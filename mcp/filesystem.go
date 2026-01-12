@@ -140,10 +140,16 @@ func readFile(ctx context.Context, req *mcp.CallToolRequest, input readFileInput
 		}
 	}
 
-	// Format lines with line numbers (4-character right-aligned)
+	// Calculate width for line numbers based on total lines
+	width := len(fmt.Sprintf("%d", totalLines))
+	if width < 4 {
+		width = 4 // Minimum width of 4 for consistency
+	}
+
+	// Format lines with line numbers (right-aligned)
 	var formattedLines []string
 	for i := offset; i < endIndex; i++ {
-		formattedLines = append(formattedLines, fmt.Sprintf("%4d| %s", i+1, lines[i]))
+		formattedLines = append(formattedLines, fmt.Sprintf("%*d| %s", width, i+1, lines[i]))
 	}
 
 	content := strings.Join(formattedLines, "\n")
@@ -255,6 +261,13 @@ func globFiles(ctx context.Context, req *mcp.CallToolRequest, input globFilesInp
 	// Check if pattern contains ** for recursive matching
 	if strings.Contains(input.Pat, "**") {
 		// Use WalkDir for recursive matching
+		// Extract the pattern after ** for matching
+		patternParts := strings.Split(input.Pat, "**")
+		var suffix string
+		if len(patternParts) > 1 {
+			suffix = strings.TrimPrefix(patternParts[1], "/")
+		}
+
 		err := filepath.WalkDir(basePath, func(path string, d os.DirEntry, err error) error {
 			if err != nil {
 				return nil // Skip errors
@@ -265,25 +278,24 @@ func globFiles(ctx context.Context, req *mcp.CallToolRequest, input globFilesInp
 				return nil
 			}
 
-			// Match against pattern
+			// Get relative path for matching
 			relPath, err := filepath.Rel(basePath, path)
 			if err != nil {
 				return nil
 			}
 
-			matched, err := filepath.Match(strings.ReplaceAll(input.Pat, "**", "*"), filepath.Base(relPath))
-			if err != nil {
-				return nil
-			}
-
-			// For ** patterns, check if any part matches
-			if strings.Contains(input.Pat, "**") {
-				parts := strings.Split(input.Pat, "**")
-				// Simple implementation: if pattern is **/*.ext, check extension
-				if len(parts) == 2 && strings.HasPrefix(parts[1], "/") {
-					ext := strings.TrimPrefix(parts[1], "/")
-					matched, _ = filepath.Match(ext, filepath.Base(relPath))
+			// Match against the suffix pattern
+			var matched bool
+			if suffix != "" {
+				// Match the end of the path against the suffix pattern
+				matched, _ = filepath.Match(suffix, filepath.Base(relPath))
+				// If the pattern contains directory separators, match the full path
+				if !matched && strings.Contains(suffix, string(filepath.Separator)) {
+					matched, _ = filepath.Match(suffix, relPath)
 				}
+			} else {
+				// If no suffix, match all files
+				matched = true
 			}
 
 			if matched {
@@ -359,6 +371,34 @@ func globFiles(ctx context.Context, req *mcp.CallToolRequest, input globFilesInp
 	}, nil
 }
 
+// searchFileForPattern searches a file for regex pattern matches
+func searchFileForPattern(path string, re *regexp.Regexp, maxMatches int) []string {
+	var matches []string
+
+	file, err := os.Open(path)
+	if err != nil {
+		return matches // Skip files that can't be opened
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	lineNum := 1
+	for scanner.Scan() {
+		if len(matches) >= maxMatches {
+			break
+		}
+
+		line := scanner.Text()
+		if re.MatchString(line) {
+			match := fmt.Sprintf("%s:%d:%s", path, lineNum, strings.TrimSpace(line))
+			matches = append(matches, match)
+		}
+		lineNum++
+	}
+
+	return matches
+}
+
 // grepFiles searches files for regex pattern
 func grepFiles(ctx context.Context, req *mcp.CallToolRequest, input grepFilesInput) (
 	*mcp.CallToolResult,
@@ -398,27 +438,9 @@ func grepFiles(ctx context.Context, req *mcp.CallToolRequest, input grepFilesInp
 			return filepath.SkipAll
 		}
 
-		// Open and read file
-		file, err := os.Open(path)
-		if err != nil {
-			return nil // Skip files that can't be opened
-		}
-		defer file.Close()
-
-		scanner := bufio.NewScanner(file)
-		lineNum := 1
-		for scanner.Scan() {
-			if len(matches) >= maxMatches {
-				break
-			}
-
-			line := scanner.Text()
-			if re.MatchString(line) {
-				match := fmt.Sprintf("%s:%d:%s", path, lineNum, strings.TrimSpace(line))
-				matches = append(matches, match)
-			}
-			lineNum++
-		}
+		// Process file and search for matches
+		fileMatches := searchFileForPattern(path, re, maxMatches-len(matches))
+		matches = append(matches, fileMatches...)
 
 		return nil
 	})
