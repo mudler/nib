@@ -31,7 +31,16 @@ func StartTransports(ctx context.Context, cfg types.Config) ([]mcp.Transport, er
 		}
 	}()
 
-	transports := []mcp.Transport{bashMCPServerClient}
+	// Start filesystem MCP server
+	filesystemMCPServerTransport, filesystemMCPServerClient := mcp.NewInMemoryTransports()
+
+	go func() {
+		if err := StartFileSystemMCPServer(ctx, filesystemMCPServerTransport); err != nil {
+			fmt.Fprintf(os.Stderr, "Filesystem MCP server error: %v\n", err)
+		}
+	}()
+
+	transports := []mcp.Transport{bashMCPServerClient, filesystemMCPServerClient}
 
 	for _, c := range cfg.MCPServers {
 		envs := []string{}
