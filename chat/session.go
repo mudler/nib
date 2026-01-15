@@ -67,6 +67,7 @@ type Callbacks struct {
 type Session struct {
 	ctx           context.Context
 	llm           cogito.LLM
+	reviewerLLM   cogito.LLM // Reviewer LLM for plan mode (can be same as llm or nil if disabled)
 	clients       []*mcp.ClientSession
 	fragment      cogito.Fragment
 	messages      []openai.ChatCompletionMessage
@@ -75,6 +76,7 @@ type Session struct {
 	cogitoOptions types.AgentOptions
 	allowedTools  map[string]bool // Tools that don't need approval this session
 	planMode      bool            // Whether plan mode is enabled
+	reviewerEnabled bool          // Whether reviewer LLM is enabled
 }
 
 // CommandTransport creates a new transport for a command
@@ -91,6 +93,30 @@ func CommandTransport(cmd string, args []string, env ...string) mcp.Transport {
 func NewSession(ctx context.Context, cfg types.Config, callbacks Callbacks, transports ...mcp.Transport) (*Session, error) {
 	llm := cogito.NewOpenAILLM(cfg.Model, cfg.APIKey, cfg.BaseURL)
 
+	// Create reviewer LLM if configured and enabled
+	var reviewerLLM cogito.LLM
+	reviewerEnabled := false
+	if cfg.ReviewerLLM != nil {
+		// Check if reviewer is enabled (defaults to true if reviewer_llm is configured)
+		enabled := true
+		if cfg.ReviewerLLM.Enabled != nil {
+			enabled = *cfg.ReviewerLLM.Enabled
+		}
+		
+		if enabled && cfg.ReviewerLLM.Model != "" {
+			reviewerAPIKey := cfg.ReviewerLLM.APIKey
+			if reviewerAPIKey == "" {
+				reviewerAPIKey = cfg.APIKey // Fallback to main API key if not specified
+			}
+			reviewerBaseURL := cfg.ReviewerLLM.BaseURL
+			if reviewerBaseURL == "" {
+				reviewerBaseURL = cfg.BaseURL // Fallback to main base URL if not specified
+			}
+			reviewerLLM = cogito.NewOpenAILLM(cfg.ReviewerLLM.Model, reviewerAPIKey, reviewerBaseURL)
+			reviewerEnabled = true
+		}
+	}
+
 	client := mcp.NewClient(&mcp.Implementation{Name: "aish", Version: "v1.0.0"}, nil)
 	clients := []*mcp.ClientSession{}
 
@@ -103,15 +129,17 @@ func NewSession(ctx context.Context, cfg types.Config, callbacks Callbacks, tran
 	}
 
 	return &Session{
-		ctx:           ctx,
-		llm:           llm,
-		clients:       clients,
-		fragment:      cogito.NewEmptyFragment(),
-		messages:      []openai.ChatCompletionMessage{},
-		callbacks:     callbacks,
-		systemPrompt:  cfg.GetPrompt(),
-		cogitoOptions: cfg.AgentOptions,
-		allowedTools:  make(map[string]bool),
+		ctx:             ctx,
+		llm:             llm,
+		reviewerLLM:     reviewerLLM,
+		clients:         clients,
+		fragment:        cogito.NewEmptyFragment(),
+		messages:        []openai.ChatCompletionMessage{},
+		callbacks:       callbacks,
+		systemPrompt:    cfg.GetPrompt(),
+		cogitoOptions:   cfg.AgentOptions,
+		allowedTools:    make(map[string]bool),
+		reviewerEnabled: reviewerEnabled,
 	}, nil
 }
 
@@ -244,6 +272,10 @@ func (s *Session) SendMessage(text string) (string, error) {
 				s.callbacks.OnResponse(response)
 			}
 			return response, nil
+		}
+
+		if s.reviewerEnabled && s.reviewerLLM != nil {
+			cogitoOpts = append(cogitoOpts, cogito.WithReviewerLLM(s.reviewerLLM))
 		}
 
 		// Execute the approved plan
