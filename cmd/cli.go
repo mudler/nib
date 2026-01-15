@@ -175,6 +175,36 @@ func RunCLI(ctx context.Context, cfg types.Config, transports ...mcp.Transport) 
 			fmt.Println(response)
 			fmt.Println(strings.Repeat("─", 50))
 		},
+		OnPlan: func(plan chat.Plan) chat.PlanResponse {
+			spin.stop()
+			fmt.Println()
+			fmt.Println(strings.Repeat("─", 50))
+			fmt.Printf("%s%s📋 Plan%s\n", colorBold, colorPurple, colorReset)
+			fmt.Println(strings.Repeat("─", 50))
+			fmt.Printf("%sDescription:%s %s\n", colorGray, colorReset, plan.Description)
+			if len(plan.Subtasks) > 0 {
+				fmt.Printf("%sSubtasks:%s\n", colorGray, colorReset)
+				for i, subtask := range plan.Subtasks {
+					fmt.Printf("  %d. %s\n", i+1, subtask)
+				}
+			}
+			fmt.Println(strings.Repeat("─", 50))
+			fmt.Printf("\n%s[Enter] approve  [n]o:%s ", colorCyan, colorReset)
+
+			text, _ := readStringCancellable(ctx, reader)
+			text = strings.TrimSpace(strings.ToLower(text))
+			fmt.Println()
+
+			var response chat.PlanResponse
+			if text == "n" || text == "no" {
+				response = chat.PlanResponse{Approved: false}
+				fmt.Printf("%s✗ Plan execution cancelled%s\n", colorRed, colorReset)
+			} else {
+				response = chat.PlanResponse{Approved: true}
+				spin.start("Executing plan...")
+			}
+			return response
+		},
 		OnError: func(err error) {
 			spin.stop()
 			fmt.Fprintf(os.Stderr, "%s✗ Error: %v%s\n", colorRed, err, colorReset)
@@ -190,14 +220,24 @@ func RunCLI(ctx context.Context, cfg types.Config, transports ...mcp.Transport) 
 	fmt.Printf("%s%s✨ [◠ ◠] wiz%s\n", colorBold, colorPurple, colorReset)
 	fmt.Println(strings.Repeat("─", 50))
 	fmt.Printf("%sYour terminal wizard awaits. Type your command and press Enter.%s\n", colorGray, colorReset)
-	fmt.Printf("%sCtrl+C to exit.%s\n\n", colorGray, colorReset)
+	fmt.Printf("%sCtrl+C to exit. Type /plan to toggle plan mode.%s\n\n", colorGray, colorReset)
+
+	// Display help immediately
+	help()
+
+	planMode := false
+	session.SetPlanMode(planMode)
 
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		default:
-			fmt.Printf("%s>%s ", colorCyan, colorReset)
+			modeIndicator := ""
+			if planMode {
+				modeIndicator = fmt.Sprintf(" %s[PLAN MODE]%s", colorYellow, colorReset)
+			}
+			fmt.Printf("%s>%s%s ", colorCyan, colorReset, modeIndicator)
 
 			text, err := readStringCancellable(ctx, reader)
 			if err != nil {
@@ -208,6 +248,25 @@ func RunCLI(ctx context.Context, cfg types.Config, transports ...mcp.Transport) 
 				continue
 			}
 
+			// Handle commands starting with /
+			if strings.HasPrefix(text, "/") {
+				switch text {
+				case "/plan":
+					planMode = !planMode
+					session.SetPlanMode(planMode)
+					if planMode {
+						fmt.Printf("%s✓ Plan mode enabled%s\n", colorGreen, colorReset)
+					} else {
+						fmt.Printf("%s✓ Plan mode disabled%s\n", colorGreen, colorReset)
+					}
+					continue
+				default:
+					fmt.Printf("%s✗ Unknown command: %s%s\n", colorRed, text, colorReset)
+					fmt.Printf("%sType 'help' for available commands.%s\n", colorGray, colorReset)
+					continue
+				}
+			}
+
 			switch text {
 			case "clear":
 				session.ClearHistory()
@@ -215,10 +274,7 @@ func RunCLI(ctx context.Context, cfg types.Config, transports ...mcp.Transport) 
 			case "exit":
 				return nil
 			case "help":
-				fmt.Println("Available commands:")
-				fmt.Println("  exit - Exit the wizard")
-				fmt.Println("  help - Show this help message")
-				fmt.Println("  clear - Clear the conversation")
+				help()
 				continue
 			}
 
@@ -232,4 +288,12 @@ func RunCLI(ctx context.Context, cfg types.Config, transports ...mcp.Transport) 
 			fmt.Println()
 		}
 	}
+}
+
+func help() {
+	fmt.Println("Available commands:")
+	fmt.Println("  exit - Exit the wizard")
+	fmt.Println("  help - Show this help message")
+	fmt.Println("  clear - Clear the conversation")
+	fmt.Println("  /plan - Toggle plan mode")
 }

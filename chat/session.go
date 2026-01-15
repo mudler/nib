@@ -34,6 +34,17 @@ type ToolCallResponse struct {
 	AlwaysAllow bool // Add tool to session allow list
 }
 
+// Plan represents a plan with description and subtasks
+type Plan struct {
+	Description string
+	Subtasks    []string
+}
+
+// PlanResponse represents the user's decision on a plan
+type PlanResponse struct {
+	Approved bool
+}
+
 // Callbacks defines the interface for UI interactions
 type Callbacks struct {
 	// OnStatus is called when there's a status update
@@ -43,6 +54,9 @@ type Callbacks struct {
 	// OnToolCall is called when the agent wants to run a tool
 	// Returns the user's decision
 	OnToolCall func(req ToolCallRequest) ToolCallResponse
+	// OnPlan is called when a plan needs user approval
+	// Returns the user's decision
+	OnPlan func(plan Plan) PlanResponse
 	// OnResponse is called when the agent responds
 	OnResponse func(response string)
 	// OnError is called when an error occurs
@@ -53,6 +67,7 @@ type Callbacks struct {
 type Session struct {
 	ctx           context.Context
 	llm           cogito.LLM
+	reviewerLLM   cogito.LLM // Reviewer LLM for plan mode (can be same as llm or nil if disabled)
 	clients       []*mcp.ClientSession
 	fragment      cogito.Fragment
 	messages      []openai.ChatCompletionMessage
@@ -60,6 +75,8 @@ type Session struct {
 	systemPrompt  string
 	cogitoOptions types.AgentOptions
 	allowedTools  map[string]bool // Tools that don't need approval this session
+	planMode      bool            // Whether plan mode is enabled
+	reviewerEnabled bool          // Whether reviewer LLM is enabled
 }
 
 // CommandTransport creates a new transport for a command
@@ -76,6 +93,30 @@ func CommandTransport(cmd string, args []string, env ...string) mcp.Transport {
 func NewSession(ctx context.Context, cfg types.Config, callbacks Callbacks, transports ...mcp.Transport) (*Session, error) {
 	llm := cogito.NewOpenAILLM(cfg.Model, cfg.APIKey, cfg.BaseURL)
 
+	// Create reviewer LLM if configured and enabled
+	var reviewerLLM cogito.LLM
+	reviewerEnabled := false
+	if cfg.ReviewerLLM != nil {
+		// Check if reviewer is enabled (defaults to true if reviewer_llm is configured)
+		enabled := true
+		if cfg.ReviewerLLM.Enabled != nil {
+			enabled = *cfg.ReviewerLLM.Enabled
+		}
+		
+		if enabled && cfg.ReviewerLLM.Model != "" {
+			reviewerAPIKey := cfg.ReviewerLLM.APIKey
+			if reviewerAPIKey == "" {
+				reviewerAPIKey = cfg.APIKey // Fallback to main API key if not specified
+			}
+			reviewerBaseURL := cfg.ReviewerLLM.BaseURL
+			if reviewerBaseURL == "" {
+				reviewerBaseURL = cfg.BaseURL // Fallback to main base URL if not specified
+			}
+			reviewerLLM = cogito.NewOpenAILLM(cfg.ReviewerLLM.Model, reviewerAPIKey, reviewerBaseURL)
+			reviewerEnabled = true
+		}
+	}
+
 	client := mcp.NewClient(&mcp.Implementation{Name: "aish", Version: "v1.0.0"}, nil)
 	clients := []*mcp.ClientSession{}
 
@@ -88,21 +129,33 @@ func NewSession(ctx context.Context, cfg types.Config, callbacks Callbacks, tran
 	}
 
 	return &Session{
-		ctx:           ctx,
-		llm:           llm,
-		clients:       clients,
-		fragment:      cogito.NewEmptyFragment(),
-		messages:      []openai.ChatCompletionMessage{},
-		callbacks:     callbacks,
-		systemPrompt:  cfg.GetPrompt(),
-		cogitoOptions: cfg.AgentOptions,
-		allowedTools:  make(map[string]bool),
+		ctx:             ctx,
+		llm:             llm,
+		reviewerLLM:     reviewerLLM,
+		clients:         clients,
+		fragment:        cogito.NewEmptyFragment(),
+		messages:        []openai.ChatCompletionMessage{},
+		callbacks:       callbacks,
+		systemPrompt:    cfg.GetPrompt(),
+		cogitoOptions:   cfg.AgentOptions,
+		allowedTools:    make(map[string]bool),
+		reviewerEnabled: reviewerEnabled,
 	}, nil
 }
 
 func (s *Session) ClearHistory() {
 	s.messages = []openai.ChatCompletionMessage{}
 	s.fragment = cogito.NewEmptyFragment()
+}
+
+// SetPlanMode sets the plan mode state
+func (s *Session) SetPlanMode(enabled bool) {
+	s.planMode = enabled
+}
+
+// GetPlanMode returns the current plan mode state
+func (s *Session) GetPlanMode() bool {
+	return s.planMode
 }
 
 // SendMessage sends a message to the assistant and processes the response
@@ -172,16 +225,83 @@ func (s *Session) SendMessage(text string) (string, error) {
 	}
 
 	var err error
-	s.fragment, err = cogito.ExecuteTools(
-		s.llm, s.fragment,
-		cogitoOpts...,
-	)
 
-	if err != nil && !errors.Is(err, cogito.ErrNoToolSelected) {
-		if s.callbacks.OnError != nil {
-			s.callbacks.OnError(err)
+	// Check if plan mode is enabled
+	if s.planMode {
+		// Extract goal from conversation
+		goal, err := cogito.ExtractGoal(s.llm, s.fragment)
+		if err != nil {
+			if s.callbacks.OnError != nil {
+				s.callbacks.OnError(err)
+			}
+			return "", err
 		}
-		return "", err
+
+		// Create plan with available tools from MCP clients
+		plan, err := cogito.ExtractPlan(s.llm, s.fragment, goal, cogitoOpts...)
+		if err != nil {
+			if s.callbacks.OnError != nil {
+				s.callbacks.OnError(err)
+			}
+			return "", err
+		}
+
+		// Convert cogito plan to our Plan type for display
+		planForDisplay := Plan{
+			Description: plan.Description,
+			Subtasks:    plan.Subtasks,
+		}
+
+		// Request user approval for the plan
+		var planResp PlanResponse
+		if s.callbacks.OnPlan != nil {
+			planResp = s.callbacks.OnPlan(planForDisplay)
+		} else {
+			// Default to approved if no callback
+			planResp = PlanResponse{Approved: true}
+		}
+
+		if !planResp.Approved {
+			// User rejected the plan
+			response := "Plan execution cancelled by user."
+			s.messages = append(s.messages, openai.ChatCompletionMessage{
+				Role:    "assistant",
+				Content: response,
+			})
+			if s.callbacks.OnResponse != nil {
+				s.callbacks.OnResponse(response)
+			}
+			return response, nil
+		}
+
+		if s.reviewerEnabled && s.reviewerLLM != nil {
+			cogitoOpts = append(cogitoOpts, cogito.WithReviewerLLM(s.reviewerLLM))
+		}
+
+		// Execute the approved plan
+		result, err := cogito.ExecutePlan(s.llm, s.fragment, plan, goal, cogitoOpts...)
+		if err != nil {
+			if s.callbacks.OnError != nil {
+				s.callbacks.OnError(err)
+			}
+			return "", err
+		}
+
+		// Update fragment with result
+		s.fragment = result
+	} else {
+		// Agent mode: use ExecuteTools as before
+		s.fragment, err = cogito.ExecuteTools(
+			s.llm, s.fragment,
+			cogitoOpts...,
+		)
+
+		if err != nil && !errors.Is(err, cogito.ErrNoToolSelected) {
+			if s.callbacks.OnError != nil {
+				s.callbacks.OnError(err)
+			}
+			return "", err
+		}
 	}
 
 	s.fragment, err = s.llm.Ask(context.Background(), s.fragment)

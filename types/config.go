@@ -17,15 +17,24 @@ type AgentOptions struct {
 	ForceReasoning bool `yaml:"force_reasoning"`
 }
 
+// ReviewerLLMConfig holds configuration for the reviewer LLM (used in plan mode)
+type ReviewerLLMConfig struct {
+	Model  string `yaml:"model"`
+	APIKey string `yaml:"api_key"`
+	BaseURL string `yaml:"base_url"`
+	Enabled *bool `yaml:"enabled"` // If nil, defaults to true when reviewer_llm is configured
+}
+
 // Config holds configuration for creating a new session
 type Config struct {
-	Model        string               `yaml:"model"`
-	APIKey       string               `yaml:"api_key"`
-	BaseURL      string               `yaml:"base_url"`
-	LogLevel     string               `yaml:"log_level"`
-	Prompt       string               `yaml:"prompt"`
-	MCPServers   map[string]MCPServer `yaml:"mcp_servers"`
-	AgentOptions AgentOptions         `yaml:"agent_options"`
+	Model          string               `yaml:"model"`
+	APIKey         string               `yaml:"api_key"`
+	BaseURL        string               `yaml:"base_url"`
+	LogLevel       string               `yaml:"log_level"`
+	Prompt         string               `yaml:"prompt"`
+	MCPServers     map[string]MCPServer `yaml:"mcp_servers"`
+	AgentOptions   AgentOptions         `yaml:"agent_options"`
+	ReviewerLLM    *ReviewerLLMConfig   `yaml:"reviewer_llm"`
 }
 
 func (c *Config) GetPrompt() string {

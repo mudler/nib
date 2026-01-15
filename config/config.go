@@ -82,6 +82,30 @@ func Load() types.Config {
 		cfg.BaseURL = baseURL
 	}
 
+	// Override reviewer LLM with environment variables if set
+	reviewerModel := os.Getenv("REVIEWER_MODEL")
+	reviewerAPIKey := os.Getenv("REVIEWER_API_KEY")
+	reviewerBaseURL := os.Getenv("REVIEWER_BASE_URL")
+	reviewerEnabled := os.Getenv("REVIEWER_ENABLED")
+	if reviewerModel != "" || reviewerAPIKey != "" || reviewerBaseURL != "" || reviewerEnabled != "" {
+		if cfg.ReviewerLLM == nil {
+			cfg.ReviewerLLM = &types.ReviewerLLMConfig{}
+		}
+		if reviewerModel != "" {
+			cfg.ReviewerLLM.Model = reviewerModel
+		}
+		if reviewerAPIKey != "" {
+			cfg.ReviewerLLM.APIKey = reviewerAPIKey
+		}
+		if reviewerBaseURL != "" {
+			cfg.ReviewerLLM.BaseURL = reviewerBaseURL
+		}
+		if reviewerEnabled != "" {
+			enabled := reviewerEnabled == "true" || reviewerEnabled == "1" || reviewerEnabled == "yes"
+			cfg.ReviewerLLM.Enabled = &enabled
+		}
+	}
+
 	if cfg.Prompt == "" {
 		cfg.Prompt = defaultPrompt
 	}
