@@ -10,11 +10,11 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/mudler/cogito/pkg/xlog"
 	"github.com/mudler/wiz/cmd"
 	"github.com/mudler/wiz/config"
 	"github.com/mudler/wiz/internal"
 	"github.com/mudler/wiz/mcp"
+	"github.com/mudler/xlog"
 )
 
 // parseHeight parses a height string like "40%" or "20"

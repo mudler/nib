@@ -34,6 +34,17 @@ type ToolCallResponse struct {
 	AlwaysAllow bool // Add tool to session allow list
 }
 
+// Plan represents a plan with description and subtasks
+type Plan struct {
+	Description string
+	Subtasks    []string
+}
+
+// PlanResponse represents the user's decision on a plan
+type PlanResponse struct {
+	Approved bool
+}
+
 // Callbacks defines the interface for UI interactions
 type Callbacks struct {
 	// OnStatus is called when there's a status update
@@ -43,6 +54,9 @@ type Callbacks struct {
 	// OnToolCall is called when the agent wants to run a tool
 	// Returns the user's decision
 	OnToolCall func(req ToolCallRequest) ToolCallResponse
+	// OnPlan is called when a plan needs user approval
+	// Returns the user's decision
+	OnPlan func(plan Plan) PlanResponse
 	// OnResponse is called when the agent responds
 	OnResponse func(response string)
 	// OnError is called when an error occurs
@@ -60,6 +74,7 @@ type Session struct {
 	systemPrompt  string
 	cogitoOptions types.AgentOptions
 	allowedTools  map[string]bool // Tools that don't need approval this session
+	planMode      bool            // Whether plan mode is enabled
 }
 
 // CommandTransport creates a new transport for a command
@@ -103,6 +118,16 @@ func NewSession(ctx context.Context, cfg types.Config, callbacks Callbacks, tran
 func (s *Session) ClearHistory() {
 	s.messages = []openai.ChatCompletionMessage{}
 	s.fragment = cogito.NewEmptyFragment()
+}
+
+// SetPlanMode sets the plan mode state
+func (s *Session) SetPlanMode(enabled bool) {
+	s.planMode = enabled
+}
+
+// GetPlanMode returns the current plan mode state
+func (s *Session) GetPlanMode() bool {
+	return s.planMode
 }
 
 // SendMessage sends a message to the assistant and processes the response
@@ -172,16 +197,79 @@ func (s *Session) SendMessage(text string) (string, error) {
 	}
 
 	var err error
-	s.fragment, err = cogito.ExecuteTools(
-		s.llm, s.fragment,
-		cogitoOpts...,
-	)
 
-	if err != nil && !errors.Is(err, cogito.ErrNoToolSelected) {
-		if s.callbacks.OnError != nil {
-			s.callbacks.OnError(err)
+	// Check if plan mode is enabled
+	if s.planMode {
+		// Extract goal from conversation
+		goal, err := cogito.ExtractGoal(s.llm, s.fragment)
+		if err != nil {
+			if s.callbacks.OnError != nil {
+				s.callbacks.OnError(err)
+			}
+			return "", err
 		}
-		return "", err
+
+		// Create plan with available tools from MCP clients
+		plan, err := cogito.ExtractPlan(s.llm, s.fragment, goal, cogitoOpts...)
+		if err != nil {
+			if s.callbacks.OnError != nil {
+				s.callbacks.OnError(err)
+			}
+			return "", err
+		}
+
+		// Convert cogito plan to our Plan type for display
+		planForDisplay := Plan{
+			Description: plan.Description,
+			Subtasks:    plan.Subtasks,
+		}
+
+		// Request user approval for the plan
+		var planResp PlanResponse
+		if s.callbacks.OnPlan != nil {
+			planResp = s.callbacks.OnPlan(planForDisplay)
+		} else {
+			// Default to approved if no callback
+			planResp = PlanResponse{Approved: true}
+		}
+
+		if !planResp.Approved {
+			// User rejected the plan
+			response := "Plan execution cancelled by user."
+			s.messages = append(s.messages, openai.ChatCompletionMessage{
+				Role:    "assistant",
+				Content: response,
+			})
+			if s.callbacks.OnResponse != nil {
+				s.callbacks.OnResponse(response)
+			}
+			return response, nil
+		}
+
+		// Execute the approved plan
+		result, err := cogito.ExecutePlan(s.llm, s.fragment, plan, goal, cogitoOpts...)
+		if err != nil {
+			if s.callbacks.OnError != nil {
+				s.callbacks.OnError(err)
+			}
+			return "", err
+		}
+
+		// Update fragment with result
+		s.fragment = result
+	} else {
+		// Agent mode: use ExecuteTools as before
+		s.fragment, err = cogito.ExecuteTools(
+			s.llm, s.fragment,
+			cogitoOpts...,
+		)
+
+		if err != nil && !errors.Is(err, cogito.ErrNoToolSelected) {
+			if s.callbacks.OnError != nil {
+				s.callbacks.OnError(err)
+			}
+			return "", err
+		}
 	}
 
 	s.fragment, err = s.llm.Ask(context.Background(), s.fragment)

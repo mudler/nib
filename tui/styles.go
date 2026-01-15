@@ -82,6 +82,12 @@ var (
 				BorderForeground(lipgloss.Color("214")).
 				Padding(0, 1)
 
+	// Plan request box style
+	planRequestBoxStyle = lipgloss.NewStyle().
+				Border(lipgloss.RoundedBorder()).
+				BorderForeground(lipgloss.Color("99")).
+				Padding(0, 1)
+
 	// Prompt hint style
 	promptHintStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("39")).
