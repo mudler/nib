@@ -57,7 +57,7 @@ type Model struct {
 	planMode bool
 
 	// Plan approval state
-	pendingPlan         *chat.Plan
+	pendingPlan          *chat.Plan
 	awaitingPlanApproval bool
 
 	// Animation state
@@ -300,7 +300,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case toolCallMsg:
 		m.pendingTool = (*chat.ToolCallRequest)(&msg)
 		m.awaitingApproval = true
-		m.loading = false // Allow user input for approval
+		m.loading = false  // Allow user input for approval
+		m.textarea.Focus() // Ensure textarea is focused for input
 		m.updateViewport()
 		// Continue listening for more tool requests
 		cmds = append(cmds, m.listenToolRequest())
@@ -308,7 +309,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case planMsg:
 		m.pendingPlan = (*chat.Plan)(&msg)
 		m.awaitingPlanApproval = true
-		m.loading = false // Allow user input for approval
+		m.loading = false  // Allow user input for approval
+		m.textarea.Focus() // Ensure textarea is focused for input
 		m.updateViewport()
 		// Continue listening for more plan requests
 		cmds = append(cmds, m.listenPlanRequest())
@@ -323,8 +325,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 
-	// Update textarea (only if not loading and not awaiting approvals)
-	if !m.loading && !m.awaitingApproval && !m.awaitingPlanApproval {
+	// Update textarea (only if not loading)
+	// Note: We allow updates during approval states so users can type their response
+	if !m.loading {
 		m.textarea, cmd = m.textarea.Update(msg)
 		cmds = append(cmds, cmd)
 	}
@@ -545,7 +548,7 @@ func wrapText(text string, width int) string {
 
 		for i, word := range words {
 			wordWidth := lipgloss.Width(word)
-			
+
 			// If a single word is longer than width, we have to break it
 			if wordWidth > width && currentWidth == 0 {
 				// Break the word itself (simple approach: just truncate with ellipsis)
