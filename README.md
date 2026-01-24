@@ -2,6 +2,8 @@
 
 Feeling Lazy? ask it to Wiz.
 
+Wiz is a small assistant living in your terminal that can be invoked with CTRL+space.
+
 Wiz aims to be the `fzf` for llms living in your terminal that is portable and local-llm friendly.
 
 
