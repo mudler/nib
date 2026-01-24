@@ -595,8 +595,11 @@ func wrapText(text string, width int) string {
 func (m *Model) updateViewport() {
 	var sb strings.Builder
 
-	// Calculate available width for content (viewport width minus padding)
-	contentWidth := m.width
+	// Calculate available width for content (use viewport width, not terminal width)
+	contentWidth := m.viewport.Width
+	if contentWidth <= 0 {
+		contentWidth = m.width
+	}
 	if contentWidth <= 0 {
 		contentWidth = 80 // fallback
 	}
@@ -607,14 +610,18 @@ func (m *Model) updateViewport() {
 			prefix := userStyle.Render("👤 You: ")
 			prefixWidth := lipgloss.Width(prefix)
 			wrappedContent := wrapText(msg.Content, contentWidth-prefixWidth)
-			// Add prefix to each line
+			// Add prefix to first line, indent continuation lines
 			lines := strings.Split(strings.TrimRight(wrappedContent, "\n"), "\n")
 			for i, line := range lines {
-				if i > 0 {
+				if i == 0 {
+					// First line: prefix + content
+					sb.WriteString(prefix)
+					sb.WriteString(line)
+				} else {
+					// Continuation lines: indent with spaces only (no prefix)
 					sb.WriteString(strings.Repeat(" ", prefixWidth))
+					sb.WriteString(line)
 				}
-				sb.WriteString(prefix)
-				sb.WriteString(line)
 				sb.WriteString("\n")
 			}
 			sb.WriteString("\n")
@@ -622,14 +629,18 @@ func (m *Model) updateViewport() {
 			prefix := assistantStyle.Render("🧙 Wiz: ")
 			prefixWidth := lipgloss.Width(prefix)
 			wrappedContent := wrapText(msg.Content, contentWidth-prefixWidth)
-			// Add prefix to each line
+			// Add prefix to first line, indent continuation lines
 			lines := strings.Split(strings.TrimRight(wrappedContent, "\n"), "\n")
 			for i, line := range lines {
-				if i > 0 {
+				if i == 0 {
+					// First line: prefix + content
+					sb.WriteString(prefix)
+					sb.WriteString(line)
+				} else {
+					// Continuation lines: indent with spaces only (no prefix)
 					sb.WriteString(strings.Repeat(" ", prefixWidth))
+					sb.WriteString(line)
 				}
-				sb.WriteString(prefix)
-				sb.WriteString(line)
 				sb.WriteString("\n")
 			}
 			sb.WriteString("\n")
@@ -637,14 +648,18 @@ func (m *Model) updateViewport() {
 			prefix := errorStyle.Render("✗ Error: ")
 			prefixWidth := lipgloss.Width(prefix)
 			wrappedContent := wrapText(msg.Content, contentWidth-prefixWidth)
-			// Add prefix to each line
+			// Add prefix to first line, indent continuation lines
 			lines := strings.Split(strings.TrimRight(wrappedContent, "\n"), "\n")
 			for i, line := range lines {
-				if i > 0 {
+				if i == 0 {
+					// First line: prefix + content
+					sb.WriteString(prefix)
+					sb.WriteString(line)
+				} else {
+					// Continuation lines: indent with spaces only (no prefix)
 					sb.WriteString(strings.Repeat(" ", prefixWidth))
+					sb.WriteString(line)
 				}
-				sb.WriteString(prefix)
-				sb.WriteString(line)
 				sb.WriteString("\n")
 			}
 			sb.WriteString("\n")
@@ -659,11 +674,30 @@ func (m *Model) updateViewport() {
 		}
 
 		// Build thinking box content
+		// Account for box padding (1 char each side) and border (1 char each side) = 4 chars total
+		boxContentWidth := contentWidth - 4
+		if boxContentWidth < 20 {
+			boxContentWidth = 20 // minimum width
+		}
+
 		var thinkingContent strings.Builder
 		thinkingContent.WriteString(thinkingStyle.Render(m.spinner.View() + " " + displayStatus))
 		if m.reasoning != "" {
 			thinkingContent.WriteString("\n")
-			thinkingContent.WriteString(reasoningStyle.Render("💭 " + m.reasoning))
+			reasoningPrefix := reasoningStyle.Render("💭 ")
+			reasoningPrefixWidth := lipgloss.Width(reasoningPrefix)
+			wrappedReasoning := wrapText(m.reasoning, boxContentWidth-reasoningPrefixWidth)
+			reasoningLines := strings.Split(strings.TrimRight(wrappedReasoning, "\n"), "\n")
+			for i, line := range reasoningLines {
+				if i == 0 {
+					thinkingContent.WriteString(reasoningPrefix)
+					thinkingContent.WriteString(line)
+				} else {
+					thinkingContent.WriteString(strings.Repeat(" ", reasoningPrefixWidth))
+					thinkingContent.WriteString(line)
+				}
+				thinkingContent.WriteString("\n")
+			}
 		}
 
 		sb.WriteString(thinkingBoxStyle.Render(thinkingContent.String()))
@@ -672,21 +706,28 @@ func (m *Model) updateViewport() {
 
 	if m.awaitingPlanApproval && m.pendingPlan != nil {
 		// Build plan request box content
+		// Account for box padding (1 char each side) and border (1 char each side) = 4 chars total
+		boxContentWidth := contentWidth - 4
+		if boxContentWidth < 20 {
+			boxContentWidth = 20 // minimum width
+		}
+
 		var planContent strings.Builder
 		planContent.WriteString(sectionHeaderStyle.Render("📋 Plan"))
 		planContent.WriteString("\n\n")
-		planContent.WriteString(dimmedStyle.Render("Description: "))
 		// Wrap description
 		descPrefix := dimmedStyle.Render("Description: ")
 		descWidth := lipgloss.Width(descPrefix)
-		wrappedDesc := wrapText(m.pendingPlan.Description, contentWidth-descWidth)
+		wrappedDesc := wrapText(m.pendingPlan.Description, boxContentWidth-descWidth)
 		descLines := strings.Split(strings.TrimRight(wrappedDesc, "\n"), "\n")
 		for i, line := range descLines {
-			if i > 0 {
+			if i == 0 {
+				planContent.WriteString(descPrefix)
+				planContent.WriteString(line)
+			} else {
 				planContent.WriteString(strings.Repeat(" ", descWidth))
+				planContent.WriteString(line)
 			}
-			planContent.WriteString(descPrefix)
-			planContent.WriteString(line)
 			planContent.WriteString("\n")
 		}
 		if len(m.pendingPlan.Subtasks) > 0 {
@@ -696,7 +737,7 @@ func (m *Model) updateViewport() {
 			subtaskPrefixWidth := 4 // "  X. "
 			for i, subtask := range m.pendingPlan.Subtasks {
 				subtaskLine := fmt.Sprintf("  %d. ", i+1)
-				wrappedSubtask := wrapText(subtask, contentWidth-subtaskPrefixWidth)
+				wrappedSubtask := wrapText(subtask, boxContentWidth-subtaskPrefixWidth)
 				subtaskLines := strings.Split(strings.TrimRight(wrappedSubtask, "\n"), "\n")
 				for j, line := range subtaskLines {
 					if j == 0 {
@@ -718,33 +759,44 @@ func (m *Model) updateViewport() {
 
 	if m.awaitingApproval && m.pendingTool != nil {
 		// Build tool request box content
+		// Account for box padding (1 char each side) and border (1 char each side) = 4 chars total
+		boxContentWidth := contentWidth - 4
+		if boxContentWidth < 20 {
+			boxContentWidth = 20 // minimum width
+		}
+
 		var toolContent strings.Builder
 		toolContent.WriteString(toolNameStyle.Render("🔧 " + m.pendingTool.Name))
 		toolContent.WriteString("\n\n")
 		// Wrap arguments
 		argsPrefix := dimmedStyle.Render("Arguments: ")
 		argsPrefixWidth := lipgloss.Width(argsPrefix)
-		wrappedArgs := wrapText(m.pendingTool.Arguments, contentWidth-argsPrefixWidth)
+		wrappedArgs := wrapText(m.pendingTool.Arguments, boxContentWidth-argsPrefixWidth)
 		argsLines := strings.Split(strings.TrimRight(wrappedArgs, "\n"), "\n")
 		for i, line := range argsLines {
-			if i > 0 {
+			if i == 0 {
+				toolContent.WriteString(argsPrefix)
+				toolContent.WriteString(line)
+			} else {
 				toolContent.WriteString(strings.Repeat(" ", argsPrefixWidth))
+				toolContent.WriteString(line)
 			}
-			toolContent.WriteString(argsPrefix)
-			toolContent.WriteString(line)
 			toolContent.WriteString("\n")
 		}
 		if m.pendingTool.Reasoning != "" {
+			toolContent.WriteString("\n")
 			reasoningPrefix := reasoningStyle.Render("💭 ")
 			reasoningPrefixWidth := lipgloss.Width(reasoningPrefix)
-			wrappedReasoning := wrapText(m.pendingTool.Reasoning, contentWidth-reasoningPrefixWidth)
+			wrappedReasoning := wrapText(m.pendingTool.Reasoning, boxContentWidth-reasoningPrefixWidth)
 			reasoningLines := strings.Split(strings.TrimRight(wrappedReasoning, "\n"), "\n")
 			for i, line := range reasoningLines {
-				if i > 0 {
+				if i == 0 {
+					toolContent.WriteString(reasoningPrefix)
+					toolContent.WriteString(line)
+				} else {
 					toolContent.WriteString(strings.Repeat(" ", reasoningPrefixWidth))
+					toolContent.WriteString(line)
 				}
-				toolContent.WriteString(reasoningPrefix)
-				toolContent.WriteString(line)
 				toolContent.WriteString("\n")
 			}
 		}
