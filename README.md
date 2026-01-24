@@ -1,4 +1,8 @@
-<img width="350" alt="logo_wiz" src="https://github.com/user-attachments/assets/7b234b54-c228-4c2f-8bcc-524a9dafd7b1" />
+<h1 align="center">
+  <br>
+  <img width="350" alt="logo_wiz" src="https://github.com/user-attachments/assets/7b234b54-c228-4c2f-8bcc-524a9dafd7b1" />
+<br>
+</h1>
 
 Feeling Lazy? ask it to Wiz.
 
