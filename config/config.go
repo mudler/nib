@@ -123,5 +123,8 @@ func Load() types.Config {
 	// ForceReasoning defaults to false (zero value), which is intentional
 	// Users must explicitly enable it in config
 
+	// Merge user-provided agent types with the built-in defaults.
+	cfg.Agents = MergeAgentTypes(cfg.Agents)
+
 	return cfg
 }
