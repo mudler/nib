@@ -29,6 +29,31 @@ type Session struct {
 	allowedTools  map[string]bool // Tools that don't need approval this session
 	planMode      bool            // Whether plan mode is enabled
 	reviewerEnabled bool          // Whether reviewer LLM is enabled
+
+	agentManager *cogito.AgentManager
+	agentDefs    []cogito.AgentDefinition
+	llmModel     string
+	apiKey       string
+	baseURL      string
+}
+
+// toCogitoDefinitions converts wiz agent-type config into cogito definitions.
+func toCogitoDefinitions(cfgs []types.AgentTypeConfig) []cogito.AgentDefinition {
+	defs := make([]cogito.AgentDefinition, 0, len(cfgs))
+	for _, t := range cfgs {
+		defs = append(defs, cogito.AgentDefinition{
+			Name:         t.Name,
+			Description:  t.Description,
+			SystemPrompt: t.SystemPrompt,
+			Tools:        t.Tools,
+			Model:        t.Model,
+			Temperature:  t.Temperature,
+			Iterations:   t.Iterations,
+			MaxAttempts:  t.MaxAttempts,
+			MaxRetries:   t.MaxRetries,
+		})
+	}
+	return defs
 }
 
 // CommandTransport creates a new transport for a command
@@ -69,6 +94,8 @@ func NewSession(ctx context.Context, cfg types.Config, callbacks Callbacks, tran
 		}
 	}
 
+	agentManager := cogito.NewAgentManager()
+
 	client := mcp.NewClient(&mcp.Implementation{Name: "aish", Version: "v1.0.0"}, nil)
 	clients := []*mcp.ClientSession{}
 
@@ -92,7 +119,17 @@ func NewSession(ctx context.Context, cfg types.Config, callbacks Callbacks, tran
 		cogitoOptions:   cfg.AgentOptions,
 		allowedTools:    make(map[string]bool),
 		reviewerEnabled: reviewerEnabled,
+		agentManager:    agentManager,
+		agentDefs:       toCogitoDefinitions(cfg.Agents),
+		llmModel:        cfg.Model,
+		apiKey:          cfg.APIKey,
+		baseURL:         cfg.BaseURL,
 	}, nil
+}
+
+// AgentManager exposes the sub-agent registry so the UI can list and detach agents.
+func (s *Session) AgentManager() *cogito.AgentManager {
+	return s.agentManager
 }
 
 func (s *Session) ClearHistory() {
@@ -157,6 +194,7 @@ func (s *Session) SendMessage(text string) (string, error) {
 				Name:      tool.Name,
 				Arguments: string(args),
 				Reasoning: tool.Reasoning,
+				AgentID:   state.AgentID,
 			})
 
 			// Add to allow list if requested
@@ -170,6 +208,26 @@ func (s *Session) SendMessage(text string) (string, error) {
 			}
 		}),
 	}
+
+	cogitoOpts = append(cogitoOpts,
+		cogito.EnableAgentSpawning,
+		cogito.WithAgentManager(s.agentManager),
+		cogito.WithAgentDefinitions(s.agentDefs...),
+		cogito.WithAgentLLMFactory(func(model string, temperature float32) cogito.LLM {
+			return clients.NewOpenAILLMWithOptions(model, s.apiKey, s.baseURL, clients.OpenAIOptions{Temperature: temperature})
+		}),
+		cogito.WithAgentCompletionCallback(func(a *cogito.AgentState) {
+			if s.callbacks.OnAgentEvent != nil {
+				s.callbacks.OnAgentEvent(AgentEvent{
+					ID:     a.ID,
+					Task:   a.Task,
+					Status: AgentStatus(a.Status),
+					Result: a.Result,
+					Err:    a.Error,
+				})
+			}
+		}),
+	)
 
 	// Add ForceReasoning only if enabled in config
 	if s.cogitoOptions.ForceReasoning {
