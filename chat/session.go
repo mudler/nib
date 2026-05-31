@@ -15,55 +15,6 @@ import (
 	openai "github.com/sashabaranov/go-openai"
 )
 
-// Message represents a chat message
-type Message struct {
-	Role    string
-	Content string
-}
-
-// ToolCallRequest contains information about a tool the agent wants to run
-type ToolCallRequest struct {
-	Name      string
-	Arguments string
-	Reasoning string
-}
-
-// ToolCallResponse represents the user's decision on a tool call
-type ToolCallResponse struct {
-	Approved    bool
-	Adjustment  string
-	AlwaysAllow bool // Add tool to session allow list
-}
-
-// Plan represents a plan with description and subtasks
-type Plan struct {
-	Description string
-	Subtasks    []string
-}
-
-// PlanResponse represents the user's decision on a plan
-type PlanResponse struct {
-	Approved bool
-}
-
-// Callbacks defines the interface for UI interactions
-type Callbacks struct {
-	// OnStatus is called when there's a status update
-	OnStatus func(status string)
-	// OnReasoning is called when the agent is reasoning
-	OnReasoning func(reasoning string)
-	// OnToolCall is called when the agent wants to run a tool
-	// Returns the user's decision
-	OnToolCall func(req ToolCallRequest) ToolCallResponse
-	// OnPlan is called when a plan needs user approval
-	// Returns the user's decision
-	OnPlan func(plan Plan) PlanResponse
-	// OnResponse is called when the agent responds
-	OnResponse func(response string)
-	// OnError is called when an error occurs
-	OnError func(err error)
-}
-
 // Session represents a chat session with the AI assistant
 type Session struct {
 	ctx           context.Context
