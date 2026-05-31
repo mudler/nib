@@ -11,6 +11,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/mudler/cogito"
+	"github.com/mudler/cogito/clients"
 	openai "github.com/sashabaranov/go-openai"
 )
 
@@ -91,7 +92,7 @@ func CommandTransport(cmd string, args []string, env ...string) mcp.Transport {
 
 // NewSession creates a new chat session
 func NewSession(ctx context.Context, cfg types.Config, callbacks Callbacks, transports ...mcp.Transport) (*Session, error) {
-	llm := cogito.NewOpenAILLM(cfg.Model, cfg.APIKey, cfg.BaseURL)
+	llm := clients.NewOpenAILLM(cfg.Model, cfg.APIKey, cfg.BaseURL)
 
 	// Create reviewer LLM if configured and enabled
 	var reviewerLLM cogito.LLM
@@ -112,7 +113,7 @@ func NewSession(ctx context.Context, cfg types.Config, callbacks Callbacks, tran
 			if reviewerBaseURL == "" {
 				reviewerBaseURL = cfg.BaseURL // Fallback to main base URL if not specified
 			}
-			reviewerLLM = cogito.NewOpenAILLM(cfg.ReviewerLLM.Model, reviewerAPIKey, reviewerBaseURL)
+			reviewerLLM = clients.NewOpenAILLM(cfg.ReviewerLLM.Model, reviewerAPIKey, reviewerBaseURL)
 			reviewerEnabled = true
 		}
 	}
