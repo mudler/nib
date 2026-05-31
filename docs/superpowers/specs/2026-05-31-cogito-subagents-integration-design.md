@@ -22,14 +22,20 @@ at that branch until it is tagged.
 3. **Agent spawning:** **always on**, no enable flag. `EnableAgentSpawning` is always passed.
 4. **Claude-Code parity features (all in):** tool-approval propagation, named agent types,
    per-agent model override, continue/resume (**both** completed-agent resume and live
-   running-agent injection).
+   running-agent injection) exposed as a **single unified `send_agent_message` tool**.
 5. **Agent types:** **hardcoded defaults in wiz**, overridable/extendable via a YAML
-   `agents:` block in wiz config.
-6. **Sub-agent LLM:** share the parent LLM by default; per-agent **model override** resolves
-   through a wiz-supplied LLM factory (same base URL / API key, different model name).
-7. **Job control (Ctrl+B):** **v1 covers sub-agents only.** Backgrounding a raw shell
+   `agents:` block in wiz config. An agent type is **rich**:
+   `{Name, Description, SystemPrompt, Tools, Model, Iterations, MaxAttempts, MaxRetries, Temperature}`.
+6. **Sub-agent LLM:** share the parent LLM by default; per-agent **model + temperature**
+   override resolves through a wiz-supplied LLM factory (same base URL / API key, different
+   model name + sampling). Requires extending cogito's OpenAI client to accept temperature.
+7. **Background completion:** **auto-continue** — the result is injected and the parent
+   assistant immediately continues reasoning with it (cogito's built-in parking behavior).
+8. **Job control (Ctrl+B):** **v1 covers sub-agents only.** Backgrounding a raw shell
    *command* (async/detachable tool execution in cogito) is a **documented follow-up**
    (see "Out of scope / follow-up").
+9. **TUI jobs surface:** a **persistent compact footer** showing active job count +
+   spinners, expandable for detail.
 
 ## Background — current state
 
@@ -83,27 +89,34 @@ implementation.
   inside a sub-agent.
 
 **C2 — Agent definitions (named types)**
-- *Responsibility:* `AgentDefinition{Name, Description, SystemPrompt, Tools, Model}`,
-  `WithAgentDefinitions(...defs)`; `spawn_agent` gains an `agent_type` argument; the chosen
-  type seeds the sub-fragment's system prompt and restricts tools to the type's list.
+- *Responsibility:* rich `AgentDefinition{Name, Description, SystemPrompt, Tools, Model,
+  Iterations, MaxAttempts, MaxRetries, Temperature}`, `WithAgentDefinitions(...defs)`;
+  `spawn_agent` gains an `agent_type` argument; the chosen type seeds the sub-fragment's
+  system prompt, restricts tools to the type's list, and applies its per-type execution
+  limits (Iterations/MaxAttempts/MaxRetries) to the sub-agent's options.
 - *Tests:* a known type resolves its system prompt + tool subset into the sub-fragment;
+  per-type limits applied to sub-agent opts (override the propagated parent limits);
   unknown `agent_type` returns a clean error (no panic); empty `agent_type` preserves
   current/legacy behavior; the spawn tool's description enumerates available types.
 
-**C3 — Per-agent model override**
-- *Responsibility:* `WithAgentLLMFactory(func(model string) LLM)`; resolution order for a
-  spawn's model = spawn `model` arg → definition `Model` → factory; fall back to parent LLM
-  when none set.
-- *Tests:* factory called with the resolved model name; spawn-arg model beats definition
-  model; no factory + no model → parent LLM used.
+**C3 — Per-agent model + temperature override**
+- *Responsibility:* extend cogito's OpenAI client to accept a temperature (e.g.
+  `NewOpenAILLMWithOptions` or a setter threading `Temperature` into the request);
+  `WithAgentLLMFactory(func(model string, temperature float32) LLM)`; resolution order for a
+  spawn's model/temperature = spawn arg → definition → factory; fall back to parent LLM when
+  none set.
+- *Tests:* OpenAI request carries the temperature when set; factory called with the resolved
+  model + temperature; spawn-arg model beats definition model; no factory + no model →
+  parent LLM used.
 
-**C4 — Resume / inject**
+**C4 — Resume / inject (single unified tool)**
 - *Responsibility:* per-agent injection channel; `AgentManager.Inject(id, msg)` for a live
   running agent; resume-completed (append message to the agent's stored `Fragment` and
-  re-run); LLM-facing `send_agent_message` tool covering both.
-- *Tests:* injected message reaches a running sub-agent's loop (parks then resumes);
-  resuming a completed agent re-runs with prior `Fragment` context and updates `Result`;
-  injecting to an unknown id errors cleanly.
+  re-run); one LLM-facing **`send_agent_message(agent_id, message)`** tool that picks the
+  path based on the agent's status (running → inject, completed → re-run).
+- *Tests:* `send_agent_message` to a running agent injects (parks then resumes); to a
+  completed agent re-runs with prior `Fragment` context and updates `Result`; to an unknown
+  id errors cleanly; status-based path selection is correct.
 
 **C5 — Detach (job control primitive)**
 - *Responsibility:* foreground spawn becomes interruptible — its `Run` selects on
@@ -128,10 +141,11 @@ implementation.
 
 **W3 — Session wiring**
 - *Responsibility:* always pass `EnableAgentSpawning`; construct a shared `AgentManager`;
-  supply `WithAgentLLMFactory` that builds `cogito.NewOpenAILLM(model, parentKey, parentURL)`;
-  pass `WithAgentDefinitions`, `WithAgentCompletionCallback`, `WithAgentCompletionFormatter`.
+  supply `WithAgentLLMFactory` that builds an OpenAI LLM with the parent base/key and the
+  requested model + temperature; pass `WithAgentDefinitions`, `WithAgentCompletionCallback`,
+  `WithAgentCompletionFormatter`.
 - *Tests:* options assembled correctly; factory builds an OpenAI LLM with parent base/key
-  and the requested model; `OnToolCall` receives `AgentID` for sub-agent calls.
+  and the requested model/temperature; `OnToolCall` receives `AgentID` for sub-agent calls.
 
 **W4 — Lifecycle callbacks**
 - *Responsibility:* extend `chat.Callbacks` with an agent-lifecycle hook
@@ -140,12 +154,14 @@ implementation.
 - *Tests:* events emitted on spawn/complete/fail; `ToolCallRequest` carries the agent id;
   no events when no agents spawned.
 
-**W5 — TUI jobs panel + Ctrl+B**
-- *Responsibility:* render a jobs/agents panel (running/done, task, status) from
-  `AgentManager.List`; bind Ctrl+B to background the current foreground job via
+**W5 — TUI jobs footer + Ctrl+B**
+- *Responsibility:* render a **persistent compact footer** (active job count + spinners,
+  expandable to a detail list of running/done agents: short id, type, task, status, elapsed)
+  from `AgentManager.List`; bind Ctrl+B to background the current foreground job via
   `AgentManager.Detach`; show completion toasts.
-- *Tests:* Ctrl+B on a running foreground sub-agent calls `Detach`; panel reflects manager
-  state; completion toast appears on the completion event.
+- *Tests:* Ctrl+B on a running foreground sub-agent calls `Detach`; footer reflects manager
+  state (count + per-job detail when expanded); completion toast appears on the completion
+  event.
 
 **W6 — CLI notifications**
 - *Responsibility:* in CLI mode, print agent spawn/complete/fail lines.
@@ -164,8 +180,9 @@ implementation.
 3. Sub-agent selects a tool → cogito calls wiz's `OnToolCall` with
    `SessionState.AgentID` set → wiz UI prompts (labeled with the agent id) or auto-allows
    per the session allow-list.
-4. Background completion injects a message back into the parent loop (existing mechanism),
-   and `WithAgentCompletionCallback` fires the wiz lifecycle event for UI.
+4. On background completion the result is injected back into the parent loop and the parent
+   **auto-continues** reasoning with it (cogito's built-in parking behavior);
+   `WithAgentCompletionCallback` fires the wiz lifecycle event for the UI (toast + footer).
 
 ## Error handling
 
