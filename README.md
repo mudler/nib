@@ -33,6 +33,10 @@ Wiz aims to be the `fzf` for llms living in your terminal that is portable and l
 
 🔌 **MCP Protocol** — Connect external AI tool servers
 
+🤖 **Sub-agents** — The assistant can delegate tasks to typed sub-agents (e.g. `explore`, `plan`), configurable via the `agents:` block
+
+🪄 **Background jobs** — Run sub-agents in the background; press `Ctrl+B` to background a running foreground sub-agent, `Ctrl+J` to view the jobs footer
+
 📟 **Tmux support** — Seamless splits and popups
 
 🐚 **Multi-shell** — zsh, bash, and fish supported
