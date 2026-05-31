@@ -1,0 +1,108 @@
+package tui
+
+import (
+	"fmt"
+	"strings"
+
+	"github.com/charmbracelet/lipgloss"
+	"github.com/mudler/wiz/chat"
+)
+
+// agentJob is the UI view of a sub-agent for the jobs footer.
+type agentJob struct {
+	ID     string
+	Type   string
+	Task   string
+	Status chat.AgentStatus
+}
+
+var jobsFooterStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
+
+// renderJobsFooter renders a compact one-line summary of active jobs.
+// Returns "" when there are no jobs so the footer takes no vertical space.
+func renderJobsFooter(jobs []agentJob, width int) string {
+	if len(jobs) == 0 {
+		return ""
+	}
+	var running, done, failed int
+	for _, j := range jobs {
+		switch j.Status {
+		case chat.AgentStatusRunning:
+			running++
+		case chat.AgentStatusCompleted:
+			done++
+		case chat.AgentStatusFailed:
+			failed++
+		}
+	}
+	parts := []string{fmt.Sprintf("⚙ jobs: %d running", running)}
+	if done > 0 {
+		parts = append(parts, fmt.Sprintf("%d done", done))
+	}
+	if failed > 0 {
+		parts = append(parts, fmt.Sprintf("%d failed", failed))
+	}
+	parts = append(parts, "(ctrl+b background · ctrl+j detail)")
+	line := strings.Join(parts, "  ·  ")
+	return jobsFooterStyle.Width(width).Render(line)
+}
+
+// renderJobsDetail renders the expanded per-job list.
+func renderJobsDetail(jobs []agentJob, width int) string {
+	if len(jobs) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	for _, j := range jobs {
+		task := j.Task
+		if len(task) > 40 {
+			task = task[:37] + "..."
+		}
+		typ := j.Type
+		if typ == "" {
+			typ = "agent"
+		}
+		b.WriteString(fmt.Sprintf("  %s  %-8s  %-10s  %s\n",
+			shortID(j.ID), typ, j.Status, task))
+	}
+	return jobsFooterStyle.Width(width).Render(strings.TrimRight(b.String(), "\n"))
+}
+
+func shortID(id string) string {
+	if len(id) > 8 {
+		return id[:8]
+	}
+	return id
+}
+
+// toolApprovalLabel builds the tool-approval header, labeling sub-agent calls.
+func toolApprovalLabel(req chat.ToolCallRequest) string {
+	if req.AgentID != "" {
+		return fmt.Sprintf("🤖 %s → run: %s", shortID(req.AgentID), req.Name)
+	}
+	return fmt.Sprintf("🔧 run: %s", req.Name)
+}
+
+// firstRunningJobID returns the id of the first running job, or "".
+func (m Model) firstRunningJobID() string {
+	for _, j := range m.jobs {
+		if j.Status == chat.AgentStatusRunning {
+			return j.ID
+		}
+	}
+	return ""
+}
+
+// applyAgentEvent upserts a job by ID and refreshes status.
+func (m *Model) applyAgentEvent(ev chat.AgentEvent) {
+	for i := range m.jobs {
+		if m.jobs[i].ID == ev.ID {
+			m.jobs[i].Status = ev.Status
+			if ev.Type != "" {
+				m.jobs[i].Type = ev.Type
+			}
+			return
+		}
+	}
+	m.jobs = append(m.jobs, agentJob{ID: ev.ID, Type: ev.Type, Task: ev.Task, Status: ev.Status})
+}
