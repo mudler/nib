@@ -132,6 +132,25 @@ func (s *Session) AgentManager() *cogito.AgentManager {
 	return s.agentManager
 }
 
+// emitAgentEvent maps a cogito sub-agent state into a chat.AgentEvent and
+// forwards it to the registered OnAgentEvent callback (if any). It is shared by
+// the spawn (Status=running) and completion callbacks so the mapping lives in
+// one place. s.callbacks.OnAgentEvent is set once in NewSession and never
+// reassigned, so reading it from cogito's spawn goroutines is safe.
+func (s *Session) emitAgentEvent(a *cogito.AgentState) {
+	if s.callbacks.OnAgentEvent == nil {
+		return
+	}
+	s.callbacks.OnAgentEvent(AgentEvent{
+		ID:     a.ID,
+		Type:   a.Type,
+		Task:   a.Task,
+		Status: AgentStatus(a.Status),
+		Result: a.Result,
+		Err:    a.Error,
+	})
+}
+
 func (s *Session) ClearHistory() {
 	s.messages = []openai.ChatCompletionMessage{}
 	s.fragment = cogito.NewEmptyFragment()
@@ -216,16 +235,11 @@ func (s *Session) SendMessage(text string) (string, error) {
 		cogito.WithAgentLLMFactory(func(model string, temperature float32) cogito.LLM {
 			return clients.NewOpenAILLMWithOptions(model, s.apiKey, s.baseURL, clients.OpenAIOptions{Temperature: temperature})
 		}),
+		cogito.WithAgentSpawnCallback(func(a *cogito.AgentState) {
+			s.emitAgentEvent(a)
+		}),
 		cogito.WithAgentCompletionCallback(func(a *cogito.AgentState) {
-			if s.callbacks.OnAgentEvent != nil {
-				s.callbacks.OnAgentEvent(AgentEvent{
-					ID:     a.ID,
-					Task:   a.Task,
-					Status: AgentStatus(a.Status),
-					Result: a.Result,
-					Err:    a.Error,
-				})
-			}
+			s.emitAgentEvent(a)
 		}),
 	)
 
