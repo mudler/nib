@@ -47,11 +47,15 @@ func TestLoadManifestNative(t *testing.T) {
 	}
 }
 
-func TestLoadManifestClaudeStub(t *testing.T) {
+func TestLoadManifestClaude(t *testing.T) {
 	dir := t.TempDir()
-	writeFile(t, filepath.Join(dir, ".claude-plugin", "plugin.json"), `{"name":"x"}`)
-	if _, err := LoadManifest(dir, "0.9.0"); err == nil {
-		t.Fatal("expected ErrClaudeUnsupported for claude format in P0")
+	writeFile(t, filepath.Join(dir, ".claude-plugin", "plugin.json"), `{"name":"x","version":"1.0.0"}`)
+	m, err := LoadManifest(dir, "0.9.0")
+	if err != nil {
+		t.Fatalf("expected claude plugin to load, got %v", err)
+	}
+	if m.Name != "x" || m.root != dir {
+		t.Fatalf("claude manifest wrong: %+v (root=%q)", m, m.root)
 	}
 }
 
