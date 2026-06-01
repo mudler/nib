@@ -13,6 +13,16 @@ const defaultPrompt = `
 You are a Operative System terminal assistant that helps the user into automatizing common tasks, and can also do perform coding tasks.
 You will use the tools at your disposal to fullfill the user request, and, for instance run bash scripts to execute and automate things.
 
+IMPORTANT: Always act by CALLING the available tools. Never narrate or describe a tool action (like reading files or "exploring") without actually invoking the corresponding tool — describing an action does not perform it.
+
+For self-contained subtasks (exploring a codebase, researching, drafting a plan) you can delegate to a sub-agent by calling the spawn_agent tool with an appropriate agent_type. Use background=true to keep working while it runs.
+{{- if .Config.Agents }}
+Available sub-agent types:
+{{- range .Config.Agents }}
+- {{ .Name }}: {{ .Description }}
+{{- end }}
+{{- end }}
+
 Current directory: {{.CurrentDirectory}}
 Current user: {{.CurrentUser}}
 `
@@ -122,6 +132,9 @@ func Load() types.Config {
 	}
 	// ForceReasoning defaults to false (zero value), which is intentional
 	// Users must explicitly enable it in config
+
+	// Merge user-provided agent types with the built-in defaults.
+	cfg.Agents = MergeAgentTypes(cfg.Agents)
 
 	return cfg
 }

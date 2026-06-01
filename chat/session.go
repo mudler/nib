@@ -11,57 +11,9 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/mudler/cogito"
+	"github.com/mudler/cogito/clients"
 	openai "github.com/sashabaranov/go-openai"
 )
-
-// Message represents a chat message
-type Message struct {
-	Role    string
-	Content string
-}
-
-// ToolCallRequest contains information about a tool the agent wants to run
-type ToolCallRequest struct {
-	Name      string
-	Arguments string
-	Reasoning string
-}
-
-// ToolCallResponse represents the user's decision on a tool call
-type ToolCallResponse struct {
-	Approved    bool
-	Adjustment  string
-	AlwaysAllow bool // Add tool to session allow list
-}
-
-// Plan represents a plan with description and subtasks
-type Plan struct {
-	Description string
-	Subtasks    []string
-}
-
-// PlanResponse represents the user's decision on a plan
-type PlanResponse struct {
-	Approved bool
-}
-
-// Callbacks defines the interface for UI interactions
-type Callbacks struct {
-	// OnStatus is called when there's a status update
-	OnStatus func(status string)
-	// OnReasoning is called when the agent is reasoning
-	OnReasoning func(reasoning string)
-	// OnToolCall is called when the agent wants to run a tool
-	// Returns the user's decision
-	OnToolCall func(req ToolCallRequest) ToolCallResponse
-	// OnPlan is called when a plan needs user approval
-	// Returns the user's decision
-	OnPlan func(plan Plan) PlanResponse
-	// OnResponse is called when the agent responds
-	OnResponse func(response string)
-	// OnError is called when an error occurs
-	OnError func(err error)
-}
 
 // Session represents a chat session with the AI assistant
 type Session struct {
@@ -77,6 +29,31 @@ type Session struct {
 	allowedTools  map[string]bool // Tools that don't need approval this session
 	planMode      bool            // Whether plan mode is enabled
 	reviewerEnabled bool          // Whether reviewer LLM is enabled
+
+	agentManager *cogito.AgentManager
+	agentDefs    []cogito.AgentDefinition
+	llmModel     string
+	apiKey       string
+	baseURL      string
+}
+
+// toCogitoDefinitions converts wiz agent-type config into cogito definitions.
+func toCogitoDefinitions(cfgs []types.AgentTypeConfig) []cogito.AgentDefinition {
+	defs := make([]cogito.AgentDefinition, 0, len(cfgs))
+	for _, t := range cfgs {
+		defs = append(defs, cogito.AgentDefinition{
+			Name:         t.Name,
+			Description:  t.Description,
+			SystemPrompt: t.SystemPrompt,
+			Tools:        t.Tools,
+			Model:        t.Model,
+			Temperature:  t.Temperature,
+			Iterations:   t.Iterations,
+			MaxAttempts:  t.MaxAttempts,
+			MaxRetries:   t.MaxRetries,
+		})
+	}
+	return defs
 }
 
 // CommandTransport creates a new transport for a command
@@ -91,7 +68,7 @@ func CommandTransport(cmd string, args []string, env ...string) mcp.Transport {
 
 // NewSession creates a new chat session
 func NewSession(ctx context.Context, cfg types.Config, callbacks Callbacks, transports ...mcp.Transport) (*Session, error) {
-	llm := cogito.NewOpenAILLM(cfg.Model, cfg.APIKey, cfg.BaseURL)
+	llm := clients.NewOpenAILLM(cfg.Model, cfg.APIKey, cfg.BaseURL)
 
 	// Create reviewer LLM if configured and enabled
 	var reviewerLLM cogito.LLM
@@ -112,10 +89,12 @@ func NewSession(ctx context.Context, cfg types.Config, callbacks Callbacks, tran
 			if reviewerBaseURL == "" {
 				reviewerBaseURL = cfg.BaseURL // Fallback to main base URL if not specified
 			}
-			reviewerLLM = cogito.NewOpenAILLM(cfg.ReviewerLLM.Model, reviewerAPIKey, reviewerBaseURL)
+			reviewerLLM = clients.NewOpenAILLM(cfg.ReviewerLLM.Model, reviewerAPIKey, reviewerBaseURL)
 			reviewerEnabled = true
 		}
 	}
+
+	agentManager := cogito.NewAgentManager()
 
 	client := mcp.NewClient(&mcp.Implementation{Name: "aish", Version: "v1.0.0"}, nil)
 	clients := []*mcp.ClientSession{}
@@ -140,7 +119,36 @@ func NewSession(ctx context.Context, cfg types.Config, callbacks Callbacks, tran
 		cogitoOptions:   cfg.AgentOptions,
 		allowedTools:    make(map[string]bool),
 		reviewerEnabled: reviewerEnabled,
+		agentManager:    agentManager,
+		agentDefs:       toCogitoDefinitions(cfg.Agents),
+		llmModel:        cfg.Model,
+		apiKey:          cfg.APIKey,
+		baseURL:         cfg.BaseURL,
 	}, nil
+}
+
+// AgentManager exposes the sub-agent registry so the UI can list and detach agents.
+func (s *Session) AgentManager() *cogito.AgentManager {
+	return s.agentManager
+}
+
+// emitAgentEvent maps a cogito sub-agent state into a chat.AgentEvent and
+// forwards it to the registered OnAgentEvent callback (if any). It is shared by
+// the spawn (Status=running) and completion callbacks so the mapping lives in
+// one place. s.callbacks.OnAgentEvent is set once in NewSession and never
+// reassigned, so reading it from cogito's spawn goroutines is safe.
+func (s *Session) emitAgentEvent(a *cogito.AgentState) {
+	if s.callbacks.OnAgentEvent == nil {
+		return
+	}
+	s.callbacks.OnAgentEvent(AgentEvent{
+		ID:     a.ID,
+		Type:   a.Type,
+		Task:   a.Task,
+		Status: AgentStatus(a.Status),
+		Result: a.Result,
+		Err:    a.Error,
+	})
 }
 
 func (s *Session) ClearHistory() {
@@ -205,6 +213,7 @@ func (s *Session) SendMessage(text string) (string, error) {
 				Name:      tool.Name,
 				Arguments: string(args),
 				Reasoning: tool.Reasoning,
+				AgentID:   state.AgentID,
 			})
 
 			// Add to allow list if requested
@@ -218,6 +227,21 @@ func (s *Session) SendMessage(text string) (string, error) {
 			}
 		}),
 	}
+
+	cogitoOpts = append(cogitoOpts,
+		cogito.EnableAgentSpawning,
+		cogito.WithAgentManager(s.agentManager),
+		cogito.WithAgentDefinitions(s.agentDefs...),
+		cogito.WithAgentLLMFactory(func(model string, temperature float32) cogito.LLM {
+			return clients.NewOpenAILLMWithOptions(model, s.apiKey, s.baseURL, clients.OpenAIOptions{Temperature: temperature})
+		}),
+		cogito.WithAgentSpawnCallback(func(a *cogito.AgentState) {
+			s.emitAgentEvent(a)
+		}),
+		cogito.WithAgentCompletionCallback(func(a *cogito.AgentState) {
+			s.emitAgentEvent(a)
+		}),
+	)
 
 	// Add ForceReasoning only if enabled in config
 	if s.cogitoOptions.ForceReasoning {

@@ -41,6 +41,11 @@ var (
 			BorderForeground(lipgloss.Color("214")).
 			Padding(1)
 
+	// Sub-agent lifecycle line style
+	agentStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("141")).
+			Italic(true)
+
 	// Help text style
 	helpStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("241"))

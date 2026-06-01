@@ -63,6 +63,11 @@ type Model struct {
 	// Animation state
 	statusPhase int
 
+	// Sub-agent jobs state
+	jobs           []agentJob
+	showJobsDetail bool
+	agentEventChan chan chat.AgentEvent
+
 	// Channels for async communication with callbacks
 	statusChan       chan string
 	reasoningChan    chan string
@@ -89,6 +94,9 @@ type toolCallMsg chat.ToolCallRequest
 
 // planMsg is sent when a plan needs approval
 type planMsg chat.Plan
+
+// agentEventMsg is sent for sub-agent lifecycle updates.
+type agentEventMsg chat.AgentEvent
 
 // sessionReadyMsg is sent when the session is initialized
 type sessionReadyMsg struct {
@@ -134,6 +142,7 @@ func NewModel(ctx context.Context, cfg types.Config, height int, transports ...m
 		transports:       transports,
 		cfg:              cfg,
 		height:           height,
+		agentEventChan:   make(chan chat.AgentEvent, 16),
 		statusChan:       make(chan string, 10),
 		reasoningChan:    make(chan string, 10),
 		toolRequestChan:  make(chan chat.ToolCallRequest),
@@ -179,6 +188,12 @@ func (m Model) initSession() tea.Cmd {
 				m.planRequestChan <- plan
 				return <-m.planResponseChan
 			},
+			OnAgentEvent: func(ev chat.AgentEvent) {
+				select {
+				case m.agentEventChan <- ev:
+				default:
+				}
+			},
 		}
 
 		session, err := chat.NewSession(m.ctx, m.cfg, callbacks, m.transports...)
@@ -213,6 +228,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.session.SetPlanMode(m.planMode)
 				m.updateViewport()
 			}
+			return m, nil
+
+		case tea.KeyCtrlB:
+			// Background (detach) the first running foreground sub-agent.
+			if m.sessionReady && m.session != nil {
+				if id := m.firstRunningJobID(); id != "" {
+					_ = m.session.AgentManager().Detach(id)
+				}
+			}
+			return m, nil
+
+		case tea.KeyCtrlJ:
+			// Toggle the expanded jobs detail list.
+			m.showJobsDetail = !m.showJobsDetail
 			return m, nil
 
 		case tea.KeyEnter:
@@ -265,7 +294,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.session.SetPlanMode(m.planMode)
 		}
 		// Start listening for callbacks
-		cmds = append(cmds, m.listenStatus(), m.listenReasoning(), m.listenToolRequest(), m.listenPlanRequest())
+		cmds = append(cmds, m.listenStatus(), m.listenReasoning(), m.listenToolRequest(), m.listenPlanRequest(), m.listenAgentEvents())
 
 	case responseMsg:
 		m.loading = false
@@ -314,6 +343,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.updateViewport()
 		// Continue listening for more plan requests
 		cmds = append(cmds, m.listenPlanRequest())
+
+	case agentEventMsg:
+		// Update value-receiver copy via pointer helper, then write back.
+		ev := chat.AgentEvent(msg)
+		am := m
+		(&am).applyAgentEvent(ev)
+		m = am
+		// Durable transcript marker so sub-agent activity stays visible in history.
+		if line := agentTranscriptLine(ev); line != "" {
+			m.messages = append(m.messages, ChatMessage{Role: "agent", Content: line})
+		}
+		m.updateViewport()
+		// Continue listening for more agent events
+		cmds = append(cmds, m.listenAgentEvents())
 
 	case spinner.TickMsg:
 		m.spinner, cmd = m.spinner.Update(msg)
@@ -365,6 +408,18 @@ func (m Model) listenReasoning() tea.Cmd {
 		select {
 		case reasoning := <-m.reasoningChan:
 			return reasoningMsg(reasoning)
+		case <-m.ctx.Done():
+			return nil
+		}
+	}
+}
+
+// listenAgentEvents listens for sub-agent lifecycle events from the session
+func (m Model) listenAgentEvents() tea.Cmd {
+	return func() tea.Msg {
+		select {
+		case ev := <-m.agentEventChan:
+			return agentEventMsg(ev)
 		case <-m.ctx.Done():
 			return nil
 		}
@@ -644,6 +699,22 @@ func (m *Model) updateViewport() {
 				sb.WriteString("\n")
 			}
 			sb.WriteString("\n")
+		case "agent":
+			prefix := agentStyle.Render("🤖 ")
+			prefixWidth := lipgloss.Width(prefix)
+			wrappedContent := wrapText(msg.Content, contentWidth-prefixWidth)
+			lines := strings.Split(strings.TrimRight(wrappedContent, "\n"), "\n")
+			for i, line := range lines {
+				if i == 0 {
+					sb.WriteString(prefix)
+					sb.WriteString(agentStyle.Render(line))
+				} else {
+					sb.WriteString(strings.Repeat(" ", prefixWidth))
+					sb.WriteString(agentStyle.Render(line))
+				}
+				sb.WriteString("\n")
+			}
+			sb.WriteString("\n")
 		case "error":
 			prefix := errorStyle.Render("✗ Error: ")
 			prefixWidth := lipgloss.Width(prefix)
@@ -766,7 +837,7 @@ func (m *Model) updateViewport() {
 		}
 
 		var toolContent strings.Builder
-		toolContent.WriteString(toolNameStyle.Render("🔧 " + m.pendingTool.Name))
+		toolContent.WriteString(toolNameStyle.Render(toolApprovalLabel(*m.pendingTool)))
 		toolContent.WriteString("\n\n")
 		// Wrap arguments
 		argsPrefix := dimmedStyle.Render("Arguments: ")
@@ -865,6 +936,23 @@ func (m Model) View() string {
 	if m.err != nil {
 		sb.WriteString("\n")
 		sb.WriteString(errorStyle.Render(fmt.Sprintf("Error: %v", m.err)))
+	}
+
+	// Sub-agent jobs footer (and optional detail). Adds nothing when no jobs,
+	// so the layout is unchanged in the common case.
+	footer := renderJobsFooter(m.jobs, m.width)
+	if m.showJobsDetail {
+		if d := renderJobsDetail(m.jobs, m.width); d != "" {
+			if footer != "" {
+				footer = d + "\n" + footer
+			} else {
+				footer = d
+			}
+		}
+	}
+	if footer != "" {
+		sb.WriteString("\n")
+		sb.WriteString(footer)
 	}
 
 	return sb.String()

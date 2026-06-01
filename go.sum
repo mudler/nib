@@ -123,12 +123,8 @@ github.com/modelcontextprotocol/go-sdk v1.0.0 h1:Z4MSjLi38bTgLrd/LjSmofqRqyBiVKR
 github.com/modelcontextprotocol/go-sdk v1.0.0/go.mod h1:nYtYQroQ2KQiM0/SbyEPUWQ6xs4B95gJjEalc9AQyOs=
 github.com/morikuni/aec v1.0.0 h1:nP9CBfwrvYnBRgY6qfDQkygYDmYwOilePFkwzv4dU8A=
 github.com/morikuni/aec v1.0.0/go.mod h1:BbKIizmSmc5MMPqRYbxO4ZU0S0+P200+tUnFx7PXmsc=
-github.com/mudler/cogito v0.7.0 h1:+MoZPUntD/PTuw0hPP8x2oyFDFdiP7RvhsaekpC8XZY=
-github.com/mudler/cogito v0.7.0/go.mod h1:2uhEElCTq8eXSsqJ1JF01oA5h9niXSELVKqCF1PqjEw=
-github.com/mudler/cogito v0.7.1-0.20251216204542-ab4090ff35d2 h1:EeKObW1LFny6DqrWKQJu7ihp7lpQFxacAGHChG1MvUM=
-github.com/mudler/cogito v0.7.1-0.20251216204542-ab4090ff35d2/go.mod h1:2uhEElCTq8eXSsqJ1JF01oA5h9niXSELVKqCF1PqjEw=
-github.com/mudler/cogito v0.8.1 h1:66qPJkAMrq/Vo8AC/PvXWuVxYPhi7X2DQuJIilL8+3I=
-github.com/mudler/cogito v0.8.1/go.mod h1:6sfja3lcu2nWRzEc0wwqGNu/eCG3EWgij+8s7xyUeQ4=
+github.com/mudler/cogito v0.10.1-0.20260601071740-67811faaf533 h1:5UDh+7RmNUC0taaNt9g6aRIcTBPX4qmZ0dwIZCxiqB8=
+github.com/mudler/cogito v0.10.1-0.20260601071740-67811faaf533/go.mod h1:6sfja3lcu2nWRzEc0wwqGNu/eCG3EWgij+8s7xyUeQ4=
 github.com/mudler/xlog v0.0.1 h1:yR3/wszd3ZM6u1n96YITJZ4yUcDgqHSwvQmzUJa+8vg=
 github.com/mudler/xlog v0.0.1/go.mod h1:39f5vcd05Qd6GWKM8IjyHNQ7AmOx3ZM0YfhfIGhC18U=
 github.com/muesli/ansi v0.0.0-20230316100256-276c6243b2f6 h1:ZK8zHtRHOkbHy6Mmr5D264iyp3TiX5OmNcI5cIARiQI=

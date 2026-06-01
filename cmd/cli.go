@@ -120,6 +120,26 @@ func readStringCancellable(ctx context.Context, reader *bufio.Reader) (string, e
 	}
 }
 
+// formatAgentEventLine renders a one-line CLI notification for a sub-agent event.
+func formatAgentEventLine(ev chat.AgentEvent) string {
+	id := ev.ID
+	if len(id) > 8 {
+		id = id[:8]
+	}
+	typ := ev.Type
+	if typ == "" {
+		typ = "agent"
+	}
+	switch ev.Status {
+	case chat.AgentStatusCompleted:
+		return fmt.Sprintf("%s🤖 %s (%s) completed: %s%s", colorGray, typ, id, ev.Result, colorReset)
+	case chat.AgentStatusFailed:
+		return fmt.Sprintf("%s🤖 %s (%s) failed: %v%s", colorRed, typ, id, ev.Err, colorReset)
+	default:
+		return fmt.Sprintf("%s🤖 %s (%s) %s%s", colorGray, typ, id, ev.Status, colorReset)
+	}
+}
+
 func RunCLI(ctx context.Context, cfg types.Config, transports ...mcp.Transport) error {
 	reader := bufio.NewReader(os.Stdin)
 	spin := newSpinner()
@@ -208,6 +228,11 @@ func RunCLI(ctx context.Context, cfg types.Config, transports ...mcp.Transport) 
 		OnError: func(err error) {
 			spin.stop()
 			fmt.Fprintf(os.Stderr, "%s✗ Error: %v%s\n", colorRed, err, colorReset)
+		},
+		OnAgentEvent: func(ev chat.AgentEvent) {
+			spin.stop()
+			fmt.Println(formatAgentEventLine(ev))
+			spin.start("Conjuring...")
 		},
 	}
 
