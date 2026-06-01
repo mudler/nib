@@ -33,27 +33,30 @@ type AgentTypeConfig struct {
 
 // ReviewerLLMConfig holds configuration for the reviewer LLM (used in plan mode)
 type ReviewerLLMConfig struct {
-	Model  string `yaml:"model"`
-	APIKey string `yaml:"api_key"`
+	Model   string `yaml:"model"`
+	APIKey  string `yaml:"api_key"`
 	BaseURL string `yaml:"base_url"`
-	Enabled *bool `yaml:"enabled"` // If nil, defaults to true when reviewer_llm is configured
+	Enabled *bool  `yaml:"enabled"` // If nil, defaults to true when reviewer_llm is configured
 }
 
 // Config holds configuration for creating a new session
 type Config struct {
-	Model          string               `yaml:"model"`
-	APIKey         string               `yaml:"api_key"`
-	BaseURL        string               `yaml:"base_url"`
-	LogLevel       string               `yaml:"log_level"`
-	Prompt         string               `yaml:"prompt"`
-	MCPServers     map[string]MCPServer `yaml:"mcp_servers"`
-	AgentOptions   AgentOptions         `yaml:"agent_options"`
-	ReviewerLLM    *ReviewerLLMConfig   `yaml:"reviewer_llm"`
-	Agents         []AgentTypeConfig    `yaml:"agents"`
+	Model        string               `yaml:"model"`
+	APIKey       string               `yaml:"api_key"`
+	BaseURL      string               `yaml:"base_url"`
+	LogLevel     string               `yaml:"log_level"`
+	Prompt       string               `yaml:"prompt"`
+	MCPServers   map[string]MCPServer `yaml:"mcp_servers"`
+	AgentOptions AgentOptions         `yaml:"agent_options"`
+	ReviewerLLM  *ReviewerLLMConfig   `yaml:"reviewer_llm"`
+	Agents       []AgentTypeConfig    `yaml:"agents"`
 }
 
 func (c *Config) GetPrompt() string {
-	tmpl := template.New("").Funcs(sprig.FuncMap())
+	tmpl, err := template.New("").Funcs(sprig.FuncMap()).Parse(c.Prompt)
+	if err != nil {
+		return ""
+	}
 
 	data := bytes.NewBuffer([]byte{})
 
