@@ -42,6 +42,17 @@ func StartTransports(ctx context.Context, cfg types.Config) ([]mcp.Transport, er
 
 	transports := []mcp.Transport{bashMCPServerClient, filesystemMCPServerClient}
 
+	// Skills server (load_skill tool) — only when the config carries skills.
+	if len(cfg.Skills) > 0 {
+		skillsServerTransport, skillsServerClient := mcp.NewInMemoryTransports()
+		go func() {
+			if err := StartSkillsMCPServer(ctx, skillsServerTransport, cfg.Skills); err != nil {
+				fmt.Fprintf(os.Stderr, "Skills MCP server error: %v\n", err)
+			}
+		}()
+		transports = append(transports, skillsServerClient)
+	}
+
 	for _, c := range cfg.MCPServers {
 		envs := []string{}
 		for k, v := range c.Env {
