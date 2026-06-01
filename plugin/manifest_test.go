@@ -1,6 +1,10 @@
 package plugin
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/mudler/wiz/types"
+)
 
 func TestParseManifestNative(t *testing.T) {
 	data := []byte(`
@@ -31,5 +35,31 @@ agents:
 	}
 	if len(m.Agents) != 1 || m.Agents[0].Name != "researcher" {
 		t.Fatalf("agents wrong: %+v", m.Agents)
+	}
+}
+
+func TestValidate(t *testing.T) {
+	cases := []struct {
+		name    string
+		m       Manifest
+		wiz     string
+		wantErr bool
+	}{
+		{"ok", Manifest{Name: "a"}, "0.9.0", false},
+		{"missing name", Manifest{}, "0.9.0", true},
+		{"mcp missing command", Manifest{Name: "a", MCPServers: map[string]types.MCPServer{"x": {}}}, "0.9.0", true},
+		{"agent missing name", Manifest{Name: "a", Agents: []types.AgentTypeConfig{{}}}, "0.9.0", true},
+		{"wiz constraint met", Manifest{Name: "a", WizVersion: ">=0.5.0"}, "0.9.0", false},
+		{"wiz constraint unmet", Manifest{Name: "a", WizVersion: ">=1.0.0"}, "0.9.0", true},
+		{"dev build skips constraint", Manifest{Name: "a", WizVersion: ">=1.0.0"}, "", false},
+		{"prefixed v version", Manifest{Name: "a", WizVersion: ">=0.5.0"}, "v0.9.0", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := c.m.Validate(c.wiz)
+			if (err != nil) != c.wantErr {
+				t.Fatalf("Validate err = %v, wantErr = %v", err, c.wantErr)
+			}
+		})
 	}
 }
