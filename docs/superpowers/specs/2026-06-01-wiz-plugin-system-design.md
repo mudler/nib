@@ -321,8 +321,11 @@ hidden — the install summary and load warnings make the gaps visible.
 - Manifest invalid / `wiz_version` unmet → that plugin is skipped with a clear logged error;
   other plugins and wiz still load.
 - Unknown skill in `load_skill` / `/skill` → clean error string (no panic).
-- Hook command missing/non-zero/malformed stdout → logged; treated as no-decision
-  (pass-through), except a hook explicitly returning `block:true`.
+- Hook stdout that is empty/malformed JSON → no-decision (pass-through). A hook that
+  exits non-zero or times out is **fail-safe**: for `PreToolUse` it counts as `block`
+  (deny rather than silently allow); for observational events it is ignored. A hook
+  explicitly returning `block:true` (or `approved:false`) denies; `approved:true` approves.
+  The dispatcher bounds each hook's wall-clock via a context deadline + `WaitDelay`.
 - Plugin-vs-plugin name clashes → last wins + warning.
 
 ## Testing strategy
