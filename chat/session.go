@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 
+	"github.com/mudler/wiz/hooks"
 	"github.com/mudler/wiz/types"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -29,6 +30,7 @@ type Session struct {
 	skills        []types.Skill
 	cogitoOptions types.AgentOptions
 	allowedTools  map[string]bool // Tools that don't need approval this session
+	hooks         *hooks.Dispatcher
 	planMode      bool            // Whether plan mode is enabled
 	reviewerEnabled bool          // Whether reviewer LLM is enabled
 
@@ -109,7 +111,7 @@ func NewSession(ctx context.Context, cfg types.Config, callbacks Callbacks, tran
 		clients = append(clients, session)
 	}
 
-	return &Session{
+	s := &Session{
 		ctx:             ctx,
 		llm:             llm,
 		reviewerLLM:     reviewerLLM,
@@ -121,13 +123,16 @@ func NewSession(ctx context.Context, cfg types.Config, callbacks Callbacks, tran
 		skills:          cfg.Skills,
 		cogitoOptions:   cfg.AgentOptions,
 		allowedTools:    make(map[string]bool),
+		hooks:           hooks.New(cfg.Hooks),
 		reviewerEnabled: reviewerEnabled,
 		agentManager:    agentManager,
 		agentDefs:       toCogitoDefinitions(cfg.Agents),
 		llmModel:        cfg.Model,
 		apiKey:          cfg.APIKey,
 		baseURL:         cfg.BaseURL,
-	}, nil
+	}
+	s.hooks.Fire(ctx, hooks.EventSessionStart, "", map[string]any{"event": "SessionStart"})
+	return s, nil
 }
 
 // LoadSkill appends a named skill's instructions to the session system prompt
@@ -143,6 +148,35 @@ func (s *Session) LoadSkill(name string) (string, error) {
 	return "", fmt.Errorf("unknown skill %q", name)
 }
 
+// decideToolCall resolves a tool-call request: PreToolUse hooks first (a hook
+// may block/approve/adjust), then the session allow-list, then the user gate.
+func (s *Session) decideToolCall(req ToolCallRequest) cogito.ToolCallDecision {
+	if s.hooks != nil {
+		decisions := s.hooks.Fire(s.ctx, hooks.EventPreToolUse, req.Name, map[string]any{
+			"event":     "PreToolUse",
+			"tool":      req.Name,
+			"arguments": req.Arguments,
+			"reasoning": req.Reasoning,
+			"agent_id":  req.AgentID,
+		})
+		if td := hooks.CombineToolDecisions(decisions); td.Decided {
+			return cogito.ToolCallDecision{Approved: td.Approve, Adjustment: td.Adjustment}
+		}
+	}
+
+	if s.allowedTools[req.Name] {
+		return cogito.ToolCallDecision{Approved: true}
+	}
+	if s.callbacks.OnToolCall == nil {
+		return cogito.ToolCallDecision{Approved: true}
+	}
+	resp := s.callbacks.OnToolCall(req)
+	if resp.AlwaysAllow && resp.Approved {
+		s.allowedTools[req.Name] = true
+	}
+	return cogito.ToolCallDecision{Approved: resp.Approved, Adjustment: resp.Adjustment}
+}
+
 // AgentManager exposes the sub-agent registry so the UI can list and detach agents.
 func (s *Session) AgentManager() *cogito.AgentManager {
 	return s.agentManager
@@ -154,17 +188,24 @@ func (s *Session) AgentManager() *cogito.AgentManager {
 // one place. s.callbacks.OnAgentEvent is set once in NewSession and never
 // reassigned, so reading it from cogito's spawn goroutines is safe.
 func (s *Session) emitAgentEvent(a *cogito.AgentState) {
-	if s.callbacks.OnAgentEvent == nil {
-		return
+	if s.callbacks.OnAgentEvent != nil {
+		s.callbacks.OnAgentEvent(AgentEvent{
+			ID:     a.ID,
+			Type:   a.Type,
+			Task:   a.Task,
+			Status: AgentStatus(a.Status),
+			Result: a.Result,
+			Err:    a.Error,
+		})
 	}
-	s.callbacks.OnAgentEvent(AgentEvent{
-		ID:     a.ID,
-		Type:   a.Type,
-		Task:   a.Task,
-		Status: AgentStatus(a.Status),
-		Result: a.Result,
-		Err:    a.Error,
-	})
+	if s.hooks != nil {
+		s.hooks.Fire(s.ctx, hooks.EventAgentEvent, string(a.Status), map[string]any{
+			"event":  "AgentEvent",
+			"id":     a.ID,
+			"type":   a.Type,
+			"status": string(a.Status),
+		})
+	}
 }
 
 func (s *Session) ClearHistory() {
@@ -184,6 +225,9 @@ func (s *Session) GetPlanMode() bool {
 
 // SendMessage sends a message to the assistant and processes the response
 func (s *Session) SendMessage(text string) (string, error) {
+	if s.hooks != nil {
+		s.hooks.Fire(s.ctx, hooks.EventUserPromptSubmit, "", map[string]any{"event": "UserPromptSubmit", "prompt": text})
+	}
 	if s.systemPrompt != "" {
 		s.fragment = s.fragment.AddMessage("system", s.systemPrompt)
 	}
@@ -211,35 +255,24 @@ func (s *Session) SendMessage(text string) (string, error) {
 		}),
 		cogito.WithMCPs(s.clients...),
 		cogito.WithToolCallBack(func(tool *cogito.ToolChoice, state *cogito.SessionState) cogito.ToolCallDecision {
-			// Check if tool is in the allow list
-			if s.allowedTools[tool.Name] {
-				return cogito.ToolCallDecision{Approved: true}
-			}
-
-			if s.callbacks.OnToolCall == nil {
-				return cogito.ToolCallDecision{Approved: true}
-			}
-
 			args, err := json.Marshal(tool.Arguments)
 			if err != nil {
 				return cogito.ToolCallDecision{Approved: false}
 			}
-
-			resp := s.callbacks.OnToolCall(ToolCallRequest{
+			return s.decideToolCall(ToolCallRequest{
 				Name:      tool.Name,
 				Arguments: string(args),
 				Reasoning: tool.Reasoning,
 				AgentID:   state.AgentID,
 			})
-
-			// Add to allow list if requested
-			if resp.AlwaysAllow && resp.Approved {
-				s.allowedTools[tool.Name] = true
-			}
-
-			return cogito.ToolCallDecision{
-				Approved:   resp.Approved,
-				Adjustment: resp.Adjustment,
+		}),
+		cogito.WithToolCallResultCallback(func(status cogito.ToolStatus) {
+			if s.hooks != nil {
+				s.hooks.Fire(s.ctx, hooks.EventPostToolUse, status.Name, map[string]any{
+					"event":  "PostToolUse",
+					"tool":   status.Name,
+					"result": status.Result,
+				})
 			}
 		}),
 	}
@@ -360,6 +393,10 @@ func (s *Session) SendMessage(text string) (string, error) {
 
 	if s.callbacks.OnResponse != nil {
 		s.callbacks.OnResponse(response)
+	}
+
+	if s.hooks != nil {
+		s.hooks.Fire(s.ctx, hooks.EventStop, "", map[string]any{"event": "Stop"})
 	}
 
 	return response, nil
