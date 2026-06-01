@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"sync"
 
 	"github.com/mudler/wiz/hooks"
 	"github.com/mudler/wiz/types"
@@ -20,6 +21,8 @@ import (
 // Session represents a chat session with the AI assistant
 type Session struct {
 	ctx           context.Context
+	turnMu        sync.Mutex
+	turnCancel    context.CancelFunc
 	llm           cogito.LLM
 	reviewerLLM   cogito.LLM // Reviewer LLM for plan mode (can be same as llm or nil if disabled)
 	clients       []*mcp.ClientSession
@@ -233,11 +236,43 @@ func (s *Session) GetPlanMode() bool {
 	return s.planMode
 }
 
+// beginTurn starts a per-turn cancellable context derived from the session
+// context and stores its cancel func so Interrupt can cancel just this turn.
+func (s *Session) beginTurn() context.Context {
+	s.turnMu.Lock()
+	defer s.turnMu.Unlock()
+	ctx, cancel := context.WithCancel(s.ctx)
+	s.turnCancel = cancel
+	return ctx
+}
+
+// endTurn releases the current turn context.
+func (s *Session) endTurn() {
+	s.turnMu.Lock()
+	defer s.turnMu.Unlock()
+	if s.turnCancel != nil {
+		s.turnCancel()
+		s.turnCancel = nil
+	}
+}
+
+// Interrupt cancels the in-flight turn (and any sub-agents spawned within it),
+// leaving the session alive. Safe to call when no turn is running.
+func (s *Session) Interrupt() {
+	s.turnMu.Lock()
+	defer s.turnMu.Unlock()
+	if s.turnCancel != nil {
+		s.turnCancel()
+	}
+}
+
 // SendMessage sends a message to the assistant and processes the response
 func (s *Session) SendMessage(text string) (string, error) {
 	if s.hooks != nil {
 		s.hooks.Fire(s.ctx, hooks.EventUserPromptSubmit, "", map[string]any{"event": "UserPromptSubmit", "prompt": text})
 	}
+	turnCtx := s.beginTurn()
+	defer s.endTurn()
 	if s.systemPrompt != "" {
 		s.fragment = s.fragment.AddMessage("system", s.systemPrompt)
 	}
@@ -249,7 +284,7 @@ func (s *Session) SendMessage(text string) (string, error) {
 
 	// Build cogito options from config
 	cogitoOpts := []cogito.Option{
-		cogito.WithContext(s.ctx),
+		cogito.WithContext(turnCtx),
 		cogito.WithIterations(s.cogitoOptions.Iterations),
 		cogito.WithMaxAttempts(s.cogitoOptions.MaxAttempts),
 		cogito.WithMaxRetries(s.cogitoOptions.MaxRetries),
@@ -387,7 +422,7 @@ func (s *Session) SendMessage(text string) (string, error) {
 		}
 	}
 
-	s.fragment, err = s.llm.Ask(context.Background(), s.fragment)
+	s.fragment, err = s.llm.Ask(turnCtx, s.fragment)
 	if err != nil {
 		if s.callbacks.OnError != nil {
 			s.callbacks.OnError(err)
