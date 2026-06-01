@@ -42,6 +42,15 @@ type Skill struct {
 	Tools        []string `yaml:"tools,omitempty"`
 }
 
+// CommandConfig is a named slash command: a prompt template (text/template with
+// {{.Args}} and {{.CurrentDirectory}}) optionally routed through a sub-agent.
+type CommandConfig struct {
+	Name        string `yaml:"name"`
+	Description string `yaml:"description"`
+	Prompt      string `yaml:"prompt"`
+	Agent       string `yaml:"agent,omitempty"`
+}
+
 // ReviewerLLMConfig holds configuration for the reviewer LLM (used in plan mode)
 type ReviewerLLMConfig struct {
 	Model   string `yaml:"model"`
@@ -64,6 +73,8 @@ type Config struct {
 
 	PromptFragments []string `yaml:"prompt_fragments"`
 	Skills          []Skill  `yaml:"skills"`
+
+	Commands []CommandConfig `yaml:"commands"`
 }
 
 func (c *Config) GetPrompt() string {

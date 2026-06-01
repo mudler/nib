@@ -131,3 +131,36 @@ func TestApplyEnabledOnly(t *testing.T) {
 		t.Fatalf("enabled plugin agent missing: %+v", cfg.Agents)
 	}
 }
+
+func TestMergeCommands(t *testing.T) {
+	cfg := &types.Config{
+		Commands: []types.CommandConfig{{Name: "shared", Prompt: "USER"}},
+	}
+	manifests := []Manifest{
+		{Name: "p1", Commands: []types.CommandConfig{
+			{Name: "shared", Prompt: "P1"},
+			{Name: "p1cmd", Prompt: "one"},
+		}},
+		{Name: "p2", Commands: []types.CommandConfig{{Name: "p1cmd", Prompt: "two"}}},
+	}
+	mergeManifests(cfg, manifests)
+
+	var shared, p1cmd *types.CommandConfig
+	for i := range cfg.Commands {
+		switch cfg.Commands[i].Name {
+		case "shared":
+			shared = &cfg.Commands[i]
+		case "p1cmd":
+			p1cmd = &cfg.Commands[i]
+		}
+	}
+	if shared == nil || shared.Prompt != "USER" {
+		t.Fatalf("user command overwritten: %+v", shared)
+	}
+	if p1cmd == nil || p1cmd.Prompt != "two" {
+		t.Fatalf("plugin-vs-plugin last-wins failed: %+v", p1cmd)
+	}
+	if len(cfg.Commands) != 2 {
+		t.Fatalf("want 2 commands, got %d: %+v", len(cfg.Commands), cfg.Commands)
+	}
+}

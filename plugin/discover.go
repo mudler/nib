@@ -77,6 +77,7 @@ func mergeManifests(cfg *types.Config, manifests []Manifest) {
 
 	mergePromptFragments(cfg, manifests)
 	mergeSkills(cfg, manifests)
+	mergeCommands(cfg, manifests)
 }
 
 // mergePromptFragments appends each enabled plugin's resolved prompt fragments
@@ -130,5 +131,36 @@ func mergeSkills(cfg *types.Config, manifests []Manifest) {
 	}
 	for _, name := range order {
 		cfg.Skills = append(cfg.Skills, byName[name])
+	}
+}
+
+// mergeCommands merges plugin commands into cfg with precedence plugins < user:
+// a user command of the same name wins; plugin-vs-plugin clash is last-wins
+// with a warning.
+func mergeCommands(cfg *types.Config, manifests []Manifest) {
+	userCmds := map[string]bool{}
+	for _, c := range cfg.Commands {
+		userCmds[c.Name] = true
+	}
+	order := []string{}
+	byName := map[string]types.CommandConfig{}
+	from := map[string]string{}
+
+	for _, m := range manifests {
+		for _, c := range m.Commands {
+			if userCmds[c.Name] {
+				continue
+			}
+			if _, ok := byName[c.Name]; ok {
+				fmt.Fprintf(os.Stderr, "wiz: command %q from plugin %q overrides plugin %q\n", c.Name, m.Name, from[c.Name])
+			} else {
+				order = append(order, c.Name)
+			}
+			byName[c.Name] = c
+			from[c.Name] = m.Name
+		}
+	}
+	for _, name := range order {
+		cfg.Commands = append(cfg.Commands, byName[name])
 	}
 }

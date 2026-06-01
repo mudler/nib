@@ -30,6 +30,8 @@ type Manifest struct {
 	PromptFragments []FragmentSpec `yaml:"prompt_fragments"`
 	Skills          []SkillSpec    `yaml:"skills"`
 
+	Commands []types.CommandConfig `yaml:"commands"`
+
 	// root is the plugin's install directory. Set by the loader, never parsed.
 	// (Unexported: yaml ignores it; no struct tag, to keep `go vet` quiet.)
 	root string
@@ -111,6 +113,14 @@ func (m Manifest) Validate(wizVersion string) error {
 		}
 		if strings.TrimSpace(s.Instructions.Inline) == "" && strings.TrimSpace(s.Instructions.File) == "" {
 			return fmt.Errorf("plugin manifest: skill %q has no instructions (inline or file)", s.Name)
+		}
+	}
+	for i, c := range m.Commands {
+		if strings.TrimSpace(c.Name) == "" {
+			return fmt.Errorf("plugin manifest: command #%d missing name", i)
+		}
+		if strings.TrimSpace(c.Prompt) == "" {
+			return fmt.Errorf("plugin manifest: command %q missing prompt", c.Name)
 		}
 	}
 	return checkWizVersion(m.WizVersion, wizVersion)

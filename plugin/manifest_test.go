@@ -139,3 +139,22 @@ func TestValidateFragmentsAndSkills(t *testing.T) {
 		t.Fatalf("expected valid manifest, got %v", err)
 	}
 }
+
+func TestParseAndValidateCommands(t *testing.T) {
+	m, err := ParseManifest([]byte("name: demo\ncommands:\n  - name: review\n    description: review the diff\n    prompt: \"Review: {{.Args}}\"\n    agent: explore\n"))
+	if err != nil {
+		t.Fatalf("ParseManifest: %v", err)
+	}
+	if len(m.Commands) != 1 || m.Commands[0].Name != "review" || m.Commands[0].Agent != "explore" {
+		t.Fatalf("commands wrong: %+v", m.Commands)
+	}
+	if err := (Manifest{Name: "a", Commands: []types.CommandConfig{{Prompt: "x"}}}).Validate("0.9.0"); err == nil {
+		t.Fatal("expected command with no name to be rejected")
+	}
+	if err := (Manifest{Name: "a", Commands: []types.CommandConfig{{Name: "c"}}}).Validate("0.9.0"); err == nil {
+		t.Fatal("expected command with no prompt to be rejected")
+	}
+	if err := (Manifest{Name: "a", Commands: []types.CommandConfig{{Name: "c", Prompt: "p"}}}).Validate("0.9.0"); err != nil {
+		t.Fatalf("expected valid, got %v", err)
+	}
+}
