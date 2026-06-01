@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 
@@ -25,6 +26,7 @@ type Session struct {
 	messages      []openai.ChatCompletionMessage
 	callbacks     Callbacks
 	systemPrompt  string
+	skills        []types.Skill
 	cogitoOptions types.AgentOptions
 	allowedTools  map[string]bool // Tools that don't need approval this session
 	planMode      bool            // Whether plan mode is enabled
@@ -116,6 +118,7 @@ func NewSession(ctx context.Context, cfg types.Config, callbacks Callbacks, tran
 		messages:        []openai.ChatCompletionMessage{},
 		callbacks:       callbacks,
 		systemPrompt:    cfg.GetPrompt(),
+		skills:          cfg.Skills,
 		cogitoOptions:   cfg.AgentOptions,
 		allowedTools:    make(map[string]bool),
 		reviewerEnabled: reviewerEnabled,
@@ -125,6 +128,19 @@ func NewSession(ctx context.Context, cfg types.Config, callbacks Callbacks, tran
 		apiKey:          cfg.APIKey,
 		baseURL:         cfg.BaseURL,
 	}, nil
+}
+
+// LoadSkill appends a named skill's instructions to the session system prompt
+// (eager load via /skill), so subsequent turns include it without a load_skill
+// tool call. Returns a short notice for the transcript.
+func (s *Session) LoadSkill(name string) (string, error) {
+	for _, sk := range s.skills {
+		if sk.Name == name {
+			s.systemPrompt += "\n\n# Skill: " + sk.Name + "\n" + sk.Instructions
+			return fmt.Sprintf("Loaded skill %q: %s", sk.Name, sk.Description), nil
+		}
+	}
+	return "", fmt.Errorf("unknown skill %q", name)
 }
 
 // AgentManager exposes the sub-agent registry so the UI can list and detach agents.
