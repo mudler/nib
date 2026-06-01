@@ -53,6 +53,55 @@ func TestMergeManifestsPrecedence(t *testing.T) {
 	}
 }
 
+func TestMergeFragmentsAndSkills(t *testing.T) {
+	root := t.TempDir() // plugins share a root here for simplicity
+	cfg := &types.Config{
+		Skills: []types.Skill{{Name: "shared", Instructions: "USER BODY"}},
+	}
+	manifests := []Manifest{
+		{
+			Name:            "p1",
+			root:            root,
+			PromptFragments: []FragmentSpec{{Text: "frag-from-p1"}},
+			Skills: []SkillSpec{
+				{Name: "shared", Instructions: InstructionsSpec{Inline: "P1 BODY"}}, // loses to user
+				{Name: "p1skill", Instructions: InstructionsSpec{Inline: "p1 body"}},
+			},
+		},
+		{
+			Name:            "p2",
+			root:            root,
+			PromptFragments: []FragmentSpec{{Text: "frag-from-p2"}},
+			Skills:          []SkillSpec{{Name: "p1skill", Instructions: InstructionsSpec{Inline: "p2 overrides"}}}, // plugin-vs-plugin: last wins
+		},
+	}
+
+	mergeManifests(cfg, manifests)
+
+	if len(cfg.PromptFragments) != 2 || cfg.PromptFragments[0] != "frag-from-p1" || cfg.PromptFragments[1] != "frag-from-p2" {
+		t.Fatalf("fragments wrong: %+v", cfg.PromptFragments)
+	}
+	var shared *types.Skill
+	var p1skill *types.Skill
+	for i := range cfg.Skills {
+		switch cfg.Skills[i].Name {
+		case "shared":
+			shared = &cfg.Skills[i]
+		case "p1skill":
+			p1skill = &cfg.Skills[i]
+		}
+	}
+	if shared == nil || shared.Instructions != "USER BODY" {
+		t.Fatalf("user skill overwritten: %+v", shared)
+	}
+	if p1skill == nil || p1skill.Instructions != "p2 overrides" {
+		t.Fatalf("plugin-vs-plugin last-wins failed: %+v", p1skill)
+	}
+	if len(cfg.Skills) != 2 {
+		t.Fatalf("want 2 skills, got %d: %+v", len(cfg.Skills), cfg.Skills)
+	}
+}
+
 func TestApplyEnabledOnly(t *testing.T) {
 	base := t.TempDir()
 	withFakeGit(t, "name: demo\nagents:\n  - name: fromplugin\n")

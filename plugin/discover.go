@@ -3,6 +3,7 @@ package plugin
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/mudler/wiz/types"
 )
@@ -73,4 +74,61 @@ func mergeManifests(cfg *types.Config, manifests []Manifest) {
 	// Prepend plugin agents so user agents stay last → user wins when
 	// config.MergeAgentTypes overlays the list (defaults < plugins < user).
 	cfg.Agents = append(pluginAgents, cfg.Agents...)
+
+	mergePromptFragments(cfg, manifests)
+	mergeSkills(cfg, manifests)
+}
+
+// mergePromptFragments appends each enabled plugin's resolved prompt fragments
+// to cfg (accumulate; fragments never override).
+func mergePromptFragments(cfg *types.Config, manifests []Manifest) {
+	for _, m := range manifests {
+		for _, fs := range m.PromptFragments {
+			text, err := resolveFragment(fs, m.root)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "wiz: plugin %q prompt fragment: %v\n", m.Name, err)
+				continue
+			}
+			if strings.TrimSpace(text) == "" {
+				continue
+			}
+			cfg.PromptFragments = append(cfg.PromptFragments, text)
+		}
+	}
+}
+
+// mergeSkills merges plugin skills into cfg with precedence plugins < user: a
+// user skill of the same name wins; a plugin-vs-plugin name clash is last-wins
+// with a warning. Resolution failures are skipped with a warning.
+func mergeSkills(cfg *types.Config, manifests []Manifest) {
+	userSkills := map[string]bool{}
+	for _, s := range cfg.Skills {
+		userSkills[s.Name] = true
+	}
+	order := []string{}
+	byName := map[string]types.Skill{}
+	from := map[string]string{}
+
+	for _, m := range manifests {
+		for _, ss := range m.Skills {
+			if userSkills[ss.Name] {
+				continue // user wins
+			}
+			skill, err := resolveSkill(ss, m.root)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "wiz: plugin %q skill %q: %v\n", m.Name, ss.Name, err)
+				continue
+			}
+			if _, ok := byName[ss.Name]; ok {
+				fmt.Fprintf(os.Stderr, "wiz: skill %q from plugin %q overrides plugin %q\n", ss.Name, m.Name, from[ss.Name])
+			} else {
+				order = append(order, ss.Name)
+			}
+			byName[ss.Name] = skill
+			from[ss.Name] = m.Name
+		}
+	}
+	for _, name := range order {
+		cfg.Skills = append(cfg.Skills, byName[name])
+	}
 }
