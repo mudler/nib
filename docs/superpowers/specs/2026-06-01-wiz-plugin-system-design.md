@@ -363,10 +363,18 @@ hidden — the install summary and load warnings make the gaps visible.
   `plugin.json`/`skills/`/`commands/`/`agents/`/`hooks.json`/`.mcp.json` into the internal
   model; tool-name alias map; command-syntax translation (`$ARGUMENTS`/`$n`);
   `${CLAUDE_PLUGIN_ROOT}` hook env; hook event-name mapping with skip-warnings.
-- **P5 — Example plugin + e2e harness:** a native plugin repo exercising every contribution
+- **P5 — Claude-Code interaction parity:** two parity gaps with Claude Code, independent of
+  plugins. (a) **Ctrl+C interrupts running work** instead of quitting: while a turn or
+  sub-agent is in flight, Ctrl+C cancels just that work (the turn context is cancelled, which
+  propagates to spawned sub-agents — cogito exposes no per-agent cancel) and the session stays
+  alive; when idle, Ctrl+C quits; Esc quits anytime. (b) an **`ask_user(question, options?)`
+  in-process MCP tool** the agent calls to ask the user a question — free-text by default, a
+  multiple-choice picker when `options` are supplied — surfaced through the existing
+  approval-prompt channels and returned to the agent as the tool result.
+- **P6 — Example plugin + e2e harness:** a native plugin repo exercising every contribution
   type, **plus installing a real Claude Code plugin** (e.g. a skills-only one) to prove
   compatibility; CLI-mode e2e harness against a stub LLM. **Acceptance gate.**
-- **P6 (later) — Marketplace:** wiz index repos + Claude `marketplace.json` import +
+- **P7 (later) — Marketplace:** wiz index repos + Claude `marketplace.json` import +
   `wiz plugin install <name>` resolution.
 
 ## Out of scope / follow-up
