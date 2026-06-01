@@ -55,6 +55,12 @@ type Model struct {
 	pendingTool      *chat.ToolCallRequest
 	awaitingApproval bool
 
+	// ask_user state
+	pendingAsk      *chat.AskRequest
+	awaitingAsk     bool
+	askRequestChan  chan chat.AskRequest
+	askResponseChan chan string
+
 	// Plan mode state
 	planMode bool
 
@@ -99,6 +105,9 @@ type toolCallMsg chat.ToolCallRequest
 
 // planMsg is sent when a plan needs approval
 type planMsg chat.Plan
+
+// askMsg is sent when the agent asks the user a question.
+type askMsg chat.AskRequest
 
 // agentEventMsg is sent for sub-agent lifecycle updates.
 type agentEventMsg chat.AgentEvent
@@ -154,6 +163,8 @@ func NewModel(ctx context.Context, cfg types.Config, height int, transports ...m
 		toolResponseChan: make(chan chat.ToolCallResponse),
 		planRequestChan:  make(chan chat.Plan),
 		planResponseChan: make(chan chat.PlanResponse),
+		askRequestChan:   make(chan chat.AskRequest),
+		askResponseChan:  make(chan string),
 		planMode:         false,
 	}
 	m.completion.setRegistries(cfg.Commands, cfg.Skills, cfg.Agents)
@@ -194,6 +205,10 @@ func (m Model) initSession() tea.Cmd {
 				// Send plan request and wait for user response
 				m.planRequestChan <- plan
 				return <-m.planResponseChan
+			},
+			OnAskUser: func(req chat.AskRequest) string {
+				m.askRequestChan <- req
+				return <-m.askResponseChan
 			},
 			OnAgentEvent: func(ev chat.AgentEvent) {
 				select {
@@ -299,6 +314,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 
+			// Check if we're answering an ask_user question
+			if m.awaitingAsk && m.pendingAsk != nil {
+				answer := parseAskAnswer(m.textarea.Value(), *m.pendingAsk)
+				m.messages = append(m.messages, ChatMessage{Role: "user", Content: answer})
+				m.textarea.Reset()
+				m.awaitingAsk = false
+				m.pendingAsk = nil
+				m.loading = true
+				m.status = "Thinking…"
+				m.updateViewport()
+				m.askResponseChan <- answer
+				return m, nil
+			}
+
 			// Check if we're in plan approval mode
 			if m.awaitingPlanApproval {
 				return m.handlePlanApproval(true)
@@ -354,7 +383,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.session.SetPlanMode(m.planMode)
 		}
 		// Start listening for callbacks
-		cmds = append(cmds, m.listenStatus(), m.listenReasoning(), m.listenToolRequest(), m.listenPlanRequest(), m.listenAgentEvents())
+		cmds = append(cmds, m.listenStatus(), m.listenReasoning(), m.listenToolRequest(), m.listenPlanRequest(), m.listenAskRequest(), m.listenAgentEvents())
 
 	case responseMsg:
 		m.loading = false
@@ -401,6 +430,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.updateViewport()
 		// Continue listening for more plan requests
 		cmds = append(cmds, m.listenPlanRequest())
+
+	case askMsg:
+		req := chat.AskRequest(msg)
+		m.pendingAsk = &req
+		m.awaitingAsk = true
+		m.loading = false
+		m.textarea.Focus()
+		m.updateViewport()
+		cmds = append(cmds, m.listenAskRequest())
 
 	case agentEventMsg:
 		// Update value-receiver copy via pointer helper, then write back.
@@ -491,6 +529,18 @@ func (m Model) listenToolRequest() tea.Cmd {
 		select {
 		case req := <-m.toolRequestChan:
 			return toolCallMsg(req)
+		case <-m.ctx.Done():
+			return nil
+		}
+	}
+}
+
+// listenAskRequest listens for ask_user requests from the session.
+func (m Model) listenAskRequest() tea.Cmd {
+	return func() tea.Msg {
+		select {
+		case req := <-m.askRequestChan:
+			return askMsg(req)
 		case <-m.ctx.Done():
 			return nil
 		}
@@ -935,6 +985,11 @@ func (m *Model) updateViewport() {
 		toolContent.WriteString(dimmedStyle.Render("or type adjustment"))
 
 		sb.WriteString(toolRequestBoxStyle.Render(toolContent.String()))
+		sb.WriteString("\n")
+	}
+
+	if m.awaitingAsk && m.pendingAsk != nil {
+		sb.WriteString(renderAsk(*m.pendingAsk, m.width))
 		sb.WriteString("\n")
 	}
 
