@@ -50,19 +50,40 @@ func pluginUsage() {
 	fmt.Fprintln(os.Stderr, "usage: wiz plugin <install|list|update|enable|disable|remove> ...")
 }
 
-func pluginInstall(mgr *plugin.Manager, args []string) int {
+// parseInstallArgs parses `[--ref REF] [--yes] <git-url>` with flags allowed
+// before or after the URL (Go's flag package otherwise stops at the first
+// positional, silently dropping trailing flags).
+func parseInstallArgs(args []string) (url, ref string, yes bool, err error) {
 	fs := flag.NewFlagSet("plugin install", flag.ContinueOnError)
-	ref := fs.String("ref", "", "git ref (tag or branch) to install")
-	yes := fs.Bool("yes", false, "skip the confirmation prompt")
-	if err := fs.Parse(args); err != nil {
-		return 1
+	refp := fs.String("ref", "", "git ref (tag or branch) to install")
+	yesp := fs.Bool("yes", false, "skip the confirmation prompt")
+	// First pass: consumes any leading flags, stops at the URL.
+	if e := fs.Parse(args); e != nil {
+		return "", "", false, e
 	}
-	if fs.NArg() < 1 {
+	rest := fs.Args()
+	if len(rest) < 1 {
+		return "", "", false, fmt.Errorf("missing <git-url>")
+	}
+	url = rest[0]
+	// Second pass: parse any flags that appeared AFTER the URL.
+	if e := fs.Parse(rest[1:]); e != nil {
+		return "", "", false, e
+	}
+	if fs.NArg() > 0 {
+		return "", "", false, fmt.Errorf("unexpected extra arguments: %v", fs.Args())
+	}
+	return url, *refp, *yesp, nil
+}
+
+func pluginInstall(mgr *plugin.Manager, args []string) int {
+	url, ref, yes, err := parseInstallArgs(args)
+	if err != nil {
 		fmt.Fprintln(os.Stderr, "usage: wiz plugin install [--ref REF] [--yes] <git-url>")
 		return 1
 	}
 
-	m, err := mgr.Install(fs.Arg(0), *ref, internal.Version)
+	m, err := mgr.Install(url, ref, internal.Version)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "install failed: %v\n", err)
 		return 1
@@ -71,7 +92,7 @@ func pluginInstall(mgr *plugin.Manager, args []string) int {
 	fmt.Printf("Installed %q v%s — %s\n", m.Name, m.Version, m.Description)
 	fmt.Printf("Contributes: %d MCP server(s), %d sub-agent(s)\n", len(m.MCPServers), len(m.Agents))
 
-	if *yes || confirmFn("Enable this plugin?") {
+	if yes || confirmFn("Enable this plugin?") {
 		if err := mgr.SetEnabled(m.Name, true); err != nil {
 			fmt.Fprintf(os.Stderr, "enable failed: %v\n", err)
 			return 1

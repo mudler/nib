@@ -6,6 +6,43 @@ import (
 	"testing"
 )
 
+func TestParseInstallArgs(t *testing.T) {
+	cases := []struct {
+		name    string
+		args    []string
+		wantURL string
+		wantRef string
+		wantYes bool
+		wantErr bool
+	}{
+		{"url only", []string{"u"}, "u", "", false, false},
+		{"yes after url", []string{"u", "--yes"}, "u", "", true, false},
+		{"yes before url", []string{"--yes", "u"}, "u", "", true, false},
+		{"ref after url", []string{"u", "--ref", "v1"}, "u", "v1", false, false},
+		{"ref before url", []string{"--ref", "v1", "u"}, "u", "v1", false, false},
+		{"ref eq form after url", []string{"u", "--ref=v2", "--yes"}, "u", "v2", true, false},
+		{"flags both sides", []string{"--yes", "u", "--ref", "v3"}, "u", "v3", true, false},
+		{"no url", []string{"--yes"}, "", "", false, true},
+		{"empty", nil, "", "", false, true},
+		{"extra positional", []string{"u", "extra"}, "", "", false, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			url, ref, yes, err := parseInstallArgs(c.args)
+			if (err != nil) != c.wantErr {
+				t.Fatalf("err = %v, wantErr = %v", err, c.wantErr)
+			}
+			if c.wantErr {
+				return
+			}
+			if url != c.wantURL || ref != c.wantRef || yes != c.wantYes {
+				t.Fatalf("got url=%q ref=%q yes=%v; want url=%q ref=%q yes=%v",
+					url, ref, yes, c.wantURL, c.wantRef, c.wantYes)
+			}
+		})
+	}
+}
+
 func TestRunPluginCommandLifecycle(t *testing.T) {
 	base := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", base)
