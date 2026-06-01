@@ -34,6 +34,9 @@ func TestDecideToolCallPreHook(t *testing.T) {
 	if dec.Approved {
 		t.Fatalf("expected hook to deny bash, got approved")
 	}
+	if dec.Adjustment != "denied" {
+		t.Fatalf("expected deny reason surfaced as adjustment, got %q", dec.Adjustment)
+	}
 	if approved {
 		t.Fatal("user gate should not have been reached when a hook decides")
 	}

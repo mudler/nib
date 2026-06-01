@@ -160,7 +160,11 @@ func (s *Session) decideToolCall(req ToolCallRequest) cogito.ToolCallDecision {
 			"agent_id":  req.AgentID,
 		})
 		if td := hooks.CombineToolDecisions(decisions); td.Decided {
-			return cogito.ToolCallDecision{Approved: td.Approve, Adjustment: td.Adjustment}
+			adjustment := td.Adjustment
+			if !td.Approve && adjustment == "" {
+				adjustment = td.Reason
+			}
+			return cogito.ToolCallDecision{Approved: td.Approve, Adjustment: adjustment}
 		}
 	}
 
