@@ -177,6 +177,12 @@ func (s *Session) decideToolCall(req ToolCallRequest) cogito.ToolCallDecision {
 	return cogito.ToolCallDecision{Approved: resp.Approved, Adjustment: resp.Adjustment}
 }
 
+// ToolCallDenied reports whether the given tool call would be denied (used to
+// verify PreToolUse hook gating end-to-end).
+func (s *Session) ToolCallDenied(req ToolCallRequest) bool {
+	return !s.decideToolCall(req).Approved
+}
+
 // AgentManager exposes the sub-agent registry so the UI can list and detach agents.
 func (s *Session) AgentManager() *cogito.AgentManager {
 	return s.agentManager
