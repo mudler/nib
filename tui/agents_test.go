@@ -1,11 +1,32 @@
 package tui
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
 	"github.com/mudler/wiz/chat"
 )
+
+func TestAgentTranscriptLine(t *testing.T) {
+	if got := agentTranscriptLine(chat.AgentEvent{Type: "explore", Task: "scan repo", Status: chat.AgentStatusRunning}); !strings.Contains(got, "explore") || !strings.Contains(got, "started") || !strings.Contains(got, "scan repo") {
+		t.Fatalf("running line wrong: %q", got)
+	}
+	if got := agentTranscriptLine(chat.AgentEvent{Type: "explore", Status: chat.AgentStatusCompleted}); !strings.Contains(got, "finished") {
+		t.Fatalf("completed line wrong: %q", got)
+	}
+	if got := agentTranscriptLine(chat.AgentEvent{Status: chat.AgentStatusFailed, Err: errors.New("boom")}); !strings.Contains(got, "failed") || !strings.Contains(got, "boom") {
+		t.Fatalf("failed line wrong: %q", got)
+	}
+	// Empty Type falls back to "agent".
+	if got := agentTranscriptLine(chat.AgentEvent{Status: chat.AgentStatusRunning}); !strings.Contains(got, "agent") {
+		t.Fatalf("empty-type fallback wrong: %q", got)
+	}
+	// Unknown status produces no line.
+	if got := agentTranscriptLine(chat.AgentEvent{Status: chat.AgentStatus("weird")}); got != "" {
+		t.Fatalf("unknown status should be empty, got %q", got)
+	}
+}
 
 func TestRenderJobsFooterEmpty(t *testing.T) {
 	if got := renderJobsFooter(nil, 80); got != "" {

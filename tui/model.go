@@ -346,9 +346,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case agentEventMsg:
 		// Update value-receiver copy via pointer helper, then write back.
+		ev := chat.AgentEvent(msg)
 		am := m
-		(&am).applyAgentEvent(chat.AgentEvent(msg))
+		(&am).applyAgentEvent(ev)
 		m = am
+		// Durable transcript marker so sub-agent activity stays visible in history.
+		if line := agentTranscriptLine(ev); line != "" {
+			m.messages = append(m.messages, ChatMessage{Role: "agent", Content: line})
+		}
 		m.updateViewport()
 		// Continue listening for more agent events
 		cmds = append(cmds, m.listenAgentEvents())
@@ -690,6 +695,22 @@ func (m *Model) updateViewport() {
 					// Continuation lines: indent with spaces only (no prefix)
 					sb.WriteString(strings.Repeat(" ", prefixWidth))
 					sb.WriteString(line)
+				}
+				sb.WriteString("\n")
+			}
+			sb.WriteString("\n")
+		case "agent":
+			prefix := agentStyle.Render("🤖 ")
+			prefixWidth := lipgloss.Width(prefix)
+			wrappedContent := wrapText(msg.Content, contentWidth-prefixWidth)
+			lines := strings.Split(strings.TrimRight(wrappedContent, "\n"), "\n")
+			for i, line := range lines {
+				if i == 0 {
+					sb.WriteString(prefix)
+					sb.WriteString(agentStyle.Render(line))
+				} else {
+					sb.WriteString(strings.Repeat(" ", prefixWidth))
+					sb.WriteString(agentStyle.Render(line))
 				}
 				sb.WriteString("\n")
 			}

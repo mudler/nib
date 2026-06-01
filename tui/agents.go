@@ -8,6 +8,31 @@ import (
 	"github.com/mudler/wiz/chat"
 )
 
+// agentTranscriptLine renders a durable one-line transcript marker for a
+// sub-agent lifecycle event, or "" for statuses that should not be logged.
+func agentTranscriptLine(ev chat.AgentEvent) string {
+	typ := ev.Type
+	if typ == "" {
+		typ = "agent"
+	}
+	switch ev.Status {
+	case chat.AgentStatusRunning:
+		if ev.Task != "" {
+			return fmt.Sprintf("sub-agent %s started: %s", typ, ev.Task)
+		}
+		return fmt.Sprintf("sub-agent %s started", typ)
+	case chat.AgentStatusCompleted:
+		return fmt.Sprintf("sub-agent %s finished", typ)
+	case chat.AgentStatusFailed:
+		if ev.Err != nil {
+			return fmt.Sprintf("sub-agent %s failed: %v", typ, ev.Err)
+		}
+		return fmt.Sprintf("sub-agent %s failed", typ)
+	default:
+		return ""
+	}
+}
+
 // agentJob is the UI view of a sub-agent for the jobs footer.
 type agentJob struct {
 	ID     string
