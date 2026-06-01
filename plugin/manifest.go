@@ -7,6 +7,7 @@ package plugin
 import (
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"github.com/Masterminds/semver/v3"
@@ -46,6 +47,9 @@ func ParseManifest(data []byte) (Manifest, error) {
 func (m Manifest) Validate(wizVersion string) error {
 	if strings.TrimSpace(m.Name) == "" {
 		return errors.New("plugin manifest: name is required")
+	}
+	if m.Name != filepath.Base(m.Name) || m.Name == "." || m.Name == ".." || strings.ContainsRune(m.Name, '/') || strings.ContainsRune(m.Name, '\\') {
+		return fmt.Errorf("plugin manifest: invalid name %q (must be a single path segment)", m.Name)
 	}
 	for k, s := range m.MCPServers {
 		if strings.TrimSpace(s.Command) == "" {

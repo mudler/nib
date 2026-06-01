@@ -63,3 +63,16 @@ func TestValidate(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateRejectsUnsafeName(t *testing.T) {
+	for _, bad := range []string{"../evil", "a/b", "..", ".", "foo/../bar", `a\b`} {
+		if err := (Manifest{Name: bad}).Validate("0.9.0"); err == nil {
+			t.Errorf("expected name %q to be rejected", bad)
+		}
+	}
+	for _, ok := range []string{"demo", "my-plugin", "my_plugin.v2", "Plugin123"} {
+		if err := (Manifest{Name: ok}).Validate("0.9.0"); err != nil {
+			t.Errorf("expected name %q to be accepted, got %v", ok, err)
+		}
+	}
+}
