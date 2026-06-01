@@ -14,6 +14,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/mudler/wiz/chat"
+	"github.com/mudler/wiz/slash"
 )
 
 // ChatMessage represents a message in the chat history
@@ -67,6 +68,9 @@ type Model struct {
 	jobs           []agentJob
 	showJobsDetail bool
 	agentEventChan chan chat.AgentEvent
+
+	// Unified `/` completion state
+	completion compState
 
 	// Channels for async communication with callbacks
 	statusChan       chan string
@@ -131,7 +135,7 @@ func NewModel(ctx context.Context, cfg types.Config, height int, transports ...m
 		maxH = 0 // Will be calculated on first WindowSizeMsg
 	}
 
-	return Model{
+	m := Model{
 		viewport:         vp,
 		textarea:         ta,
 		spinner:          s,
@@ -151,6 +155,8 @@ func NewModel(ctx context.Context, cfg types.Config, height int, transports ...m
 		planResponseChan: make(chan chat.PlanResponse),
 		planMode:         false,
 	}
+	m.completion.setRegistries(cfg.Commands, cfg.Skills, cfg.Agents)
+	return m
 }
 
 // Init initializes the model
@@ -244,7 +250,37 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.showJobsDetail = !m.showJobsDetail
 			return m, nil
 
+		case tea.KeyTab:
+			if m.completion.active {
+				if ins, ok := m.completion.accept(); ok {
+					m.textarea.SetValue(ins)
+					m.completion.sync(ins)
+				}
+				return m, nil
+			}
+
+		case tea.KeyUp:
+			if m.completion.active {
+				m.completion.up()
+				return m, nil
+			}
+
+		case tea.KeyDown:
+			if m.completion.active {
+				m.completion.down()
+				return m, nil
+			}
+
 		case tea.KeyEnter:
+			// Accept an open completion instead of submitting.
+			if m.completion.active {
+				if ins, ok := m.completion.accept(); ok {
+					m.textarea.SetValue(ins)
+					m.completion.sync(ins)
+				}
+				return m, nil
+			}
+
 			if m.loading || !m.sessionReady {
 				return m, nil
 			}
@@ -264,17 +300,32 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m.handleToolApproval(input)
 			}
 
-			// Add user message
-			m.messages = append(m.messages, ChatMessage{
-				Role:    "user",
-				Content: input,
-			})
+			// Echo the user's literal input, then resolve it (command/skill/agent).
+			m.messages = append(m.messages, ChatMessage{Role: "user", Content: input})
 			m.textarea.Reset()
-			m.loading = true
-			m.status = "Thinking..."
-			m.updateViewport()
+			m.completion.sync("")
 
-			return m, m.sendMessage(input)
+			action := slash.Resolve(input, m.cfg.Commands, m.cfg.Skills, m.cfg.Agents)
+			switch action.Kind {
+			case slash.KindError:
+				m.messages = append(m.messages, ChatMessage{Role: "error", Content: action.Err})
+				m.updateViewport()
+				return m, nil
+			case slash.KindLoadSkill:
+				notice, err := m.session.LoadSkill(action.Skill)
+				if err != nil {
+					m.messages = append(m.messages, ChatMessage{Role: "error", Content: err.Error()})
+				} else {
+					m.messages = append(m.messages, ChatMessage{Role: "agent", Content: notice})
+				}
+				m.updateViewport()
+				return m, nil
+			default: // slash.KindSend
+				m.loading = true
+				m.status = "Thinking..."
+				m.updateViewport()
+				return m, m.sendMessage(action.Text)
+			}
 		}
 
 	case tea.WindowSizeMsg:
@@ -373,6 +424,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if !m.loading {
 		m.textarea, cmd = m.textarea.Update(msg)
 		cmds = append(cmds, cmd)
+		m.completion.sync(m.textarea.Value())
 	}
 
 	// Update viewport
@@ -915,6 +967,12 @@ func (m Model) View() string {
 	// Separator
 	sb.WriteString(strings.Repeat("─", m.width))
 	sb.WriteString("\n")
+
+	// `/` completion popup (above the input)
+	if comp := renderCompletion(m.completion, strings.TrimSpace(m.textarea.Value()), m.width); comp != "" {
+		sb.WriteString(comp)
+		sb.WriteString("\n")
+	}
 
 	// Input area
 	if m.sessionReady {
