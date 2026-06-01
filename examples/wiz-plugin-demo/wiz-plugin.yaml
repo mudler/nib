@@ -1,0 +1,45 @@
+name: wiz-demo
+version: 1.0.0
+description: Demo plugin exercising every wiz contribution type
+wiz_version: ">=0.0.0"
+
+# 1) MCP server — a standalone stdio server shipped in cmd/echo-mcp (build it and
+#    put it on PATH, or set command to its absolute path).
+mcp_servers:
+  echo:
+    command: echo-mcp
+    args: []
+
+# 2) Sub-agent type
+agents:
+  - name: demo-researcher
+    description: a demo research sub-agent for self-contained subtasks
+    system_prompt: You are the demo researcher. Investigate the task and report a concise result.
+    tools: [bash]
+
+# 3) Prompt fragments (inline + file)
+prompt_fragments:
+  - "DEMO_FRAGMENT_INLINE: keep demo answers concise."
+  - { file: prompts/style.md }
+
+# 4) Skill (body loaded on demand via load_skill / eagerly via /skill)
+skills:
+  - name: demo-skill
+    description: DEMO_SKILL_INDEX demonstrates a loadable skill
+    instructions: { file: skills/demo.md }
+    tools: [bash]
+
+# 5) Slash command (optionally routed through a sub-agent)
+commands:
+  - name: demo-review
+    description: a demo slash command
+    prompt: "Demo review of the following: {{.Args}}"
+    agent: demo-researcher
+
+# 6) Hooks (shell commands on lifecycle events)
+hooks:
+  - event: SessionStart
+    command: sh hooks/session.sh
+  - event: PreToolUse
+    matcher: bash
+    command: sh hooks/audit.sh
