@@ -15,31 +15,42 @@ the "single binary, zero-dependency" ethos.
 The acceptance gate is an **example plugin** that exercises every contribution type, plus
 an **end-to-end harness** that installs it and drives wiz through each feature.
 
+wiz is additionally **compatible with Claude Code plugins**: the same loader installs and
+runs an unmodified Claude Code plugin (and Claude marketplace), mapping its layout into
+wiz's internal contribution model with documented, best-effort semantics.
+
 ## Decisions (locked during brainstorming)
 
 1. **Scope:** full Claude-Code parity, but staged. One architecture spec, a phased
    implementation roadmap; each phase becomes its own spec-driven plan.
-2. **Packaging:** a plugin is a **git repo** with a `wiz-plugin.yaml` manifest at its root
-   plus optional asset folders. Installed via `wiz plugin install <git-url>`.
-3. **Sub-agents are already done.** The merged subagent subsystem (`AgentTypeConfig`,
+2. **Packaging:** a plugin is a **git repo**. Two native-supported formats, detected by the
+   loader and feeding one format-agnostic internal contribution model:
+   (a) a concise **`wiz-plugin.yaml`** manifest at the root (YAML-native, single-file), and
+   (b) the full **Claude Code `.claude-plugin/` layout**. Both via `wiz plugin install <git-url>`.
+3. **Claude Code compatibility:** an unmodified Claude Code plugin/marketplace installs and
+   runs. The `.claude-plugin/` adapter maps `plugin.json`, `skills/`, `commands/`, `agents/`,
+   `hooks/hooks.json`, and `.mcp.json` into the internal model, with a tool-name alias map,
+   command-syntax translation (`$ARGUMENTS`/`$n`), `${CLAUDE_PLUGIN_ROOT}` hook env, and
+   event-name mapping. Unmappable items are skipped with a warning (documented gaps).
+4. **Sub-agents are already done.** The merged subagent subsystem (`AgentTypeConfig`,
    `MergeAgentTypes`, full cogito runtime, TUI jobs footer) is reused as-is. Plugins
    contribute `agents:` entries; no new subagent runtime is built here.
-4. **Merge convention:** mirror the existing `MergeAgentTypes` — merge named items by name,
+5. **Merge convention:** mirror the existing `MergeAgentTypes` — merge named items by name,
    user config always wins, plugin-vs-plugin clash = last-loaded wins **with a warning**;
    hooks and prompt-fragments accumulate.
-5. **Skills:** NOT cogito guidelines. A skill is indexed in the system prompt
+6. **Skills:** NOT cogito guidelines. A skill is indexed in the system prompt
    (name + description); a `load_skill` tool lets the agent read a skill body on demand
    (progressive disclosure); `/skill <name>` eagerly injects a skill body into the system
    prompt for the session.
-6. **Hooks:** shell commands bound to events, receiving event JSON on stdin and returning a
+7. **Hooks:** shell commands bound to events, receiving event JSON on stdin and returning a
    JSON decision on stdout. `PreToolUse` reuses the existing `OnToolCall` approve/deny/adjust
    contract.
-7. **Security consent point:** `wiz plugin install` prints a contribution summary and
+8. **Security consent point:** `wiz plugin install` prints a contribution summary and
    requires confirmation (`--yes` to skip). Disabled plugins contribute nothing. All tool
    calls still pass the existing approval gate at runtime.
-8. **Acceptance:** an example plugin + e2e harness driven through wiz **CLI mode** against a
-   stub/local LLM.
-9. **Execution:** spec-driven, sub-agent-dispatched on Opus 4.8.
+9. **Acceptance:** an example plugin + e2e harness driven through wiz **CLI mode** against a
+   stub/local LLM, plus installing a real Claude Code plugin to prove compatibility.
+10. **Execution:** spec-driven, sub-agent-dispatched on Opus 4.8.
 
 ## Background — current state (post `feat: subagent integration (#6)`)
 
@@ -62,10 +73,13 @@ an **end-to-end harness** that installs it and drives wiz through each feature.
 
 ```
 git repo (plugin) ──install──► ~/.config/wiz/plugins/<name>/   registry: ~/.config/wiz/plugins.yaml
-                                     │ wiz-plugin.yaml              {name, source_url, ref, enabled}
+                                     │                             {name, source_url, ref, enabled}
+                          ┌──────────┴───────────┐  format detection
+                  wiz-plugin.yaml          .claude-plugin/       → both produce the SAME
+                   (native adapter)        (Claude adapter)        []Contribution model
 config.Load()
   ├─ load user config (highest precedence)
-  ├─ discover enabled plugins (registry) → parse each manifest
+  ├─ discover enabled plugins (registry) → detect format → adapter → []Contribution
   └─ merge contributions into types.Config:
         mcp_servers ──► Config.MCPServers ──────► WithMCPs            (exists)
         agents ───────► MergeAgentTypes ────────► WithAgentDefinitions (exists)
@@ -83,12 +97,27 @@ additions; the merge itself touches no runtime.
 
 ## Plugin anatomy
 
+A plugin is either **native** (concise `wiz-plugin.yaml`) or **Claude Code layout**
+(`.claude-plugin/plugin.json` + per-type directories); the loader detects which. Native:
+
 ```
 my-plugin/
   wiz-plugin.yaml          # manifest (root)
   prompts/style.md         # prompt fragment bodies
   skills/git-commit.md     # skill instruction bodies
   hooks/guard.sh           # hook scripts
+```
+
+Claude Code layout (also natively supported — see "Claude Code plugin compatibility"):
+
+```
+my-plugin/
+  .claude-plugin/plugin.json   # manifest
+  skills/<name>/SKILL.md        # skill (frontmatter + body)
+  commands/*.md                 # slash commands
+  agents/*.md                   # sub-agent types
+  hooks/hooks.json              # hook config
+  .mcp.json                     # MCP servers
 ```
 
 ### Manifest schema (`wiz-plugin.yaml`)
@@ -210,6 +239,44 @@ existing `text/template` pass over the whole thing.
 - Hook stdout schema (subset honored per event): `{ "approved": bool, "adjustment": string,
   "reason": string, "block": bool }`. Malformed/empty stdout = no decision (pass through).
 
+## Claude Code plugin compatibility
+
+The internal contribution model is format-agnostic. A format-detection step picks an adapter:
+a directory with `.claude-plugin/plugin.json` is loaded as a Claude plugin; one with
+`wiz-plugin.yaml` as native wiz. (Both may coexist; native wins for overlapping declarations.)
+
+### Structural mapping (Claude → internal model)
+
+| Claude Code path | Internal target | Notes |
+|---|---|---|
+| `.claude-plugin/plugin.json` | manifest meta | `name`/`version`/`description`/`author` (JSON) |
+| `.claude-plugin/marketplace.json` | marketplace index | `plugins[].source` (incl. `{source:github,repo}`) — P6 |
+| `skills/<n>/SKILL.md` | `SkillConfig` | frontmatter `name`/`description` → index; body → `load_skill`; sibling files kept on disk |
+| `commands/*.md` | `CommandConfig` | frontmatter `description` → desc; body → `prompt` |
+| `agents/*.md` | `AgentTypeConfig` | frontmatter `name`/`description`/`tools`/`model` → fields; body → `system_prompt` |
+| `hooks/hooks.json` | `[]HookConfig` | `{hooks:{Event:[{matcher,hooks:[{type:command,command}]}]}}` flattened |
+| `.mcp.json` (`mcpServers`) | `Config.MCPServers` | same `command`/`args`/`env` shape |
+
+### Semantic mapping (best-effort, documented gaps)
+
+- **Tool namespace:** a built-in alias map translates Claude tool names to wiz tools
+  (`Bash→bash`; `Read`/`Edit`/`Write`/`Glob`/`Grep`→ wiz filesystem MCP tools). Unmapped
+  names (`Task`, `WebFetch`, …) are dropped from `tools:`/`matcher` with a warning.
+- **Command syntax:** `$ARGUMENTS` → the full arg string; `$1..$n` → positional args. Claude's
+  `!`bash-exec and `@`file-ref injection are a documented subset (may be unsupported in v1).
+  Frontmatter `allowed-tools`/`model` map to the command's tool scope / agent model where
+  resolvable; otherwise ignored with a warning.
+- **Hook env:** the dispatcher exports `${CLAUDE_PLUGIN_ROOT}` (and `${WIZ_PLUGIN_ROOT}`) set
+  to the plugin install dir, so Claude hook commands run unmodified.
+- **Hook events:** the six wiz events are mapped from their Claude equivalents; Claude-only
+  events (`SubagentStop`, `PreCompact`, `Notification`, …) are skipped with a warning.
+- **Model aliases:** Claude `model: opus|haiku|sonnet` cannot resolve to the user's endpoint;
+  falls back to the parent LLM (warning), unless a user-config alias table maps it.
+
+Compatibility is **structural + best-effort semantic**, not behavioral parity: a Claude plugin
+whose value depends on tools wiz lacks will load but under-deliver. This is documented, not
+hidden — the install summary and load warnings make the gaps visible.
+
 ## Security model
 
 - Plugins ship executable code (MCP servers, hook scripts). The **consent point** is
@@ -261,23 +328,30 @@ existing `text/template` pass over the whole thing.
 
 ## Phased roadmap (each phase = one spec-driven plan, sub-agent executed on Opus 4.8)
 
-- **P0 — Spine:** manifest schema + parse/validate; `wiz plugin install/list/update/
-  enable/disable/remove`; registry; discovery + generalized merge engine wiring the already
-  config-driven contributions (`mcp_servers`, `agents`). Outcome: installable plugins that
-  can ship MCP servers and sub-agent types.
+- **P0 — Spine:** the format-agnostic `[]Contribution` model + a **format-detection loader
+  seam** (native adapter present; Claude adapter stubbed); manifest schema + parse/validate;
+  `wiz plugin install/list/update/enable/disable/remove`; registry; discovery + generalized
+  merge engine wiring the already config-driven contributions (`mcp_servers`, `agents`).
+  Outcome: installable native plugins shipping MCP servers and sub-agent types.
 - **P1 — Prompt fragments + Skills:** `Config.PromptFragments` compose; `Config.Skills` +
   system-prompt index + `load_skill` in-memory MCP tool.
 - **P2 — Commands:** TUI slash palette + command registry + expansion + agent routing;
   built-in `/skill` eager-load command.
 - **P3 — Hooks:** `HookDispatcher` + six events + JSON stdin/stdout, wired through
   `chat.Callbacks` (incl. `PreToolUse` → approval gate).
-- **P4 — Example plugin + e2e harness:** a plugin repo exercising every contribution type;
-  CLI-mode e2e harness against a stub LLM. **Acceptance gate.**
-- **P5 (later) — Marketplace:** index repos + `wiz plugin install <name>` resolution.
+- **P4 — Claude Code compatibility:** the `.claude-plugin/` adapter mapping
+  `plugin.json`/`skills/`/`commands/`/`agents/`/`hooks.json`/`.mcp.json` into the internal
+  model; tool-name alias map; command-syntax translation (`$ARGUMENTS`/`$n`);
+  `${CLAUDE_PLUGIN_ROOT}` hook env; hook event-name mapping with skip-warnings.
+- **P5 — Example plugin + e2e harness:** a native plugin repo exercising every contribution
+  type, **plus installing a real Claude Code plugin** (e.g. a skills-only one) to prove
+  compatibility; CLI-mode e2e harness against a stub LLM. **Acceptance gate.**
+- **P6 (later) — Marketplace:** wiz index repos + Claude `marketplace.json` import +
+  `wiz plugin install <name>` resolution.
 
 ## Out of scope / follow-up
 
-- Marketplace/registry resolution (P5, designed but not built in the first pass).
+- Marketplace/registry resolution (P6, designed but not built in the first pass).
 - Sandboxing/isolation of plugin code beyond the install-time consent + runtime approval
   gate.
 - Hot-reload of plugins within a running session (load is at `config.Load()` time).
@@ -293,3 +367,7 @@ existing `text/template` pass over the whole thing.
   changes isolated and well-tested (precedent: `tui/agents_test.go`).
 - **E2E determinism:** LLM-driven flows are nondeterministic. Mitigation: stub/local LLM and
   assert on observable side effects (tool invoked, prompt composed) rather than model text.
+- **Claude-compat over-promising:** users may expect a Claude plugin to behave identically.
+  Mitigation: structural+best-effort framing, install summary + load warnings surface dropped
+  tools/events, and the docs state compatibility limits plainly. The P5 e2e installs a real
+  Claude plugin so regressions in the adapter are caught.
