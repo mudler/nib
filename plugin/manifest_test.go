@@ -158,3 +158,22 @@ func TestParseAndValidateCommands(t *testing.T) {
 		t.Fatalf("expected valid, got %v", err)
 	}
 }
+
+func TestParseAndValidateHooks(t *testing.T) {
+	m, err := ParseManifest([]byte("name: demo\nhooks:\n  - event: PreToolUse\n    matcher: bash\n    command: ./hooks/guard.sh\n"))
+	if err != nil {
+		t.Fatalf("ParseManifest: %v", err)
+	}
+	if len(m.Hooks) != 1 || m.Hooks[0].Event != "PreToolUse" || m.Hooks[0].Matcher != "bash" {
+		t.Fatalf("hooks wrong: %+v", m.Hooks)
+	}
+	if err := (Manifest{Name: "a", Hooks: []types.HookConfig{{Command: "x"}}}).Validate("0.9.0"); err == nil {
+		t.Fatal("expected hook with no event to be rejected")
+	}
+	if err := (Manifest{Name: "a", Hooks: []types.HookConfig{{Event: "PreToolUse"}}}).Validate("0.9.0"); err == nil {
+		t.Fatal("expected hook with no command to be rejected")
+	}
+	if err := (Manifest{Name: "a", Hooks: []types.HookConfig{{Event: "Stop", Command: "x"}}}).Validate("0.9.0"); err != nil {
+		t.Fatalf("expected valid, got %v", err)
+	}
+}

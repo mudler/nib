@@ -32,6 +32,8 @@ type Manifest struct {
 
 	Commands []types.CommandConfig `yaml:"commands"`
 
+	Hooks []types.HookConfig `yaml:"hooks"`
+
 	// root is the plugin's install directory. Set by the loader, never parsed.
 	// (Unexported: yaml ignores it; no struct tag, to keep `go vet` quiet.)
 	root string
@@ -121,6 +123,14 @@ func (m Manifest) Validate(wizVersion string) error {
 		}
 		if strings.TrimSpace(c.Prompt) == "" {
 			return fmt.Errorf("plugin manifest: command %q missing prompt", c.Name)
+		}
+	}
+	for i, h := range m.Hooks {
+		if strings.TrimSpace(h.Event) == "" {
+			return fmt.Errorf("plugin manifest: hook #%d missing event", i)
+		}
+		if strings.TrimSpace(h.Command) == "" {
+			return fmt.Errorf("plugin manifest: hook #%d (%s) missing command", i, h.Event)
 		}
 	}
 	return checkWizVersion(m.WizVersion, wizVersion)

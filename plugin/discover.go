@@ -78,6 +78,19 @@ func mergeManifests(cfg *types.Config, manifests []Manifest) {
 	mergePromptFragments(cfg, manifests)
 	mergeSkills(cfg, manifests)
 	mergeCommands(cfg, manifests)
+	mergeHooks(cfg, manifests)
+}
+
+// mergeHooks accumulates each enabled plugin's hooks into cfg, stamping the
+// plugin root as the hook's Dir (working directory + ${WIZ_PLUGIN_ROOT}). Hooks
+// never override — they all fire.
+func mergeHooks(cfg *types.Config, manifests []Manifest) {
+	for _, m := range manifests {
+		for _, h := range m.Hooks {
+			h.Dir = m.root
+			cfg.Hooks = append(cfg.Hooks, h)
+		}
+	}
 }
 
 // mergePromptFragments appends each enabled plugin's resolved prompt fragments

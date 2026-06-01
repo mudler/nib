@@ -51,6 +51,17 @@ type CommandConfig struct {
 	Agent       string `yaml:"agent,omitempty"`
 }
 
+// HookConfig is a shell command bound to a lifecycle event. Matcher (optional)
+// is matched against the tool name for PreToolUse/PostToolUse. Dir is the
+// plugin root (set during merge); it is the command's working directory and is
+// exported as ${WIZ_PLUGIN_ROOT}/${CLAUDE_PLUGIN_ROOT}.
+type HookConfig struct {
+	Event   string `yaml:"event"`
+	Matcher string `yaml:"matcher,omitempty"`
+	Command string `yaml:"command"`
+	Dir     string `yaml:"-"` // plugin root; set during merge, not parsed
+}
+
 // ReviewerLLMConfig holds configuration for the reviewer LLM (used in plan mode)
 type ReviewerLLMConfig struct {
 	Model   string `yaml:"model"`
@@ -75,6 +86,8 @@ type Config struct {
 	Skills          []Skill  `yaml:"skills"`
 
 	Commands []CommandConfig `yaml:"commands"`
+
+	Hooks []HookConfig `yaml:"hooks"`
 }
 
 func (c *Config) GetPrompt() string {

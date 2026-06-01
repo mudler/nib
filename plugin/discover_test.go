@@ -164,3 +164,33 @@ func TestMergeCommands(t *testing.T) {
 		t.Fatalf("want 2 commands, got %d: %+v", len(cfg.Commands), cfg.Commands)
 	}
 }
+
+func TestMergeHooksStampsDir(t *testing.T) {
+	cfg := &types.Config{
+		Hooks: []types.HookConfig{{Event: "Stop", Command: "user.sh"}},
+	}
+	manifests := []Manifest{
+		{Name: "p1", root: "/plugins/p1", Hooks: []types.HookConfig{{Event: "PreToolUse", Command: "g.sh"}}},
+		{Name: "p2", root: "/plugins/p2", Hooks: []types.HookConfig{{Event: "Stop", Command: "s.sh"}}},
+	}
+	mergeManifests(cfg, manifests)
+
+	if len(cfg.Hooks) != 3 {
+		t.Fatalf("want 3 hooks (accumulate), got %d: %+v", len(cfg.Hooks), cfg.Hooks)
+	}
+	if cfg.Hooks[0].Dir != "" {
+		t.Fatalf("user hook Dir should be empty: %+v", cfg.Hooks[0])
+	}
+	var p1, p2 *types.HookConfig
+	for i := range cfg.Hooks {
+		switch cfg.Hooks[i].Command {
+		case "g.sh":
+			p1 = &cfg.Hooks[i]
+		case "s.sh":
+			p2 = &cfg.Hooks[i]
+		}
+	}
+	if p1 == nil || p1.Dir != "/plugins/p1" || p2 == nil || p2.Dir != "/plugins/p2" {
+		t.Fatalf("plugin hook Dir not stamped: p1=%+v p2=%+v", p1, p2)
+	}
+}
