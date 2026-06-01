@@ -52,6 +52,12 @@ type PlanResponse struct {
 	Approved bool
 }
 
+// AskRequest is a question the agent wants to ask the user.
+type AskRequest struct {
+	Question string
+	Options  []string // optional multiple-choice options
+}
+
 // Callbacks defines the interface for UI interactions.
 type Callbacks struct {
 	OnStatus    func(status string)
@@ -62,4 +68,7 @@ type Callbacks struct {
 	OnError     func(err error)
 	// OnAgentEvent is called on sub-agent lifecycle changes. Optional.
 	OnAgentEvent func(ev AgentEvent)
+	// OnAskUser is called when the agent asks the user a question (ask_user tool).
+	// It blocks until the user answers and returns the answer.
+	OnAskUser func(req AskRequest) string
 }

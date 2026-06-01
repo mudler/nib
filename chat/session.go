@@ -335,6 +335,12 @@ func (s *Session) SendMessage(text string) (string, error) {
 		cogito.WithAgentCompletionCallback(func(a *cogito.AgentState) {
 			s.emitAgentEvent(a)
 		}),
+		cogito.WithTools(askUserToolDefinition(func(req AskRequest) string {
+			if s.callbacks.OnAskUser != nil {
+				return s.callbacks.OnAskUser(req)
+			}
+			return ""
+		})),
 	)
 
 	// Add ForceReasoning only if enabled in config
