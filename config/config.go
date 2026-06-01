@@ -1,9 +1,12 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 
+	"github.com/mudler/wiz/internal"
+	"github.com/mudler/wiz/plugin"
 	"github.com/mudler/wiz/types"
 
 	"gopkg.in/yaml.v3"
@@ -132,6 +135,12 @@ func Load() types.Config {
 	}
 	// ForceReasoning defaults to false (zero value), which is intentional
 	// Users must explicitly enable it in config
+
+	// Merge enabled plugin contributions (mcp servers + agents) before the
+	// agent default-merge, so precedence is built-in defaults < plugins < user.
+	if err := plugin.Apply(&cfg, plugin.BaseDir(), internal.Version); err != nil {
+		fmt.Fprintf(os.Stderr, "wiz: plugin load: %v\n", err)
+	}
 
 	// Merge user-provided agent types with the built-in defaults.
 	cfg.Agents = MergeAgentTypes(cfg.Agents)
