@@ -76,3 +76,66 @@ func TestValidateRejectsUnsafeName(t *testing.T) {
 		}
 	}
 }
+
+func TestParseManifestFragmentsAndSkills(t *testing.T) {
+	data := []byte(`
+name: demo
+prompt_fragments:
+  - "bare string fragment"
+  - { text: "explicit text fragment" }
+  - { file: prompts/extra.md }
+skills:
+  - name: git-commit
+    description: make a commit
+    instructions: { inline: "do the thing" }
+    tools: [bash]
+  - name: deploy
+    description: ship it
+    instructions: { file: skills/deploy.md }
+`)
+	m, err := ParseManifest(data)
+	if err != nil {
+		t.Fatalf("ParseManifest: %v", err)
+	}
+	if len(m.PromptFragments) != 3 {
+		t.Fatalf("want 3 fragments, got %d: %+v", len(m.PromptFragments), m.PromptFragments)
+	}
+	if m.PromptFragments[0].Text != "bare string fragment" {
+		t.Fatalf("bare-string fragment not parsed to Text: %+v", m.PromptFragments[0])
+	}
+	if m.PromptFragments[1].Text != "explicit text fragment" {
+		t.Fatalf("text-map fragment wrong: %+v", m.PromptFragments[1])
+	}
+	if m.PromptFragments[2].File != "prompts/extra.md" {
+		t.Fatalf("file fragment wrong: %+v", m.PromptFragments[2])
+	}
+	if len(m.Skills) != 2 || m.Skills[0].Name != "git-commit" {
+		t.Fatalf("skills wrong: %+v", m.Skills)
+	}
+	if m.Skills[0].Instructions.Inline != "do the thing" || m.Skills[1].Instructions.File != "skills/deploy.md" {
+		t.Fatalf("skill instructions wrong: %+v / %+v", m.Skills[0].Instructions, m.Skills[1].Instructions)
+	}
+}
+
+func TestValidateFragmentsAndSkills(t *testing.T) {
+	bad := Manifest{Name: "a", PromptFragments: []FragmentSpec{{}}}
+	if err := bad.Validate("0.9.0"); err == nil {
+		t.Fatal("expected empty fragment to be rejected")
+	}
+	bad = Manifest{Name: "a", Skills: []SkillSpec{{Description: "x", Instructions: InstructionsSpec{Inline: "y"}}}}
+	if err := bad.Validate("0.9.0"); err == nil {
+		t.Fatal("expected skill with no name to be rejected")
+	}
+	bad = Manifest{Name: "a", Skills: []SkillSpec{{Name: "s"}}}
+	if err := bad.Validate("0.9.0"); err == nil {
+		t.Fatal("expected skill with no instructions to be rejected")
+	}
+	ok := Manifest{
+		Name:            "a",
+		PromptFragments: []FragmentSpec{{Text: "t"}, {File: "f.md"}},
+		Skills:          []SkillSpec{{Name: "s", Instructions: InstructionsSpec{File: "s.md"}}},
+	}
+	if err := ok.Validate("0.9.0"); err != nil {
+		t.Fatalf("expected valid manifest, got %v", err)
+	}
+}

@@ -27,9 +27,48 @@ type Manifest struct {
 	MCPServers  map[string]types.MCPServer `yaml:"mcp_servers"`
 	Agents      []types.AgentTypeConfig    `yaml:"agents"`
 
+	PromptFragments []FragmentSpec `yaml:"prompt_fragments"`
+	Skills          []SkillSpec    `yaml:"skills"`
+
 	// root is the plugin's install directory. Set by the loader, never parsed.
 	// (Unexported: yaml ignores it; no struct tag, to keep `go vet` quiet.)
 	root string
+}
+
+// FragmentSpec is a prompt fragment in a manifest: either a bare YAML string
+// (→ Text) or a mapping with text:/file:.
+type FragmentSpec struct {
+	Text string `yaml:"text"`
+	File string `yaml:"file"`
+}
+
+// UnmarshalYAML lets a fragment be written as a bare string or a {text,file} map.
+func (f *FragmentSpec) UnmarshalYAML(node *yaml.Node) error {
+	if node.Kind == yaml.ScalarNode {
+		return node.Decode(&f.Text)
+	}
+	type raw FragmentSpec // avoid recursion into this UnmarshalYAML
+	var r raw
+	if err := node.Decode(&r); err != nil {
+		return err
+	}
+	*f = FragmentSpec(r)
+	return nil
+}
+
+// SkillSpec is a skill declared in a manifest.
+type SkillSpec struct {
+	Name         string           `yaml:"name"`
+	Description  string           `yaml:"description"`
+	Instructions InstructionsSpec `yaml:"instructions"`
+	Tools        []string         `yaml:"tools"`
+}
+
+// InstructionsSpec carries a skill body inline or via a file path (relative to
+// the plugin root).
+type InstructionsSpec struct {
+	Inline string `yaml:"inline"`
+	File   string `yaml:"file"`
 }
 
 // ParseManifest parses a native wiz-plugin.yaml document.
@@ -59,6 +98,19 @@ func (m Manifest) Validate(wizVersion string) error {
 	for i, a := range m.Agents {
 		if strings.TrimSpace(a.Name) == "" {
 			return fmt.Errorf("plugin manifest: agent #%d missing name", i)
+		}
+	}
+	for i, f := range m.PromptFragments {
+		if strings.TrimSpace(f.Text) == "" && strings.TrimSpace(f.File) == "" {
+			return fmt.Errorf("plugin manifest: prompt_fragment #%d has neither text nor file", i)
+		}
+	}
+	for i, s := range m.Skills {
+		if strings.TrimSpace(s.Name) == "" {
+			return fmt.Errorf("plugin manifest: skill #%d missing name", i)
+		}
+		if strings.TrimSpace(s.Instructions.Inline) == "" && strings.TrimSpace(s.Instructions.File) == "" {
+			return fmt.Errorf("plugin manifest: skill %q has no instructions (inline or file)", s.Name)
 		}
 	}
 	return checkWizVersion(m.WizVersion, wizVersion)
