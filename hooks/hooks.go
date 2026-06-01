@@ -104,6 +104,7 @@ func runHook(ctx context.Context, h types.HookConfig, stdin []byte, timeout time
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
+	cmd.WaitDelay = 2 * time.Second
 
 	err := cmd.Run()
 

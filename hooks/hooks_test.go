@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/mudler/wiz/types"
 )
@@ -51,6 +52,28 @@ func TestFireNonZeroExitBlocks(t *testing.T) {
 	got := d.Fire(context.Background(), EventPreToolUse, "bash", nil)
 	if len(got) != 1 || !got[0].Block {
 		t.Fatalf("non-zero exit should block: %+v", got)
+	}
+}
+
+func TestFireTimeoutNotDefeatedByBackgroundChild(t *testing.T) {
+	dir := t.TempDir()
+	// Hook backgrounds a child that holds stdout for 3s, then the hook itself
+	// would exit — but the context deadline should kill it and WaitDelay must
+	// bound how long Fire blocks regardless of the lingering pipe writer.
+	script := writeScript(t, dir, "bg.sh", "sleep 3 & sleep 3")
+	d := New([]types.HookConfig{{Event: "PreToolUse", Command: script, Dir: dir}})
+	d.timeout = 200 * time.Millisecond // force a fast deadline
+
+	start := time.Now()
+	got := d.Fire(context.Background(), EventPreToolUse, "bash", nil)
+	elapsed := time.Since(start)
+
+	if len(got) != 1 || !got[0].Block {
+		t.Fatalf("timed-out hook should Block: %+v", got)
+	}
+	// Must return well before the 3s child lifetime (deadline 200ms + WaitDelay 2s).
+	if elapsed > 2700*time.Millisecond {
+		t.Fatalf("Fire blocked too long (%v) — timeout defeated by background child", elapsed)
 	}
 }
 
