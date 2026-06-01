@@ -199,9 +199,12 @@ Plugin `agents` entries flow through the existing `MergeAgentTypes` and
 `toCogitoDefinitions` path. No new code beyond including plugin agents in the merge input.
 
 ### Prompt fragments
-New `Config.PromptFragments []PromptFragment` (`inline` string or `{file}`). `GetPrompt()`
-loads each fragment body and appends it after the base prompt, in load order, then runs the
-existing `text/template` pass over the whole thing.
+New `Config.PromptFragments []string` — resolved fragment text (the manifest authoring form
+is `FragmentSpec`: a bare string or `{text}`/`{file}`, resolved at merge time relative to the
+plugin root). `GetPrompt()` runs the `text/template` pass over the **base prompt only**, then
+appends the resolved fragments (and the skill index) to the rendered output, in load order.
+Fragments are appended *after* templating — not run through it — so untrusted plugin text
+cannot inject `{{...}}`/sprig template directives.
 
 ### Skills (index + load-tool + `/skill`)
 - New `Config.Skills []SkillConfig {Name, Description, Instructions (file|inline), Tools}`.
