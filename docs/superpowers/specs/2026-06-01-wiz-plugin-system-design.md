@@ -214,15 +214,25 @@ existing `text/template` pass over the whole thing.
 - **`/skill <name>`** (built-in command, P2): eagerly injects the named skill's body into
   the session system prompt, so the agent has it without a `load_skill` call.
 
-### Commands (TUI slash palette)
+### Commands & the unified `/` completion surface (TUI)
 - New `Config.Commands []CommandConfig {Name, Description, Prompt, Agent}`.
-- Typing `/` at the start of TUI input opens a filterable palette (name + description),
-  using the same `tui/model.go` update pattern as the agents surface.
-- Selecting `/<name> <args>` expands the command's `prompt` template (`{{.Args}}`,
-  `{{.CurrentDirectory}}`) into a user message and sends it. If `agent:` is set, the turn is
-  routed through that sub-agent type via the existing spawn path.
-- Built-in commands: `/skill` (P2). Plugin/user commands extend the same registry.
-- A command name clash with a built-in → built-in wins, warn.
+- Typing `/` at the start of TUI input opens a **completion popup** driven by **three
+  registries at once** — commands, skills, and agents — each row tagged with its type
+  (`[cmd]` / `[skill]` / `[agent]`), fuzzy-filtered as the user types. Built with the same
+  `tui/model.go` update pattern as the agents surface (precedent: `tui/agents_test.go`).
+- **Flat namespace, category tags.** `/rev` matches across all three categories; the tag
+  disambiguates same-named entries; accepting acts on the highlighted row's type.
+- **Tab** completes to the highlighted entry; an **inline ghost-text suggestion** renders the
+  top match after the cursor (Tab/→ accepts it). **Enter** accepts the highlighted entry, or
+  submits the line if the popup is closed. **Esc** dismisses the popup.
+- **Auto-expand on accept**, by type:
+  - `[cmd]` → expands the command's `prompt` template (`{{.Args}}`, `{{.CurrentDirectory}}`)
+    into a user message; if `agent:` is set, routes the turn through that sub-agent type.
+  - `[skill]` → inserts `/skill <name>` (eager-load the skill body into the system prompt).
+  - `[agent]` → inserts `/agent <name> ` (routes the next turn through that sub-agent type).
+- **Built-in verbs:** `/skill <name>` and `/agent <name>` are the canonical actions the menu
+  expands to; they also work when typed directly. Plugin/user commands extend the command
+  registry. A command-name clash with a built-in verb → built-in wins, warn.
 
 ### Hooks (event bus + shell dispatch)
 - New `Config.Hooks []HookConfig {Event, Matcher, Command}`.
@@ -320,6 +330,8 @@ hidden — the install summary and load warnings make the gaps visible.
   - prompt-fragment compose order
   - skill index rendering + `load_skill` tool (known/unknown name)
   - command expansion (`{{.Args}}`, agent routing)
+  - `/` completion: fuzzy match across the three registries, category tagging, Tab-complete,
+    ghost-text top match, Enter/Esc behavior, per-type auto-expand (cmd/skill/agent)
   - hook dispatch with fake shell scripts (approve/deny/adjust/malformed)
   - install/registry over temp dirs (install/list/enable/disable/remove)
 - **E2E (P4):** the example plugin driven through wiz **CLI mode** against a stub/local LLM,
@@ -335,8 +347,10 @@ hidden — the install summary and load warnings make the gaps visible.
   Outcome: installable native plugins shipping MCP servers and sub-agent types.
 - **P1 — Prompt fragments + Skills:** `Config.PromptFragments` compose; `Config.Skills` +
   system-prompt index + `load_skill` in-memory MCP tool.
-- **P2 — Commands:** TUI slash palette + command registry + expansion + agent routing;
-  built-in `/skill` eager-load command.
+- **P2 — Commands & unified `/` completion:** command registry + expansion + agent routing;
+  the `/` completion popup over all three registries (commands/skills/agents) with category
+  tags, fuzzy filter, Tab-complete, and inline ghost-text suggestion; built-in `/skill` and
+  `/agent` verbs.
 - **P3 — Hooks:** `HookDispatcher` + six events + JSON stdin/stdout, wired through
   `chat.Callbacks` (incl. `PreToolUse` → approval gate).
 - **P4 — Claude Code compatibility:** the `.claude-plugin/` adapter mapping
@@ -363,8 +377,10 @@ hidden — the install summary and load warnings make the gaps visible.
   gate unchanged.
 - **Merge ambiguity:** silent overrides confuse users. Mitigation: warn on every
   plugin-vs-plugin clash; document precedence.
-- **TUI slash surface:** first interactive command palette in wiz; keep the model-update
-  changes isolated and well-tested (precedent: `tui/agents_test.go`).
+- **TUI completion surface:** first interactive completion popup in wiz (fuzzy filter,
+  category tags, Tab-complete, ghost-text suggestion over three registries) — the largest new
+  UI surface. Mitigation: isolate the completion state in its own model component, drive it
+  from the in-memory registries, and unit-test it exhaustively (precedent: `tui/agents_test.go`).
 - **E2E determinism:** LLM-driven flows are nondeterministic. Mitigation: stub/local LLM and
   assert on observable side effects (tool invoked, prompt composed) rather than model text.
 - **Claude-compat over-promising:** users may expect a Claude plugin to behave identically.
