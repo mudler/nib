@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"strings"
 	"testing"
 
 	"github.com/mudler/wiz/types"
@@ -50,8 +49,8 @@ func TestCompStateSyncAndAccept(t *testing.T) {
 	if !c.active || len(c.matches) != 2 {
 		t.Fatalf("expected active with 2 matches, got active=%v matches=%d", c.active, len(c.matches))
 	}
-	if g := c.ghost("/rev"); g == "" || !strings.HasPrefix("/review ", "/rev") {
-		t.Fatalf("ghost wrong: %q", g)
+	if g := c.ghost("/rev"); g != "iew " {
+		t.Fatalf("ghost wrong: got %q want %q", g, "iew ")
 	}
 	c.sync("/review the diff")
 	if c.active {
