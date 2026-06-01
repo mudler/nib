@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -215,17 +216,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch msg.Type {
-		case tea.KeyCtrlC, tea.KeyEsc:
-			// If awaiting plan approval, reject the plan
+		case tea.KeyCtrlC:
+			// Interrupt running work; quit only when idle.
 			if m.awaitingPlanApproval {
 				return m.handlePlanApproval(false)
 			}
-			m.quitting = true
-			if m.session != nil {
-				m.session.Close()
+			if m.isWorking() {
+				if m.session != nil {
+					m.session.Interrupt()
+				}
+				m.status = "Interrupting…"
+				return m, nil
 			}
-			m.cancel()
-			return m, tea.Quit
+			return m.quit()
+
+		case tea.KeyEsc:
+			if m.awaitingPlanApproval {
+				return m.handlePlanApproval(false)
+			}
+			return m.quit()
 
 		case tea.KeyCtrlP:
 			// Toggle plan mode
@@ -352,16 +361,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.status = ""
 		m.reasoning = ""
 		if msg.err != nil {
-			m.err = msg.err
-			m.messages = append(m.messages, ChatMessage{
-				Role:    "error",
-				Content: msg.err.Error(),
-			})
+			if errors.Is(msg.err, context.Canceled) {
+				m.messages = append(m.messages, ChatMessage{Role: "agent", Content: "⛔ Interrupted."})
+			} else {
+				m.err = msg.err
+				m.messages = append(m.messages, ChatMessage{Role: "error", Content: msg.err.Error()})
+			}
 		} else {
-			m.messages = append(m.messages, ChatMessage{
-				Role:    "assistant",
-				Content: msg.content,
-			})
+			m.messages = append(m.messages, ChatMessage{Role: "assistant", Content: msg.content})
 		}
 		m.updateViewport()
 
@@ -983,7 +990,7 @@ func (m Model) View() string {
 
 	// Help text
 	sb.WriteString("\n")
-	helpText := "Enter: send • Esc: exit"
+	helpText := "Enter: send • Ctrl+C: interrupt/exit • Esc: exit"
 	if m.planMode {
 		helpText += " • Ctrl+P: plan mode ON"
 	} else {
@@ -1019,4 +1026,25 @@ func (m Model) View() string {
 // Output returns any command that should be output to the shell
 func (m Model) Output() string {
 	return m.output
+}
+
+// isWorking reports whether a turn or sub-agent is currently running.
+func (m Model) isWorking() bool {
+	if m.loading {
+		return true
+	}
+	if m.session != nil && m.session.AgentManager() != nil {
+		return m.session.AgentManager().HasRunning()
+	}
+	return false
+}
+
+// quit tears down the session and exits.
+func (m Model) quit() (tea.Model, tea.Cmd) {
+	m.quitting = true
+	if m.session != nil {
+		m.session.Close()
+	}
+	m.cancel()
+	return m, tea.Quit
 }
