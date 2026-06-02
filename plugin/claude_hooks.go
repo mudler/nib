@@ -36,13 +36,13 @@ func loadClaudeHooks(root string) []types.HookConfig {
 		} `json:"hooks"`
 	}
 	if err := json.Unmarshal(data, &doc); err != nil {
-		fmt.Fprintf(os.Stderr, "wiz: claude hooks.json parse error: %v\n", err)
+		fmt.Fprintf(os.Stderr, "nib: claude hooks.json parse error: %v\n", err)
 		return nil
 	}
 	var out []types.HookConfig
 	for event, groups := range doc.Hooks {
 		if !claudeSupportedEvents[event] {
-			fmt.Fprintf(os.Stderr, "wiz: skipping unsupported claude hook event %q\n", event)
+			fmt.Fprintf(os.Stderr, "nib: skipping unsupported claude hook event %q\n", event)
 			continue
 		}
 		for _, g := range groups {
@@ -67,7 +67,7 @@ func loadClaudeMCP(root string) map[string]types.MCPServer {
 		MCPServers map[string]types.MCPServer `json:"mcpServers"`
 	}
 	if err := json.Unmarshal(data, &doc); err != nil {
-		fmt.Fprintf(os.Stderr, "wiz: claude .mcp.json parse error: %v\n", err)
+		fmt.Fprintf(os.Stderr, "nib: claude .mcp.json parse error: %v\n", err)
 		return nil
 	}
 	return doc.MCPServers
