@@ -20,9 +20,30 @@ func TestUnifiedJobsAgentsAndRender(t *testing.T) {
 		t.Fatalf("unifiedJobs = %+v", jobs)
 	}
 
-	out := renderUnifiedJobsDetail(jobs, 80)
+	out := renderUnifiedJobsDetail(jobs, 80, nil)
 	if !strings.Contains(out, "[1]") || !strings.Contains(out, "agent") || !strings.Contains(out, "look around") {
 		t.Fatalf("detail render missing numbering/label:\n%s", out)
+	}
+
+	// With a tail provider, recent activity is shown beneath the job line.
+	withTail := renderUnifiedJobsDetail(jobs, 80, func(j jobRef) string {
+		return "→ bash(echo hi)\n← bash: hi"
+	})
+	if !strings.Contains(withTail, "← bash: hi") {
+		t.Fatalf("detail should include activity tail:\n%s", withTail)
+	}
+}
+
+func TestLastLinesAndClip(t *testing.T) {
+	got := lastLines("a\nb\nc\nd\n", 2)
+	if len(got) != 2 || got[0] != "c" || got[1] != "d" {
+		t.Fatalf("lastLines = %v", got)
+	}
+	if lastLines("", 3) != nil {
+		t.Fatal("empty input should yield nil")
+	}
+	if clipLine("hello world", 8) != "hello w…" {
+		t.Fatalf("clipLine = %q", clipLine("hello world", 8))
 	}
 }
 

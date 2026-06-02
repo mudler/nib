@@ -62,4 +62,8 @@ type Callbacks struct {
 	// OnAskUser is called when the agent asks the user a question (ask_user tool).
 	// It blocks until the user answers and returns the answer.
 	OnAskUser func(req AskRequest) string
+	// OnScheduleWakeup is called when the agent schedules an in-session wake-up
+	// (schedule_wakeup tool). It returns immediately with a confirmation; the
+	// host re-engages the agent with the note once the delay elapses.
+	OnScheduleWakeup func(req WakeupRequest) string
 }

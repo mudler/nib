@@ -38,9 +38,19 @@ type Session struct {
 	agentManager *cogito.AgentManager
 	agentDefs    []cogito.AgentDefinition
 	agentModels  map[string]bool // models configured per agent type (for the LLM-model guard)
+	agentLogs    *agentLogStore  // per-sub-agent activity log (for the agent_logs tool)
 	llmModel     string
 	apiKey       string
 	baseURL      string
+}
+
+// AgentLog returns the captured activity log for a sub-agent (for the
+// agent_logs tool / UI inspection).
+func (s *Session) AgentLog(agentID string) string {
+	if s.agentLogs == nil {
+		return ""
+	}
+	return s.agentLogs.dump(agentID)
 }
 
 // resolveAgentModel picks the model for a sub-agent: the requested model when
@@ -131,6 +141,7 @@ func NewSession(ctx context.Context, cfg types.Config, callbacks Callbacks, tran
 		agentManager:  agentManager,
 		agentDefs:     toCogitoDefinitions(cfg.Agents),
 		agentModels:   agentModelSet(toCogitoDefinitions(cfg.Agents)),
+		agentLogs:     newAgentLogStore(),
 		llmModel:      cfg.Model,
 		apiKey:        cfg.APIKey,
 		baseURL:       cfg.BaseURL,
@@ -308,6 +319,11 @@ func (s *Session) SendMessage(text string) (string, error) {
 		}),
 		cogito.WithMCPs(s.clients...),
 		cogito.WithToolCallBack(func(tool *cogito.ToolChoice, state *cogito.SessionState) cogito.ToolCallDecision {
+			// Capture sub-agent activity so the agent_logs tool can surface what
+			// a backgrounded sub-agent is doing.
+			if state.AgentID != "" {
+				s.agentLogs.recordCall(state.AgentID, tool)
+			}
 			args, err := json.Marshal(tool.Arguments)
 			if err != nil {
 				return cogito.ToolCallDecision{Approved: false}
@@ -320,6 +336,7 @@ func (s *Session) SendMessage(text string) (string, error) {
 			})
 		}),
 		cogito.WithToolCallResultCallback(func(status cogito.ToolStatus) {
+			s.agentLogs.recordResult(status) // no-op for root-agent tool calls
 			if s.hooks != nil {
 				s.hooks.Fire(s.ctx, hooks.EventPostToolUse, status.Name, map[string]any{
 					"event":  "PostToolUse",
@@ -365,6 +382,13 @@ func (s *Session) SendMessage(text string) (string, error) {
 				return s.callbacks.OnAskUser(req)
 			}
 			return ""
+		})),
+		cogito.WithTools(agentLogsToolDefinition(s.AgentLog)),
+		cogito.WithTools(scheduleWakeupToolDefinition(func(req WakeupRequest) string {
+			if s.callbacks.OnScheduleWakeup != nil {
+				return s.callbacks.OnScheduleWakeup(req)
+			}
+			return "Scheduling is not available in this session."
 		})),
 	)
 
