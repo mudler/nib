@@ -49,6 +49,7 @@ func main() {
 	versionFlag := flag.Bool("version", false, "Print version and exit")
 	tmuxFlag := flag.Bool("tmux", false, "Run in tmux popup (auto-detected if in tmux)")
 	noTmuxFlag := flag.Bool("no-tmux", false, "Disable tmux popup even when in tmux")
+	tuiFlag := flag.Bool("tui", false, "Start the full-screen TUI directly (no tmux popup)")
 	flag.Parse()
 
 	// Handle version flag
@@ -93,12 +94,17 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Determine mode based on flags
-	if *heightFlag != "" {
-		height := parseHeight(*heightFlag)
+	// Determine mode based on flags. --tui (or --height) selects the TUI; bare
+	// `wiz` stays in CLI mode.
+	if *tuiFlag || *heightFlag != "" {
+		h := *heightFlag
+		if h == "" {
+			h = "40%" // sensible default when only --tui is given
+		}
+		height := parseHeight(h)
 
-		// Check if we should use tmux popup
-		useTmux := *tmuxFlag || (cmd.IsInTmux() && !*noTmuxFlag)
+		// --tui forces a direct (non-tmux) TUI; otherwise honor tmux detection.
+		useTmux := !*tuiFlag && (*tmuxFlag || (cmd.IsInTmux() && !*noTmuxFlag))
 
 		if useTmux && cmd.IsInTmux() {
 			// Run in tmux split pane (like fzf-tmux -d)
