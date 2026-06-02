@@ -1046,7 +1046,7 @@ func (m Model) View() string {
 	// uses for kill selection, above the compact per-kind summary footers. All
 	// add nothing when there are no jobs, so the common case is unchanged.
 	if m.showJobsDetail {
-		if d := renderUnifiedJobsDetail(m.unifiedJobs(), m.width); d != "" {
+		if d := renderUnifiedJobsDetail(m.unifiedJobs(), m.width, m.jobActivityTail); d != "" {
 			sb.WriteString("\n")
 			sb.WriteString(d)
 		}

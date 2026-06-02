@@ -33,8 +33,10 @@ func (m Model) unifiedJobs() []jobRef {
 }
 
 // renderUnifiedJobsDetail renders the numbered, unified per-job list (Ctrl+J),
-// whose indices Ctrl+K uses for selection.
-func renderUnifiedJobsDetail(jobs []jobRef, width int) string {
+// whose indices Ctrl+K uses for selection. When tailOf is non-nil, each job's
+// recent activity (a sub-agent's agent_logs, or a shell job's output) is shown
+// indented beneath its line.
+func renderUnifiedJobsDetail(jobs []jobRef, width int, tailOf func(jobRef) string) string {
 	if len(jobs) == 0 {
 		return ""
 	}
@@ -45,8 +47,55 @@ func renderUnifiedJobsDetail(jobs []jobRef, width int) string {
 			label = label[:37] + "..."
 		}
 		fmt.Fprintf(&b, "  [%d] %-6s %-8s %-10s %s\n", i+1, j.Kind, shortID(j.ID), j.Status, label)
+		if tailOf != nil {
+			for _, line := range lastLines(tailOf(j), 3) {
+				b.WriteString("        ")
+				b.WriteString(dimmedStyle.Render(clipLine(line, width-10)))
+				b.WriteString("\n")
+			}
+		}
 	}
 	return jobsFooterStyle.Width(width).Render(strings.TrimRight(b.String(), "\n"))
+}
+
+// jobActivityTail returns recent activity for a job: a sub-agent's captured
+// agent_logs, or a shell job's captured output.
+func (m Model) jobActivityTail(j jobRef) string {
+	switch j.Kind {
+	case "agent":
+		if m.session != nil {
+			return m.session.AgentLog(j.ID)
+		}
+	case "shell":
+		if so, se, ok := m.shellJobs.Output(j.ID); ok {
+			return strings.TrimRight(so+se, "\n")
+		}
+	}
+	return ""
+}
+
+// lastLines returns the last n non-empty-trimmed lines of s.
+func lastLines(s string, n int) []string {
+	s = strings.TrimRight(s, "\n")
+	if s == "" {
+		return nil
+	}
+	lines := strings.Split(s, "\n")
+	if len(lines) > n {
+		lines = lines[len(lines)-n:]
+	}
+	return lines
+}
+
+// clipLine truncates a single line to width runes with an ellipsis.
+func clipLine(s string, width int) string {
+	if width < 8 {
+		width = 8
+	}
+	if len(s) > width {
+		return s[:width-1] + "…"
+	}
+	return s
 }
 
 // killSelected kills the n-th (1-based) job in the unified list.
