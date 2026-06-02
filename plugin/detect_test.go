@@ -18,7 +18,7 @@ func writeFile(t *testing.T, path, content string) {
 
 func TestDetectFormat(t *testing.T) {
 	native := t.TempDir()
-	writeFile(t, filepath.Join(native, "wiz-plugin.yaml"), "name: x")
+	writeFile(t, filepath.Join(native, "nib-plugin.yaml"), "name: x")
 	if got := DetectFormat(native); got != FormatNative {
 		t.Fatalf("native detect = %v", got)
 	}
@@ -37,7 +37,7 @@ func TestDetectFormat(t *testing.T) {
 
 func TestLoadManifestNative(t *testing.T) {
 	dir := t.TempDir()
-	writeFile(t, filepath.Join(dir, "wiz-plugin.yaml"), "name: demo\nversion: 1.0.0\n")
+	writeFile(t, filepath.Join(dir, "nib-plugin.yaml"), "name: demo\nversion: 1.0.0\n")
 	m, err := LoadManifest(dir, "0.9.0")
 	if err != nil {
 		t.Fatalf("LoadManifest: %v", err)

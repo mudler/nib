@@ -24,7 +24,7 @@ func boolp(b bool) *bool { return &b }
 func TestFireMatchingAndStdinEnv(t *testing.T) {
 	dir := t.TempDir()
 	script := writeScript(t, dir, "h.sh",
-		"cat > \"$WIZ_PLUGIN_ROOT/stdin.txt\"; echo \"$WIZ_PLUGIN_ROOT\" > \"$WIZ_PLUGIN_ROOT/root.txt\"; echo '{\"approved\": true}'")
+		"cat > \"$NIB_PLUGIN_ROOT/stdin.txt\"; echo \"$NIB_PLUGIN_ROOT\" > \"$NIB_PLUGIN_ROOT/root.txt\"; echo '{\"approved\": true}'")
 	d := New([]types.HookConfig{{Event: "PreToolUse", Matcher: "bash", Command: script, Dir: dir}})
 
 	if got := d.Fire(context.Background(), EventStop, "bash", map[string]any{"x": 1}); len(got) != 0 {
@@ -41,7 +41,7 @@ func TestFireMatchingAndStdinEnv(t *testing.T) {
 		t.Fatal("hook did not receive payload on stdin")
 	}
 	if b, _ := os.ReadFile(filepath.Join(dir, "root.txt")); string(b) == "\n" || len(b) == 0 {
-		t.Fatal("WIZ_PLUGIN_ROOT not set for the hook")
+		t.Fatal("NIB_PLUGIN_ROOT not set for the hook")
 	}
 }
 

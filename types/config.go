@@ -54,7 +54,7 @@ type CommandConfig struct {
 // HookConfig is a shell command bound to a lifecycle event. Matcher (optional)
 // is matched against the tool name for PreToolUse/PostToolUse. Dir is the
 // plugin root (set during merge); it is the command's working directory and is
-// exported as ${WIZ_PLUGIN_ROOT}/${CLAUDE_PLUGIN_ROOT}.
+// exported as ${NIB_PLUGIN_ROOT}/${CLAUDE_PLUGIN_ROOT}.
 type HookConfig struct {
 	Event   string `yaml:"event"`
 	Matcher string `yaml:"matcher,omitempty"`

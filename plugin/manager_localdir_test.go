@@ -10,7 +10,7 @@ import (
 func TestInstallFromLocalDir(t *testing.T) {
 	base := t.TempDir()
 	src := t.TempDir()
-	writeFile(t, filepath.Join(src, "wiz-plugin.yaml"), "name: localdemo\nversion: 1.0.0\n")
+	writeFile(t, filepath.Join(src, "nib-plugin.yaml"), "name: localdemo\nversion: 1.0.0\n")
 	writeFile(t, filepath.Join(src, "hooks", "h.sh"), "#!/bin/sh\necho hi\n")
 
 	mgr := NewManager(base)

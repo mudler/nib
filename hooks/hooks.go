@@ -98,7 +98,7 @@ func runHook(ctx context.Context, h types.HookConfig, stdin []byte, timeout time
 	if h.Dir != "" {
 		cmd.Dir = h.Dir
 	}
-	cmd.Env = append(os.Environ(), "WIZ_PLUGIN_ROOT="+h.Dir, "CLAUDE_PLUGIN_ROOT="+h.Dir)
+	cmd.Env = append(os.Environ(), "NIB_PLUGIN_ROOT="+h.Dir, "CLAUDE_PLUGIN_ROOT="+h.Dir)
 	cmd.Stdin = bytes.NewReader(stdin)
 
 	var stdout, stderr bytes.Buffer

@@ -15,7 +15,7 @@ func TestEndToEndCommand(t *testing.T) {
 	}
 	base := t.TempDir()
 	repo := gitInitRepoFiles(t, map[string]string{
-		"wiz-plugin.yaml": "name: p2demo\n" +
+		"nib-plugin.yaml": "name: p2demo\n" +
 			"commands:\n  - name: review\n    description: review the diff\n    prompt: \"Please review: {{.Args}}\"\n",
 	})
 
