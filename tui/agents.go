@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/charmbracelet/lipgloss"
 	"github.com/mudler/nib/chat"
 	"github.com/mudler/nib/theme"
 )
@@ -42,7 +41,7 @@ type agentJob struct {
 	Status chat.AgentStatus
 }
 
-var jobsFooterStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
+var jobsFooterStyle = theme.Meta
 
 // renderJobsFooter renders a compact one-line summary of active jobs.
 // Returns "" when there are no jobs so the footer takes no vertical space.

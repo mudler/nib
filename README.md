@@ -23,25 +23,25 @@ nib aims to be the `fzf` for llms living in your terminal that is portable and l
 
 ## Features
 
-🧙 **Terminal Keybindings** — Press `Ctrl+Space` anywhere to open nib
+**Terminal Keybindings** — Press `Ctrl+Space` anywhere to open nib
 
-⚡ **Dual modes** — Beautiful TUI or simple CLI, your choice
+**Dual modes** — TUI or simple CLI, your choice
 
-🔧 **Tool execution** — AI runs shell commands with your approval
+**Tool execution** — AI runs shell commands with your approval
 
-✅ **Allow list** — Type `a` to trust a tool for the entire session
+**Allow list** — Type `a` to trust a tool for the entire session
 
-🔌 **MCP Protocol** — Connect external AI tool servers
+**MCP Protocol** — Connect external AI tool servers
 
-🤖 **Sub-agents** — The assistant can delegate tasks to typed sub-agents (e.g. `explore`, `plan`), configurable via the `agents:` block
+**Sub-agents** — The assistant can delegate tasks to typed sub-agents (e.g. `explore`, `plan`), configurable via the `agents:` block
 
-🪄 **Background jobs** — Run sub-agents in the background; press `Ctrl+B` to background a running foreground sub-agent, `Ctrl+J` to view the jobs footer
+**Background jobs** — Run sub-agents in the background; press `Ctrl+B` to background a running foreground sub-agent, `Ctrl+J` to view the jobs footer
 
-📟 **Tmux support** — Seamless splits and popups
+**Tmux support** — Seamless splits and popups
 
-🐚 **Multi-shell** — zsh, bash, and fish supported
+**Multi-shell** — zsh, bash, and fish supported
 
-📦 **0 dependencies** — Portable, single binary, easy to install and upgrade
+**0 dependencies** — Portable, single binary, easy to install and upgrade
 
 
 ## Installation
@@ -114,7 +114,7 @@ base_url: https://api.openai.com/v1
 
 # Optional: Custom system prompt
 prompt: |
-  You are a helpful terminal wizard...
+  You are a calm, helpful terminal assistant...
 
 # Optional: Agent behavior
 agent_options:
@@ -150,14 +150,10 @@ export BASE_URL=https://api.openai.com/v1
 When nib wants to run a command, you'll see a prompt:
 
 ```
-┌──────────────────────────────────────┐
-│ 🔧 bash                              │
-│                                      │
-│ Arguments: {"script": "ls -la"}      │
-│ 💭 Listing directory contents...     │
-│                                      │
-│ [y]es  [a]lways  [n]o  or adjust     │
-└──────────────────────────────────────┘
+▏ run: bash
+▏ {"script": "ls -la"}
+▏ listing directory contents...
+▏ y · a always · n · or type a change
 ```
 
 **Options:**

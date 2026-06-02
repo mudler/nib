@@ -47,4 +47,14 @@ func TestNoEmojiInRenderHelpers(t *testing.T) {
 	if containsEmoji(root) {
 		t.Fatalf("toolApprovalLabel (root) contains emoji: %q", root)
 	}
+
+	// Completion popup (tags, names, descriptions, ghost hint).
+	cmds, skills, agents := sampleRegistries()
+	var c compState
+	c.setRegistries(cmds, skills, agents)
+	c.sync("/rev")
+	comp := renderCompletion(c, "/rev", 80)
+	if containsEmoji(comp) {
+		t.Fatalf("renderCompletion output contains emoji: %q", comp)
+	}
 }
