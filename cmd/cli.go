@@ -11,19 +11,8 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/mudler/nib/chat"
+	"github.com/mudler/nib/theme"
 	"github.com/mudler/nib/types"
-)
-
-// ANSI color codes
-const (
-	colorReset  = "\033[0m"
-	colorCyan   = "\033[36m"
-	colorYellow = "\033[33m"
-	colorGreen  = "\033[32m"
-	colorGray   = "\033[90m"
-	colorBold   = "\033[1m"
-	colorRed    = "\033[31m"
-	colorPurple = "\033[35m"
 )
 
 // Spinner frames for animated display
@@ -73,7 +62,7 @@ func (s *spinner) start(message string) {
 				s.mu.Lock()
 				msg := s.message
 				s.mu.Unlock()
-				fmt.Printf("\r%s%s %s%s", colorCyan, spinnerFrames[frame], msg, colorReset)
+				fmt.Printf("\r%s %s", theme.Help.Render(spinnerFrames[frame]), theme.Help.Render(msg))
 				frame = (frame + 1) % len(spinnerFrames)
 			}
 		}
@@ -132,11 +121,11 @@ func formatAgentEventLine(ev chat.AgentEvent) string {
 	}
 	switch ev.Status {
 	case chat.AgentStatusCompleted:
-		return fmt.Sprintf("%s🤖 %s (%s) completed: %s%s", colorGray, typ, id, ev.Result, colorReset)
+		return theme.Subtle.Render(fmt.Sprintf("%s %s (%s) completed: %s", theme.SubAgent, typ, id, ev.Result))
 	case chat.AgentStatusFailed:
-		return fmt.Sprintf("%s🤖 %s (%s) failed: %v%s", colorRed, typ, id, ev.Err, colorReset)
+		return theme.Error.Render(fmt.Sprintf("%s %s (%s) failed: %v", theme.SubAgent, typ, id, ev.Err))
 	default:
-		return fmt.Sprintf("%s🤖 %s (%s) %s%s", colorGray, typ, id, ev.Status, colorReset)
+		return theme.Subtle.Render(fmt.Sprintf("%s %s (%s) %s", theme.SubAgent, typ, id, ev.Status))
 	}
 }
 
@@ -150,20 +139,19 @@ func RunCLI(ctx context.Context, cfg types.Config, transports ...mcp.Transport) 
 		},
 		OnReasoning: func(reasoning string) {
 			spin.stop()
-			fmt.Printf("%s💭 %s%s\n", colorGray, reasoning, colorReset)
-			spin.start("Conjuring...")
+			fmt.Println(theme.Reasoning.Render(reasoning))
+			spin.start(theme.Status(theme.VerbThinking, 0))
 		},
 		OnToolCall: func(req chat.ToolCallRequest) chat.ToolCallResponse {
 			spin.stop()
+			g := theme.Gutter.Render(theme.ApprovalGutter) + " "
 			fmt.Println()
-			fmt.Println(strings.Repeat("─", 50))
-			fmt.Printf("%s%s🔧 Tool Request: %s%s\n", colorBold, colorYellow, req.Name, colorReset)
-			fmt.Printf("%sArguments:%s %s\n", colorGray, colorReset, req.Arguments)
+			fmt.Println(g + theme.ApproveKey.Render("run  "+req.Name))
+			fmt.Println(g + theme.Help.Render(req.Arguments))
 			if req.Reasoning != "" {
-				fmt.Printf("%s💭 %s%s\n", colorGray, req.Reasoning, colorReset)
+				fmt.Println(g + theme.Reasoning.Render(req.Reasoning))
 			}
-			fmt.Println(strings.Repeat("─", 50))
-			fmt.Printf("\n%s[y]es  [a]lways  [n]o  or type adjustment:%s ", colorCyan, colorReset)
+			fmt.Print(g + theme.ApproveKey.Render(theme.ApprovePrompt) + " ")
 
 			text, _ := readStringCancellable(ctx, reader)
 			text = strings.TrimSpace(text)
@@ -173,36 +161,35 @@ func RunCLI(ctx context.Context, cfg types.Config, transports ...mcp.Transport) 
 			switch strings.ToLower(text) {
 			case "y", "yes":
 				response = chat.ToolCallResponse{Approved: true}
-				spin.start("Executing tool...")
+				spin.start(theme.Status(theme.VerbWorking, 0))
 			case "a", "always":
 				response = chat.ToolCallResponse{Approved: true, AlwaysAllow: true}
-				fmt.Printf("%s✓ Tool '%s' added to allow list for this session%s\n", colorGreen, req.Name, colorReset)
-				spin.start("Executing tool...")
+				fmt.Println(theme.Subtle.Render("added '" + req.Name + "' to the session allow list"))
+				spin.start(theme.Status(theme.VerbWorking, 0))
 			case "n", "no":
 				response = chat.ToolCallResponse{Approved: false}
-				fmt.Printf("%s✗ Tool execution denied%s\n", colorRed, colorReset)
+				fmt.Println(theme.Error.Render(theme.Cross + " denied"))
 			default:
 				response = chat.ToolCallResponse{Approved: true, Adjustment: text}
-				spin.start("Executing adjusted tool...")
+				spin.start(theme.Status(theme.VerbWorking, 0))
 			}
 			return response
 		},
 		OnResponse: func(response string) {
 			spin.stop()
 			fmt.Println()
-			fmt.Println(strings.Repeat("─", 50))
-			fmt.Printf("%s%s🧙 Wiz:%s\n", colorBold, colorPurple, colorReset)
+			fmt.Println(theme.LabelNib.Render(theme.BrandName) + " " + theme.SepStyle.Render(theme.Sep))
 			fmt.Println(response)
-			fmt.Println(strings.Repeat("─", 50))
+			fmt.Println()
 		},
 		OnError: func(err error) {
 			spin.stop()
-			fmt.Fprintf(os.Stderr, "%s✗ Error: %v%s\n", colorRed, err, colorReset)
+			fmt.Fprintln(os.Stderr, theme.Error.Render(theme.Cross+" "+err.Error()))
 		},
 		OnAgentEvent: func(ev chat.AgentEvent) {
 			spin.stop()
 			fmt.Println(formatAgentEventLine(ev))
-			spin.start("Conjuring...")
+			spin.start(theme.Status(theme.VerbThinking, 0))
 		},
 	}
 
@@ -212,10 +199,11 @@ func RunCLI(ctx context.Context, cfg types.Config, transports ...mcp.Transport) 
 	}
 	defer session.Close()
 
-	fmt.Printf("%s%s✨ [◠ ◠] wiz%s\n", colorBold, colorPurple, colorReset)
-	fmt.Println(strings.Repeat("─", 50))
-	fmt.Printf("%sYour terminal wizard awaits. Type your command and press Enter.%s\n", colorGray, colorReset)
-	fmt.Printf("%sCtrl+C to exit.%s\n\n", colorGray, colorReset)
+	fmt.Println(theme.Brand.Render(theme.BrandName))
+	fmt.Println(theme.Rule.Render(strings.Repeat("─", 50)))
+	fmt.Println(theme.Help.Render(theme.CLIWelcome))
+	fmt.Println(theme.Help.Render(theme.CLIExit))
+	fmt.Println()
 
 	// Display help immediately
 	help()
@@ -225,7 +213,7 @@ func RunCLI(ctx context.Context, cfg types.Config, transports ...mcp.Transport) 
 		case <-ctx.Done():
 			return ctx.Err()
 		default:
-			fmt.Printf("%s>%s ", colorCyan, colorReset)
+			fmt.Print(theme.Prompt.Render(theme.PromptGlyph) + " ")
 
 			text, err := readStringCancellable(ctx, reader)
 			if err != nil {
@@ -238,8 +226,8 @@ func RunCLI(ctx context.Context, cfg types.Config, transports ...mcp.Transport) 
 
 			// Handle commands starting with /
 			if strings.HasPrefix(text, "/") {
-				fmt.Printf("%s✗ Unknown command: %s%s\n", colorRed, text, colorReset)
-				fmt.Printf("%sType 'help' for available commands.%s\n", colorGray, colorReset)
+				fmt.Println(theme.Error.Render(theme.Cross + " unknown command: " + text))
+				fmt.Println(theme.Help.Render("type 'help' for available commands"))
 				continue
 			}
 
@@ -255,11 +243,11 @@ func RunCLI(ctx context.Context, cfg types.Config, transports ...mcp.Transport) 
 			}
 
 			fmt.Println()
-			spin.start("Casting spell...")
+			spin.start(theme.Status(theme.VerbThinking, 0))
 			_, err = session.SendMessage(text)
 			spin.stop()
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "%s✗ Error: %v%s\n", colorRed, err, colorReset)
+				fmt.Fprintln(os.Stderr, theme.Error.Render(theme.Cross+" "+err.Error()))
 			}
 			fmt.Println()
 		}
@@ -267,8 +255,5 @@ func RunCLI(ctx context.Context, cfg types.Config, transports ...mcp.Transport) 
 }
 
 func help() {
-	fmt.Println("Available commands:")
-	fmt.Println("  exit - Exit the wizard")
-	fmt.Println("  help - Show this help message")
-	fmt.Println("  clear - Clear the conversation")
+	fmt.Println(theme.Help.Render("commands:  exit  ·  clear  ·  help"))
 }
