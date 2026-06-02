@@ -120,8 +120,12 @@ func startBashMCPServer(ctx context.Context, transport mcp.Transport) error {
 	// Add tool for executing shell scripts
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "bash",
-		Description: "Execute a shell script and return the output, exit code, and any errors. The shell command can be configured via SHELL_CMD environment variable (default: 'sh')",
+		Description: "Execute a shell script and return the output, exit code, and any errors. The shell command can be configured via SHELL_CMD environment variable (default: 'sh'). For long-running commands, prefer bash_background so the conversation isn't blocked.",
 	}, executeCommand)
+
+	// Background-shell tools: bash_background / bash_jobs / bash_job_output /
+	// bash_job_kill. Jobs run under ctx (session lifetime), surviving turns.
+	registerBackgroundShellTools(ctx, server)
 
 	// Run the server
 	if err := server.Run(ctx, transport); err != nil {
