@@ -196,6 +196,23 @@ func (s *Session) AgentManager() *cogito.AgentManager {
 	return s.agentManager
 }
 
+// KillAgent cancels a running sub-agent by id (its context is cancelled, which
+// stops the agent and any LLM call it has in flight). Returns false when the id
+// is unknown. Safe to call on an already-finished agent.
+func (s *Session) KillAgent(id string) bool {
+	if s.agentManager == nil {
+		return false
+	}
+	a, ok := s.agentManager.Get(id)
+	if !ok {
+		return false
+	}
+	if a.Cancel != nil {
+		a.Cancel()
+	}
+	return true
+}
+
 // emitAgentEvent maps a cogito sub-agent state into a chat.AgentEvent and
 // forwards it to the registered OnAgentEvent callback (if any). It is shared by
 // the spawn (Status=running) and completion callbacks so the mapping lives in

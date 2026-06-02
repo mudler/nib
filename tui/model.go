@@ -74,6 +74,7 @@ type Model struct {
 	// Sub-agent jobs state
 	jobs           []agentJob
 	showJobsDetail bool
+	killArmed      bool // Ctrl+K pressed: next digit kills that numbered job
 	agentEventChan chan chat.AgentEvent
 
 	// Unified `/` completion state
@@ -218,6 +219,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
+		// Kill-selection mode (armed by Ctrl+K): a digit kills that numbered job;
+		// Esc/Ctrl+K cancels; any other key cancels and is handled normally.
+		if m.killArmed {
+			switch {
+			case msg.Type == tea.KeyEsc || msg.Type == tea.KeyCtrlK:
+				m.killArmed = false
+				m.status = ""
+				m.updateViewport()
+				return m, nil
+			case msg.Type == tea.KeyRunes && len(msg.Runes) == 1 && msg.Runes[0] >= '1' && msg.Runes[0] <= '9':
+				m.killSelected(int(msg.Runes[0] - '0'))
+				m.killArmed = false
+				m.updateViewport()
+				return m, nil
+			default:
+				m.killArmed = false
+				m.status = ""
+			}
+		}
 		switch msg.Type {
 		case tea.KeyCtrlC:
 			// First Ctrl+C on an in-flight turn interrupts the request but keeps
@@ -253,6 +273,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case tea.KeyCtrlJ:
 			// Toggle the expanded jobs detail list.
 			m.showJobsDetail = !m.showJobsDetail
+			return m, nil
+
+		case tea.KeyCtrlK:
+			// Arm kill-selection: open the numbered detail and wait for a digit.
+			if m.sessionReady && len(m.unifiedJobs()) > 0 {
+				m.killArmed = true
+				m.showJobsDetail = true
+				m.status = "Kill which job? press its number · Esc cancels"
+				m.updateViewport()
+			}
 			return m, nil
 
 		case tea.KeyTab:
@@ -942,38 +972,22 @@ func (m Model) View() string {
 		sb.WriteString(errorStyle.Render(fmt.Sprintf("Error: %v", m.err)))
 	}
 
-	// Sub-agent jobs footer (and optional detail). Adds nothing when no jobs,
-	// so the layout is unchanged in the common case.
-	footer := renderJobsFooter(m.jobs, m.width)
+	// Jobs area: a unified numbered detail list (Ctrl+J), whose numbers Ctrl+K
+	// uses for kill selection, above the compact per-kind summary footers. All
+	// add nothing when there are no jobs, so the common case is unchanged.
 	if m.showJobsDetail {
-		if d := renderJobsDetail(m.jobs, m.width); d != "" {
-			if footer != "" {
-				footer = d + "\n" + footer
-			} else {
-				footer = d
-			}
+		if d := renderUnifiedJobsDetail(m.unifiedJobs(), m.width); d != "" {
+			sb.WriteString("\n")
+			sb.WriteString(d)
 		}
 	}
-	if footer != "" {
+	if f := renderJobsFooter(m.jobs, m.width); f != "" {
 		sb.WriteString("\n")
-		sb.WriteString(footer)
+		sb.WriteString(f)
 	}
-
-	// Shell jobs footer (background / backgrounded commands), same treatment.
-	shellList := m.shellJobs.List()
-	shellFooter := renderShellJobsFooter(shellList, m.width)
-	if m.showJobsDetail {
-		if d := renderShellJobsDetail(shellList, m.width); d != "" {
-			if shellFooter != "" {
-				shellFooter = d + "\n" + shellFooter
-			} else {
-				shellFooter = d
-			}
-		}
-	}
-	if shellFooter != "" {
+	if f := renderShellJobsFooter(m.shellJobs.List(), m.width); f != "" {
 		sb.WriteString("\n")
-		sb.WriteString(shellFooter)
+		sb.WriteString(f)
 	}
 
 	return sb.String()
