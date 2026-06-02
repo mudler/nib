@@ -4,9 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/mudler/nib/theme"
 	"github.com/mudler/nib/types"
 
 	"github.com/charmbracelet/bubbles/spinner"
@@ -126,9 +129,10 @@ func NewModel(ctx context.Context, cfg types.Config, height int, shellJobs *wizm
 	ctx, cancel := context.WithCancel(ctx)
 
 	ta := textarea.New()
-	ta.Placeholder = "Ask the wizard..."
+	ta.Placeholder = "ask anything…"
 	ta.Focus()
-	ta.Prompt = "│ "
+	ta.Prompt = theme.PromptGlyph + " "
+	ta.FocusedStyle.Prompt = theme.Prompt
 	ta.CharLimit = 4096
 	ta.SetWidth(80)
 	ta.SetHeight(3)
@@ -136,11 +140,11 @@ func NewModel(ctx context.Context, cfg types.Config, height int, shellJobs *wizm
 	ta.KeyMap.InsertNewline.SetEnabled(false) // Enter sends message
 
 	vp := viewport.New(80, 10)
-	vp.SetContent("✨ Welcome! The wizard awaits your command.\n\nType your question and press Enter. Press Esc to exit.")
+	vp.SetContent("")
 
 	s := spinner.New()
 	s.Spinner = spinner.Points
-	s.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("39"))
+	s.Style = theme.Help
 
 	// Calculate max height - negative means percentage, positive means lines
 	maxH := height
@@ -388,7 +392,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			default: // slash.KindSend
 				m.loading = true
 				m.interruptArmed = false
-				m.status = "Thinking..."
+				m.status = ""
 				m.updateViewport()
 				return m, m.sendMessage(action.Text)
 			}
@@ -416,7 +420,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.reasoning = ""
 		if msg.err != nil {
 			if errors.Is(msg.err, context.Canceled) {
-				m.messages = append(m.messages, ChatMessage{Role: "agent", Content: "⛔ Interrupted."})
+				m.messages = append(m.messages, ChatMessage{Role: "agent", Content: "interrupted."})
 			} else {
 				m.err = msg.err
 				m.messages = append(m.messages, ChatMessage{Role: "error", Content: msg.err.Error()})
@@ -681,48 +685,6 @@ func (m *Model) updateDimensions() {
 	m.textarea.SetWidth(m.width - 2)
 }
 
-// Wizard face animation frames - the wizard winks while thinking!
-var wizardFaces = []string{
-	"◠ ◠", // normal
-	"◠ ─", // wink right
-	"◠ ◠", // normal
-	"─ ◠", // wink left
-	"─ ─", // blink
-	"◠ ◠", // normal
-}
-
-// Sparkle animation for the header
-var wizardSparkles = []string{"✨", "⭐", "💫", "✨", "⭐", "💫"}
-
-// getWizardFace returns the current wizard face animation frame
-func (m *Model) getWizardFace() string {
-	return wizardFaces[m.statusPhase%len(wizardFaces)]
-}
-
-// getWizardSparkle returns the current sparkle animation
-func (m *Model) getWizardSparkle() string {
-	return wizardSparkles[m.statusPhase%len(wizardSparkles)]
-}
-
-// getThinkingStatus returns an animated thinking status message
-func (m *Model) getThinkingStatus() string {
-	phases := []string{
-		"Casting spell",
-		"Casting spell.",
-		"Casting spell..",
-		"Casting spell...",
-		"Conjuring",
-		"Conjuring.",
-		"Conjuring..",
-		"Conjuring...",
-		"Summoning wisdom",
-		"Summoning wisdom.",
-		"Summoning wisdom..",
-		"Summoning wisdom...",
-	}
-	return phases[m.statusPhase%len(phases)]
-}
-
 // wrapText wraps text to fit within the specified width, preserving existing newlines
 func wrapText(text string, width int) string {
 	if width <= 0 {
@@ -828,7 +790,7 @@ func (m *Model) updateViewport() {
 	for _, msg := range m.messages {
 		switch msg.Role {
 		case "user":
-			prefix := userStyle.Render("👤 You: ")
+			prefix := userStyle.Render("you") + " " + theme.SepStyle.Render(theme.Sep) + " "
 			prefixWidth := lipgloss.Width(prefix)
 			wrappedContent := wrapText(msg.Content, contentWidth-prefixWidth)
 			// Add prefix to first line, indent continuation lines
@@ -847,7 +809,7 @@ func (m *Model) updateViewport() {
 			}
 			sb.WriteString("\n")
 		case "assistant":
-			prefix := assistantStyle.Render("🧙 Wiz: ")
+			prefix := assistantStyle.Render(theme.BrandName) + " " + theme.SepStyle.Render(theme.Sep) + " "
 			prefixWidth := lipgloss.Width(prefix)
 			wrappedContent := wrapText(msg.Content, contentWidth-prefixWidth)
 			// Add prefix to first line, indent continuation lines
@@ -866,7 +828,7 @@ func (m *Model) updateViewport() {
 			}
 			sb.WriteString("\n")
 		case "agent":
-			prefix := agentStyle.Render("🤖 ")
+			prefix := theme.Subtle.Render(theme.SubAgent) + " "
 			prefixWidth := lipgloss.Width(prefix)
 			wrappedContent := wrapText(msg.Content, contentWidth-prefixWidth)
 			lines := strings.Split(strings.TrimRight(wrappedContent, "\n"), "\n")
@@ -882,7 +844,7 @@ func (m *Model) updateViewport() {
 			}
 			sb.WriteString("\n")
 		case "error":
-			prefix := errorStyle.Render("✗ Error: ")
+			prefix := errorStyle.Render(theme.Cross) + " "
 			prefixWidth := lipgloss.Width(prefix)
 			wrappedContent := wrapText(msg.Content, contentWidth-prefixWidth)
 			// Add prefix to first line, indent continuation lines
@@ -904,91 +866,35 @@ func (m *Model) updateViewport() {
 	}
 
 	if m.loading {
-		// Use animated status if no specific status is set
 		displayStatus := m.status
 		if displayStatus == "" || displayStatus == "Thinking..." {
-			displayStatus = m.getThinkingStatus()
+			displayStatus = theme.Status(theme.VerbThinking, m.statusPhase)
 		}
-
-		// Build thinking box content
-		// Account for box padding (1 char each side) and border (1 char each side) = 4 chars total
-		boxContentWidth := contentWidth - 4
-		if boxContentWidth < 20 {
-			boxContentWidth = 20 // minimum width
-		}
-
-		var thinkingContent strings.Builder
-		thinkingContent.WriteString(thinkingStyle.Render(m.spinner.View() + " " + displayStatus))
+		sb.WriteString(theme.SepStyle.Render(theme.Sep) + " " + theme.Reasoning.Render(displayStatus))
+		sb.WriteString("\n")
 		if m.reasoning != "" {
-			thinkingContent.WriteString("\n")
-			reasoningPrefix := reasoningStyle.Render("💭 ")
-			reasoningPrefixWidth := lipgloss.Width(reasoningPrefix)
-			wrappedReasoning := wrapText(m.reasoning, boxContentWidth-reasoningPrefixWidth)
-			reasoningLines := strings.Split(strings.TrimRight(wrappedReasoning, "\n"), "\n")
-			for i, line := range reasoningLines {
-				if i == 0 {
-					thinkingContent.WriteString(reasoningPrefix)
-					thinkingContent.WriteString(line)
-				} else {
-					thinkingContent.WriteString(strings.Repeat(" ", reasoningPrefixWidth))
-					thinkingContent.WriteString(line)
-				}
-				thinkingContent.WriteString("\n")
+			wrapped := wrapText(m.reasoning, contentWidth-4)
+			for _, line := range strings.Split(strings.TrimRight(wrapped, "\n"), "\n") {
+				sb.WriteString("  " + theme.Reasoning.Render(line) + "\n")
 			}
 		}
-
-		sb.WriteString(thinkingBoxStyle.Render(thinkingContent.String()))
-		sb.WriteString("\n")
 	}
 
 	if m.awaitingApproval && m.pendingTool != nil {
-		// Build tool request box content
-		// Account for box padding (1 char each side) and border (1 char each side) = 4 chars total
-		boxContentWidth := contentWidth - 4
-		if boxContentWidth < 20 {
-			boxContentWidth = 20 // minimum width
-		}
-
-		var toolContent strings.Builder
-		toolContent.WriteString(toolNameStyle.Render(toolApprovalLabel(*m.pendingTool)))
-		toolContent.WriteString("\n\n")
-		// Wrap arguments
-		argsPrefix := dimmedStyle.Render("Arguments: ")
-		argsPrefixWidth := lipgloss.Width(argsPrefix)
-		wrappedArgs := wrapText(m.pendingTool.Arguments, boxContentWidth-argsPrefixWidth)
-		argsLines := strings.Split(strings.TrimRight(wrappedArgs, "\n"), "\n")
-		for i, line := range argsLines {
-			if i == 0 {
-				toolContent.WriteString(argsPrefix)
-				toolContent.WriteString(line)
-			} else {
-				toolContent.WriteString(strings.Repeat(" ", argsPrefixWidth))
-				toolContent.WriteString(line)
-			}
-			toolContent.WriteString("\n")
+		gutter := theme.Gutter.Render(theme.ApprovalGutter) + " "
+		sb.WriteString(gutter + theme.ApproveKey.Render(toolApprovalLabel(*m.pendingTool)))
+		sb.WriteString("\n")
+		args := wrapText(m.pendingTool.Arguments, contentWidth-4)
+		for _, line := range strings.Split(strings.TrimRight(args, "\n"), "\n") {
+			sb.WriteString(gutter + theme.Help.Render(line) + "\n")
 		}
 		if m.pendingTool.Reasoning != "" {
-			toolContent.WriteString("\n")
-			reasoningPrefix := reasoningStyle.Render("💭 ")
-			reasoningPrefixWidth := lipgloss.Width(reasoningPrefix)
-			wrappedReasoning := wrapText(m.pendingTool.Reasoning, boxContentWidth-reasoningPrefixWidth)
-			reasoningLines := strings.Split(strings.TrimRight(wrappedReasoning, "\n"), "\n")
-			for i, line := range reasoningLines {
-				if i == 0 {
-					toolContent.WriteString(reasoningPrefix)
-					toolContent.WriteString(line)
-				} else {
-					toolContent.WriteString(strings.Repeat(" ", reasoningPrefixWidth))
-					toolContent.WriteString(line)
-				}
-				toolContent.WriteString("\n")
+			rz := wrapText(m.pendingTool.Reasoning, contentWidth-4)
+			for _, line := range strings.Split(strings.TrimRight(rz, "\n"), "\n") {
+				sb.WriteString(gutter + theme.Reasoning.Render(line) + "\n")
 			}
 		}
-		toolContent.WriteString("\n")
-		toolContent.WriteString(promptHintStyle.Render("[y]es  [a]lways  [n]o  "))
-		toolContent.WriteString(dimmedStyle.Render("or type adjustment"))
-
-		sb.WriteString(toolRequestBoxStyle.Render(toolContent.String()))
+		sb.WriteString(gutter + theme.ApproveKey.Render(theme.ApprovePrompt))
 		sb.WriteString("\n")
 	}
 
@@ -1001,7 +907,7 @@ func (m *Model) updateViewport() {
 	m.viewport.GotoBottom()
 }
 
-// View renders the TUI
+// View renders the TUI.
 func (m Model) View() string {
 	if m.quitting {
 		return ""
@@ -1009,69 +915,93 @@ func (m Model) View() string {
 
 	var sb strings.Builder
 
-	// Header with animated wizard
-	sparkle := m.getWizardSparkle()
-	if m.loading {
-		// Animated wizard face when loading
-		face := m.getWizardFace()
-		sb.WriteString(headerStyle.Render(fmt.Sprintf("%s [%s] wiz", sparkle, face)))
+	// Header: brand left, cwd right, one dim hairline beneath.
+	brand := theme.Brand.Render(theme.BrandName)
+	cwd := theme.Meta.Render(shortenPath(currentDir()))
+	gap := m.width - lipgloss.Width(brand) - lipgloss.Width(cwd)
+	if gap < 1 {
+		gap = 1
+	}
+	sb.WriteString(brand + strings.Repeat(" ", gap) + cwd)
+	sb.WriteString("\n")
+	sb.WriteString(theme.Rule.Render(strings.Repeat("─", max(1, m.width))))
+	sb.WriteString("\n")
+
+	// Body: first-run empty state, otherwise the conversation viewport.
+	if len(m.messages) == 0 && !m.loading && !m.awaitingApproval && !m.awaitingAsk {
+		sb.WriteString(renderEmptyState(m.width))
 	} else {
-		sb.WriteString(headerStyle.Render(fmt.Sprintf("%s [◠ ◠] wiz", sparkle)))
+		sb.WriteString(m.viewport.View())
 	}
 	sb.WriteString("\n")
-	sb.WriteString(strings.Repeat("─", m.width))
-	sb.WriteString("\n")
 
-	// Chat viewport
-	sb.WriteString(m.viewport.View())
-	sb.WriteString("\n")
-
-	// Separator
-	sb.WriteString(strings.Repeat("─", m.width))
-	sb.WriteString("\n")
-
-	// `/` completion popup (above the input)
+	// `/` completion popup, above the input.
 	if comp := renderCompletion(m.completion, strings.TrimSpace(m.textarea.Value()), m.width); comp != "" {
 		sb.WriteString(comp)
 		sb.WriteString("\n")
 	}
 
-	// Input area
+	// Input.
 	if m.sessionReady {
 		sb.WriteString(m.textarea.View())
 	} else {
-		sb.WriteString(m.spinner.View() + " Summoning the wizard...")
+		sb.WriteString(theme.Help.Render(theme.Starting))
 	}
-
-	// Help text
 	sb.WriteString("\n")
-	helpText := "Enter: send • Ctrl+C: interrupt/exit • Esc: exit"
-	sb.WriteString(helpStyle.Render(helpText))
+	sb.WriteString(theme.Help.Render(m.helpLine()))
 
 	if m.err != nil {
-		sb.WriteString("\n")
-		sb.WriteString(errorStyle.Render(fmt.Sprintf("Error: %v", m.err)))
+		sb.WriteString("\n" + theme.Error.Render(theme.Cross+" "+m.err.Error()))
 	}
 
-	// Jobs area: a unified numbered detail list (Ctrl+J), whose numbers Ctrl+K
-	// uses for kill selection, above the compact per-kind summary footers. All
-	// add nothing when there are no jobs, so the common case is unchanged.
+	// Jobs footers (renderers restyle internally; nil-safe when empty).
 	if m.showJobsDetail {
 		if d := renderUnifiedJobsDetail(m.unifiedJobs(), m.width, m.jobActivityTail); d != "" {
-			sb.WriteString("\n")
-			sb.WriteString(d)
+			sb.WriteString("\n" + d)
 		}
 	}
 	if f := renderJobsFooter(m.jobs, m.width); f != "" {
-		sb.WriteString("\n")
-		sb.WriteString(f)
+		sb.WriteString("\n" + f)
 	}
 	if f := renderShellJobsFooter(m.shellJobs.List(), m.width); f != "" {
-		sb.WriteString("\n")
-		sb.WriteString(f)
+		sb.WriteString("\n" + f)
 	}
 
 	return sb.String()
+}
+
+// helpLine returns the context-appropriate help string.
+func (m Model) helpLine() string {
+	switch {
+	case m.awaitingApproval:
+		return theme.HelpApproval
+	default:
+		return theme.HelpDefault
+	}
+}
+
+func currentDir() string {
+	d, err := os.Getwd()
+	if err != nil {
+		return ""
+	}
+	return d
+}
+
+// shortenPath replaces the home-dir prefix with ~ for a compact header.
+func shortenPath(p string) string {
+	if p == "" {
+		return ""
+	}
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		if p == home {
+			return "~"
+		}
+		if strings.HasPrefix(p, home+string(filepath.Separator)) {
+			return "~" + p[len(home):]
+		}
+	}
+	return p
 }
 
 // Output returns any command that should be output to the shell
