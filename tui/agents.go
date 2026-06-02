@@ -6,6 +6,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/mudler/nib/chat"
+	"github.com/mudler/nib/theme"
 )
 
 // agentTranscriptLine renders a durable one-line transcript marker for a
@@ -60,7 +61,7 @@ func renderJobsFooter(jobs []agentJob, width int) string {
 			failed++
 		}
 	}
-	parts := []string{fmt.Sprintf("⚙ jobs: %d running", running)}
+	parts := []string{fmt.Sprintf("jobs: %d running", running)}
 	if done > 0 {
 		parts = append(parts, fmt.Sprintf("%d done", done))
 	}
@@ -82,9 +83,9 @@ func shortID(id string) string {
 // toolApprovalLabel builds the tool-approval header, labeling sub-agent calls.
 func toolApprovalLabel(req chat.ToolCallRequest) string {
 	if req.AgentID != "" {
-		return fmt.Sprintf("🤖 %s → run: %s", shortID(req.AgentID), req.Name)
+		return fmt.Sprintf("%s %s · run: %s", theme.SubAgent, shortID(req.AgentID), req.Name)
 	}
-	return fmt.Sprintf("🔧 run: %s", req.Name)
+	return fmt.Sprintf("run: %s", req.Name)
 }
 
 // firstRunningJobID returns the id of the first running job, or "".

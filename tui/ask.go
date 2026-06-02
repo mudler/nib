@@ -15,7 +15,7 @@ import (
 // multi-select.
 func renderAsk(req chat.AskRequest, width int) string {
 	var b strings.Builder
-	b.WriteString(askHeaderStyle.Render("❓ " + req.Question))
+	b.WriteString(askHeaderStyle.Render(req.Question))
 	b.WriteString("\n")
 	marker := "( )"
 	if req.MultiSelect {

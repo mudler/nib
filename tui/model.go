@@ -464,7 +464,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if note == "" {
 			note = "(no note)"
 		}
-		m.pendingNotices = append(m.pendingNotices, "⏰ scheduled wake-up: "+note)
+		m.pendingNotices = append(m.pendingNotices, "scheduled wake-up: "+note)
 		if c := m.autoNotifyCmd(); c != nil {
 			cmds = append(cmds, c)
 		}
