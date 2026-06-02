@@ -1,98 +1,35 @@
 package tui
 
-import "github.com/charmbracelet/lipgloss"
+import (
+	"github.com/charmbracelet/lipgloss"
 
+	"github.com/mudler/nib/theme"
+)
+
+// Style vars kept for existing call sites, now sourced from the shared theme.
 var (
-	// Header style
-	headerStyle = lipgloss.NewStyle().
-			Bold(true).
-			Foreground(lipgloss.Color("205")).
-			Padding(0, 1)
+	headerStyle        = theme.Brand
+	userStyle          = theme.LabelYou
+	assistantStyle     = theme.LabelNib
+	errorStyle         = theme.Error
+	statusStyle        = theme.Reasoning
+	reasoningStyle     = theme.Reasoning
+	agentStyle         = theme.Subtle
+	helpStyle          = theme.Help
+	thinkingStyle      = theme.Running
+	toolNameStyle      = theme.Gutter
+	sectionHeaderStyle = theme.Brand
+	promptHintStyle    = theme.ApproveKey
+	dimmedStyle        = theme.Help
 
-	// User message style
-	userStyle = lipgloss.NewStyle().
-			Bold(true).
-			Foreground(lipgloss.Color("86"))
+	// Retained so any remaining reference compiles; the redesign no longer
+	// boxes content. Safe to delete once no call sites remain.
+	borderStyle = lipgloss.NewStyle()
 
-	// Assistant message style
-	assistantStyle = lipgloss.NewStyle().
-			Bold(true).
-			Foreground(lipgloss.Color("212"))
-
-	// Error style
-	errorStyle = lipgloss.NewStyle().
-			Bold(true).
-			Foreground(lipgloss.Color("196"))
-
-	// Status style
-	statusStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("241")).
-			Italic(true)
-
-	// Reasoning style
-	reasoningStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("243")).
-			Italic(true)
-
-	// Tool request style
-	toolStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("214")).
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color("214")).
-			Padding(1)
-
-	// Sub-agent lifecycle line style
-	agentStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("141")).
-			Italic(true)
-
-	// Help text style
-	helpStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("241"))
-
-	// Border style
-	borderStyle = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color("238"))
-
-	// Thinking style - for active processing
-	thinkingStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("39")).
-			Bold(true)
-
-	// Tool name style - highlight tool names
-	toolNameStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("214")).
-			Bold(true)
-
-	// Tool executing style
-	toolExecutingStyle = lipgloss.NewStyle().
-				Foreground(lipgloss.Color("76")).
-				Italic(true)
-
-	// Section header style
-	sectionHeaderStyle = lipgloss.NewStyle().
-				Foreground(lipgloss.Color("99")).
-				Bold(true)
-
-	// Box style for sections
-	thinkingBoxStyle = lipgloss.NewStyle().
-				Border(lipgloss.RoundedBorder()).
-				BorderForeground(lipgloss.Color("39")).
-				Padding(0, 1)
-
-	// Tool request box style
-	toolRequestBoxStyle = lipgloss.NewStyle().
-				Border(lipgloss.RoundedBorder()).
-				BorderForeground(lipgloss.Color("214")).
-				Padding(0, 1)
-
-	// Prompt hint style
-	promptHintStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("39")).
-			Bold(true)
-
-	// Dimmed text style
-	dimmedStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("241"))
+	// Compatibility aliases for vars whose last call sites are removed by a
+	// later task; kept here so the package compiles in the meantime.
+	toolExecutingStyle  = theme.Done
+	thinkingBoxStyle    = lipgloss.NewStyle().Padding(0, 1)
+	toolRequestBoxStyle = lipgloss.NewStyle().Padding(0, 1)
+	toolStyle           = lipgloss.NewStyle()
 )
