@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/mudler/wiz/types"
 
@@ -15,6 +16,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/mudler/wiz/chat"
+	wizmcp "github.com/mudler/wiz/mcp"
 	"github.com/mudler/wiz/slash"
 )
 
@@ -37,6 +39,7 @@ type Model struct {
 	ctx          context.Context
 	cancel       context.CancelFunc
 	transports   []mcp.Transport
+	shellJobs    *wizmcp.ShellJobs
 	cfg          types.Config
 	sessionReady bool
 
@@ -111,7 +114,7 @@ type sessionReadyMsg struct {
 }
 
 // NewModel creates a new TUI model
-func NewModel(ctx context.Context, cfg types.Config, height int, transports ...mcp.Transport) Model {
+func NewModel(ctx context.Context, cfg types.Config, height int, shellJobs *wizmcp.ShellJobs, transports ...mcp.Transport) Model {
 	ctx, cancel := context.WithCancel(ctx)
 
 	ta := textarea.New()
@@ -146,6 +149,7 @@ func NewModel(ctx context.Context, cfg types.Config, height int, transports ...m
 		cancel:           cancel,
 		maxHeight:        maxH,
 		transports:       transports,
+		shellJobs:        shellJobs,
 		cfg:              cfg,
 		height:           height,
 		agentEventChan:   make(chan chat.AgentEvent, 16),
@@ -232,11 +236,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.quit()
 
 		case tea.KeyCtrlB:
-			// Background (detach) the first running foreground sub-agent.
+			// Background the running foreground work: a sub-agent first,
+			// otherwise a running foreground shell command.
 			if m.sessionReady && m.session != nil {
 				if id := m.firstRunningJobID(); id != "" {
 					_ = m.session.AgentManager().Detach(id)
+					return m, nil
 				}
+			}
+			if id, ok := m.shellJobs.DetachForeground(); ok {
+				m.status = "Backgrounded shell job " + id
+				m.updateViewport()
 			}
 			return m, nil
 
@@ -346,7 +356,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.session = msg.session
 		m.sessionReady = true
 		// Start listening for callbacks
-		cmds = append(cmds, m.listenStatus(), m.listenReasoning(), m.listenToolRequest(), m.listenAskRequest(), m.listenAgentEvents())
+		cmds = append(cmds, m.listenStatus(), m.listenReasoning(), m.listenToolRequest(), m.listenAskRequest(), m.listenAgentEvents(), m.shellTick())
 
 	case responseMsg:
 		m.loading = false
@@ -364,6 +374,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.messages = append(m.messages, ChatMessage{Role: "assistant", Content: msg.content})
 		}
 		m.updateViewport()
+
+	case shellTickMsg:
+		// Periodic refresh so the shell-jobs footer reflects jobs that finish
+		// (or are started by the model) while the user is idle.
+		m.updateViewport()
+		if !m.quitting {
+			cmds = append(cmds, m.shellTick())
+		}
 
 	case statusMsg:
 		m.status = string(msg)
@@ -440,6 +458,14 @@ func (m Model) sendMessage(text string) tea.Cmd {
 		response, err := m.session.SendMessage(text)
 		return responseMsg{content: response, err: err}
 	}
+}
+
+// shellTickMsg drives a periodic refresh of the shell-jobs footer.
+type shellTickMsg struct{}
+
+// shellTick schedules the next shell-jobs footer refresh.
+func (m Model) shellTick() tea.Cmd {
+	return tea.Tick(time.Second, func(time.Time) tea.Msg { return shellTickMsg{} })
 }
 
 // listenStatus listens for status updates from the session
@@ -931,6 +957,23 @@ func (m Model) View() string {
 	if footer != "" {
 		sb.WriteString("\n")
 		sb.WriteString(footer)
+	}
+
+	// Shell jobs footer (background / backgrounded commands), same treatment.
+	shellList := m.shellJobs.List()
+	shellFooter := renderShellJobsFooter(shellList, m.width)
+	if m.showJobsDetail {
+		if d := renderShellJobsDetail(shellList, m.width); d != "" {
+			if shellFooter != "" {
+				shellFooter = d + "\n" + shellFooter
+			} else {
+				shellFooter = d
+			}
+		}
+	}
+	if shellFooter != "" {
+		sb.WriteString("\n")
+		sb.WriteString(shellFooter)
 	}
 
 	return sb.String()

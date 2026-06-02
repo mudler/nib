@@ -21,7 +21,7 @@ func waitJob(t *testing.T, j *bgJob) {
 
 func TestBgJobCompletesAndCapturesOutput(t *testing.T) {
 	mgr := newBgJobManager()
-	j := mgr.start(context.Background(), "echo HELLO_BG")
+	j := mgr.launch(context.Background(), "echo HELLO_BG", false)
 	waitJob(t, j)
 
 	if got := j.stdout.String(); !strings.Contains(got, "HELLO_BG") {
@@ -37,7 +37,7 @@ func TestBgJobCompletesAndCapturesOutput(t *testing.T) {
 
 func TestBgJobFailureStatus(t *testing.T) {
 	mgr := newBgJobManager()
-	j := mgr.start(context.Background(), "exit 3")
+	j := mgr.launch(context.Background(), "exit 3", false)
 	waitJob(t, j)
 	if st := j.status(); st != "failed" {
 		t.Fatalf("status = %q, want failed", st)
@@ -49,7 +49,7 @@ func TestBgJobFailureStatus(t *testing.T) {
 
 func TestBgJobKill(t *testing.T) {
 	mgr := newBgJobManager()
-	j := mgr.start(context.Background(), "sleep 30")
+	j := mgr.launch(context.Background(), "sleep 30", false)
 	if !mgr.kill(j.id) {
 		t.Fatal("kill returned false for a known job")
 	}
@@ -64,12 +64,12 @@ func TestBgJobKill(t *testing.T) {
 
 func TestBgJobListOrderAndGet(t *testing.T) {
 	mgr := newBgJobManager()
-	a := mgr.start(context.Background(), "echo a")
-	b := mgr.start(context.Background(), "echo b")
+	a := mgr.launch(context.Background(), "echo a", false)
+	b := mgr.launch(context.Background(), "echo b", false)
 	waitJob(t, a)
 	waitJob(t, b)
 
-	list := mgr.list()
+	list := mgr.ordered()
 	if len(list) != 2 || list[0].id != a.id || list[1].id != b.id {
 		t.Fatalf("list order wrong: %+v", list)
 	}
@@ -78,6 +78,44 @@ func TestBgJobListOrderAndGet(t *testing.T) {
 	}
 	if _, ok := mgr.get("bg-nope"); ok {
 		t.Fatal("get should not find an unknown job")
+	}
+}
+
+// TestForegroundDetach simulates the Ctrl+B path: a foreground job is launched,
+// detachForeground signals it, and it keeps running (then finishes) instead of
+// being cancelled.
+func TestForegroundDetach(t *testing.T) {
+	mgr := newBgJobManager()
+	j := mgr.launch(context.Background(), "sleep 0.3; echo DONE_BG", true)
+
+	if !mgr.hasForeground() {
+		t.Fatal("a running foreground job should be reported by hasForeground")
+	}
+	id, ok := mgr.detachForeground()
+	if !ok || id != j.id {
+		t.Fatalf("detachForeground = (%q, %v), want (%q, true)", id, ok, j.id)
+	}
+	// The detach channel should have been signalled (the bash handler selects on it).
+	select {
+	case <-j.detach:
+	case <-time.After(time.Second):
+		t.Fatal("detach channel was not signalled")
+	}
+	// Once detached it is no longer an eligible foreground target.
+	if mgr.hasForeground() {
+		t.Fatal("a detached job should not be reported as foreground")
+	}
+	if _, ok := mgr.detachForeground(); ok {
+		t.Fatal("no foreground job should remain to detach")
+	}
+
+	// It keeps running to completion (not cancelled by the detach).
+	waitJob(t, j)
+	if st := j.status(); st != "completed" {
+		t.Fatalf("detached job status = %q, want completed", st)
+	}
+	if got := j.stdout.String(); !strings.Contains(got, "DONE_BG") {
+		t.Fatalf("detached job stdout = %q, want DONE_BG", got)
 	}
 }
 

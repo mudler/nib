@@ -10,14 +10,15 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	wizmcp "github.com/mudler/wiz/mcp"
 	"github.com/mudler/wiz/tui"
 	"github.com/mudler/wiz/types"
 )
 
 // runTUI runs the Bubble Tea TUI
-func RunTUI(ctx context.Context, cfg types.Config, height int, transports ...mcp.Transport) error {
+func RunTUI(ctx context.Context, cfg types.Config, height int, shellJobs *wizmcp.ShellJobs, transports ...mcp.Transport) error {
 
-	model := tui.NewModel(ctx, cfg, height, transports...)
+	model := tui.NewModel(ctx, cfg, height, shellJobs, transports...)
 
 	// Open /dev/tty directly for TUI - this is crucial when stdout is being captured
 	// (e.g., when run from a shell widget like `output=$(wiz --height 40%)`)

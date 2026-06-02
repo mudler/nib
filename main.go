@@ -88,7 +88,11 @@ func main() {
 
 	xlog.SetLogger(xlog.NewLogger(xlog.LogLevel(cfg.LogLevel), os.Getenv("LOG_FORMAT")))
 
-	transports, err := mcp.StartTransports(ctx, cfg)
+	// Shared shell-job registry: the shell MCP server starts/manages jobs in it,
+	// and the TUI lists them (footer) and backgrounds the foreground one (Ctrl+B).
+	shellJobs := mcp.NewShellJobs()
+
+	transports, err := mcp.StartTransports(ctx, cfg, shellJobs)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error starting MCP servers: %v\n", err)
 		os.Exit(1)
@@ -114,7 +118,7 @@ func main() {
 			}
 		} else {
 			// TUI mode
-			if err := cmd.RunTUI(ctx, cfg, height, transports...); err != nil {
+			if err := cmd.RunTUI(ctx, cfg, height, shellJobs, transports...); err != nil {
 				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 				os.Exit(1)
 			}

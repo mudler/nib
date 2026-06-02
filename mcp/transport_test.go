@@ -12,7 +12,7 @@ func TestStartTransportsIncludesSkillsWhenPresent(t *testing.T) {
 	defer cancel()
 
 	// No skills → bash + filesystem only.
-	base, err := StartTransports(ctx, types.Config{})
+	base, err := StartTransports(ctx, types.Config{}, NewShellJobs())
 	if err != nil {
 		t.Fatalf("StartTransports (no skills): %v", err)
 	}
@@ -21,7 +21,7 @@ func TestStartTransportsIncludesSkillsWhenPresent(t *testing.T) {
 	// With skills → exactly one more transport (the skills server).
 	withSkills, err := StartTransports(ctx, types.Config{
 		Skills: []types.Skill{{Name: "s", Instructions: "body"}},
-	})
+	}, NewShellJobs())
 	if err != nil {
 		t.Fatalf("StartTransports (skills): %v", err)
 	}

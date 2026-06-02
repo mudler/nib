@@ -21,12 +21,15 @@ func commandTransport(cmd string, args []string, env ...string) mcp.Transport {
 	return transport
 }
 
-func StartTransports(ctx context.Context, cfg types.Config) ([]mcp.Transport, error) {
+func StartTransports(ctx context.Context, cfg types.Config, shellJobs *ShellJobs) ([]mcp.Transport, error) {
+	if shellJobs == nil {
+		shellJobs = NewShellJobs()
+	}
 	// Set MCP servers
 	bashMCPServerTransport, bashMCPServerClient := mcp.NewInMemoryTransports()
 
 	go func() {
-		if err := startBashMCPServer(ctx, bashMCPServerTransport); err != nil {
+		if err := startBashMCPServer(ctx, bashMCPServerTransport, shellJobs.mgr); err != nil {
 			fmt.Fprintf(os.Stderr, "MCP server error: %v\n", err)
 		}
 	}()

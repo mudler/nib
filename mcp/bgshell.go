@@ -13,13 +13,13 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-// bgMaxOutput caps the captured output per stream for a background job, so a
-// chatty long-running command can't grow memory without bound.
+// bgMaxOutput caps the captured output per stream for a shell job, so a chatty
+// long-running command can't grow memory without bound.
 const bgMaxOutput = 64 * 1024
 
 // lockedBuffer is a concurrency-safe, size-capped writer: the running command's
-// goroutine writes to it while tool handlers read it. Once the cap is hit
-// further writes are dropped and the buffer is marked truncated.
+// goroutine writes to it while tool handlers / the UI read it. Once the cap is
+// hit, further writes are dropped and the buffer is marked truncated.
 type lockedBuffer struct {
 	mu        sync.Mutex
 	buf       bytes.Buffer
@@ -52,7 +52,9 @@ func (w *lockedBuffer) String() string {
 	return s
 }
 
-// bgJob is a single background shell command.
+// bgJob is a single shell command. A job may be started directly in the
+// background (detach == nil) or run in the foreground as a detachable job
+// (detach != nil) that the user can background mid-run with Ctrl+B.
 type bgJob struct {
 	id      string
 	script  string
@@ -61,8 +63,12 @@ type bgJob struct {
 	cancel  context.CancelFunc
 	started time.Time
 
+	detach chan struct{} // non-nil while the job is a detachable foreground job
+	doneCh chan struct{} // closed when the process exits
+
 	mu       sync.Mutex
 	done     bool
+	detached bool // set when backgrounded via Ctrl+B (guarded by manager.mu)
 	exitCode int
 	errMsg   string
 }
@@ -86,7 +92,20 @@ func (j *bgJob) snapshot() (done bool, code int, errMsg string) {
 	return j.done, j.exitCode, j.errMsg
 }
 
-// bgJobManager tracks background shell jobs for a session.
+// toOutput renders the job as a bash-tool result.
+func (j *bgJob) toOutput(script string) executeCommandOutput {
+	_, code, errMsg := j.snapshot()
+	return executeCommandOutput{
+		Script:   script,
+		Stdout:   j.stdout.String(),
+		Stderr:   j.stderr.String(),
+		ExitCode: code,
+		Success:  code == 0 && errMsg == "",
+		Error:    errMsg,
+	}
+}
+
+// bgJobManager tracks shell jobs for a session.
 type bgJobManager struct {
 	mu   sync.Mutex
 	jobs map[string]*bgJob
@@ -95,17 +114,21 @@ type bgJobManager struct {
 
 func newBgJobManager() *bgJobManager { return &bgJobManager{jobs: map[string]*bgJob{}} }
 
-// start launches script under a context derived from parent (so the job
-// survives a single turn but is cancelled when the session/app shuts down) and
-// returns immediately.
-func (m *bgJobManager) start(parent context.Context, script string) *bgJob {
+// launch starts script under a context derived from parent (so the job survives
+// a single turn but is cancelled when the session/app shuts down). When
+// foreground is true the job carries a detach channel so it can be backgrounded
+// mid-run. It returns immediately; the caller decides whether to wait.
+func (m *bgJobManager) launch(parent context.Context, script string, foreground bool) *bgJob {
 	m.mu.Lock()
 	m.seq++
 	id := "bg-" + strconv.Itoa(m.seq)
 	m.mu.Unlock()
 
 	ctx, cancel := context.WithCancel(parent)
-	j := &bgJob{id: id, script: script, cancel: cancel, started: time.Now()}
+	j := &bgJob{id: id, script: script, cancel: cancel, started: time.Now(), doneCh: make(chan struct{})}
+	if foreground {
+		j.detach = make(chan struct{}, 1)
+	}
 
 	shellExec, shellArgs := shellInvocation(script)
 	cmd := exec.CommandContext(ctx, shellExec, shellArgs...)
@@ -117,6 +140,7 @@ func (m *bgJobManager) start(parent context.Context, script string) *bgJob {
 		j.mu.Lock()
 		j.done, j.exitCode, j.errMsg = true, -1, err.Error()
 		j.mu.Unlock()
+		close(j.doneCh)
 	} else {
 		go func() {
 			err := cmd.Wait()
@@ -131,6 +155,7 @@ func (m *bgJobManager) start(parent context.Context, script string) *bgJob {
 				j.errMsg = err.Error()
 			}
 			j.mu.Unlock()
+			close(j.doneCh)
 		}()
 	}
 
@@ -147,7 +172,7 @@ func (m *bgJobManager) get(id string) (*bgJob, bool) {
 	return j, ok
 }
 
-func (m *bgJobManager) list() []*bgJob {
+func (m *bgJobManager) ordered() []*bgJob {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	out := make([]*bgJob, 0, len(m.jobs))
@@ -169,6 +194,49 @@ func (m *bgJobManager) kill(id string) bool {
 	return true
 }
 
+// detachForeground backgrounds the most-recently-started running foreground job
+// (the one a Ctrl+B targets) by signalling its detach channel. Returns the job
+// id and true when one was detached.
+func (m *bgJobManager) detachForeground() (string, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var pick *bgJob
+	for _, j := range m.jobs {
+		if j.detach == nil || j.detached {
+			continue
+		}
+		if done, _, _ := j.snapshot(); done {
+			continue
+		}
+		if pick == nil || j.started.After(pick.started) {
+			pick = j
+		}
+	}
+	if pick == nil {
+		return "", false
+	}
+	pick.detached = true
+	select {
+	case pick.detach <- struct{}{}:
+	default:
+	}
+	return pick.id, true
+}
+
+func (m *bgJobManager) hasForeground() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, j := range m.jobs {
+		if j.detach == nil || j.detached {
+			continue
+		}
+		if done, _, _ := j.snapshot(); !done {
+			return true
+		}
+	}
+	return false
+}
+
 // shellInvocation resolves the configured shell (SHELL_CMD, default "sh -c")
 // into an executable plus args for running script.
 func shellInvocation(script string) (string, []string) {
@@ -179,15 +247,57 @@ func shellInvocation(script string) (string, []string) {
 	return parts[0], []string{"-c", script}
 }
 
-// --- MCP tool I/O shapes ---
+// ShellJobs is the shared registry of shell jobs. It is created in main.go and
+// shared between the shell MCP server (which starts/manages jobs) and the UI
+// (which lists jobs for the footer and backgrounds the foreground one on
+// Ctrl+B).
+type ShellJobs struct {
+	mgr *bgJobManager
+}
 
-type bgStartInput struct {
-	Script string `json:"script" jsonschema:"the shell script to run in the background"`
+// NewShellJobs creates an empty shared shell-job registry.
+func NewShellJobs() *ShellJobs { return &ShellJobs{mgr: newBgJobManager()} }
+
+// ShellJobInfo is a UI-facing snapshot of a shell job.
+type ShellJobInfo struct {
+	ID      string
+	Script  string
+	Status  string // running | completed | failed
+	Running bool
 }
-type bgStartOutput struct {
-	JobID   string `json:"job_id" jsonschema:"id of the started background job"`
-	Message string `json:"message" jsonschema:"human-readable status"`
+
+// List returns all shell jobs in start order, oldest first.
+func (s *ShellJobs) List() []ShellJobInfo {
+	if s == nil {
+		return nil
+	}
+	jobs := s.mgr.ordered()
+	out := make([]ShellJobInfo, 0, len(jobs))
+	for _, j := range jobs {
+		done, _, _ := j.snapshot()
+		out = append(out, ShellJobInfo{ID: j.id, Script: j.script, Status: j.status(), Running: !done})
+	}
+	return out
 }
+
+// DetachForeground backgrounds the running foreground shell command (Ctrl+B).
+func (s *ShellJobs) DetachForeground() (string, bool) {
+	if s == nil {
+		return "", false
+	}
+	return s.mgr.detachForeground()
+}
+
+// HasForeground reports whether a detachable foreground shell command is
+// currently running.
+func (s *ShellJobs) HasForeground() bool {
+	return s != nil && s.mgr.hasForeground()
+}
+
+// Kill stops a shell job by id.
+func (s *ShellJobs) Kill(id string) bool { return s != nil && s.mgr.kill(id) }
+
+// --- MCP tool I/O shapes ---
 
 type bgJobRefInput struct {
 	JobID string `json:"job_id" jsonschema:"id of a background job (from bash_background or bash_jobs)"`
@@ -201,6 +311,14 @@ type bgOutputResult struct {
 	Stdout   string `json:"stdout"`
 	Stderr   string `json:"stderr"`
 	Error    string `json:"error,omitempty"`
+}
+
+type bgStartInput struct {
+	Script string `json:"script" jsonschema:"the shell script to run in the background"`
+}
+type bgStartOutput struct {
+	JobID   string `json:"job_id" jsonschema:"id of the started background job"`
+	Message string `json:"message" jsonschema:"human-readable status"`
 }
 
 type bgJobInfo struct {
@@ -218,26 +336,24 @@ type bgKillOutput struct {
 	Message string `json:"message"`
 }
 
-// registerBackgroundShellTools wires the background-shell tools onto server.
-// Jobs run under srvCtx (the session/server lifetime), not a per-call context,
-// so they keep running after the tool call (and the turn) returns.
-func registerBackgroundShellTools(srvCtx context.Context, server *mcp.Server) {
-	mgr := newBgJobManager()
-
+// registerBackgroundShellTools wires the explicit background-shell tools onto
+// server, backed by the shared manager mgr. Jobs run under srvCtx so they keep
+// running after the tool call (and the turn) returns.
+func registerBackgroundShellTools(srvCtx context.Context, server *mcp.Server, mgr *bgJobManager) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "bash_background",
 		Description: "Run a shell script in the background and return immediately with a job_id. Use this for long-running commands (servers, builds, watchers, downloads) so the conversation isn't blocked. Read progress with bash_job_output and stop it with bash_job_kill.",
 	}, func(_ context.Context, _ *mcp.CallToolRequest, in bgStartInput) (*mcp.CallToolResult, bgStartOutput, error) {
-		j := mgr.start(srvCtx, in.Script)
+		j := mgr.launch(srvCtx, in.Script, false)
 		return nil, bgStartOutput{JobID: j.id, Message: "Started background job " + j.id}, nil
 	})
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "bash_jobs",
-		Description: "List background shell jobs started with bash_background and their status (running/completed/failed).",
+		Description: "List shell jobs (background or backgrounded) and their status (running/completed/failed).",
 	}, func(_ context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, bgListOutput, error) {
 		var out bgListOutput
-		for _, j := range mgr.list() {
+		for _, j := range mgr.ordered() {
 			out.Jobs = append(out.Jobs, bgJobInfo{JobID: j.id, Script: j.script, Status: j.status()})
 		}
 		return nil, out, nil
@@ -245,7 +361,7 @@ func registerBackgroundShellTools(srvCtx context.Context, server *mcp.Server) {
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "bash_job_output",
-		Description: "Read the captured stdout/stderr and status of a background shell job by job_id.",
+		Description: "Read the captured stdout/stderr and status of a shell job by job_id.",
 	}, func(_ context.Context, _ *mcp.CallToolRequest, in bgJobRefInput) (*mcp.CallToolResult, bgOutputResult, error) {
 		j, ok := mgr.get(in.JobID)
 		if !ok {
@@ -265,7 +381,7 @@ func registerBackgroundShellTools(srvCtx context.Context, server *mcp.Server) {
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "bash_job_kill",
-		Description: "Stop a running background shell job by job_id.",
+		Description: "Stop a running shell job by job_id.",
 	}, func(_ context.Context, _ *mcp.CallToolRequest, in bgJobRefInput) (*mcp.CallToolResult, bgKillOutput, error) {
 		if !mgr.kill(in.JobID) {
 			return nil, bgKillOutput{JobID: in.JobID, Killed: false, Message: "no such job"}, nil
