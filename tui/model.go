@@ -67,6 +67,7 @@ type Model struct {
 	awaitingAsk     bool
 	askRequestChan  chan chat.AskRequest
 	askResponseChan chan string
+	wakeupChan      chan chat.WakeupRequest
 
 	// Animation state
 	statusPhase int
@@ -166,6 +167,7 @@ func NewModel(ctx context.Context, cfg types.Config, height int, shellJobs *wizm
 		toolResponseChan: make(chan chat.ToolCallResponse),
 		askRequestChan:   make(chan chat.AskRequest),
 		askResponseChan:  make(chan string),
+		wakeupChan:       make(chan chat.WakeupRequest, 8),
 	}
 	m.completion.setRegistries(cfg.Commands, cfg.Skills, cfg.Agents)
 	return m
@@ -204,6 +206,15 @@ func (m Model) initSession() tea.Cmd {
 			OnAskUser: func(req chat.AskRequest) string {
 				m.askRequestChan <- req
 				return <-m.askResponseChan
+			},
+			OnScheduleWakeup: func(req chat.WakeupRequest) string {
+				// Non-blocking: hand the request to the UI loop and confirm now.
+				select {
+				case m.wakeupChan <- req:
+					return fmt.Sprintf("Scheduled a wake-up in %ds: %q. You'll be re-invoked then to check on it.", req.DelaySeconds, req.Note)
+				default:
+					return "Could not schedule wake-up (too many pending)."
+				}
 			},
 			OnAgentEvent: func(ev chat.AgentEvent) {
 				select {
@@ -396,7 +407,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.session = msg.session
 		m.sessionReady = true
 		// Start listening for callbacks
-		cmds = append(cmds, m.listenStatus(), m.listenReasoning(), m.listenToolRequest(), m.listenAskRequest(), m.listenAgentEvents(), m.shellTick())
+		cmds = append(cmds, m.listenStatus(), m.listenReasoning(), m.listenToolRequest(), m.listenAskRequest(), m.listenAgentEvents(), m.shellTick(), m.listenWakeup())
 
 	case responseMsg:
 		m.loading = false
@@ -430,6 +441,28 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.updateViewport()
 		if !m.quitting {
 			cmds = append(cmds, m.shellTick())
+		}
+
+	case wakeupScheduledMsg:
+		// Arm a timer for the requested delay, then keep listening for more.
+		req := chat.WakeupRequest(msg)
+		d := time.Duration(req.DelaySeconds) * time.Second
+		note := req.Note
+		cmds = append(cmds,
+			tea.Tick(d, func(time.Time) tea.Msg { return wakeupFireMsg{note: note} }),
+			m.listenWakeup(),
+		)
+
+	case wakeupFireMsg:
+		// The delay elapsed: queue a wake-up notice and react when idle (reusing
+		// the auto-notify turn machinery).
+		note := msg.note
+		if note == "" {
+			note = "(no note)"
+		}
+		m.pendingNotices = append(m.pendingNotices, "⏰ scheduled wake-up: "+note)
+		if c := m.autoNotifyCmd(); c != nil {
+			cmds = append(cmds, c)
 		}
 
 	case statusMsg:
@@ -515,6 +548,24 @@ type shellTickMsg struct{}
 // shellTick schedules the next shell-jobs footer refresh.
 func (m Model) shellTick() tea.Cmd {
 	return tea.Tick(time.Second, func(time.Time) tea.Msg { return shellTickMsg{} })
+}
+
+// wakeupScheduledMsg is emitted when the agent schedules an in-session wake-up.
+type wakeupScheduledMsg chat.WakeupRequest
+
+// wakeupFireMsg is emitted when a scheduled wake-up's delay elapses.
+type wakeupFireMsg struct{ note string }
+
+// listenWakeup waits for the agent to schedule a wake-up.
+func (m Model) listenWakeup() tea.Cmd {
+	return func() tea.Msg {
+		select {
+		case req := <-m.wakeupChan:
+			return wakeupScheduledMsg(req)
+		case <-m.ctx.Done():
+			return nil
+		}
+	}
 }
 
 // listenStatus listens for status updates from the session

@@ -93,15 +93,17 @@ func (m *Model) autoNotifyCmd() tea.Cmd {
 	m.pendingNotices = nil
 
 	var b strings.Builder
-	b.WriteString("Background work finished while you were away. React if useful ")
-	b.WriteString("(read full output with bash_job_output / get_agent_result), or acknowledge briefly:\n")
+	b.WriteString("You have background updates to act on. Check on them if useful ")
+	b.WriteString("(read a shell job's output with bash_job_output, list jobs with bash_jobs, ")
+	b.WriteString("inspect a sub-agent with agent_logs / check_agent / get_agent_result), ")
+	b.WriteString("then continue or acknowledge briefly:\n")
 	for _, n := range notices {
 		b.WriteString("- ")
 		b.WriteString(n)
 		b.WriteString("\n")
 	}
 
-	m.messages = append(m.messages, ChatMessage{Role: "agent", Content: "🔔 Background work finished — reacting…"})
+	m.messages = append(m.messages, ChatMessage{Role: "agent", Content: "🔔 Reacting to background updates…"})
 	m.loading = true
 	m.interruptArmed = false
 	m.status = "Reacting to finished background work…"
