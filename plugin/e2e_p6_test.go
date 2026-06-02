@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mudler/wiz/types"
+	"github.com/mudler/nib/types"
 )
 
 // copyTree recursively copies src into dst (files + dirs), preserving structure.

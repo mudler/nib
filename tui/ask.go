@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/mudler/wiz/chat"
+	"github.com/mudler/nib/chat"
 
 	"github.com/charmbracelet/lipgloss"
 )

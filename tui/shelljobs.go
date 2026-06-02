@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	wizmcp "github.com/mudler/wiz/mcp"
+	wizmcp "github.com/mudler/nib/mcp"
 )
 
 // renderShellJobsFooter renders a compact one-line summary of shell jobs

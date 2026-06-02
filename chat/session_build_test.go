@@ -3,7 +3,7 @@ package chat
 import (
 	"testing"
 
-	"github.com/mudler/wiz/types"
+	"github.com/mudler/nib/types"
 )
 
 // TestForceReasoningDefaultsOff guards the spec decision: force_reasoning stays

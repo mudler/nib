@@ -10,9 +10,9 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
-	wizmcp "github.com/mudler/wiz/mcp"
-	"github.com/mudler/wiz/tui"
-	"github.com/mudler/wiz/types"
+	wizmcp "github.com/mudler/nib/mcp"
+	"github.com/mudler/nib/tui"
+	"github.com/mudler/nib/types"
 )
 
 // runTUI runs the Bubble Tea TUI

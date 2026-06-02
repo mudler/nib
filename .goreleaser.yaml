@@ -9,8 +9,8 @@ builds:
       - CGO_ENABLED=0
     ldflags:
       - -s -w
-      - -X "github.com/mudler/wiz/internal.Version={{ .Tag }}"
-      - -X "github.com/mudler/wiz/internal.Commit={{ .FullCommit }}"
+      - -X "github.com/mudler/nib/internal.Version={{ .Tag }}"
+      - -X "github.com/mudler/nib/internal.Commit={{ .FullCommit }}"
     goos:
       - linux
       - darwin

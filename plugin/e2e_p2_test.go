@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mudler/wiz/slash"
-	"github.com/mudler/wiz/types"
+	"github.com/mudler/nib/slash"
+	"github.com/mudler/nib/types"
 )
 
 func TestEndToEndCommand(t *testing.T) {

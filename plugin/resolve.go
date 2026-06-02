@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/mudler/wiz/types"
+	"github.com/mudler/nib/types"
 )
 
 // resolveFragment returns a fragment's text: inline Text when set, otherwise the

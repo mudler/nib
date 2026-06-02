@@ -3,7 +3,7 @@ package plugin
 import (
 	"testing"
 
-	"github.com/mudler/wiz/types"
+	"github.com/mudler/nib/types"
 )
 
 func TestMergeManifestsPrecedence(t *testing.T) {

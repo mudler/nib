@@ -10,10 +10,10 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/mudler/wiz/cmd"
-	"github.com/mudler/wiz/config"
-	"github.com/mudler/wiz/internal"
-	"github.com/mudler/wiz/mcp"
+	"github.com/mudler/nib/cmd"
+	"github.com/mudler/nib/config"
+	"github.com/mudler/nib/internal"
+	"github.com/mudler/nib/mcp"
 	"github.com/mudler/xlog"
 )
 

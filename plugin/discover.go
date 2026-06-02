@@ -5,7 +5,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/mudler/wiz/types"
+	"github.com/mudler/nib/types"
 )
 
 // EnabledManifests loads the manifest of every enabled plugin in the registry,

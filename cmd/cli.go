@@ -10,8 +10,8 @@ import (
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
-	"github.com/mudler/wiz/chat"
-	"github.com/mudler/wiz/types"
+	"github.com/mudler/nib/chat"
+	"github.com/mudler/nib/types"
 )
 
 // ANSI color codes

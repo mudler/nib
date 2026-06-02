@@ -7,8 +7,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/mudler/wiz/internal"
-	"github.com/mudler/wiz/plugin"
+	"github.com/mudler/nib/internal"
+	"github.com/mudler/nib/plugin"
 )
 
 // confirmFn reads a yes/no answer. Var for test injection.

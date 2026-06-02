@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/mudler/wiz/types"
+	"github.com/mudler/nib/types"
 
 	"gopkg.in/yaml.v3"
 )

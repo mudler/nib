@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/mudler/wiz/types"
+	"github.com/mudler/nib/types"
 
 	"github.com/charmbracelet/lipgloss"
 )

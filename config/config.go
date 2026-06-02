@@ -5,9 +5,9 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/mudler/wiz/internal"
-	"github.com/mudler/wiz/plugin"
-	"github.com/mudler/wiz/types"
+	"github.com/mudler/nib/internal"
+	"github.com/mudler/nib/plugin"
+	"github.com/mudler/nib/types"
 
 	"gopkg.in/yaml.v3"
 )

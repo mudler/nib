@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/mudler/wiz/types"
+	"github.com/mudler/nib/types"
 )
 
 func TestInterruptCancelsTurn(t *testing.T) {

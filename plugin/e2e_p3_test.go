@@ -5,8 +5,8 @@ import (
 	"os/exec"
 	"testing"
 
-	"github.com/mudler/wiz/chat"
-	"github.com/mudler/wiz/types"
+	"github.com/mudler/nib/chat"
+	"github.com/mudler/nib/types"
 )
 
 func TestEndToEndHookBlocksTool(t *testing.T) {

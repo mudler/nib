@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mudler/wiz/types"
+	"github.com/mudler/nib/types"
 )
 
 func writeScript(t *testing.T, dir, name, body string) string {

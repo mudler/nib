@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mudler/wiz/types"
+	"github.com/mudler/nib/types"
 
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textarea"
@@ -15,9 +15,9 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
-	"github.com/mudler/wiz/chat"
-	wizmcp "github.com/mudler/wiz/mcp"
-	"github.com/mudler/wiz/slash"
+	"github.com/mudler/nib/chat"
+	wizmcp "github.com/mudler/nib/mcp"
+	"github.com/mudler/nib/slash"
 )
 
 // ChatMessage represents a message in the chat history

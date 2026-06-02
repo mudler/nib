@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mudler/wiz/types"
+	"github.com/mudler/nib/types"
 )
 
 // Event identifies a lifecycle hook point.

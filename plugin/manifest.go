@@ -11,7 +11,7 @@ import (
 	"strings"
 
 	"github.com/Masterminds/semver/v3"
-	"github.com/mudler/wiz/types"
+	"github.com/mudler/nib/types"
 
 	"gopkg.in/yaml.v3"
 )

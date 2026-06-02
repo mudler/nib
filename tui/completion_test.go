@@ -3,7 +3,7 @@ package tui
 import (
 	"testing"
 
-	"github.com/mudler/wiz/types"
+	"github.com/mudler/nib/types"
 )
 
 func sampleRegistries() ([]types.CommandConfig, []types.Skill, []types.AgentTypeConfig) {

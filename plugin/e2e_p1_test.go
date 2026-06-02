@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mudler/wiz/types"
+	"github.com/mudler/nib/types"
 )
 
 func gitInitRepoFiles(t *testing.T, files map[string]string) string {

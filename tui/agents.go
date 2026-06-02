@@ -5,7 +5,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
-	"github.com/mudler/wiz/chat"
+	"github.com/mudler/nib/chat"
 )
 
 // agentTranscriptLine renders a durable one-line transcript marker for a

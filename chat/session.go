@@ -9,8 +9,8 @@ import (
 	"os/exec"
 	"sync"
 
-	"github.com/mudler/wiz/hooks"
-	"github.com/mudler/wiz/types"
+	"github.com/mudler/nib/hooks"
+	"github.com/mudler/nib/types"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/mudler/cogito"
