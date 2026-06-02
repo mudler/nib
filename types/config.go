@@ -62,14 +62,6 @@ type HookConfig struct {
 	Dir     string `yaml:"-"` // plugin root; set during merge, not parsed
 }
 
-// ReviewerLLMConfig holds configuration for the reviewer LLM (used in plan mode)
-type ReviewerLLMConfig struct {
-	Model   string `yaml:"model"`
-	APIKey  string `yaml:"api_key"`
-	BaseURL string `yaml:"base_url"`
-	Enabled *bool  `yaml:"enabled"` // If nil, defaults to true when reviewer_llm is configured
-}
-
 // Config holds configuration for creating a new session
 type Config struct {
 	Model        string               `yaml:"model"`
@@ -79,7 +71,6 @@ type Config struct {
 	Prompt       string               `yaml:"prompt"`
 	MCPServers   map[string]MCPServer `yaml:"mcp_servers"`
 	AgentOptions AgentOptions         `yaml:"agent_options"`
-	ReviewerLLM  *ReviewerLLMConfig   `yaml:"reviewer_llm"`
 	Agents       []AgentTypeConfig    `yaml:"agents"`
 
 	PromptFragments []string `yaml:"prompt_fragments"`

@@ -61,13 +61,6 @@ type Model struct {
 	askRequestChan  chan chat.AskRequest
 	askResponseChan chan string
 
-	// Plan mode state
-	planMode bool
-
-	// Plan approval state
-	pendingPlan          *chat.Plan
-	awaitingPlanApproval bool
-
 	// Animation state
 	statusPhase int
 
@@ -84,8 +77,6 @@ type Model struct {
 	reasoningChan    chan string
 	toolRequestChan  chan chat.ToolCallRequest
 	toolResponseChan chan chat.ToolCallResponse
-	planRequestChan  chan chat.Plan
-	planResponseChan chan chat.PlanResponse
 }
 
 // responseMsg is sent when the AI responds
@@ -102,9 +93,6 @@ type reasoningMsg string
 
 // toolCallMsg is sent when a tool call needs approval
 type toolCallMsg chat.ToolCallRequest
-
-// planMsg is sent when a plan needs approval
-type planMsg chat.Plan
 
 // askMsg is sent when the agent asks the user a question.
 type askMsg chat.AskRequest
@@ -161,11 +149,8 @@ func NewModel(ctx context.Context, cfg types.Config, height int, transports ...m
 		reasoningChan:    make(chan string, 10),
 		toolRequestChan:  make(chan chat.ToolCallRequest),
 		toolResponseChan: make(chan chat.ToolCallResponse),
-		planRequestChan:  make(chan chat.Plan),
-		planResponseChan: make(chan chat.PlanResponse),
 		askRequestChan:   make(chan chat.AskRequest),
 		askResponseChan:  make(chan string),
-		planMode:         false,
 	}
 	m.completion.setRegistries(cfg.Commands, cfg.Skills, cfg.Agents)
 	return m
@@ -201,11 +186,6 @@ func (m Model) initSession() tea.Cmd {
 				m.toolRequestChan <- req
 				return <-m.toolResponseChan
 			},
-			OnPlan: func(plan chat.Plan) chat.PlanResponse {
-				// Send plan request and wait for user response
-				m.planRequestChan <- plan
-				return <-m.planResponseChan
-			},
 			OnAskUser: func(req chat.AskRequest) string {
 				m.askRequestChan <- req
 				return <-m.askResponseChan
@@ -233,9 +213,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch msg.Type {
 		case tea.KeyCtrlC:
 			// Interrupt running work; quit only when idle.
-			if m.awaitingPlanApproval {
-				return m.handlePlanApproval(false)
-			}
 			if m.isWorking() {
 				if m.session != nil {
 					m.session.Interrupt()
@@ -246,19 +223,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.quit()
 
 		case tea.KeyEsc:
-			if m.awaitingPlanApproval {
-				return m.handlePlanApproval(false)
-			}
 			return m.quit()
-
-		case tea.KeyCtrlP:
-			// Toggle plan mode
-			if m.sessionReady && m.session != nil {
-				m.planMode = !m.planMode
-				m.session.SetPlanMode(m.planMode)
-				m.updateViewport()
-			}
-			return m, nil
 
 		case tea.KeyCtrlB:
 			// Background (detach) the first running foreground sub-agent.
@@ -328,11 +293,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 
-			// Check if we're in plan approval mode
-			if m.awaitingPlanApproval {
-				return m.handlePlanApproval(true)
-			}
-
 			// Check if we're in tool approval mode
 			if m.awaitingApproval {
 				return m.handleToolApproval(input)
@@ -378,12 +338,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.session = msg.session
 		m.sessionReady = true
-		// Set initial plan mode state
-		if m.session != nil {
-			m.session.SetPlanMode(m.planMode)
-		}
 		// Start listening for callbacks
-		cmds = append(cmds, m.listenStatus(), m.listenReasoning(), m.listenToolRequest(), m.listenPlanRequest(), m.listenAskRequest(), m.listenAgentEvents())
+		cmds = append(cmds, m.listenStatus(), m.listenReasoning(), m.listenToolRequest(), m.listenAskRequest(), m.listenAgentEvents())
 
 	case responseMsg:
 		m.loading = false
@@ -421,15 +377,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.updateViewport()
 		// Continue listening for more tool requests
 		cmds = append(cmds, m.listenToolRequest())
-
-	case planMsg:
-		m.pendingPlan = (*chat.Plan)(&msg)
-		m.awaitingPlanApproval = true
-		m.loading = false  // Allow user input for approval
-		m.textarea.Focus() // Ensure textarea is focused for input
-		m.updateViewport()
-		// Continue listening for more plan requests
-		cmds = append(cmds, m.listenPlanRequest())
 
 	case askMsg:
 		req := chat.AskRequest(msg)
@@ -547,18 +494,6 @@ func (m Model) listenAskRequest() tea.Cmd {
 	}
 }
 
-// listenPlanRequest listens for plan approval requests from the session
-func (m Model) listenPlanRequest() tea.Cmd {
-	return func() tea.Msg {
-		select {
-		case plan := <-m.planRequestChan:
-			return planMsg(plan)
-		case <-m.ctx.Done():
-			return nil
-		}
-	}
-}
-
 // handleToolApproval handles tool approval input
 func (m Model) handleToolApproval(input string) (tea.Model, tea.Cmd) {
 	input = strings.ToLower(strings.TrimSpace(input))
@@ -586,29 +521,6 @@ func (m Model) handleToolApproval(input string) (tea.Model, tea.Cmd) {
 	// Send response back to the waiting callback
 	return m, func() tea.Msg {
 		m.toolResponseChan <- response
-		return nil
-	}
-}
-
-// handlePlanApproval handles plan approval (Enter = approve, Esc = reject)
-func (m Model) handlePlanApproval(approved bool) (tea.Model, tea.Cmd) {
-	response := chat.PlanResponse{Approved: approved}
-
-	m.awaitingPlanApproval = false
-	m.pendingPlan = nil
-	m.textarea.Reset()
-	if approved {
-		m.loading = true
-		m.status = "Executing plan..."
-	} else {
-		m.loading = false
-		m.status = ""
-	}
-	m.updateViewport()
-
-	// Send response back to the waiting callback
-	return m, func() tea.Msg {
-		m.planResponseChan <- response
 		return nil
 	}
 }
@@ -884,59 +796,6 @@ func (m *Model) updateViewport() {
 		sb.WriteString("\n")
 	}
 
-	if m.awaitingPlanApproval && m.pendingPlan != nil {
-		// Build plan request box content
-		// Account for box padding (1 char each side) and border (1 char each side) = 4 chars total
-		boxContentWidth := contentWidth - 4
-		if boxContentWidth < 20 {
-			boxContentWidth = 20 // minimum width
-		}
-
-		var planContent strings.Builder
-		planContent.WriteString(sectionHeaderStyle.Render("📋 Plan"))
-		planContent.WriteString("\n\n")
-		// Wrap description
-		descPrefix := dimmedStyle.Render("Description: ")
-		descWidth := lipgloss.Width(descPrefix)
-		wrappedDesc := wrapText(m.pendingPlan.Description, boxContentWidth-descWidth)
-		descLines := strings.Split(strings.TrimRight(wrappedDesc, "\n"), "\n")
-		for i, line := range descLines {
-			if i == 0 {
-				planContent.WriteString(descPrefix)
-				planContent.WriteString(line)
-			} else {
-				planContent.WriteString(strings.Repeat(" ", descWidth))
-				planContent.WriteString(line)
-			}
-			planContent.WriteString("\n")
-		}
-		if len(m.pendingPlan.Subtasks) > 0 {
-			planContent.WriteString("\n")
-			planContent.WriteString(dimmedStyle.Render("Subtasks:"))
-			planContent.WriteString("\n")
-			subtaskPrefixWidth := 4 // "  X. "
-			for i, subtask := range m.pendingPlan.Subtasks {
-				subtaskLine := fmt.Sprintf("  %d. ", i+1)
-				wrappedSubtask := wrapText(subtask, boxContentWidth-subtaskPrefixWidth)
-				subtaskLines := strings.Split(strings.TrimRight(wrappedSubtask, "\n"), "\n")
-				for j, line := range subtaskLines {
-					if j == 0 {
-						planContent.WriteString(subtaskLine)
-					} else {
-						planContent.WriteString(strings.Repeat(" ", subtaskPrefixWidth))
-					}
-					planContent.WriteString(line)
-					planContent.WriteString("\n")
-				}
-			}
-		}
-		planContent.WriteString("\n")
-		planContent.WriteString(promptHintStyle.Render("[Enter] approve  [Esc] reject"))
-
-		sb.WriteString(planRequestBoxStyle.Render(planContent.String()))
-		sb.WriteString("\n")
-	}
-
 	if m.awaitingApproval && m.pendingTool != nil {
 		// Build tool request box content
 		// Account for box padding (1 char each side) and border (1 char each side) = 4 chars total
@@ -1007,16 +866,12 @@ func (m Model) View() string {
 
 	// Header with animated wizard
 	sparkle := m.getWizardSparkle()
-	modeIndicator := ""
-	if m.planMode {
-		modeIndicator = " [PLAN MODE]"
-	}
 	if m.loading {
 		// Animated wizard face when loading
 		face := m.getWizardFace()
-		sb.WriteString(headerStyle.Render(fmt.Sprintf("%s [%s] wiz%s", sparkle, face, modeIndicator)))
+		sb.WriteString(headerStyle.Render(fmt.Sprintf("%s [%s] wiz", sparkle, face)))
 	} else {
-		sb.WriteString(headerStyle.Render(fmt.Sprintf("%s [◠ ◠] wiz%s", sparkle, modeIndicator)))
+		sb.WriteString(headerStyle.Render(fmt.Sprintf("%s [◠ ◠] wiz", sparkle)))
 	}
 	sb.WriteString("\n")
 	sb.WriteString(strings.Repeat("─", m.width))
@@ -1046,11 +901,6 @@ func (m Model) View() string {
 	// Help text
 	sb.WriteString("\n")
 	helpText := "Enter: send • Ctrl+C: interrupt/exit • Esc: exit"
-	if m.planMode {
-		helpText += " • Ctrl+P: plan mode ON"
-	} else {
-		helpText += " • Ctrl+P: toggle plan mode"
-	}
 	sb.WriteString(helpStyle.Render(helpText))
 
 	if m.err != nil {
