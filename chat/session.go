@@ -323,6 +323,11 @@ func (s *Session) SendMessage(text string) (string, error) {
 	}
 
 	cogitoOpts = append(cogitoOpts,
+		// Disable cogito's sink-state "reply" tool: wiz produces the final
+		// natural-language answer with the explicit Ask below, so letting
+		// ExecuteTools also reply would double-answer (and the redundant Ask
+		// returns empty on many models, overwriting the real answer).
+		cogito.DisableSinkState,
 		cogito.EnableAgentSpawning,
 		cogito.WithAgentManager(s.agentManager),
 		cogito.WithAgentDefinitions(s.agentDefs...),
