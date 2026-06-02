@@ -759,15 +759,10 @@ func wrapText(text string, width int) string {
 		for i, word := range words {
 			wordWidth := lipgloss.Width(word)
 
-			// If a single word is longer than width, we have to break it
+			// If a single word is longer than width, truncate it on a rune
+			// boundary (byte slicing here would split a multibyte rune).
 			if wordWidth > width && currentWidth == 0 {
-				// Break the word itself (simple approach: just truncate with ellipsis)
-				if width > 3 {
-					result.WriteString(word[:width-3])
-					result.WriteString("...")
-				} else {
-					result.WriteString(word[:width])
-				}
+				result.WriteString(truncateRunes(word, width))
 				result.WriteString("\n")
 				continue
 			}
@@ -799,6 +794,22 @@ func wrapText(text string, width int) string {
 	}
 
 	return result.String()
+}
+
+// truncateRunes shortens word to at most width display columns, breaking on a
+// rune boundary and appending an ellipsis when there is room for it.
+func truncateRunes(word string, width int) string {
+	runes := []rune(word)
+	if width <= 0 {
+		return ""
+	}
+	if len(runes) <= width {
+		return word
+	}
+	if width <= 1 {
+		return string(runes[:width])
+	}
+	return string(runes[:width-1]) + "…"
 }
 
 // updateViewport updates the viewport content with chat messages
