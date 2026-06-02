@@ -37,9 +37,33 @@ type Session struct {
 
 	agentManager *cogito.AgentManager
 	agentDefs    []cogito.AgentDefinition
+	agentModels  map[string]bool // models configured per agent type (for the LLM-model guard)
 	llmModel     string
 	apiKey       string
 	baseURL      string
+}
+
+// resolveAgentModel picks the model for a sub-agent: the requested model when
+// wiz actually serves it (the main model, or one configured for an agent type),
+// otherwise the main model. This honors per-agent model overrides from config
+// while ignoring model names the LLM invents via the spawn_agent `model` arg.
+func resolveAgentModel(requested, main string, configured map[string]bool) string {
+	if requested != "" && (requested == main || configured[requested]) {
+		return requested
+	}
+	return main
+}
+
+// agentModelSet collects the non-empty per-agent-type model overrides so the
+// agent LLM factory can tell a configured model apart from an invented one.
+func agentModelSet(defs []cogito.AgentDefinition) map[string]bool {
+	m := make(map[string]bool, len(defs))
+	for _, d := range defs {
+		if d.Model != "" {
+			m[d.Model] = true
+		}
+	}
+	return m
 }
 
 // toCogitoDefinitions converts wiz agent-type config into cogito definitions.
@@ -106,6 +130,7 @@ func NewSession(ctx context.Context, cfg types.Config, callbacks Callbacks, tran
 		hooks:         hooks.New(cfg.Hooks),
 		agentManager:  agentManager,
 		agentDefs:     toCogitoDefinitions(cfg.Agents),
+		agentModels:   agentModelSet(toCogitoDefinitions(cfg.Agents)),
 		llmModel:      cfg.Model,
 		apiKey:        cfg.APIKey,
 		baseURL:       cfg.BaseURL,
@@ -299,7 +324,18 @@ func (s *Session) SendMessage(text string) (string, error) {
 		cogito.WithAgentManager(s.agentManager),
 		cogito.WithAgentDefinitions(s.agentDefs...),
 		cogito.WithAgentLLMFactory(func(model string, temperature float32) cogito.LLM {
-			return clients.NewOpenAILLMWithOptions(model, s.apiKey, s.baseURL, clients.OpenAIOptions{Temperature: temperature})
+			// The spawn_agent tool lets the LLM request a `model`, which it may
+			// fill with a name the endpoint doesn't serve (e.g. "sonar") and
+			// 404 the sub-agent. Honor a requested model only when wiz actually
+			// serves it — the main model, or one configured for an agent type —
+			// otherwise fall back to the main model. This keeps per-agent model
+			// overrides from config working while ignoring invented names.
+			chosen := resolveAgentModel(model, s.llmModel, s.agentModels)
+			if model != "" && chosen != model {
+				xlog.Warn("sub-agent requested an unserved model; using the main model",
+					"requested", model, "model", chosen)
+			}
+			return clients.NewOpenAILLMWithOptions(chosen, s.apiKey, s.baseURL, clients.OpenAIOptions{Temperature: temperature})
 		}),
 		cogito.WithAgentSpawnCallback(func(a *cogito.AgentState) {
 			s.emitAgentEvent(a)
