@@ -77,6 +77,12 @@ type Model struct {
 	killArmed      bool // Ctrl+K pressed: next digit kills that numbered job
 	agentEventChan chan chat.AgentEvent
 
+	// Auto-notify state: completion notices for backgrounded work that the
+	// assistant should react to.
+	notifiedJobs   map[string]bool // job/agent ids already notified (or suppressed)
+	pendingNotices []string        // queued notices awaiting an idle moment
+	bgAgents       map[string]bool // sub-agent ids the user backgrounded (Ctrl+B)
+
 	// Unified `/` completion state
 	completion compState
 
@@ -261,6 +267,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.sessionReady && m.session != nil {
 				if id := m.firstRunningJobID(); id != "" {
 					_ = m.session.AgentManager().Detach(id)
+					if m.bgAgents == nil {
+						m.bgAgents = map[string]bool{}
+					}
+					m.bgAgents[id] = true // eligible for auto-notify on completion
 					return m, nil
 				}
 			}
@@ -404,10 +414,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.messages = append(m.messages, ChatMessage{Role: "assistant", Content: msg.content})
 		}
 		m.updateViewport()
+		// A background job may have finished during this turn; react to it now
+		// that we're idle again.
+		if c := m.autoNotifyCmd(); c != nil {
+			cmds = append(cmds, c)
+		}
 
 	case shellTickMsg:
 		// Periodic refresh so the shell-jobs footer reflects jobs that finish
-		// (or are started by the model) while the user is idle.
+		// (or are started by the model) while the user is idle, and auto-notify
+		// the assistant about finished background work.
+		if c := m.autoNotifyCmd(); c != nil {
+			cmds = append(cmds, c)
+		}
 		m.updateViewport()
 		if !m.quitting {
 			cmds = append(cmds, m.shellTick())

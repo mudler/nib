@@ -119,6 +119,47 @@ func TestForegroundDetach(t *testing.T) {
 	}
 }
 
+func TestListBackgroundedFlagAndOutput(t *testing.T) {
+	jobs := NewShellJobs()
+
+	// A bash_background-style job is Backgrounded.
+	bg := jobs.mgr.launch(context.Background(), "echo HELLO", false)
+	// A plain foreground job (never detached) is not.
+	fg := jobs.mgr.launch(context.Background(), "echo FG", true)
+	waitJob(t, bg)
+	waitJob(t, fg)
+
+	infos := map[string]ShellJobInfo{}
+	for _, i := range jobs.List() {
+		infos[i.ID] = i
+	}
+	if !infos[bg.id].Backgrounded {
+		t.Fatal("background job should be Backgrounded")
+	}
+	if infos[fg.id].Backgrounded {
+		t.Fatal("plain foreground job should not be Backgrounded")
+	}
+
+	if so, _, ok := jobs.Output(bg.id); !ok || !strings.Contains(so, "HELLO") {
+		t.Fatalf("Output stdout=%q ok=%v", so, ok)
+	}
+	if _, _, ok := jobs.Output("bg-nope"); ok {
+		t.Fatal("Output should report ok=false for an unknown job")
+	}
+
+	// A foreground job the user backgrounds (Ctrl+B) becomes Backgrounded.
+	d := jobs.mgr.launch(context.Background(), "sleep 0.2; echo D", true)
+	if id, ok := jobs.DetachForeground(); !ok || id != d.id {
+		t.Fatalf("DetachForeground = (%q, %v), want (%q, true)", id, ok, d.id)
+	}
+	waitJob(t, d)
+	for _, i := range jobs.List() {
+		if i.ID == d.id && !i.Backgrounded {
+			t.Fatal("a detached foreground job should be Backgrounded")
+		}
+	}
+}
+
 func TestLockedBufferTruncates(t *testing.T) {
 	var w lockedBuffer
 	big := strings.Repeat("x", bgMaxOutput+100)

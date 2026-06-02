@@ -264,6 +264,10 @@ type ShellJobInfo struct {
 	Script  string
 	Status  string // running | completed | failed
 	Running bool
+	// Backgrounded is true for jobs that run detached from a turn — started via
+	// bash_background, or a foreground command the user backgrounded with Ctrl+B.
+	// A normal foreground command (consumed inline by the turn) is false.
+	Backgrounded bool
 }
 
 // List returns all shell jobs in start order, oldest first.
@@ -271,13 +275,39 @@ func (s *ShellJobs) List() []ShellJobInfo {
 	if s == nil {
 		return nil
 	}
-	jobs := s.mgr.ordered()
-	out := make([]ShellJobInfo, 0, len(jobs))
-	for _, j := range jobs {
-		done, _, _ := j.snapshot()
-		out = append(out, ShellJobInfo{ID: j.id, Script: j.script, Status: j.status(), Running: !done})
+	m := s.mgr
+	m.mu.Lock()
+	type row struct {
+		j  *bgJob
+		bg bool
+	}
+	rows := make([]row, 0, len(m.jobs))
+	for _, j := range m.jobs {
+		// detach/detached are read here under m.mu (detachForeground writes them
+		// under the same lock).
+		rows = append(rows, row{j: j, bg: j.detach == nil || j.detached})
+	}
+	m.mu.Unlock()
+
+	sort.Slice(rows, func(a, b int) bool { return rows[a].j.started.Before(rows[b].j.started) })
+	out := make([]ShellJobInfo, 0, len(rows))
+	for _, r := range rows {
+		done, _, _ := r.j.snapshot()
+		out = append(out, ShellJobInfo{ID: r.j.id, Script: r.j.script, Status: r.j.status(), Running: !done, Backgrounded: r.bg})
 	}
 	return out
+}
+
+// Output returns the captured stdout/stderr of a shell job by id.
+func (s *ShellJobs) Output(id string) (stdout, stderr string, ok bool) {
+	if s == nil {
+		return "", "", false
+	}
+	j, found := s.mgr.get(id)
+	if !found {
+		return "", "", false
+	}
+	return j.stdout.String(), j.stderr.String(), true
 }
 
 // DetachForeground backgrounds the running foreground shell command (Ctrl+B).
