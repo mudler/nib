@@ -55,7 +55,7 @@ func main() {
 
 	// Handle version flag
 	if *versionFlag {
-		fmt.Printf("wiz %s\n", internal.PrintableVersion())
+		fmt.Printf("nib %s\n", internal.PrintableVersion())
 		os.Exit(0)
 	}
 

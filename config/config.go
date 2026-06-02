@@ -34,24 +34,29 @@ Current user: {{.CurrentUser}}
 func configPaths() []string {
 	var paths []string
 
-	// current directory, .wiz.yaml
+	// current directory, .nib.yaml (legacy .wiz.yaml as fallback)
 	cwd, err := os.Getwd()
 	if err == nil {
+		paths = append(paths, filepath.Join(cwd, ".nib.yaml"))
 		paths = append(paths, filepath.Join(cwd, ".wiz.yaml"))
 	}
 
-	// First priority: XDG config directory
+	// First priority: XDG config directory (legacy wiz dir as fallback)
 	if xdgConfig := os.Getenv("XDG_CONFIG_HOME"); xdgConfig != "" {
+		paths = append(paths, filepath.Join(xdgConfig, "nib", "config.yaml"))
 		paths = append(paths, filepath.Join(xdgConfig, "wiz", "config.yaml"))
 	}
 
-	// Second priority: ~/.config/wiz/config.yaml
+	// Second priority: ~/.config/nib/config.yaml (legacy wiz dir as fallback)
 	if home, err := os.UserHomeDir(); err == nil {
+		paths = append(paths, filepath.Join(home, ".config", "nib", "config.yaml"))
 		paths = append(paths, filepath.Join(home, ".config", "wiz", "config.yaml"))
-		// Third priority: ~/.wiz.yaml
+		// Third priority: ~/.nib.yaml (legacy ~/.wiz.yaml as fallback)
+		paths = append(paths, filepath.Join(home, ".nib.yaml"))
 		paths = append(paths, filepath.Join(home, ".wiz.yaml"))
 	}
 
+	paths = append(paths, filepath.Join("/etc", "nib", "config.yaml"))
 	paths = append(paths, filepath.Join("/etc", "wiz", "config.yaml"))
 
 	return paths
@@ -115,7 +120,7 @@ func Load() types.Config {
 	// Merge enabled plugin contributions (mcp servers + agents) before the
 	// agent default-merge, so precedence is built-in defaults < plugins < user.
 	if err := plugin.Apply(&cfg, plugin.BaseDir(), internal.Version); err != nil {
-		fmt.Fprintf(os.Stderr, "wiz: plugin load: %v\n", err)
+		fmt.Fprintf(os.Stderr, "nib: plugin load: %v\n", err)
 	}
 
 	// Merge user-provided agent types with the built-in defaults.
