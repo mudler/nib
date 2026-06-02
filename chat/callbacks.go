@@ -45,6 +45,9 @@ type ToolCallResponse struct {
 type AskRequest struct {
 	Question string
 	Options  []string // optional multiple-choice options
+	// MultiSelect, when true, lets the user pick several options (checkbox);
+	// otherwise it's a single choice (radio). Only meaningful with Options.
+	MultiSelect bool
 }
 
 // Callbacks defines the interface for UI interactions.

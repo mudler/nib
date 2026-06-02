@@ -93,22 +93,22 @@ func NewSession(ctx context.Context, cfg types.Config, callbacks Callbacks, tran
 	}
 
 	s := &Session{
-		ctx:             ctx,
-		llm:             llm,
-		clients:         clients,
-		fragment:        cogito.NewEmptyFragment(),
-		messages:        []openai.ChatCompletionMessage{},
-		callbacks:       callbacks,
-		systemPrompt:    cfg.GetPrompt(),
-		skills:          cfg.Skills,
-		cogitoOptions:   cfg.AgentOptions,
-		allowedTools:    make(map[string]bool),
-		hooks:           hooks.New(cfg.Hooks),
-		agentManager:    agentManager,
-		agentDefs:       toCogitoDefinitions(cfg.Agents),
-		llmModel:        cfg.Model,
-		apiKey:          cfg.APIKey,
-		baseURL:         cfg.BaseURL,
+		ctx:           ctx,
+		llm:           llm,
+		clients:       clients,
+		fragment:      cogito.NewEmptyFragment(),
+		messages:      []openai.ChatCompletionMessage{},
+		callbacks:     callbacks,
+		systemPrompt:  cfg.GetPrompt(),
+		skills:        cfg.Skills,
+		cogitoOptions: cfg.AgentOptions,
+		allowedTools:  make(map[string]bool),
+		hooks:         hooks.New(cfg.Hooks),
+		agentManager:  agentManager,
+		agentDefs:     toCogitoDefinitions(cfg.Agents),
+		llmModel:      cfg.Model,
+		apiKey:        cfg.APIKey,
+		baseURL:       cfg.BaseURL,
 	}
 	s.hooks.Fire(ctx, hooks.EventSessionStart, "", map[string]any{"event": "SessionStart"})
 	return s, nil

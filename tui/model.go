@@ -52,8 +52,8 @@ type Model struct {
 	status         string
 	reasoning      string
 	err            error
-	output    string // Command to output to shell on exit
-	quitting  bool
+	output         string // Command to output to shell on exit
+	quitting       bool
 
 	// Tool approval state
 	pendingTool      *chat.ToolCallRequest
