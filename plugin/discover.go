@@ -59,7 +59,7 @@ func mergeManifests(cfg *types.Config, manifests []Manifest) {
 			if prev, ok := mcpFrom[k]; ok {
 				fmt.Fprintf(os.Stderr, "wiz: mcp server %q from plugin %q overrides plugin %q\n", k, m.Name, prev)
 			}
-			cfg.MCPServers[k] = v
+			cfg.MCPServers[k] = expandServerRoot(v, m.root)
 			mcpFrom[k] = m.Name
 		}
 		for _, a := range m.Agents {
@@ -79,6 +79,33 @@ func mergeManifests(cfg *types.Config, manifests []Manifest) {
 	mergeSkills(cfg, manifests)
 	mergeCommands(cfg, manifests)
 	mergeHooks(cfg, manifests)
+}
+
+// expandServerRoot resolves the ${WIZ_PLUGIN_ROOT}/${CLAUDE_PLUGIN_ROOT} token
+// (against the plugin's install dir) in a plugin MCP server's command, args, and
+// env values, so a plugin can ship its own server binary and reference it by an
+// absolute, install-location-independent path. Returns a copy; the manifest is
+// left untouched.
+func expandServerRoot(s types.MCPServer, root string) types.MCPServer {
+	repl := func(v string) string {
+		v = strings.ReplaceAll(v, "${WIZ_PLUGIN_ROOT}", root)
+		v = strings.ReplaceAll(v, "${CLAUDE_PLUGIN_ROOT}", root)
+		return v
+	}
+	out := types.MCPServer{Command: repl(s.Command)}
+	if len(s.Args) > 0 {
+		out.Args = make([]string, len(s.Args))
+		for i, a := range s.Args {
+			out.Args[i] = repl(a)
+		}
+	}
+	if len(s.Env) > 0 {
+		out.Env = make(map[string]string, len(s.Env))
+		for k, val := range s.Env {
+			out.Env[k] = repl(val)
+		}
+	}
+	return out
 }
 
 // mergeHooks accumulates each enabled plugin's hooks into cfg, stamping the

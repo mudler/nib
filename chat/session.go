@@ -15,6 +15,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/mudler/cogito"
 	"github.com/mudler/cogito/clients"
+	"github.com/mudler/xlog"
 	openai "github.com/sashabaranov/go-openai"
 )
 
@@ -82,7 +83,11 @@ func NewSession(ctx context.Context, cfg types.Config, callbacks Callbacks, tran
 	for _, transport := range transports {
 		session, err := client.Connect(ctx, transport, nil)
 		if err != nil {
-			return nil, err
+			// A single MCP server that fails to start (e.g. a plugin whose
+			// binary isn't on PATH) must not prevent the whole session from
+			// coming up. Skip it and continue with the rest.
+			xlog.Warn("Skipping MCP server that failed to connect", "error", err)
+			continue
 		}
 		clients = append(clients, session)
 	}
