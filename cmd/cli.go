@@ -11,9 +11,15 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/mudler/nib/chat"
+	"github.com/mudler/nib/slash"
 	"github.com/mudler/nib/theme"
 	"github.com/mudler/nib/types"
 )
+
+// resolveCLIInput maps a CLI input line to a slash Action, mirroring the TUI.
+func resolveCLIInput(input string, cfg types.Config) slash.Action {
+	return slash.Resolve(input, cfg.Commands, cfg.Skills, cfg.Agents)
+}
 
 // Spinner frames for animated display
 var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
@@ -224,13 +230,6 @@ func RunCLI(ctx context.Context, cfg types.Config, transports ...mcp.Transport) 
 				continue
 			}
 
-			// Handle commands starting with /
-			if strings.HasPrefix(text, "/") {
-				fmt.Println(theme.Error.Render(theme.Cross + " unknown command: " + text))
-				fmt.Println(theme.Help.Render("type 'help' for available commands"))
-				continue
-			}
-
 			switch text {
 			case "clear":
 				session.ClearHistory()
@@ -242,14 +241,29 @@ func RunCLI(ctx context.Context, cfg types.Config, transports ...mcp.Transport) 
 				continue
 			}
 
-			fmt.Println()
-			spin.start(theme.Status(theme.VerbThinking, 0))
-			_, err = session.SendMessage(text)
-			spin.stop()
-			if err != nil {
-				fmt.Fprintln(os.Stderr, theme.Error.Render(theme.Cross+" "+err.Error()))
+			action := resolveCLIInput(text, cfg)
+			switch action.Kind {
+			case slash.KindError:
+				fmt.Fprintln(os.Stderr, theme.Error.Render(theme.Cross+" "+action.Err))
+				continue
+			case slash.KindLoadSkill:
+				notice, err := session.LoadSkill(action.Skill)
+				if err != nil {
+					fmt.Fprintln(os.Stderr, theme.Error.Render(theme.Cross+" "+err.Error()))
+				} else {
+					fmt.Println(theme.Subtle.Render(notice))
+				}
+				continue
+			default: // slash.KindSend
+				fmt.Println()
+				spin.start(theme.Status(theme.VerbThinking, 0))
+				_, err = session.SendMessage(action.Text)
+				spin.stop()
+				if err != nil {
+					fmt.Fprintln(os.Stderr, theme.Error.Render(theme.Cross+" "+err.Error()))
+				}
+				fmt.Println()
 			}
-			fmt.Println()
 		}
 	}
 }
