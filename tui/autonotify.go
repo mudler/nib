@@ -43,10 +43,15 @@ func (m *Model) collectCompletions() {
 		m.pendingNotices = append(m.pendingNotices, notice)
 	}
 
-	// Sub-agents the user backgrounded with Ctrl+B.
-	if m.session != nil && len(m.bgAgents) > 0 {
+	// Sub-agents running unattended: spawned with background=true, or a
+	// foreground agent the user backgrounded with Ctrl+B. Foreground agents
+	// whose result is consumed inline are excluded.
+	if m.session != nil {
 		for _, a := range m.session.AgentManager().List() {
-			if !m.bgAgents[a.ID] || m.notifiedJobs[a.ID] {
+			if m.notifiedJobs[a.ID] {
+				continue
+			}
+			if !a.Background && !m.bgAgents[a.ID] {
 				continue
 			}
 			st := string(a.Status)
