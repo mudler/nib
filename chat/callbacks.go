@@ -41,15 +41,13 @@ type ToolCallResponse struct {
 	AlwaysAllow bool
 }
 
-// Plan represents a plan with description and subtasks.
-type Plan struct {
-	Description string
-	Subtasks    []string
-}
-
-// PlanResponse represents the user's decision on a plan.
-type PlanResponse struct {
-	Approved bool
+// AskRequest is a question the agent wants to ask the user.
+type AskRequest struct {
+	Question string
+	Options  []string // optional multiple-choice options
+	// MultiSelect, when true, lets the user pick several options (checkbox);
+	// otherwise it's a single choice (radio). Only meaningful with Options.
+	MultiSelect bool
 }
 
 // Callbacks defines the interface for UI interactions.
@@ -57,9 +55,11 @@ type Callbacks struct {
 	OnStatus    func(status string)
 	OnReasoning func(reasoning string)
 	OnToolCall  func(req ToolCallRequest) ToolCallResponse
-	OnPlan      func(plan Plan) PlanResponse
 	OnResponse  func(response string)
 	OnError     func(err error)
 	// OnAgentEvent is called on sub-agent lifecycle changes. Optional.
 	OnAgentEvent func(ev AgentEvent)
+	// OnAskUser is called when the agent asks the user a question (ask_user tool).
+	// It blocks until the user answers and returns the answer.
+	OnAskUser func(req AskRequest) string
 }

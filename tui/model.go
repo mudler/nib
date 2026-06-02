@@ -2,8 +2,10 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/mudler/wiz/types"
 
@@ -14,6 +16,8 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/mudler/wiz/chat"
+	wizmcp "github.com/mudler/wiz/mcp"
+	"github.com/mudler/wiz/slash"
 )
 
 // ChatMessage represents a message in the chat history
@@ -35,6 +39,7 @@ type Model struct {
 	ctx          context.Context
 	cancel       context.CancelFunc
 	transports   []mcp.Transport
+	shellJobs    *wizmcp.ShellJobs
 	cfg          types.Config
 	sessionReady bool
 
@@ -43,22 +48,25 @@ type Model struct {
 	height    int
 	maxHeight int // Configured max height (0 = no limit)
 	loading   bool
-	status    string
-	reasoning string
-	err       error
-	output    string // Command to output to shell on exit
-	quitting  bool
+	// interruptArmed is set after a first Ctrl+C interrupts an in-flight turn,
+	// so a second Ctrl+C exits instead of just re-interrupting. Reset when a new
+	// turn starts and when the turn ends.
+	interruptArmed bool
+	status         string
+	reasoning      string
+	err            error
+	output         string // Command to output to shell on exit
+	quitting       bool
 
 	// Tool approval state
 	pendingTool      *chat.ToolCallRequest
 	awaitingApproval bool
 
-	// Plan mode state
-	planMode bool
-
-	// Plan approval state
-	pendingPlan          *chat.Plan
-	awaitingPlanApproval bool
+	// ask_user state
+	pendingAsk      *chat.AskRequest
+	awaitingAsk     bool
+	askRequestChan  chan chat.AskRequest
+	askResponseChan chan string
 
 	// Animation state
 	statusPhase int
@@ -66,15 +74,23 @@ type Model struct {
 	// Sub-agent jobs state
 	jobs           []agentJob
 	showJobsDetail bool
+	killArmed      bool // Ctrl+K pressed: next digit kills that numbered job
 	agentEventChan chan chat.AgentEvent
+
+	// Auto-notify state: completion notices for backgrounded work that the
+	// assistant should react to.
+	notifiedJobs   map[string]bool // job/agent ids already notified (or suppressed)
+	pendingNotices []string        // queued notices awaiting an idle moment
+	bgAgents       map[string]bool // sub-agent ids the user backgrounded (Ctrl+B)
+
+	// Unified `/` completion state
+	completion compState
 
 	// Channels for async communication with callbacks
 	statusChan       chan string
 	reasoningChan    chan string
 	toolRequestChan  chan chat.ToolCallRequest
 	toolResponseChan chan chat.ToolCallResponse
-	planRequestChan  chan chat.Plan
-	planResponseChan chan chat.PlanResponse
 }
 
 // responseMsg is sent when the AI responds
@@ -92,8 +108,8 @@ type reasoningMsg string
 // toolCallMsg is sent when a tool call needs approval
 type toolCallMsg chat.ToolCallRequest
 
-// planMsg is sent when a plan needs approval
-type planMsg chat.Plan
+// askMsg is sent when the agent asks the user a question.
+type askMsg chat.AskRequest
 
 // agentEventMsg is sent for sub-agent lifecycle updates.
 type agentEventMsg chat.AgentEvent
@@ -105,7 +121,7 @@ type sessionReadyMsg struct {
 }
 
 // NewModel creates a new TUI model
-func NewModel(ctx context.Context, cfg types.Config, height int, transports ...mcp.Transport) Model {
+func NewModel(ctx context.Context, cfg types.Config, height int, shellJobs *wizmcp.ShellJobs, transports ...mcp.Transport) Model {
 	ctx, cancel := context.WithCancel(ctx)
 
 	ta := textarea.New()
@@ -131,7 +147,7 @@ func NewModel(ctx context.Context, cfg types.Config, height int, transports ...m
 		maxH = 0 // Will be calculated on first WindowSizeMsg
 	}
 
-	return Model{
+	m := Model{
 		viewport:         vp,
 		textarea:         ta,
 		spinner:          s,
@@ -140,6 +156,7 @@ func NewModel(ctx context.Context, cfg types.Config, height int, transports ...m
 		cancel:           cancel,
 		maxHeight:        maxH,
 		transports:       transports,
+		shellJobs:        shellJobs,
 		cfg:              cfg,
 		height:           height,
 		agentEventChan:   make(chan chat.AgentEvent, 16),
@@ -147,10 +164,11 @@ func NewModel(ctx context.Context, cfg types.Config, height int, transports ...m
 		reasoningChan:    make(chan string, 10),
 		toolRequestChan:  make(chan chat.ToolCallRequest),
 		toolResponseChan: make(chan chat.ToolCallResponse),
-		planRequestChan:  make(chan chat.Plan),
-		planResponseChan: make(chan chat.PlanResponse),
-		planMode:         false,
+		askRequestChan:   make(chan chat.AskRequest),
+		askResponseChan:  make(chan string),
 	}
+	m.completion.setRegistries(cfg.Commands, cfg.Skills, cfg.Agents)
+	return m
 }
 
 // Init initializes the model
@@ -183,10 +201,9 @@ func (m Model) initSession() tea.Cmd {
 				m.toolRequestChan <- req
 				return <-m.toolResponseChan
 			},
-			OnPlan: func(plan chat.Plan) chat.PlanResponse {
-				// Send plan request and wait for user response
-				m.planRequestChan <- plan
-				return <-m.planResponseChan
+			OnAskUser: func(req chat.AskRequest) string {
+				m.askRequestChan <- req
+				return <-m.askResponseChan
 			},
 			OnAgentEvent: func(ev chat.AgentEvent) {
 				select {
@@ -208,34 +225,58 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
-		switch msg.Type {
-		case tea.KeyCtrlC, tea.KeyEsc:
-			// If awaiting plan approval, reject the plan
-			if m.awaitingPlanApproval {
-				return m.handlePlanApproval(false)
-			}
-			m.quitting = true
-			if m.session != nil {
-				m.session.Close()
-			}
-			m.cancel()
-			return m, tea.Quit
-
-		case tea.KeyCtrlP:
-			// Toggle plan mode
-			if m.sessionReady && m.session != nil {
-				m.planMode = !m.planMode
-				m.session.SetPlanMode(m.planMode)
+		// Kill-selection mode (armed by Ctrl+K): a digit kills that numbered job;
+		// Esc/Ctrl+K cancels; any other key cancels and is handled normally.
+		if m.killArmed {
+			switch {
+			case msg.Type == tea.KeyEsc || msg.Type == tea.KeyCtrlK:
+				m.killArmed = false
+				m.status = ""
 				m.updateViewport()
+				return m, nil
+			case msg.Type == tea.KeyRunes && len(msg.Runes) == 1 && msg.Runes[0] >= '1' && msg.Runes[0] <= '9':
+				m.killSelected(int(msg.Runes[0] - '0'))
+				m.killArmed = false
+				m.updateViewport()
+				return m, nil
+			default:
+				m.killArmed = false
+				m.status = ""
 			}
-			return m, nil
+		}
+		switch msg.Type {
+		case tea.KeyCtrlC:
+			// First Ctrl+C on an in-flight turn interrupts the request but keeps
+			// the session open; a second Ctrl+C (or Ctrl+C while idle) exits.
+			if m.isWorking() && !m.interruptArmed {
+				if m.session != nil {
+					m.session.Interrupt()
+				}
+				m.interruptArmed = true
+				m.status = "Interrupting… (Ctrl+C again to exit)"
+				return m, nil
+			}
+			return m.quit()
+
+		case tea.KeyEsc:
+			return m.quit()
 
 		case tea.KeyCtrlB:
-			// Background (detach) the first running foreground sub-agent.
+			// Background the running foreground work: a sub-agent first,
+			// otherwise a running foreground shell command.
 			if m.sessionReady && m.session != nil {
 				if id := m.firstRunningJobID(); id != "" {
 					_ = m.session.AgentManager().Detach(id)
+					if m.bgAgents == nil {
+						m.bgAgents = map[string]bool{}
+					}
+					m.bgAgents[id] = true // eligible for auto-notify on completion
+					return m, nil
 				}
+			}
+			if id, ok := m.shellJobs.DetachForeground(); ok {
+				m.status = "Backgrounded shell job " + id
+				m.updateViewport()
 			}
 			return m, nil
 
@@ -244,7 +285,47 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.showJobsDetail = !m.showJobsDetail
 			return m, nil
 
+		case tea.KeyCtrlK:
+			// Arm kill-selection: open the numbered detail and wait for a digit.
+			if m.sessionReady && len(m.unifiedJobs()) > 0 {
+				m.killArmed = true
+				m.showJobsDetail = true
+				m.status = "Kill which job? press its number · Esc cancels"
+				m.updateViewport()
+			}
+			return m, nil
+
+		case tea.KeyTab:
+			if m.completion.active {
+				if ins, ok := m.completion.accept(); ok {
+					m.textarea.SetValue(ins)
+					m.completion.sync(ins)
+				}
+				return m, nil
+			}
+
+		case tea.KeyUp:
+			if m.completion.active {
+				m.completion.up()
+				return m, nil
+			}
+
+		case tea.KeyDown:
+			if m.completion.active {
+				m.completion.down()
+				return m, nil
+			}
+
 		case tea.KeyEnter:
+			// Accept an open completion instead of submitting.
+			if m.completion.active {
+				if ins, ok := m.completion.accept(); ok {
+					m.textarea.SetValue(ins)
+					m.completion.sync(ins)
+				}
+				return m, nil
+			}
+
 			if m.loading || !m.sessionReady {
 				return m, nil
 			}
@@ -254,9 +335,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 
-			// Check if we're in plan approval mode
-			if m.awaitingPlanApproval {
-				return m.handlePlanApproval(true)
+			// Check if we're answering an ask_user question
+			if m.awaitingAsk && m.pendingAsk != nil {
+				answer := parseAskAnswer(m.textarea.Value(), *m.pendingAsk)
+				m.messages = append(m.messages, ChatMessage{Role: "user", Content: answer})
+				m.textarea.Reset()
+				m.awaitingAsk = false
+				m.pendingAsk = nil
+				m.loading = true
+				m.status = "Thinking…"
+				m.updateViewport()
+				m.askResponseChan <- answer
+				return m, nil
 			}
 
 			// Check if we're in tool approval mode
@@ -264,17 +354,33 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m.handleToolApproval(input)
 			}
 
-			// Add user message
-			m.messages = append(m.messages, ChatMessage{
-				Role:    "user",
-				Content: input,
-			})
+			// Echo the user's literal input, then resolve it (command/skill/agent).
+			m.messages = append(m.messages, ChatMessage{Role: "user", Content: input})
 			m.textarea.Reset()
-			m.loading = true
-			m.status = "Thinking..."
-			m.updateViewport()
+			m.completion.sync("")
 
-			return m, m.sendMessage(input)
+			action := slash.Resolve(input, m.cfg.Commands, m.cfg.Skills, m.cfg.Agents)
+			switch action.Kind {
+			case slash.KindError:
+				m.messages = append(m.messages, ChatMessage{Role: "error", Content: action.Err})
+				m.updateViewport()
+				return m, nil
+			case slash.KindLoadSkill:
+				notice, err := m.session.LoadSkill(action.Skill)
+				if err != nil {
+					m.messages = append(m.messages, ChatMessage{Role: "error", Content: err.Error()})
+				} else {
+					m.messages = append(m.messages, ChatMessage{Role: "agent", Content: notice})
+				}
+				m.updateViewport()
+				return m, nil
+			default: // slash.KindSend
+				m.loading = true
+				m.interruptArmed = false
+				m.status = "Thinking..."
+				m.updateViewport()
+				return m, m.sendMessage(action.Text)
+			}
 		}
 
 	case tea.WindowSizeMsg:
@@ -289,30 +395,42 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.session = msg.session
 		m.sessionReady = true
-		// Set initial plan mode state
-		if m.session != nil {
-			m.session.SetPlanMode(m.planMode)
-		}
 		// Start listening for callbacks
-		cmds = append(cmds, m.listenStatus(), m.listenReasoning(), m.listenToolRequest(), m.listenPlanRequest(), m.listenAgentEvents())
+		cmds = append(cmds, m.listenStatus(), m.listenReasoning(), m.listenToolRequest(), m.listenAskRequest(), m.listenAgentEvents(), m.shellTick())
 
 	case responseMsg:
 		m.loading = false
+		m.interruptArmed = false
 		m.status = ""
 		m.reasoning = ""
 		if msg.err != nil {
-			m.err = msg.err
-			m.messages = append(m.messages, ChatMessage{
-				Role:    "error",
-				Content: msg.err.Error(),
-			})
+			if errors.Is(msg.err, context.Canceled) {
+				m.messages = append(m.messages, ChatMessage{Role: "agent", Content: "⛔ Interrupted."})
+			} else {
+				m.err = msg.err
+				m.messages = append(m.messages, ChatMessage{Role: "error", Content: msg.err.Error()})
+			}
 		} else {
-			m.messages = append(m.messages, ChatMessage{
-				Role:    "assistant",
-				Content: msg.content,
-			})
+			m.messages = append(m.messages, ChatMessage{Role: "assistant", Content: msg.content})
 		}
 		m.updateViewport()
+		// A background job may have finished during this turn; react to it now
+		// that we're idle again.
+		if c := m.autoNotifyCmd(); c != nil {
+			cmds = append(cmds, c)
+		}
+
+	case shellTickMsg:
+		// Periodic refresh so the shell-jobs footer reflects jobs that finish
+		// (or are started by the model) while the user is idle, and auto-notify
+		// the assistant about finished background work.
+		if c := m.autoNotifyCmd(); c != nil {
+			cmds = append(cmds, c)
+		}
+		m.updateViewport()
+		if !m.quitting {
+			cmds = append(cmds, m.shellTick())
+		}
 
 	case statusMsg:
 		m.status = string(msg)
@@ -335,14 +453,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Continue listening for more tool requests
 		cmds = append(cmds, m.listenToolRequest())
 
-	case planMsg:
-		m.pendingPlan = (*chat.Plan)(&msg)
-		m.awaitingPlanApproval = true
-		m.loading = false  // Allow user input for approval
-		m.textarea.Focus() // Ensure textarea is focused for input
+	case askMsg:
+		req := chat.AskRequest(msg)
+		m.pendingAsk = &req
+		m.awaitingAsk = true
+		m.loading = false
+		m.textarea.Focus()
 		m.updateViewport()
-		// Continue listening for more plan requests
-		cmds = append(cmds, m.listenPlanRequest())
+		cmds = append(cmds, m.listenAskRequest())
 
 	case agentEventMsg:
 		// Update value-receiver copy via pointer helper, then write back.
@@ -373,6 +491,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if !m.loading {
 		m.textarea, cmd = m.textarea.Update(msg)
 		cmds = append(cmds, cmd)
+		m.completion.sync(m.textarea.Value())
 	}
 
 	// Update viewport
@@ -388,6 +507,14 @@ func (m Model) sendMessage(text string) tea.Cmd {
 		response, err := m.session.SendMessage(text)
 		return responseMsg{content: response, err: err}
 	}
+}
+
+// shellTickMsg drives a periodic refresh of the shell-jobs footer.
+type shellTickMsg struct{}
+
+// shellTick schedules the next shell-jobs footer refresh.
+func (m Model) shellTick() tea.Cmd {
+	return tea.Tick(time.Second, func(time.Time) tea.Msg { return shellTickMsg{} })
 }
 
 // listenStatus listens for status updates from the session
@@ -438,12 +565,12 @@ func (m Model) listenToolRequest() tea.Cmd {
 	}
 }
 
-// listenPlanRequest listens for plan approval requests from the session
-func (m Model) listenPlanRequest() tea.Cmd {
+// listenAskRequest listens for ask_user requests from the session.
+func (m Model) listenAskRequest() tea.Cmd {
 	return func() tea.Msg {
 		select {
-		case plan := <-m.planRequestChan:
-			return planMsg(plan)
+		case req := <-m.askRequestChan:
+			return askMsg(req)
 		case <-m.ctx.Done():
 			return nil
 		}
@@ -477,29 +604,6 @@ func (m Model) handleToolApproval(input string) (tea.Model, tea.Cmd) {
 	// Send response back to the waiting callback
 	return m, func() tea.Msg {
 		m.toolResponseChan <- response
-		return nil
-	}
-}
-
-// handlePlanApproval handles plan approval (Enter = approve, Esc = reject)
-func (m Model) handlePlanApproval(approved bool) (tea.Model, tea.Cmd) {
-	response := chat.PlanResponse{Approved: approved}
-
-	m.awaitingPlanApproval = false
-	m.pendingPlan = nil
-	m.textarea.Reset()
-	if approved {
-		m.loading = true
-		m.status = "Executing plan..."
-	} else {
-		m.loading = false
-		m.status = ""
-	}
-	m.updateViewport()
-
-	// Send response back to the waiting callback
-	return m, func() tea.Msg {
-		m.planResponseChan <- response
 		return nil
 	}
 }
@@ -775,59 +879,6 @@ func (m *Model) updateViewport() {
 		sb.WriteString("\n")
 	}
 
-	if m.awaitingPlanApproval && m.pendingPlan != nil {
-		// Build plan request box content
-		// Account for box padding (1 char each side) and border (1 char each side) = 4 chars total
-		boxContentWidth := contentWidth - 4
-		if boxContentWidth < 20 {
-			boxContentWidth = 20 // minimum width
-		}
-
-		var planContent strings.Builder
-		planContent.WriteString(sectionHeaderStyle.Render("📋 Plan"))
-		planContent.WriteString("\n\n")
-		// Wrap description
-		descPrefix := dimmedStyle.Render("Description: ")
-		descWidth := lipgloss.Width(descPrefix)
-		wrappedDesc := wrapText(m.pendingPlan.Description, boxContentWidth-descWidth)
-		descLines := strings.Split(strings.TrimRight(wrappedDesc, "\n"), "\n")
-		for i, line := range descLines {
-			if i == 0 {
-				planContent.WriteString(descPrefix)
-				planContent.WriteString(line)
-			} else {
-				planContent.WriteString(strings.Repeat(" ", descWidth))
-				planContent.WriteString(line)
-			}
-			planContent.WriteString("\n")
-		}
-		if len(m.pendingPlan.Subtasks) > 0 {
-			planContent.WriteString("\n")
-			planContent.WriteString(dimmedStyle.Render("Subtasks:"))
-			planContent.WriteString("\n")
-			subtaskPrefixWidth := 4 // "  X. "
-			for i, subtask := range m.pendingPlan.Subtasks {
-				subtaskLine := fmt.Sprintf("  %d. ", i+1)
-				wrappedSubtask := wrapText(subtask, boxContentWidth-subtaskPrefixWidth)
-				subtaskLines := strings.Split(strings.TrimRight(wrappedSubtask, "\n"), "\n")
-				for j, line := range subtaskLines {
-					if j == 0 {
-						planContent.WriteString(subtaskLine)
-					} else {
-						planContent.WriteString(strings.Repeat(" ", subtaskPrefixWidth))
-					}
-					planContent.WriteString(line)
-					planContent.WriteString("\n")
-				}
-			}
-		}
-		planContent.WriteString("\n")
-		planContent.WriteString(promptHintStyle.Render("[Enter] approve  [Esc] reject"))
-
-		sb.WriteString(planRequestBoxStyle.Render(planContent.String()))
-		sb.WriteString("\n")
-	}
-
 	if m.awaitingApproval && m.pendingTool != nil {
 		// Build tool request box content
 		// Account for box padding (1 char each side) and border (1 char each side) = 4 chars total
@@ -879,6 +930,11 @@ func (m *Model) updateViewport() {
 		sb.WriteString("\n")
 	}
 
+	if m.awaitingAsk && m.pendingAsk != nil {
+		sb.WriteString(renderAsk(*m.pendingAsk, m.width))
+		sb.WriteString("\n")
+	}
+
 	m.viewport.SetContent(sb.String())
 	m.viewport.GotoBottom()
 }
@@ -893,16 +949,12 @@ func (m Model) View() string {
 
 	// Header with animated wizard
 	sparkle := m.getWizardSparkle()
-	modeIndicator := ""
-	if m.planMode {
-		modeIndicator = " [PLAN MODE]"
-	}
 	if m.loading {
 		// Animated wizard face when loading
 		face := m.getWizardFace()
-		sb.WriteString(headerStyle.Render(fmt.Sprintf("%s [%s] wiz%s", sparkle, face, modeIndicator)))
+		sb.WriteString(headerStyle.Render(fmt.Sprintf("%s [%s] wiz", sparkle, face)))
 	} else {
-		sb.WriteString(headerStyle.Render(fmt.Sprintf("%s [◠ ◠] wiz%s", sparkle, modeIndicator)))
+		sb.WriteString(headerStyle.Render(fmt.Sprintf("%s [◠ ◠] wiz", sparkle)))
 	}
 	sb.WriteString("\n")
 	sb.WriteString(strings.Repeat("─", m.width))
@@ -916,6 +968,12 @@ func (m Model) View() string {
 	sb.WriteString(strings.Repeat("─", m.width))
 	sb.WriteString("\n")
 
+	// `/` completion popup (above the input)
+	if comp := renderCompletion(m.completion, strings.TrimSpace(m.textarea.Value()), m.width); comp != "" {
+		sb.WriteString(comp)
+		sb.WriteString("\n")
+	}
+
 	// Input area
 	if m.sessionReady {
 		sb.WriteString(m.textarea.View())
@@ -925,12 +983,7 @@ func (m Model) View() string {
 
 	// Help text
 	sb.WriteString("\n")
-	helpText := "Enter: send • Esc: exit"
-	if m.planMode {
-		helpText += " • Ctrl+P: plan mode ON"
-	} else {
-		helpText += " • Ctrl+P: toggle plan mode"
-	}
+	helpText := "Enter: send • Ctrl+C: interrupt/exit • Esc: exit"
 	sb.WriteString(helpStyle.Render(helpText))
 
 	if m.err != nil {
@@ -938,21 +991,22 @@ func (m Model) View() string {
 		sb.WriteString(errorStyle.Render(fmt.Sprintf("Error: %v", m.err)))
 	}
 
-	// Sub-agent jobs footer (and optional detail). Adds nothing when no jobs,
-	// so the layout is unchanged in the common case.
-	footer := renderJobsFooter(m.jobs, m.width)
+	// Jobs area: a unified numbered detail list (Ctrl+J), whose numbers Ctrl+K
+	// uses for kill selection, above the compact per-kind summary footers. All
+	// add nothing when there are no jobs, so the common case is unchanged.
 	if m.showJobsDetail {
-		if d := renderJobsDetail(m.jobs, m.width); d != "" {
-			if footer != "" {
-				footer = d + "\n" + footer
-			} else {
-				footer = d
-			}
+		if d := renderUnifiedJobsDetail(m.unifiedJobs(), m.width); d != "" {
+			sb.WriteString("\n")
+			sb.WriteString(d)
 		}
 	}
-	if footer != "" {
+	if f := renderJobsFooter(m.jobs, m.width); f != "" {
 		sb.WriteString("\n")
-		sb.WriteString(footer)
+		sb.WriteString(f)
+	}
+	if f := renderShellJobsFooter(m.shellJobs.List(), m.width); f != "" {
+		sb.WriteString("\n")
+		sb.WriteString(f)
 	}
 
 	return sb.String()
@@ -961,4 +1015,25 @@ func (m Model) View() string {
 // Output returns any command that should be output to the shell
 func (m Model) Output() string {
 	return m.output
+}
+
+// isWorking reports whether a turn or sub-agent is currently running.
+func (m Model) isWorking() bool {
+	if m.loading {
+		return true
+	}
+	if m.session != nil && m.session.AgentManager() != nil {
+		return m.session.AgentManager().HasRunning()
+	}
+	return false
+}
+
+// quit tears down the session and exits.
+func (m Model) quit() (tea.Model, tea.Cmd) {
+	m.quitting = true
+	if m.session != nil {
+		m.session.Close()
+	}
+	m.cancel()
+	return m, tea.Quit
 }

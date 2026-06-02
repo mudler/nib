@@ -38,12 +38,18 @@ func parseHeight(s string) int {
 }
 
 func main() {
+	// Subcommand dispatch (must precede flag parsing).
+	if len(os.Args) >= 2 && os.Args[1] == "plugin" {
+		os.Exit(cmd.RunPluginCommand(os.Args[2:]))
+	}
+
 	// Parse command line arguments
 	heightFlag := flag.String("height", "", "Height of the TUI (e.g., '40%' or '20')")
 	initFlag := flag.String("init", "", "Output shell integration script (zsh, bash, or fish)")
 	versionFlag := flag.Bool("version", false, "Print version and exit")
 	tmuxFlag := flag.Bool("tmux", false, "Run in tmux popup (auto-detected if in tmux)")
 	noTmuxFlag := flag.Bool("no-tmux", false, "Disable tmux popup even when in tmux")
+	tuiFlag := flag.Bool("tui", false, "Start the full-screen TUI directly (no tmux popup)")
 	flag.Parse()
 
 	// Handle version flag
@@ -82,18 +88,27 @@ func main() {
 
 	xlog.SetLogger(xlog.NewLogger(xlog.LogLevel(cfg.LogLevel), os.Getenv("LOG_FORMAT")))
 
-	transports, err := mcp.StartTransports(ctx, cfg)
+	// Shared shell-job registry: the shell MCP server starts/manages jobs in it,
+	// and the TUI lists them (footer) and backgrounds the foreground one (Ctrl+B).
+	shellJobs := mcp.NewShellJobs()
+
+	transports, err := mcp.StartTransports(ctx, cfg, shellJobs)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error starting MCP servers: %v\n", err)
 		os.Exit(1)
 	}
 
-	// Determine mode based on flags
-	if *heightFlag != "" {
-		height := parseHeight(*heightFlag)
+	// Determine mode based on flags. --tui (or --height) selects the TUI; bare
+	// `wiz` stays in CLI mode.
+	if *tuiFlag || *heightFlag != "" {
+		h := *heightFlag
+		if h == "" {
+			h = "40%" // sensible default when only --tui is given
+		}
+		height := parseHeight(h)
 
-		// Check if we should use tmux popup
-		useTmux := *tmuxFlag || (cmd.IsInTmux() && !*noTmuxFlag)
+		// --tui forces a direct (non-tmux) TUI; otherwise honor tmux detection.
+		useTmux := !*tuiFlag && (*tmuxFlag || (cmd.IsInTmux() && !*noTmuxFlag))
 
 		if useTmux && cmd.IsInTmux() {
 			// Run in tmux split pane (like fzf-tmux -d)
@@ -103,7 +118,7 @@ func main() {
 			}
 		} else {
 			// TUI mode
-			if err := cmd.RunTUI(ctx, cfg, height, transports...); err != nil {
+			if err := cmd.RunTUI(ctx, cfg, height, shellJobs, transports...); err != nil {
 				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 				os.Exit(1)
 			}

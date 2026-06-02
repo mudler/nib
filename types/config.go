@@ -2,8 +2,10 @@ package types
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"os/user"
+	"strings"
 	"text/template"
 
 	"github.com/Masterminds/sprig/v3"
@@ -31,12 +33,33 @@ type AgentTypeConfig struct {
 	MaxRetries   int      `yaml:"max_retries"`
 }
 
-// ReviewerLLMConfig holds configuration for the reviewer LLM (used in plan mode)
-type ReviewerLLMConfig struct {
-	Model   string `yaml:"model"`
-	APIKey  string `yaml:"api_key"`
-	BaseURL string `yaml:"base_url"`
-	Enabled *bool  `yaml:"enabled"` // If nil, defaults to true when reviewer_llm is configured
+// Skill is a named, on-demand instruction set. Its Description is listed in the
+// system prompt; the agent calls the load_skill tool to read Instructions.
+type Skill struct {
+	Name         string   `yaml:"name"`
+	Description  string   `yaml:"description"`
+	Instructions string   `yaml:"instructions"` // resolved body (inline, or loaded from a plugin file)
+	Tools        []string `yaml:"tools,omitempty"`
+}
+
+// CommandConfig is a named slash command: a prompt template (text/template with
+// {{.Args}} and {{.CurrentDirectory}}) optionally routed through a sub-agent.
+type CommandConfig struct {
+	Name        string `yaml:"name"`
+	Description string `yaml:"description"`
+	Prompt      string `yaml:"prompt"`
+	Agent       string `yaml:"agent,omitempty"`
+}
+
+// HookConfig is a shell command bound to a lifecycle event. Matcher (optional)
+// is matched against the tool name for PreToolUse/PostToolUse. Dir is the
+// plugin root (set during merge); it is the command's working directory and is
+// exported as ${WIZ_PLUGIN_ROOT}/${CLAUDE_PLUGIN_ROOT}.
+type HookConfig struct {
+	Event   string `yaml:"event"`
+	Matcher string `yaml:"matcher,omitempty"`
+	Command string `yaml:"command"`
+	Dir     string `yaml:"-"` // plugin root; set during merge, not parsed
 }
 
 // Config holds configuration for creating a new session
@@ -48,8 +71,14 @@ type Config struct {
 	Prompt       string               `yaml:"prompt"`
 	MCPServers   map[string]MCPServer `yaml:"mcp_servers"`
 	AgentOptions AgentOptions         `yaml:"agent_options"`
-	ReviewerLLM  *ReviewerLLMConfig   `yaml:"reviewer_llm"`
 	Agents       []AgentTypeConfig    `yaml:"agents"`
+
+	PromptFragments []string `yaml:"prompt_fragments"`
+	Skills          []Skill  `yaml:"skills"`
+
+	Commands []CommandConfig `yaml:"commands"`
+
+	Hooks []HookConfig `yaml:"hooks"`
 }
 
 func (c *Config) GetPrompt() string {
@@ -81,7 +110,25 @@ func (c *Config) GetPrompt() string {
 		return ""
 	}
 
-	return data.String()
+	var b strings.Builder
+	b.WriteString(data.String())
+
+	if len(c.Skills) > 0 {
+		b.WriteString("\n\nAvailable skills — call the load_skill tool with the skill name to read its full instructions before acting on a matching task:\n")
+		for _, s := range c.Skills {
+			fmt.Fprintf(&b, "- %s: %s\n", s.Name, s.Description)
+		}
+	}
+
+	for _, f := range c.PromptFragments {
+		if strings.TrimSpace(f) == "" {
+			continue
+		}
+		b.WriteString("\n\n")
+		b.WriteString(f)
+	}
+
+	return b.String()
 }
 
 type MCPServer struct {

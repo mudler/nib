@@ -67,30 +67,9 @@ func renderJobsFooter(jobs []agentJob, width int) string {
 	if failed > 0 {
 		parts = append(parts, fmt.Sprintf("%d failed", failed))
 	}
-	parts = append(parts, "(ctrl+b background · ctrl+j detail)")
+	parts = append(parts, "(ctrl+b background · ctrl+j detail · ctrl+k kill)")
 	line := strings.Join(parts, "  ·  ")
 	return jobsFooterStyle.Width(width).Render(line)
-}
-
-// renderJobsDetail renders the expanded per-job list.
-func renderJobsDetail(jobs []agentJob, width int) string {
-	if len(jobs) == 0 {
-		return ""
-	}
-	var b strings.Builder
-	for _, j := range jobs {
-		task := j.Task
-		if len(task) > 40 {
-			task = task[:37] + "..."
-		}
-		typ := j.Type
-		if typ == "" {
-			typ = "agent"
-		}
-		b.WriteString(fmt.Sprintf("  %s  %-8s  %-10s  %s\n",
-			shortID(j.ID), typ, j.Status, task))
-	}
-	return jobsFooterStyle.Width(width).Render(strings.TrimRight(b.String(), "\n"))
 }
 
 func shortID(id string) string {

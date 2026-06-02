@@ -1,9 +1,12 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 
+	"github.com/mudler/wiz/internal"
+	"github.com/mudler/wiz/plugin"
 	"github.com/mudler/wiz/types"
 
 	"gopkg.in/yaml.v3"
@@ -92,30 +95,6 @@ func Load() types.Config {
 		cfg.BaseURL = baseURL
 	}
 
-	// Override reviewer LLM with environment variables if set
-	reviewerModel := os.Getenv("REVIEWER_MODEL")
-	reviewerAPIKey := os.Getenv("REVIEWER_API_KEY")
-	reviewerBaseURL := os.Getenv("REVIEWER_BASE_URL")
-	reviewerEnabled := os.Getenv("REVIEWER_ENABLED")
-	if reviewerModel != "" || reviewerAPIKey != "" || reviewerBaseURL != "" || reviewerEnabled != "" {
-		if cfg.ReviewerLLM == nil {
-			cfg.ReviewerLLM = &types.ReviewerLLMConfig{}
-		}
-		if reviewerModel != "" {
-			cfg.ReviewerLLM.Model = reviewerModel
-		}
-		if reviewerAPIKey != "" {
-			cfg.ReviewerLLM.APIKey = reviewerAPIKey
-		}
-		if reviewerBaseURL != "" {
-			cfg.ReviewerLLM.BaseURL = reviewerBaseURL
-		}
-		if reviewerEnabled != "" {
-			enabled := reviewerEnabled == "true" || reviewerEnabled == "1" || reviewerEnabled == "yes"
-			cfg.ReviewerLLM.Enabled = &enabled
-		}
-	}
-
 	if cfg.Prompt == "" {
 		cfg.Prompt = defaultPrompt
 	}
@@ -132,6 +111,12 @@ func Load() types.Config {
 	}
 	// ForceReasoning defaults to false (zero value), which is intentional
 	// Users must explicitly enable it in config
+
+	// Merge enabled plugin contributions (mcp servers + agents) before the
+	// agent default-merge, so precedence is built-in defaults < plugins < user.
+	if err := plugin.Apply(&cfg, plugin.BaseDir(), internal.Version); err != nil {
+		fmt.Fprintf(os.Stderr, "wiz: plugin load: %v\n", err)
+	}
 
 	// Merge user-provided agent types with the built-in defaults.
 	cfg.Agents = MergeAgentTypes(cfg.Agents)
