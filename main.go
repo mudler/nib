@@ -50,6 +50,7 @@ func main() {
 	tmuxFlag := flag.Bool("tmux", false, "Run in tmux popup (auto-detected if in tmux)")
 	noTmuxFlag := flag.Bool("no-tmux", false, "Disable tmux popup even when in tmux")
 	tuiFlag := flag.Bool("tui", false, "Start the full-screen TUI directly (no tmux popup)")
+	cliFlag := flag.Bool("cli", false, "Run in plain CLI mode instead of the TUI")
 	flag.Parse()
 
 	// Handle version flag
@@ -98,34 +99,42 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Determine mode based on flags. --tui (or --height) selects the TUI; bare
-	// `wiz` stays in CLI mode.
-	if *tuiFlag || *heightFlag != "" {
+	// Determine mode based on flags. Bare invocation -> fullscreen TUI (default);
+	// --cli -> plain CLI; --height/--tmux -> inline/tmux drop-down widget.
+	mode := selectMode(modeInputs{
+		cli:    *cliFlag,
+		tui:    *tuiFlag,
+		tmux:   *tmuxFlag,
+		height: *heightFlag,
+		inTmux: cmd.IsInTmux(),
+	})
+
+	switch mode {
+	case modeCLI:
+		if err := cmd.RunCLI(ctx, cfg, transports...); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+	case modeInline:
 		h := *heightFlag
 		if h == "" {
-			h = "40%" // sensible default when only --tui is given
+			h = "40%"
 		}
 		height := parseHeight(h)
-
-		// --tui forces a direct (non-tmux) TUI; otherwise honor tmux detection.
-		useTmux := !*tuiFlag && (*tmuxFlag || (cmd.IsInTmux() && !*noTmuxFlag))
-
+		useTmux := *tmuxFlag || (cmd.IsInTmux() && !*noTmuxFlag)
 		if useTmux && cmd.IsInTmux() {
-			// Run in tmux split pane (like fzf-tmux -d)
 			if err := cmd.RunTmuxSplit(*heightFlag); err != nil {
 				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 				os.Exit(1)
 			}
 		} else {
-			// TUI mode
 			if err := cmd.RunTUI(ctx, cfg, height, shellJobs, transports...); err != nil {
 				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 				os.Exit(1)
 			}
 		}
-	} else {
-		// CLI mode (original behavior)
-		if err := cmd.RunCLI(ctx, cfg, transports...); err != nil {
+	default: // modeTUI — fullscreen, direct (no tmux split)
+		if err := cmd.RunTUI(ctx, cfg, parseHeight("100%"), shellJobs, transports...); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
