@@ -45,9 +45,13 @@ type Model struct {
 	height    int
 	maxHeight int // Configured max height (0 = no limit)
 	loading   bool
-	status    string
-	reasoning string
-	err       error
+	// interruptArmed is set after a first Ctrl+C interrupts an in-flight turn,
+	// so a second Ctrl+C exits instead of just re-interrupting. Reset when a new
+	// turn starts and when the turn ends.
+	interruptArmed bool
+	status         string
+	reasoning      string
+	err            error
 	output    string // Command to output to shell on exit
 	quitting  bool
 
@@ -212,12 +216,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		switch msg.Type {
 		case tea.KeyCtrlC:
-			// Interrupt running work; quit only when idle.
-			if m.isWorking() {
+			// First Ctrl+C on an in-flight turn interrupts the request but keeps
+			// the session open; a second Ctrl+C (or Ctrl+C while idle) exits.
+			if m.isWorking() && !m.interruptArmed {
 				if m.session != nil {
 					m.session.Interrupt()
 				}
-				m.status = "Interrupting…"
+				m.interruptArmed = true
+				m.status = "Interrupting… (Ctrl+C again to exit)"
 				return m, nil
 			}
 			return m.quit()
@@ -320,6 +326,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			default: // slash.KindSend
 				m.loading = true
+				m.interruptArmed = false
 				m.status = "Thinking..."
 				m.updateViewport()
 				return m, m.sendMessage(action.Text)
@@ -343,6 +350,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case responseMsg:
 		m.loading = false
+		m.interruptArmed = false
 		m.status = ""
 		m.reasoning = ""
 		if msg.err != nil {
