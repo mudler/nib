@@ -123,6 +123,14 @@ agent_options:
   max_retries: 3
   force_reasoning: false
 
+# Optional: Tool-approval policy (default: prompt for every tool)
+#   prompt    — ask before each tool call (default)
+#   allowlist — auto-approve the tools in allowed_tools, prompt for the rest
+#   auto      — approve every tool call without prompting
+approval_mode: prompt
+allowed_tools:
+  - bash
+
 # Optional: Additional MCP servers
 mcp_servers:
   filesystem:
@@ -150,17 +158,26 @@ export BASE_URL=https://api.openai.com/v1
 When nib wants to run a command, you'll see a prompt:
 
 ```
-▏ run: bash
-▏ {"script": "ls -la"}
+▏ run  bash
+▏ {
+▏   "script": "ls -la"
+▏ }
 ▏ listing directory contents...
-▏ y · a always · n · or type a change
+▏ [y] yes  [a] always  [n] no  [e] edit  [A] all
 ```
 
-**Options:**
-- `y` or `yes` — Approve this execution
-- `a` or `always` — Approve and add to session allow list (won't ask again)
-- `n` or `no` — Deny execution
-- *anything else* — Treated as an adjustment to the command
+Arguments are pretty-printed, and in the **TUI** approval is key-driven — the input
+box is hidden and a single keypress answers (no Enter needed):
+
+- `y` — approve this call
+- `a` — always allow **this tool** for the session (incl. sub-agents — they share the allow list)
+- `A` — allow **all** tool calls for the rest of this turn (handy when you've delegated a multi-step task to a sub-agent)
+- `n` / `Esc` — deny
+- `e` — edit: open a field to type a free-form change, then Enter (Esc cancels)
+
+In the **CLI** (`--cli`) the prompt is line-based — type `y`, `a`, `all`, `n`, or a free-form change, then Enter.
+
+To avoid prompting altogether, set `approval_mode` / `allowed_tools` in your config (see above).
 
 ## MCP Servers
 
