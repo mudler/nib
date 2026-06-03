@@ -27,11 +27,23 @@ func deriveName(src string) string {
 	return s
 }
 
+// validPackName reports whether name is a single, safe path segment usable as a
+// directory under skills/ — no path separators and not "."/".." (which would
+// let a crafted source escape the skills directory).
+func validPackName(name string) bool {
+	return name != "" && name != "." && name != ".." && !strings.ContainsAny(name, `/\`)
+}
+
 // Install clones/copies a skill pack, verifies it contributes at least one
 // skill, places it at skills/<name>, and records it in the registry as
 // DISABLED. It returns the derived pack name and the harvested skills (with Dir
 // set to their final on-disk location).
 func (mgr *Manager) Install(src, ref string) (string, []types.Skill, error) {
+	name := deriveName(src)
+	if !validPackName(name) {
+		return "", nil, fmt.Errorf("could not derive a valid pack name from %q", src)
+	}
+
 	skillsDir := SkillsDir(mgr.baseDir)
 	if err := os.MkdirAll(skillsDir, 0o755); err != nil {
 		return "", nil, err
@@ -65,11 +77,6 @@ func (mgr *Manager) Install(src, ref string) (string, []types.Skill, error) {
 		return "", nil, fmt.Errorf("no skills found under skills/*/SKILL.md (did you mean `wiz plugin install`?)")
 	}
 
-	name := deriveName(src)
-	if name == "" {
-		return "", nil, fmt.Errorf("could not derive a pack name from %q", src)
-	}
-
 	reg, err := LoadRegistry(mgr.baseDir)
 	if err != nil {
 		return "", nil, err
@@ -93,6 +100,9 @@ func (mgr *Manager) Install(src, ref string) (string, []types.Skill, error) {
 	}
 
 	// Re-harvest from the final location so returned Dir paths are correct.
+	// The discarded error is safe: this same content was harvested successfully
+	// moments earlier from the temp dir; we re-harvest only to get Dir paths
+	// rooted at the final location.
 	final, _ := HarvestPack(dest)
 	return name, final, nil
 }
