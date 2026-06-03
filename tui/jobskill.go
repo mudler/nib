@@ -109,11 +109,19 @@ func (m Model) renderLogsViewer() string {
 		b.WriteString(theme.Meta.Render("  no sub-agents or background jobs yet."))
 		return b.String()
 	}
+	// Clamp the highlight in case the list shrank since the last keypress.
+	sel := m.logSel
+	if sel >= len(jobs) {
+		sel = len(jobs) - 1
+	}
+	if sel < 0 {
+		sel = 0
+	}
 	for i, j := range jobs {
 		label := strings.ReplaceAll(j.Label, "\n", " ")
 		label = clipLine(label, m.width-30)
 		row := fmt.Sprintf("[%d] %-6s %-8s %-9s %s", i+1, j.Kind, shortID(j.ID), j.Status, label)
-		if i == m.logSel {
+		if i == sel {
 			b.WriteString(theme.Prompt.Render(theme.PromptGlyph) + " " + theme.Brand.Render(row))
 		} else {
 			b.WriteString("  " + theme.Help.Render(row))
