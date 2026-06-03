@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;800&display=swap');
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html,body { width:1000px; height:380px; }
+  body {
+    display:flex; align-items:center; justify-content:center;
+    background:transparent;
+    font-family:'JetBrains Mono', monospace;
+  }
+  .card {
+    width:880px; height:300px; border-radius:16px;
+    background:#0d1117;
+    border:1px solid #232b36;
+    box-shadow:0 24px 60px rgba(0,0,0,.45), inset 0 1px 0 rgba(255,255,255,.04);
+    position:relative; overflow:hidden;
+  }
+  .bar { height:40px; display:flex; align-items:center; gap:9px; padding:0 18px;
+         border-bottom:1px solid #1b222c; }
+  .dot { width:12px; height:12px; border-radius:50%; }
+  .r{background:#ff5f57} .y{background:#febc2e} .g{background:#28c840}
+  .body { display:flex; flex-direction:column; justify-content:center;
+          height:calc(100% - 40px); padding:0 46px; }
+  .word { font-size:118px; font-weight:800; letter-spacing:-4px; line-height:1;
+          color:#e6edf3; display:flex; align-items:center; }
+  .prompt { color:#3dd6c4; font-weight:600; margin-right:18px; font-size:96px; }
+  .cursor { display:inline-block; width:46px; height:96px; background:#3dd6c4;
+            margin-left:16px; border-radius:3px; box-shadow:0 0 22px rgba(61,214,196,.55); }
+  .sub { margin-top:18px; font-size:23px; color:#7d8694; letter-spacing:1px; }
+  .sub b { color:#3dd6c4; font-weight:600; }
+</style>
+</head>
+<body>
+  <div class="card">
+    <div class="bar"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span></div>
+    <div class="body">
+      <div class="word"><span class="prompt">&#10095;</span>nib<span class="cursor"></span></div>
+      <div class="sub">a tiny, <b>zero-dependency</b> agent harness</div>
+    </div>
+  </div>
+</body>
+</html>
