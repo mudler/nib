@@ -25,10 +25,11 @@ import (
 
 // ChatMessage represents a message in the chat history
 type ChatMessage struct {
-	Role    string
-	Content string
-	Name    string // tool name, for Role == "tool"
-	AgentID string // issuing sub-agent, for Role == "tool" (empty = root agent)
+	Role      string
+	Content   string
+	Name      string // tool name, for Role == "tool"
+	Arguments string // marshaled call args, for Role == "tool"
+	AgentID   string // issuing sub-agent, for Role == "tool" (empty = root agent)
 }
 
 // Model represents the TUI state
@@ -637,7 +638,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// once at append time so we don't retain a multi-MB raw result.
 		if res.AgentID == "" {
 			if preview := chat.PreviewResult(res.Result, toolResultPreviewLines); preview != "" {
-				m.messages = append(m.messages, ChatMessage{Role: "tool", Name: res.Name, Content: preview})
+				m.messages = append(m.messages, ChatMessage{Role: "tool", Name: res.Name, Arguments: res.Arguments, Content: preview})
 				m.updateViewport()
 			}
 		}
@@ -988,8 +989,18 @@ func (m *Model) updateViewport() {
 			// Calm, dim block: a header naming the tool, then the pretty/truncated
 			// output indented and dimmed beneath it.
 			label := msg.Name
+			if msg.Arguments != "" {
+				// First line of the friendly summary makes the clearest header.
+				summary := chat.FormatToolCall(msg.Name, msg.Arguments)
+				if nl := strings.IndexByte(summary, '\n'); nl >= 0 {
+					summary = summary[:nl]
+				}
+				if summary != "" {
+					label = summary
+				}
+			}
 			if msg.AgentID != "" {
-				label = theme.SubAgent + " " + shortID(msg.AgentID) + " · " + msg.Name
+				label = theme.SubAgent + " " + shortID(msg.AgentID) + " · " + label
 			}
 			sb.WriteString(theme.Subtle.Render(theme.Sep + " " + label))
 			sb.WriteString("\n")
