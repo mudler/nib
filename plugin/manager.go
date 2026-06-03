@@ -3,68 +3,16 @@ package plugin
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
+
+	"github.com/mudler/wiz/internal/vcs"
 )
-
-// gitClone clones url (optionally at ref) into dest. Var for test injection.
-var gitClone = func(url, ref, dest string) error {
-	args := []string{"clone", "--depth", "1"}
-	if ref != "" {
-		args = append(args, "--branch", ref)
-	}
-	args = append(args, url, dest)
-	cmd := exec.Command("git", args...)
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
-}
-
-// gitPull fast-forwards an existing checkout. Var for test injection.
-var gitPull = func(dir string) error {
-	cmd := exec.Command("git", "-C", dir, "pull", "--ff-only")
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
-}
 
 // Manager performs plugin install/update/remove against a base directory.
 type Manager struct{ baseDir string }
 
 // NewManager returns a Manager rooted at baseDir (use plugin.BaseDir() in prod).
 func NewManager(baseDir string) *Manager { return &Manager{baseDir: baseDir} }
-
-// copyDir recursively copies the contents of src into dst (which must already
-// exist), skipping any .git directory and preserving file permission bits (so
-// hook scripts stay executable). Used to install a plugin from a local
-// directory without requiring it to be a git repository.
-func copyDir(src, dst string) error {
-	return filepath.WalkDir(src, func(p string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		rel, err := filepath.Rel(src, p)
-		if err != nil {
-			return err
-		}
-		if rel == "." {
-			return nil
-		}
-		if d.IsDir() {
-			if d.Name() == ".git" {
-				return filepath.SkipDir
-			}
-			return os.MkdirAll(filepath.Join(dst, rel), 0o755)
-		}
-		data, err := os.ReadFile(p)
-		if err != nil {
-			return err
-		}
-		mode := os.FileMode(0o644)
-		if info, e := d.Info(); e == nil {
-			mode = info.Mode().Perm()
-		}
-		return os.WriteFile(filepath.Join(dst, rel), data, mode)
-	})
-}
 
 // Install clones a plugin, validates its manifest, places it at
 // plugins/<name>, and records it in the registry as DISABLED. The caller (CLI)
@@ -88,10 +36,10 @@ func (mgr *Manager) Install(url, ref, wizVersion string) (Manifest, error) {
 	// A local directory installs by copying (no git repo required); anything
 	// else (remote URL, local git repo, scp-style) goes through git clone.
 	if fi, statErr := os.Stat(url); statErr == nil && fi.IsDir() {
-		if err := copyDir(url, tmp); err != nil {
+		if err := vcs.CopyDir(url, tmp); err != nil {
 			return Manifest{}, fmt.Errorf("copy plugin dir: %w", err)
 		}
-	} else if err := gitClone(url, ref, tmp); err != nil {
+	} else if err := vcs.Clone(url, ref, tmp); err != nil {
 		return Manifest{}, fmt.Errorf("git clone: %w", err)
 	}
 	m, err := LoadManifest(tmp, wizVersion)
@@ -129,7 +77,7 @@ func (mgr *Manager) Update(name string) error {
 	if reg.Find(name) == nil {
 		return fmt.Errorf("plugin %q not installed", name)
 	}
-	return gitPull(pluginDir(mgr.baseDir, name))
+	return vcs.Pull(pluginDir(mgr.baseDir, name))
 }
 
 // Remove deletes an installed plugin's files and registry record.
