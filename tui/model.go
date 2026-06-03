@@ -125,6 +125,9 @@ type askMsg chat.AskRequest
 // agentEventMsg is sent for sub-agent lifecycle updates.
 type agentEventMsg chat.AgentEvent
 
+// toolResultPreviewLines bounds how many lines of a tool result we show inline.
+const toolResultPreviewLines = 12
+
 // toolResultMsg carries a finished tool's output to the UI.
 type toolResultMsg chat.ToolResult
 
@@ -574,8 +577,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case toolResultMsg:
 		res := chat.ToolResult(msg)
 		if res.AgentID == "" { // root-agent result: show inline (sub-agent output stays in Ctrl+J)
-			if preview := chat.PreviewResult(res.Result, 12); preview != "" {
-				m.messages = append(m.messages, ChatMessage{Role: "tool", Name: res.Name, Content: res.Result})
+			// Preview once at append time (truncate + pretty), so we don't retain
+			// a multi-MB raw result or re-format it on every viewport refresh.
+			if preview := chat.PreviewResult(res.Result, toolResultPreviewLines); preview != "" {
+				m.messages = append(m.messages, ChatMessage{Role: "tool", Name: res.Name, Content: preview})
 				m.updateViewport()
 			}
 		}
@@ -925,8 +930,8 @@ func (m *Model) updateViewport() {
 			// output indented and dimmed beneath it.
 			sb.WriteString(theme.Subtle.Render(theme.Sep + " " + msg.Name))
 			sb.WriteString("\n")
-			body := chat.PreviewResult(msg.Content, 12)
-			wrapped := wrapText(body, contentWidth-2)
+			// Content is already previewed (truncated + pretty) at append time.
+			wrapped := wrapText(msg.Content, contentWidth-2)
 			for _, line := range strings.Split(strings.TrimRight(wrapped, "\n"), "\n") {
 				sb.WriteString("  " + theme.Help.Render(line))
 				sb.WriteString("\n")
