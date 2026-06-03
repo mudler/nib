@@ -7,25 +7,25 @@ import (
 	"github.com/mudler/nib/types"
 )
 
-func TestStartTransportsIncludesSkillsWhenPresent(t *testing.T) {
+func TestStartTransportsReturnsOnlyBuiltins(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// No skills → bash + filesystem only.
+	// Skills and config MCP servers are now wired by the Session, not here:
+	// StartTransports returns only the built-in bash + filesystem servers,
+	// regardless of cfg contents.
 	base, err := StartTransports(ctx, types.Config{}, NewShellJobs())
 	if err != nil {
-		t.Fatalf("StartTransports (no skills): %v", err)
+		t.Fatalf("StartTransports (empty cfg): %v", err)
 	}
-	withoutSkills := len(base)
-
-	// With skills → exactly one more transport (the skills server).
-	withSkills, err := StartTransports(ctx, types.Config{
-		Skills: []types.Skill{{Name: "s", Instructions: "body"}},
+	withExtras, err := StartTransports(ctx, types.Config{
+		Skills:     []types.Skill{{Name: "s", Instructions: "body"}},
+		MCPServers: map[string]types.MCPServer{"x": {Command: "true"}},
 	}, NewShellJobs())
 	if err != nil {
-		t.Fatalf("StartTransports (skills): %v", err)
+		t.Fatalf("StartTransports (with skills+mcp): %v", err)
 	}
-	if len(withSkills) != withoutSkills+1 {
-		t.Fatalf("expected one extra transport for skills, got %d vs %d", len(withSkills), withoutSkills)
+	if len(base) != len(withExtras) {
+		t.Fatalf("StartTransports should ignore skills/mcp_servers now: %d vs %d", len(base), len(withExtras))
 	}
 }
