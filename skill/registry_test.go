@@ -12,14 +12,14 @@ func TestRegistryRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadRegistry empty: %v", err)
 	}
-	if len(reg.Packs) != 0 {
-		t.Fatalf("expected empty registry, got %d", len(reg.Packs))
+	if len(reg.Entries) != 0 {
+		t.Fatalf("expected empty registry, got %d", len(reg.Entries))
 	}
 
 	reg.Upsert(Entry{Name: "superpowers", SourceURL: "https://x/sp.git", Ref: "v1", Enabled: false})
 	reg.Upsert(Entry{Name: "superpowers", SourceURL: "https://x/sp.git", Ref: "v1", Enabled: true}) // update in place
-	if len(reg.Packs) != 1 {
-		t.Fatalf("upsert should update in place, got %d", len(reg.Packs))
+	if len(reg.Entries) != 1 {
+		t.Fatalf("upsert should update in place, got %d", len(reg.Entries))
 	}
 	if err := reg.Save(); err != nil {
 		t.Fatalf("Save: %v", err)

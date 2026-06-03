@@ -17,7 +17,7 @@ func (mgr *Manager) EnabledManifests(wizVersion string) []Manifest {
 		return nil
 	}
 	var out []Manifest
-	for _, e := range reg.Plugins {
+	for _, e := range reg.Entries {
 		if !e.Enabled {
 			continue
 		}

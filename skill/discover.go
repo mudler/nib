@@ -61,7 +61,7 @@ func (mgr *Manager) enabledPacks() []pack {
 		return nil
 	}
 	var out []pack
-	for _, e := range reg.Packs {
+	for _, e := range reg.Entries {
 		if !e.Enabled {
 			continue
 		}

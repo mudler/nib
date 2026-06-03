@@ -116,5 +116,5 @@ func (mgr *Manager) List() ([]Entry, error) {
 	if err != nil {
 		return nil, err
 	}
-	return reg.Plugins, nil
+	return reg.Entries, nil
 }

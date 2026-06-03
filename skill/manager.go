@@ -160,7 +160,7 @@ func (mgr *Manager) List() ([]Entry, error) {
 	if err != nil {
 		return nil, err
 	}
-	return reg.Packs, nil
+	return reg.Entries, nil
 }
 
 // Skills harvests the skills contributed by an installed pack (for `list`).
