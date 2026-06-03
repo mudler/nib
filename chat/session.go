@@ -7,9 +7,11 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"reflect"
 	"sync"
 
 	"github.com/mudler/nib/hooks"
+	wizmcp "github.com/mudler/nib/mcp"
 	"github.com/mudler/nib/types"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -26,6 +28,10 @@ type Session struct {
 	turnCancel    context.CancelFunc
 	llm           cogito.LLM
 	clients       []*mcp.ClientSession
+	mcpClient     *mcp.Client
+	cfgClients    map[string]*mcp.ClientSession // config/plugin MCP servers, by name
+	cfgServers    map[string]types.MCPServer    // desired set, for diffing
+	skillsClient  *mcp.ClientSession            // the load_skill server
 	fragment      cogito.Fragment
 	messages      []openai.ChatCompletionMessage
 	callbacks     Callbacks
@@ -455,6 +461,90 @@ func (s *Session) GetMessages() []Message {
 		})
 	}
 	return messages
+}
+
+// allClients returns every connected MCP client (built-ins + skills + config
+// servers). Called from the turn goroutine; reload mutates these only between
+// turns, so no lock is needed.
+func (s *Session) allClients() []*mcp.ClientSession {
+	out := append([]*mcp.ClientSession{}, s.clients...)
+	if s.skillsClient != nil {
+		out = append(out, s.skillsClient)
+	}
+	for _, c := range s.cfgClients {
+		out = append(out, c)
+	}
+	return out
+}
+
+// ReconcileMCPServers connects newly-desired config MCP servers and closes ones
+// no longer desired (or whose command/args changed). Connect failures are
+// logged and skipped so one bad server never breaks the session.
+func (s *Session) ReconcileMCPServers(desired map[string]types.MCPServer) error {
+	for name, sess := range s.cfgClients {
+		if d, ok := desired[name]; !ok || !reflect.DeepEqual(d, s.cfgServers[name]) {
+			_ = sess.Close()
+			delete(s.cfgClients, name)
+			delete(s.cfgServers, name)
+		}
+	}
+	for name, srv := range desired {
+		if _, ok := s.cfgClients[name]; ok {
+			continue
+		}
+		var env []string
+		for k, v := range srv.Env {
+			env = append(env, fmt.Sprintf("%s=%s", k, v))
+		}
+		transport := CommandTransport(srv.Command, srv.Args, env...)
+		sess, err := s.mcpClient.Connect(s.ctx, transport, nil)
+		if err != nil {
+			xlog.Warn("self-config: MCP server failed to connect", "name", name, "error", err)
+			continue
+		}
+		s.cfgClients[name] = sess
+		s.cfgServers[name] = srv
+	}
+	return nil
+}
+
+// SetSkills rebuilds the in-memory skills MCP server so load_skill advertises
+// the given skills, swapping its client. An empty list tears the server down.
+func (s *Session) SetSkills(skills []types.Skill) error {
+	if s.skillsClient != nil {
+		_ = s.skillsClient.Close()
+		s.skillsClient = nil
+	}
+	s.skills = skills
+	if len(skills) == 0 {
+		return nil
+	}
+	serverT, clientT := mcp.NewInMemoryTransports()
+	go func() {
+		if err := wizmcp.StartSkillsMCPServer(s.ctx, serverT, skills); err != nil {
+			xlog.Warn("self-config: skills MCP server error", "error", err)
+		}
+	}()
+	sess, err := s.mcpClient.Connect(s.ctx, clientT, nil)
+	if err != nil {
+		return err
+	}
+	s.skillsClient = sess
+	return nil
+}
+
+// Reload re-wires every reloadable part of the session from cfg. Call only
+// between turns, never concurrently with a running turn.
+func (s *Session) Reload(cfg types.Config) error {
+	_ = s.ReconcileMCPServers(cfg.MCPServers)
+	_ = s.SetSkills(cfg.Skills)
+	s.agentDefs = toCogitoDefinitions(cfg.Agents)
+	s.agentModels = agentModelSet(s.agentDefs)
+	s.hooks = hooks.New(cfg.Hooks)
+	if cfg.Prompt != "" {
+		s.systemPrompt = cfg.GetPrompt()
+	}
+	return nil
 }
 
 // Close closes the session and cleans up resources
