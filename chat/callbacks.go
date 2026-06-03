@@ -39,6 +39,9 @@ type ToolCallResponse struct {
 	Approved    bool
 	Adjustment  string
 	AlwaysAllow bool
+	// AllowAllTurn, when set together with Approved, approves every remaining
+	// tool call for the rest of the current turn (incl. sub-agents) w/o prompting.
+	AllowAllTurn bool
 }
 
 // AskRequest is a question the agent wants to ask the user.
