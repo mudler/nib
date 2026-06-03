@@ -376,6 +376,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case tea.KeyEsc:
 			return m.quit()
 
+		case tea.KeyCtrlY:
+			// Yank nib's last suggested command to the shell and exit, so the
+			// Ctrl+Space widget inserts it at the prompt. No-op if there's
+			// nothing to yank or a turn is still in flight.
+			if !m.sessionReady || m.loading {
+				return m, nil
+			}
+			cmd := lastSuggestedCommand(m.messages)
+			if cmd == "" {
+				m.status = "no command to use yet"
+				return m, nil
+			}
+			m.output = cmd
+			return m.quit()
+
 		case tea.KeyCtrlB:
 			// Background the running foreground work: a sub-agent first,
 			// otherwise a running foreground shell command.
@@ -585,7 +600,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.awaitingApproval = true
 		m.approvalEditing = false // every approval starts in key-driven choice mode
 		m.loading = false         // Allow user input for approval
-		m.textarea.Focus() // Ensure textarea is focused for input
+		m.textarea.Focus()        // Ensure textarea is focused for input
 		m.updateViewport()
 		// Continue listening for more tool requests
 		cmds = append(cmds, m.listenToolRequest())
