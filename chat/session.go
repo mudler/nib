@@ -39,6 +39,7 @@ type Session struct {
 	messages      []openai.ChatCompletionMessage
 	callbacks     Callbacks
 	systemPrompt  string
+	loadedSkills  string // eager-loaded /skill instructions, re-applied across reloads
 	skills        []types.Skill
 	cogitoOptions types.AgentOptions
 	allowedTools  map[string]bool // Tools that don't need approval this session
@@ -179,7 +180,9 @@ func NewSession(ctx context.Context, cfg types.Config, callbacks Callbacks, tran
 func (s *Session) LoadSkill(name string) (string, error) {
 	for _, sk := range s.skills {
 		if sk.Name == name {
-			s.systemPrompt += "\n\n# Skill: " + sk.Name + "\n" + sk.Instructions
+			suffix := "\n\n# Skill: " + sk.Name + "\n" + sk.Instructions
+			s.loadedSkills += suffix
+			s.systemPrompt += suffix
 			return fmt.Sprintf("Loaded skill %q: %s", sk.Name, sk.Description), nil
 		}
 	}
@@ -570,7 +573,7 @@ func (s *Session) Reload(cfg types.Config) error {
 	s.agentModels = agentModelSet(s.agentDefs)
 	s.hooks = hooks.New(cfg.Hooks)
 	if cfg.Prompt != "" {
-		s.systemPrompt = cfg.GetPrompt()
+		s.systemPrompt = cfg.GetPrompt() + s.loadedSkills
 	}
 	return nil
 }
@@ -589,7 +592,8 @@ func (s *Session) requestReload() {
 // s.cfgClients, s.agentDefs) that detached agents — which outlive their spawning
 // turn — continue to read, so reconfiguring under them would race or use a closed
 // session. The dirty flag stays set, so the reload is retried on a later turn
-// once no background agents are live.
+// once no background agents are live. The flag is cleared only after a
+// SUCCESSFUL reload, so a failed reload is retried on the next turn.
 func (s *Session) applyPendingReload() {
 	s.reloadMu.Lock()
 	pending := s.pendingReload
@@ -600,24 +604,26 @@ func (s *Session) applyPendingReload() {
 	if s.agentManager != nil && s.agentManager.HasRunning() {
 		return // defer; pendingReload stays set, retried next turn
 	}
-	s.reloadMu.Lock()
-	s.pendingReload = false
-	s.reloadMu.Unlock()
 	eff, err := s.configurator.EffectiveConfig()
 	if err != nil {
 		xlog.Warn("self-config: effective config", "error", err)
-		return
+		return // leave flag set, retried next turn
 	}
 	if err := s.Reload(eff); err != nil {
 		xlog.Warn("self-config: reload", "error", err)
+		return // leave flag set, retried next turn
 	}
+	s.reloadMu.Lock()
+	s.pendingReload = false
+	s.reloadMu.Unlock()
 }
 
 // Close closes the session and cleans up resources
 func (s *Session) Close() error {
+	var firstErr error
 	for _, client := range s.clients {
-		if err := client.Close(); err != nil {
-			return err
+		if err := client.Close(); err != nil && firstErr == nil {
+			firstErr = err
 		}
 	}
 	if s.skillsClient != nil {
@@ -626,5 +632,5 @@ func (s *Session) Close() error {
 	for _, c := range s.cfgClients {
 		_ = c.Close()
 	}
-	return nil
+	return firstErr
 }

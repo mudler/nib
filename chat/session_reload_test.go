@@ -2,6 +2,7 @@ package chat
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -118,5 +119,23 @@ func TestApplyPendingReloadDefersWhileAgentsRunning(t *testing.T) {
 	s.applyPendingReload()
 	if s.pendingReload {
 		t.Fatalf("expected reload to be applied once no agents are running")
+	}
+}
+
+func TestReloadPreservesEagerLoadedSkill(t *testing.T) {
+	s := newReloadTestSession(t)
+	s.skills = []types.Skill{{Name: "x", Description: "d", Instructions: "SKILL-BODY-MARKER"}}
+	if _, err := s.LoadSkill("x"); err != nil {
+		t.Fatalf("LoadSkill: %v", err)
+	}
+	// A reload that rebuilds the base prompt must NOT drop the eager-loaded skill.
+	if err := s.Reload(types.Config{Prompt: "BASE-PROMPT-MARKER"}); err != nil {
+		t.Fatalf("Reload: %v", err)
+	}
+	if !strings.Contains(s.systemPrompt, "SKILL-BODY-MARKER") {
+		t.Fatalf("reload dropped eager-loaded skill: %q", s.systemPrompt)
+	}
+	if !strings.Contains(s.systemPrompt, "BASE-PROMPT-MARKER") {
+		t.Fatalf("reload dropped base prompt: %q", s.systemPrompt)
 	}
 }
