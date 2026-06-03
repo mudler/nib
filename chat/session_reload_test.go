@@ -71,3 +71,22 @@ func TestReloadSetsAgentsHooksAndPrompt(t *testing.T) {
 		t.Fatalf("hooks not initialized")
 	}
 }
+
+func TestNewSessionWiresSkillsServer(t *testing.T) {
+	ctx := context.Background()
+	cfg := types.Config{
+		Prompt: "hi",
+		Skills: []types.Skill{{Name: "foo", Description: "d", Instructions: "do x"}},
+	}
+	s, err := NewSession(ctx, cfg, Callbacks{})
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	defer s.Close()
+	if s.skillsClient == nil {
+		t.Fatalf("expected NewSession to wire the skills server from cfg.Skills")
+	}
+	if s.configurator == nil {
+		t.Fatalf("expected NewSession to build a configurator")
+	}
+}

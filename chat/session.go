@@ -10,8 +10,11 @@ import (
 	"reflect"
 	"sync"
 
+	"github.com/mudler/nib/config"
 	"github.com/mudler/nib/hooks"
+	"github.com/mudler/nib/manage"
 	wizmcp "github.com/mudler/nib/mcp"
+	"github.com/mudler/nib/plugin"
 	"github.com/mudler/nib/types"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -50,6 +53,10 @@ type Session struct {
 	llmModel     string
 	apiKey       string
 	baseURL      string
+
+	configurator  *manage.Configurator
+	reloadMu      sync.Mutex
+	pendingReload bool
 }
 
 // AgentLog returns the captured activity log for a sub-agent (for the
@@ -141,23 +148,27 @@ func NewSession(ctx context.Context, cfg types.Config, callbacks Callbacks, tran
 		fragment:      cogito.NewEmptyFragment(),
 		messages:      []openai.ChatCompletionMessage{},
 		callbacks:     callbacks,
-		systemPrompt:  cfg.GetPrompt(),
-		skills:        cfg.Skills,
 		cogitoOptions: cfg.AgentOptions,
 		allowedTools:  make(map[string]bool),
-		hooks:         hooks.New(cfg.Hooks),
 		agentManager:  agentManager,
-		agentDefs:     toCogitoDefinitions(cfg.Agents),
-		agentModels:   agentModelSet(toCogitoDefinitions(cfg.Agents)),
 		agentLogs:     newAgentLogStore(),
 		llmModel:      cfg.Model,
 		apiKey:        cfg.APIKey,
 		baseURL:       cfg.BaseURL,
+		mcpClient:     client,
+		cfgClients:    map[string]*mcp.ClientSession{},
+		cfgServers:    map[string]types.MCPServer{},
+		configurator:  manage.New(plugin.BaseDir(), config.WritablePath()),
 	}
 	for _, name := range cfg.AllowedTools {
 		s.allowedTools[name] = true
 	}
 	s.autoApprove = cfg.ApprovalMode == "auto"
+	// Wire reloadable state (skills server, config MCP clients, agents, hooks,
+	// system prompt) through the same path used for live reloads.
+	if err := s.Reload(cfg); err != nil {
+		xlog.Warn("self-config: initial reload", "error", err)
+	}
 	s.hooks.Fire(ctx, hooks.EventSessionStart, "", map[string]any{"event": "SessionStart"})
 	return s, nil
 }
@@ -309,6 +320,7 @@ func (s *Session) SendMessage(text string) (string, error) {
 		s.hooks.Fire(s.ctx, hooks.EventUserPromptSubmit, "", map[string]any{"event": "UserPromptSubmit", "prompt": text})
 	}
 	turnCtx := s.beginTurn()
+	s.applyPendingReload()
 	s.allowAllTurn = false
 	defer s.endTurn()
 	if s.systemPrompt != "" {
@@ -336,7 +348,7 @@ func (s *Session) SendMessage(text string) (string, error) {
 				s.callbacks.OnReasoning(reasoning)
 			}
 		}),
-		cogito.WithMCPs(s.clients...),
+		cogito.WithMCPs(s.allClients()...),
 		cogito.WithToolCallBack(func(tool *cogito.ToolChoice, state *cogito.SessionState) cogito.ToolCallDecision {
 			// Capture sub-agent activity so the agent_logs tool can surface what
 			// a backgrounded sub-agent is doing.
@@ -547,12 +559,46 @@ func (s *Session) Reload(cfg types.Config) error {
 	return nil
 }
 
+// requestReload marks the session dirty; the next SendMessage applies it.
+func (s *Session) requestReload() {
+	s.reloadMu.Lock()
+	s.pendingReload = true
+	s.reloadMu.Unlock()
+}
+
+// applyPendingReload, if a reload was requested, recomputes the effective config
+// and re-wires the session. Runs at the start of a turn (no concurrent turn), so
+// the no-lock Reload is serialized with turn state reads.
+func (s *Session) applyPendingReload() {
+	s.reloadMu.Lock()
+	pending := s.pendingReload
+	s.pendingReload = false
+	s.reloadMu.Unlock()
+	if !pending || s.configurator == nil {
+		return
+	}
+	eff, err := s.configurator.EffectiveConfig()
+	if err != nil {
+		xlog.Warn("self-config: effective config", "error", err)
+		return
+	}
+	if err := s.Reload(eff); err != nil {
+		xlog.Warn("self-config: reload", "error", err)
+	}
+}
+
 // Close closes the session and cleans up resources
 func (s *Session) Close() error {
 	for _, client := range s.clients {
 		if err := client.Close(); err != nil {
 			return err
 		}
+	}
+	if s.skillsClient != nil {
+		_ = s.skillsClient.Close()
+	}
+	for _, c := range s.cfgClients {
+		_ = c.Close()
 	}
 	return nil
 }
