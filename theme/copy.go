@@ -10,6 +10,10 @@ const (
 	ApprovePrompt    = "[y] yes  [a] always  [n] no  [e] edit  [A] all"
 	ApproveEditHint  = "describe the change · enter submit · esc cancel"
 
+	// CLIApprovePrompt is the line-based CLI approval prompt (the TUI uses the
+	// single-key ApprovePrompt instead).
+	CLIApprovePrompt = "y yes · a always · all (this turn) · n no · or type a change"
+
 	EmptyTagline = "a calm assistant for your terminal."
 	EmptyTryLead = "try:"
 	EmptySlash   = "type /  for skills, agents & commands"

@@ -153,11 +153,13 @@ func RunCLI(ctx context.Context, cfg types.Config, transports ...mcp.Transport) 
 			g := theme.Gutter.Render(theme.ApprovalGutter) + " "
 			fmt.Println()
 			fmt.Println(g + theme.ApproveKey.Render("run  "+req.Name))
-			fmt.Println(g + theme.Help.Render(req.Arguments))
+			for _, line := range strings.Split(chat.PrettyJSON(req.Arguments), "\n") {
+				fmt.Println(g + theme.Help.Render(line))
+			}
 			if req.Reasoning != "" {
 				fmt.Println(g + theme.Reasoning.Render(req.Reasoning))
 			}
-			fmt.Print(g + theme.ApproveKey.Render(theme.ApprovePrompt) + " ")
+			fmt.Print(g + theme.ApproveKey.Render(theme.CLIApprovePrompt) + " ")
 
 			text, _ := readStringCancellable(ctx, reader)
 			text = strings.TrimSpace(text)
@@ -171,6 +173,10 @@ func RunCLI(ctx context.Context, cfg types.Config, transports ...mcp.Transport) 
 			case "a", "always":
 				response = chat.ToolCallResponse{Approved: true, AlwaysAllow: true}
 				fmt.Println(theme.Subtle.Render("added '" + req.Name + "' to the session allow list"))
+				spin.start(theme.Status(theme.VerbWorking, 0))
+			case "all":
+				response = chat.ToolCallResponse{Approved: true, AllowAllTurn: true}
+				fmt.Println(theme.Subtle.Render("approving all tool calls for this turn"))
 				spin.start(theme.Status(theme.VerbWorking, 0))
 			case "n", "no":
 				response = chat.ToolCallResponse{Approved: false}
