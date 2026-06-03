@@ -153,7 +153,7 @@ func RunCLI(ctx context.Context, cfg types.Config, transports ...mcp.Transport) 
 			g := theme.Gutter.Render(theme.ApprovalGutter) + " "
 			fmt.Println()
 			fmt.Println(g + theme.ApproveKey.Render("run  "+req.Name))
-			for _, line := range strings.Split(chat.PrettyJSON(req.Arguments), "\n") {
+			for _, line := range strings.Split(chat.FormatToolCall(req.Name, req.Arguments), "\n") {
 				fmt.Println(g + theme.Help.Render(line))
 			}
 			if req.Reasoning != "" {

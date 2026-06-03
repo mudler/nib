@@ -16,6 +16,7 @@ import (
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/mudler/nib/chat"
@@ -25,10 +26,11 @@ import (
 
 // ChatMessage represents a message in the chat history
 type ChatMessage struct {
-	Role    string
-	Content string
-	Name    string // tool name, for Role == "tool"
-	AgentID string // issuing sub-agent, for Role == "tool" (empty = root agent)
+	Role      string
+	Content   string
+	Name      string // tool name, for Role == "tool"
+	Arguments string // marshaled call args, for Role == "tool"
+	AgentID   string // issuing sub-agent, for Role == "tool" (empty = root agent)
 }
 
 // Model represents the TUI state
@@ -101,6 +103,11 @@ type Model struct {
 
 	// Unified `/` completion state
 	completion compState
+
+	// Markdown renderers cached per wrap width (glamour renderers are
+	// width-bound and expensive to build). At most a couple of distinct
+	// widths exist in practice (one per message-prefix width).
+	mdRenderers map[int]*glamour.TermRenderer
 
 	// Channels for async communication with callbacks
 	statusChan       chan string
@@ -195,6 +202,7 @@ func NewModel(ctx context.Context, cfg types.Config, height int, shellJobs *wizm
 		askRequestChan:   make(chan chat.AskRequest),
 		askResponseChan:  make(chan string),
 		wakeupChan:       make(chan chat.WakeupRequest, 8),
+		mdRenderers:      make(map[int]*glamour.TermRenderer),
 	}
 	m.completion.setRegistries(cfg.Commands, cfg.Skills, cfg.Agents)
 	return m
@@ -652,7 +660,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// once at append time so we don't retain a multi-MB raw result.
 		if res.AgentID == "" {
 			if preview := chat.PreviewResult(res.Result, toolResultPreviewLines); preview != "" {
-				m.messages = append(m.messages, ChatMessage{Role: "tool", Name: res.Name, Content: preview})
+				m.messages = append(m.messages, ChatMessage{Role: "tool", Name: res.Name, Arguments: res.Arguments, Content: preview})
 				m.updateViewport()
 			}
 		}
@@ -931,6 +939,27 @@ func truncateRunes(word string, width int) string {
 }
 
 // updateViewport updates the viewport content with chat messages
+// markdownFor returns a glamour renderer for the given wrap width, building and
+// caching one per distinct width. Returns nil on construction error (callers
+// fall back to plain wrapText).
+func (m *Model) markdownFor(width int) *glamour.TermRenderer {
+	if width < 1 {
+		width = 1
+	}
+	if m.mdRenderers == nil {
+		m.mdRenderers = make(map[int]*glamour.TermRenderer)
+	}
+	if r, ok := m.mdRenderers[width]; ok {
+		return r
+	}
+	r, err := nibMarkdownRenderer(width)
+	if err != nil {
+		return nil
+	}
+	m.mdRenderers[width] = r
+	return r
+}
+
 func (m *Model) updateViewport() {
 	var sb strings.Builder
 
@@ -967,7 +996,7 @@ func (m *Model) updateViewport() {
 		case "assistant":
 			prefix := assistantStyle.Render(theme.BrandName) + " " + theme.SepStyle.Render(theme.Sep) + " "
 			prefixWidth := lipgloss.Width(prefix)
-			wrappedContent := wrapText(msg.Content, contentWidth-prefixWidth)
+			wrappedContent := renderMarkdownWith(m.markdownFor(contentWidth-prefixWidth), msg.Content, contentWidth-prefixWidth)
 			// Add prefix to first line, indent continuation lines
 			lines := strings.Split(strings.TrimRight(wrappedContent, "\n"), "\n")
 			for i, line := range lines {
@@ -986,7 +1015,7 @@ func (m *Model) updateViewport() {
 		case "agent":
 			prefix := theme.Subtle.Render(theme.SubAgent) + " "
 			prefixWidth := lipgloss.Width(prefix)
-			wrappedContent := wrapText(msg.Content, contentWidth-prefixWidth)
+			wrappedContent := renderMarkdownWith(m.markdownFor(contentWidth-prefixWidth), msg.Content, contentWidth-prefixWidth)
 			lines := strings.Split(strings.TrimRight(wrappedContent, "\n"), "\n")
 			for i, line := range lines {
 				if i == 0 {
@@ -1003,8 +1032,18 @@ func (m *Model) updateViewport() {
 			// Calm, dim block: a header naming the tool, then the pretty/truncated
 			// output indented and dimmed beneath it.
 			label := msg.Name
+			if msg.Arguments != "" {
+				// First line of the friendly summary makes the clearest header.
+				summary := chat.FormatToolCall(msg.Name, msg.Arguments)
+				if nl := strings.IndexByte(summary, '\n'); nl >= 0 {
+					summary = summary[:nl]
+				}
+				if summary != "" {
+					label = summary
+				}
+			}
 			if msg.AgentID != "" {
-				label = theme.SubAgent + " " + shortID(msg.AgentID) + " · " + msg.Name
+				label = theme.SubAgent + " " + shortID(msg.AgentID) + " · " + label
 			}
 			sb.WriteString(theme.Subtle.Render(theme.Sep + " " + label))
 			sb.WriteString("\n")
@@ -1056,7 +1095,7 @@ func (m *Model) updateViewport() {
 		gutter := theme.Gutter.Render(theme.ApprovalGutter) + " "
 		sb.WriteString(gutter + theme.ApproveKey.Render(toolApprovalLabel(*m.pendingTool)))
 		sb.WriteString("\n")
-		args := wrapText(chat.PrettyJSON(m.pendingTool.Arguments), contentWidth-4)
+		args := wrapText(chat.FormatToolCall(m.pendingTool.Name, m.pendingTool.Arguments), contentWidth-4)
 		for _, line := range strings.Split(strings.TrimRight(args, "\n"), "\n") {
 			sb.WriteString(gutter + theme.Help.Render(line) + "\n")
 		}
