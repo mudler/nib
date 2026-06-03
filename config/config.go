@@ -63,6 +63,21 @@ func configPaths() []string {
 	return paths
 }
 
+// WritablePath returns the config file self-configuration should write to: the
+// first existing config path (so additions are visible to Load), else the
+// preferred default ~/.config/nib/config.yaml.
+func WritablePath() string {
+	for _, p := range configPaths() {
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		return filepath.Join(home, ".config", "nib", "config.yaml")
+	}
+	return ".nib.yaml"
+}
+
 // loadFromFile attempts to load config from the first existing config file
 func loadFromFile() types.Config {
 	var cfg types.Config

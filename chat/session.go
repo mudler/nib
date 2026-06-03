@@ -7,9 +7,14 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"reflect"
 	"sync"
 
+	"github.com/mudler/nib/config"
 	"github.com/mudler/nib/hooks"
+	"github.com/mudler/nib/manage"
+	wizmcp "github.com/mudler/nib/mcp"
+	"github.com/mudler/nib/plugin"
 	"github.com/mudler/nib/types"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -26,10 +31,15 @@ type Session struct {
 	turnCancel    context.CancelFunc
 	llm           cogito.LLM
 	clients       []*mcp.ClientSession
+	mcpClient     *mcp.Client
+	cfgClients    map[string]*mcp.ClientSession // config/plugin MCP servers, by name
+	cfgServers    map[string]types.MCPServer    // desired set, for diffing
+	skillsClient  *mcp.ClientSession            // the load_skill server
 	fragment      cogito.Fragment
 	messages      []openai.ChatCompletionMessage
 	callbacks     Callbacks
 	systemPrompt  string
+	loadedSkills  string // eager-loaded /skill instructions, re-applied across reloads
 	skills        []types.Skill
 	cogitoOptions types.AgentOptions
 	allowedTools  map[string]bool // Tools that don't need approval this session
@@ -44,6 +54,10 @@ type Session struct {
 	llmModel     string
 	apiKey       string
 	baseURL      string
+
+	configurator  *manage.Configurator
+	reloadMu      sync.Mutex
+	pendingReload bool
 }
 
 // AgentLog returns the captured activity log for a sub-agent (for the
@@ -135,23 +149,27 @@ func NewSession(ctx context.Context, cfg types.Config, callbacks Callbacks, tran
 		fragment:      cogito.NewEmptyFragment(),
 		messages:      []openai.ChatCompletionMessage{},
 		callbacks:     callbacks,
-		systemPrompt:  cfg.GetPrompt(),
-		skills:        cfg.Skills,
 		cogitoOptions: cfg.AgentOptions,
 		allowedTools:  make(map[string]bool),
-		hooks:         hooks.New(cfg.Hooks),
 		agentManager:  agentManager,
-		agentDefs:     toCogitoDefinitions(cfg.Agents),
-		agentModels:   agentModelSet(toCogitoDefinitions(cfg.Agents)),
 		agentLogs:     newAgentLogStore(),
 		llmModel:      cfg.Model,
 		apiKey:        cfg.APIKey,
 		baseURL:       cfg.BaseURL,
+		mcpClient:     client,
+		cfgClients:    map[string]*mcp.ClientSession{},
+		cfgServers:    map[string]types.MCPServer{},
+		configurator:  manage.New(plugin.BaseDir(), config.WritablePath()),
 	}
 	for _, name := range cfg.AllowedTools {
 		s.allowedTools[name] = true
 	}
 	s.autoApprove = cfg.ApprovalMode == "auto"
+	// Wire reloadable state (skills server, config MCP clients, agents, hooks,
+	// system prompt) through the same path used for live reloads.
+	if err := s.Reload(cfg); err != nil {
+		xlog.Warn("self-config: initial reload", "error", err)
+	}
 	s.hooks.Fire(ctx, hooks.EventSessionStart, "", map[string]any{"event": "SessionStart"})
 	return s, nil
 }
@@ -162,7 +180,9 @@ func NewSession(ctx context.Context, cfg types.Config, callbacks Callbacks, tran
 func (s *Session) LoadSkill(name string) (string, error) {
 	for _, sk := range s.skills {
 		if sk.Name == name {
-			s.systemPrompt += "\n\n# Skill: " + sk.Name + "\n" + sk.Instructions
+			suffix := "\n\n# Skill: " + sk.Name + "\n" + sk.Instructions
+			s.loadedSkills += suffix
+			s.systemPrompt += suffix
 			return fmt.Sprintf("Loaded skill %q: %s", sk.Name, sk.Description), nil
 		}
 	}
@@ -303,6 +323,7 @@ func (s *Session) SendMessage(text string) (string, error) {
 		s.hooks.Fire(s.ctx, hooks.EventUserPromptSubmit, "", map[string]any{"event": "UserPromptSubmit", "prompt": text})
 	}
 	turnCtx := s.beginTurn()
+	s.applyPendingReload()
 	s.allowAllTurn = false
 	defer s.endTurn()
 	if s.systemPrompt != "" {
@@ -330,7 +351,7 @@ func (s *Session) SendMessage(text string) (string, error) {
 				s.callbacks.OnReasoning(reasoning)
 			}
 		}),
-		cogito.WithMCPs(s.clients...),
+		cogito.WithMCPs(s.allClients()...),
 		cogito.WithToolCallBack(func(tool *cogito.ToolChoice, state *cogito.SessionState) cogito.ToolCallDecision {
 			// Capture sub-agent activity so the agent_logs tool can surface what
 			// a backgrounded sub-agent is doing.
@@ -417,6 +438,13 @@ func (s *Session) SendMessage(text string) (string, error) {
 		})),
 	)
 
+	// Wire the native self-configuration tools so the assistant can manage its
+	// own plugins, skills, and MCP servers. requestReload re-wires the live
+	// session on the next turn after any mutating op.
+	for _, d := range selfConfigToolDefs(s.configurator, s.requestReload) {
+		cogitoOpts = append(cogitoOpts, cogito.WithTools(d.def))
+	}
+
 	// Add ForceReasoning only if enabled in config
 	if s.cogitoOptions.ForceReasoning {
 		cogitoOpts = append(cogitoOpts, cogito.WithForceReasoning())
@@ -462,12 +490,152 @@ func (s *Session) GetMessages() []Message {
 	return messages
 }
 
-// Close closes the session and cleans up resources
-func (s *Session) Close() error {
-	for _, client := range s.clients {
-		if err := client.Close(); err != nil {
-			return err
+// allClients returns every connected MCP client (built-ins + skills + config
+// servers). Called from the turn goroutine. Reload mutates these only at turn
+// start (and is deferred while background sub-agents run, see
+// applyPendingReload), so it does not race with detached agents and no lock is
+// needed.
+func (s *Session) allClients() []*mcp.ClientSession {
+	out := append([]*mcp.ClientSession{}, s.clients...)
+	if s.skillsClient != nil {
+		out = append(out, s.skillsClient)
+	}
+	for _, c := range s.cfgClients {
+		out = append(out, c)
+	}
+	return out
+}
+
+// ReconcileMCPServers connects newly-desired config MCP servers and closes ones
+// no longer desired (or whose command/args changed). Connect failures are
+// logged and skipped so one bad server never breaks the session. Called from
+// Reload at turn start (deferred while background sub-agents run), so closing a
+// client session here cannot race with a detached agent still using it.
+func (s *Session) ReconcileMCPServers(desired map[string]types.MCPServer) error {
+	for name, sess := range s.cfgClients {
+		if d, ok := desired[name]; !ok || !reflect.DeepEqual(d, s.cfgServers[name]) {
+			_ = sess.Close()
+			delete(s.cfgClients, name)
+			delete(s.cfgServers, name)
 		}
 	}
+	for name, srv := range desired {
+		if _, ok := s.cfgClients[name]; ok {
+			continue
+		}
+		var env []string
+		for k, v := range srv.Env {
+			env = append(env, fmt.Sprintf("%s=%s", k, v))
+		}
+		transport := CommandTransport(srv.Command, srv.Args, env...)
+		sess, err := s.mcpClient.Connect(s.ctx, transport, nil)
+		if err != nil {
+			xlog.Warn("self-config: MCP server failed to connect", "name", name, "error", err)
+			continue
+		}
+		s.cfgClients[name] = sess
+		s.cfgServers[name] = srv
+	}
 	return nil
+}
+
+// SetSkills rebuilds the in-memory skills MCP server so load_skill advertises
+// the given skills, swapping its client. An empty list tears the server down.
+// Called from Reload at turn start (deferred while background sub-agents run),
+// so closing the old skills client cannot race with a detached agent.
+func (s *Session) SetSkills(skills []types.Skill) error {
+	if s.skillsClient != nil {
+		_ = s.skillsClient.Close()
+		s.skillsClient = nil
+	}
+	s.skills = skills
+	if len(skills) == 0 {
+		return nil
+	}
+	serverT, clientT := mcp.NewInMemoryTransports()
+	go func() {
+		if err := wizmcp.StartSkillsMCPServer(s.ctx, serverT, skills); err != nil {
+			xlog.Warn("self-config: skills MCP server error", "error", err)
+		}
+	}()
+	sess, err := s.mcpClient.Connect(s.ctx, clientT, nil)
+	if err != nil {
+		return err
+	}
+	s.skillsClient = sess
+	return nil
+}
+
+// Reload re-wires every reloadable part of the session from cfg. It closes MCP
+// client sessions and mutates session state read by the turn goroutine and by
+// detached sub-agents, so it must run at turn start in the turn goroutine and is
+// deferred while background sub-agents run (see applyPendingReload). It must not
+// run concurrently with a running turn or a live detached agent.
+func (s *Session) Reload(cfg types.Config) error {
+	_ = s.ReconcileMCPServers(cfg.MCPServers)
+	_ = s.SetSkills(cfg.Skills)
+	s.agentDefs = toCogitoDefinitions(cfg.Agents)
+	s.agentModels = agentModelSet(s.agentDefs)
+	s.hooks = hooks.New(cfg.Hooks)
+	if cfg.Prompt != "" {
+		s.systemPrompt = cfg.GetPrompt() + s.loadedSkills
+	}
+	return nil
+}
+
+// requestReload marks the session dirty; the next SendMessage applies it.
+func (s *Session) requestReload() {
+	s.reloadMu.Lock()
+	s.pendingReload = true
+	s.reloadMu.Unlock()
+}
+
+// applyPendingReload, if a reload was requested, recomputes the effective config
+// and re-wires the session. Runs at the start of a turn, in the turn goroutine.
+// It DEFERS the reload while background sub-agents are still running: Reload
+// closes MCP client sessions and mutates session state (s.hooks, s.skillsClient,
+// s.cfgClients, s.agentDefs) that detached agents — which outlive their spawning
+// turn — continue to read, so reconfiguring under them would race or use a closed
+// session. The dirty flag stays set, so the reload is retried on a later turn
+// once no background agents are live. The flag is cleared only after a
+// SUCCESSFUL reload, so a failed reload is retried on the next turn.
+func (s *Session) applyPendingReload() {
+	s.reloadMu.Lock()
+	pending := s.pendingReload
+	s.reloadMu.Unlock()
+	if !pending || s.configurator == nil {
+		return
+	}
+	if s.agentManager != nil && s.agentManager.HasRunning() {
+		return // defer; pendingReload stays set, retried next turn
+	}
+	eff, err := s.configurator.EffectiveConfig()
+	if err != nil {
+		xlog.Warn("self-config: effective config", "error", err)
+		return // leave flag set, retried next turn
+	}
+	if err := s.Reload(eff); err != nil {
+		xlog.Warn("self-config: reload", "error", err)
+		return // leave flag set, retried next turn
+	}
+	s.reloadMu.Lock()
+	s.pendingReload = false
+	s.reloadMu.Unlock()
+}
+
+// Close closes the session and cleans up resources
+func (s *Session) Close() error {
+	var firstErr error
+	for _, client := range s.clients {
+		if err := client.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	if s.skillsClient != nil {
+		_ = s.skillsClient.Close()
+	}
+	for _, c := range s.cfgClients {
+		_ = c.Close()
+	}
+	return firstErr
 }
