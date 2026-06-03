@@ -29,23 +29,26 @@ func TestToolResultMessageRenders(t *testing.T) {
 		}
 	})
 
-	t.Run("sub-agent result is shown and labeled", func(t *testing.T) {
+	t.Run("sub-agent tool result is not streamed inline", func(t *testing.T) {
 		m := Model{
 			ctx:            context.Background(),
 			viewport:       viewport.New(80, 10),
 			toolResultChan: make(chan chat.ToolResult, 1),
 		}
+		before := len(m.messages)
 		next, _ := m.Update(toolResultMsg{Name: "bash", Result: "y", AgentID: "agent1234"})
 		nm := next.(Model)
-		if len(nm.messages) != 1 {
-			t.Fatalf("sub-agent result should append one message, got %d", len(nm.messages))
+		if len(nm.messages) != before {
+			t.Fatalf("sub-agent tool result must not stream inline; messages %d -> %d", before, len(nm.messages))
 		}
-		if nm.messages[0].AgentID != "agent1234" {
-			t.Fatalf("appended message should carry the agent id, got %+v", nm.messages[0])
-		}
-		nm.updateViewport()
-		if out := nm.viewport.View(); !strings.Contains(out, theme.SubAgent) {
-			t.Errorf("sub-agent result should render the sub-agent marker %q, got:\n%s", theme.SubAgent, out)
+	})
+
+	t.Run("sub-agent final result renders labeled with its id", func(t *testing.T) {
+		m := Model{viewport: viewport.New(80, 10)}
+		m.messages = append(m.messages, ChatMessage{Role: "tool", Name: "explore", AgentID: "agent1234", Content: "done"})
+		m.updateViewport()
+		if out := m.viewport.View(); !strings.Contains(out, theme.SubAgent) {
+			t.Errorf("sub-agent final result should render the %q marker, got:\n%s", theme.SubAgent, out)
 		}
 	})
 

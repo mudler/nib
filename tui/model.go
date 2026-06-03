@@ -567,8 +567,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		am := m
 		(&am).applyAgentEvent(ev)
 		m = am
-		// Durable transcript marker so sub-agent activity stays visible in history.
-		if line := agentTranscriptLine(ev); line != "" {
+		// Quiet by default: on completion surface the sub-agent's FINAL result
+		// inline (one block, labeled with its id); its per-tool activity lives in
+		// the Ctrl+O log viewer. Other lifecycle events get a lightweight marker.
+		if ev.Status == chat.AgentStatusCompleted && strings.TrimSpace(ev.Result) != "" {
+			typ := ev.Type
+			if typ == "" {
+				typ = "agent"
+			}
+			m.messages = append(m.messages, ChatMessage{
+				Role:    "tool",
+				Name:    typ,
+				AgentID: ev.ID,
+				Content: chat.PreviewResult(ev.Result, toolResultPreviewLines),
+			})
+		} else if line := agentTranscriptLine(ev); line != "" {
 			m.messages = append(m.messages, ChatMessage{Role: "agent", Content: line})
 		}
 		m.updateViewport()
@@ -577,12 +590,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case toolResultMsg:
 		res := chat.ToolResult(msg)
-		// Show every tool result inline — root and sub-agent (the latter labeled
-		// with its agent id). Preview once at append time (truncate + pretty) so
-		// we don't retain a multi-MB raw result or re-format it every refresh.
-		if preview := chat.PreviewResult(res.Result, toolResultPreviewLines); preview != "" {
-			m.messages = append(m.messages, ChatMessage{Role: "tool", Name: res.Name, Content: preview, AgentID: res.AgentID})
-			m.updateViewport()
+		// Quiet by default: only the ROOT agent's tool results stream inline.
+		// Sub-agent tool activity lives in the Ctrl+O log viewer; a sub-agent's
+		// final result is shown inline on completion (see agentEventMsg). Preview
+		// once at append time so we don't retain a multi-MB raw result.
+		if res.AgentID == "" {
+			if preview := chat.PreviewResult(res.Result, toolResultPreviewLines); preview != "" {
+				m.messages = append(m.messages, ChatMessage{Role: "tool", Name: res.Name, Content: preview})
+				m.updateViewport()
+			}
 		}
 		// Continue listening for more tool results
 		cmds = append(cmds, m.listenToolResult())
