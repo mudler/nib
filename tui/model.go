@@ -104,9 +104,10 @@ type Model struct {
 	// Unified `/` completion state
 	completion compState
 
-	// Cached markdown renderer; rebuilt when the wrap width changes.
-	mdRenderer *glamour.TermRenderer
-	mdWidth    int
+	// Markdown renderers cached per wrap width (glamour renderers are
+	// width-bound and expensive to build). At most a couple of distinct
+	// widths exist in practice (one per message-prefix width).
+	mdRenderers map[int]*glamour.TermRenderer
 
 	// Channels for async communication with callbacks
 	statusChan       chan string
@@ -201,6 +202,7 @@ func NewModel(ctx context.Context, cfg types.Config, height int, shellJobs *wizm
 		askRequestChan:   make(chan chat.AskRequest),
 		askResponseChan:  make(chan string),
 		wakeupChan:       make(chan chat.WakeupRequest, 8),
+		mdRenderers:      make(map[int]*glamour.TermRenderer),
 	}
 	m.completion.setRegistries(cfg.Commands, cfg.Skills, cfg.Agents)
 	return m
@@ -922,21 +924,25 @@ func truncateRunes(word string, width int) string {
 }
 
 // updateViewport updates the viewport content with chat messages
-// markdownFor returns a width-cached glamour renderer, rebuilding it when the
-// wrap width changes. Returns nil on construction error (callers fall back).
+// markdownFor returns a glamour renderer for the given wrap width, building and
+// caching one per distinct width. Returns nil on construction error (callers
+// fall back to plain wrapText).
 func (m *Model) markdownFor(width int) *glamour.TermRenderer {
 	if width < 1 {
 		width = 1
 	}
-	if m.mdRenderer == nil || m.mdWidth != width {
-		r, err := nibMarkdownRenderer(width)
-		if err != nil {
-			return nil
-		}
-		m.mdRenderer = r
-		m.mdWidth = width
+	if m.mdRenderers == nil {
+		m.mdRenderers = make(map[int]*glamour.TermRenderer)
 	}
-	return m.mdRenderer
+	if r, ok := m.mdRenderers[width]; ok {
+		return r
+	}
+	r, err := nibMarkdownRenderer(width)
+	if err != nil {
+		return nil
+	}
+	m.mdRenderers[width] = r
+	return r
 }
 
 func (m *Model) updateViewport() {
