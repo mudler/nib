@@ -66,8 +66,8 @@ func nibMarkdownStyle() ansi.StyleConfig {
 		Text:        ansi.StylePrimitive{},
 		Strong:      ansi.StylePrimitive{Bold: &yes},
 		Emph:        ansi.StylePrimitive{Italic: &yes},
-		Item:        ansi.StylePrimitive{},
-		Enumeration: ansi.StylePrimitive{},
+		Item:        ansi.StylePrimitive{BlockPrefix: theme.Sep + " "},
+		Enumeration: ansi.StylePrimitive{BlockPrefix: ". "},
 		Link:        ansi.StylePrimitive{Color: &accent, Underline: &yes},
 		LinkText:    ansi.StylePrimitive{Color: &accent},
 		Code: ansi.StyleBlock{

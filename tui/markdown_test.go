@@ -65,3 +65,23 @@ func TestRenderMarkdownWith_NoBackgroundSGR(t *testing.T) {
 		}
 	}
 }
+
+func TestRenderMarkdownWith_ListMarkers(t *testing.T) {
+	r, err := nibMarkdownRenderer(80)
+	if err != nil {
+		t.Fatalf("renderer: %v", err)
+	}
+	// Unordered list: items should carry the theme bullet "· ".
+	ul := renderMarkdownWith(r, "- alpha\n- beta\n", 80)
+	if !strings.Contains(ul, "· alpha") {
+		t.Fatalf("unordered list missing theme bullet: %q", ul)
+	}
+	// Ordered list: the number must be separated from the text, not glued.
+	ol := renderMarkdownWith(r, "1. first\n2. second\n", 80)
+	if strings.Contains(ol, "1first") {
+		t.Fatalf("ordered list number glued to text: %q", ol)
+	}
+	if !strings.Contains(ol, "1. first") {
+		t.Fatalf("ordered list missing '1. ' separator: %q", ol)
+	}
+}
