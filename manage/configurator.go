@@ -92,7 +92,7 @@ func (c *Configurator) ListSkills() ([]SkillInfo, error) {
 		}
 		skills, err := c.skills.Skills(p.Name)
 		if err != nil {
-			continue
+			continue // skip packs that fail to harvest; one bad pack shouldn't break listing
 		}
 		for _, s := range skills {
 			out = append(out, SkillInfo{Name: s.Name, Description: s.Description, Pack: p.Name})
