@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/mudler/wiz/types"
 )
 
 // writeSkill creates skills/<name>/SKILL.md (plus optional extra files) under root.
@@ -63,5 +65,53 @@ func TestHarvestPackNoSkillsDir(t *testing.T) {
 	}
 	if len(skills) != 0 {
 		t.Fatalf("expected 0 skills, got %d", len(skills))
+	}
+}
+
+func TestApplyPrecedenceAndEnabledOnly(t *testing.T) {
+	base := t.TempDir()
+	mgr := NewManager(base)
+
+	// Pack A (enabled): contributes "shared" and "onlyA".
+	srcA := t.TempDir()
+	writeSkill(t, srcA, "shared", "---\nname: shared\ndescription: from A\n---\nA body\n", nil)
+	writeSkill(t, srcA, "onlyA", "---\nname: onlyA\ndescription: only in A\n---\nA only\n", nil)
+	nameA, _, err := mgr.Install(srcA, "")
+	if err != nil {
+		t.Fatalf("install A: %v", err)
+	}
+	if err := mgr.SetEnabled(nameA, true); err != nil {
+		t.Fatal(err)
+	}
+
+	// Pack B (left disabled): contributes "onlyB" — must NOT appear.
+	srcB := t.TempDir()
+	writeSkill(t, srcB, "onlyB", "---\nname: onlyB\ndescription: only in B\n---\nB only\n", nil)
+	if _, _, err := mgr.Install(srcB, ""); err != nil {
+		t.Fatalf("install B: %v", err)
+	}
+
+	// A user skill named "shared" must win over the pack's.
+	cfg := &types.Config{Skills: []types.Skill{{Name: "shared", Description: "user wins", Instructions: "user body"}}}
+
+	if err := Apply(cfg, base); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+
+	byName := map[string]types.Skill{}
+	for _, s := range cfg.Skills {
+		byName[s.Name] = s
+	}
+	if byName["shared"].Description != "user wins" {
+		t.Fatalf("user skill should win, got %+v", byName["shared"])
+	}
+	if _, ok := byName["onlyA"]; !ok {
+		t.Fatalf("enabled pack A skill missing")
+	}
+	if _, ok := byName["onlyB"]; ok {
+		t.Fatalf("disabled pack B skill must not be applied")
+	}
+	if byName["onlyA"].Dir == "" {
+		t.Fatalf("applied pack skill should carry Dir")
 	}
 }

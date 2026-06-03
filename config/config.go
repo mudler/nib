@@ -7,6 +7,7 @@ import (
 
 	"github.com/mudler/wiz/internal"
 	"github.com/mudler/wiz/plugin"
+	"github.com/mudler/wiz/skill"
 	"github.com/mudler/wiz/types"
 
 	"gopkg.in/yaml.v3"
@@ -111,6 +112,13 @@ func Load() types.Config {
 	}
 	// ForceReasoning defaults to false (zero value), which is intentional
 	// Users must explicitly enable it in config
+
+	// Merge enabled skill-pack skills before plugins, so precedence is
+	// built-in defaults < plugins < skill-packs < user. plugin.Apply skips any
+	// skill name already present (user + packs), so packs win over plugins.
+	if err := skill.Apply(&cfg, plugin.BaseDir()); err != nil {
+		fmt.Fprintf(os.Stderr, "wiz: skill load: %v\n", err)
+	}
 
 	// Merge enabled plugin contributions (mcp servers + agents) before the
 	// agent default-merge, so precedence is built-in defaults < plugins < user.
