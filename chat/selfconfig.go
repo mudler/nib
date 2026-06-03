@@ -40,16 +40,21 @@ func argStrSlice(args map[string]any, key string) []string {
 	return nil
 }
 
-func argStrMap(args map[string]any, key string) map[string]string {
-	v, ok := args[key].(map[string]any)
-	if !ok {
+// argEnvMap parses an "env" argument given as KEY=VALUE strings into a map.
+// cogito's tool-schema generator rejects map-typed argument fields, so env is
+// modeled as a []string on the wire and parsed back into a map here.
+func argEnvMap(args map[string]any, key string) map[string]string {
+	pairs := argStrSlice(args, key)
+	if len(pairs) == 0 {
 		return nil
 	}
-	out := make(map[string]string, len(v))
-	for k, e := range v {
-		if s, ok := e.(string); ok {
-			out[k] = s
+	out := make(map[string]string, len(pairs))
+	for _, p := range pairs {
+		k, v, ok := strings.Cut(p, "=")
+		if !ok || k == "" {
+			continue
 		}
+		out[k] = v
 	}
 	return out
 }
@@ -90,7 +95,7 @@ type addMCPServerArgs struct {
 	Name    string            `json:"name" jsonschema:"unique name for the MCP server"`
 	Command string            `json:"command" jsonschema:"executable to launch the MCP server"`
 	Args    []string          `json:"args,omitempty" jsonschema:"command arguments"`
-	Env     map[string]string `json:"env,omitempty" jsonschema:"environment variables for the server"`
+	Env     []string          `json:"env,omitempty" jsonschema:"environment variables for the server, each as a KEY=VALUE string"`
 }
 
 // selfConfigToolDefs builds the ten self-configuration tools. reload is called
@@ -215,7 +220,7 @@ func selfConfigToolDefs(c *manage.Configurator, reload func()) []toolDef {
 			"Add an MCP server to the user config and connect it on the next message.",
 			addMCPServerArgs{}, func(args map[string]any) (string, error) {
 				name := argStr(args, "name")
-				if err := c.AddMCPServer(name, argStr(args, "command"), argStrSlice(args, "args"), argStrMap(args, "env")); err != nil {
+				if err := c.AddMCPServer(name, argStr(args, "command"), argStrSlice(args, "args"), argEnvMap(args, "env")); err != nil {
 					return "", err
 				}
 				reload()

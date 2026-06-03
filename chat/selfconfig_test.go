@@ -56,3 +56,28 @@ func TestSelfConfigToolDefinitionsCount(t *testing.T) {
 		t.Fatalf("expected 10 tools, got %d", len(defs))
 	}
 }
+
+// TestSelfConfigToolSchemasBuild guards against arg-struct fields that cogito's
+// JSON-schema generator cannot handle (notably map fields, which panic). This is
+// the schema-generation path the agent loop runs when registering tools — the
+// step that plain Run-based tests skip.
+func TestSelfConfigToolSchemasBuild(t *testing.T) {
+	for _, d := range selfConfigToolDefs(newToolConfigurator(t), func() {}) {
+		tool := d.def.Tool() // panics if the arg schema is unsupported
+		if tool.Function == nil || tool.Function.Name != d.name {
+			t.Fatalf("tool %q built a bad definition: %+v", d.name, tool)
+		}
+	}
+}
+
+func TestAddMCPServerParsesEnv(t *testing.T) {
+	c := newToolConfigurator(t)
+	defs := selfConfigToolDefs(c, func() {})
+	out := runTool(t, defs, "add_mcp_server", map[string]any{
+		"name": "svc", "command": "svc-bin",
+		"env": []any{"TOKEN=abc", "MODE=fast"},
+	})
+	if !strings.Contains(out, "svc") {
+		t.Fatalf("add_mcp_server: %q", out)
+	}
+}
