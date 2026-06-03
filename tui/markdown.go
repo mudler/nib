@@ -63,12 +63,6 @@ func nibMarkdownStyle() ansi.StyleConfig {
 		Heading: ansi.StyleBlock{
 			StylePrimitive: ansi.StylePrimitive{Color: &accent, Bold: &yes},
 		},
-		H1:          ansi.StyleBlock{StylePrimitive: ansi.StylePrimitive{Prefix: "", Color: &accent, Bold: &yes}},
-		H2:          ansi.StyleBlock{StylePrimitive: ansi.StylePrimitive{Prefix: "", Color: &accent, Bold: &yes}},
-		H3:          ansi.StyleBlock{StylePrimitive: ansi.StylePrimitive{Prefix: "", Color: &accent, Bold: &yes}},
-		H4:          ansi.StyleBlock{StylePrimitive: ansi.StylePrimitive{Prefix: "", Color: &accent, Bold: &yes}},
-		H5:          ansi.StyleBlock{StylePrimitive: ansi.StylePrimitive{Prefix: "", Color: &accent, Bold: &yes}},
-		H6:          ansi.StyleBlock{StylePrimitive: ansi.StylePrimitive{Prefix: "", Color: &accent, Bold: &yes}},
 		Text:        ansi.StylePrimitive{},
 		Strong:      ansi.StylePrimitive{Bold: &yes},
 		Emph:        ansi.StylePrimitive{Italic: &yes},
