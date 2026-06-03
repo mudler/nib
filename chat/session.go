@@ -357,6 +357,13 @@ func (s *Session) SendMessage(text string) (string, error) {
 					"result": status.Result,
 				})
 			}
+			if s.callbacks.OnToolResult != nil {
+				s.callbacks.OnToolResult(ToolResult{
+					Name:    status.Name,
+					Result:  status.Result,
+					AgentID: s.agentLogs.agentFor(status.ToolArguments.ID),
+				})
+			}
 		}),
 	}
 
