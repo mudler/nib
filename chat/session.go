@@ -476,8 +476,10 @@ func (s *Session) GetMessages() []Message {
 }
 
 // allClients returns every connected MCP client (built-ins + skills + config
-// servers). Called from the turn goroutine; reload mutates these only between
-// turns, so no lock is needed.
+// servers). Called from the turn goroutine. Reload mutates these only at turn
+// start (and is deferred while background sub-agents run, see
+// applyPendingReload), so it does not race with detached agents and no lock is
+// needed.
 func (s *Session) allClients() []*mcp.ClientSession {
 	out := append([]*mcp.ClientSession{}, s.clients...)
 	if s.skillsClient != nil {
@@ -491,7 +493,9 @@ func (s *Session) allClients() []*mcp.ClientSession {
 
 // ReconcileMCPServers connects newly-desired config MCP servers and closes ones
 // no longer desired (or whose command/args changed). Connect failures are
-// logged and skipped so one bad server never breaks the session.
+// logged and skipped so one bad server never breaks the session. Called from
+// Reload at turn start (deferred while background sub-agents run), so closing a
+// client session here cannot race with a detached agent still using it.
 func (s *Session) ReconcileMCPServers(desired map[string]types.MCPServer) error {
 	for name, sess := range s.cfgClients {
 		if d, ok := desired[name]; !ok || !reflect.DeepEqual(d, s.cfgServers[name]) {
@@ -522,6 +526,8 @@ func (s *Session) ReconcileMCPServers(desired map[string]types.MCPServer) error 
 
 // SetSkills rebuilds the in-memory skills MCP server so load_skill advertises
 // the given skills, swapping its client. An empty list tears the server down.
+// Called from Reload at turn start (deferred while background sub-agents run),
+// so closing the old skills client cannot race with a detached agent.
 func (s *Session) SetSkills(skills []types.Skill) error {
 	if s.skillsClient != nil {
 		_ = s.skillsClient.Close()
@@ -545,8 +551,11 @@ func (s *Session) SetSkills(skills []types.Skill) error {
 	return nil
 }
 
-// Reload re-wires every reloadable part of the session from cfg. Call only
-// between turns, never concurrently with a running turn.
+// Reload re-wires every reloadable part of the session from cfg. It closes MCP
+// client sessions and mutates session state read by the turn goroutine and by
+// detached sub-agents, so it must run at turn start in the turn goroutine and is
+// deferred while background sub-agents run (see applyPendingReload). It must not
+// run concurrently with a running turn or a live detached agent.
 func (s *Session) Reload(cfg types.Config) error {
 	_ = s.ReconcileMCPServers(cfg.MCPServers)
 	_ = s.SetSkills(cfg.Skills)
@@ -567,16 +576,26 @@ func (s *Session) requestReload() {
 }
 
 // applyPendingReload, if a reload was requested, recomputes the effective config
-// and re-wires the session. Runs at the start of a turn (no concurrent turn), so
-// the no-lock Reload is serialized with turn state reads.
+// and re-wires the session. Runs at the start of a turn, in the turn goroutine.
+// It DEFERS the reload while background sub-agents are still running: Reload
+// closes MCP client sessions and mutates session state (s.hooks, s.skillsClient,
+// s.cfgClients, s.agentDefs) that detached agents — which outlive their spawning
+// turn — continue to read, so reconfiguring under them would race or use a closed
+// session. The dirty flag stays set, so the reload is retried on a later turn
+// once no background agents are live.
 func (s *Session) applyPendingReload() {
 	s.reloadMu.Lock()
 	pending := s.pendingReload
-	s.pendingReload = false
 	s.reloadMu.Unlock()
 	if !pending || s.configurator == nil {
 		return
 	}
+	if s.agentManager != nil && s.agentManager.HasRunning() {
+		return // defer; pendingReload stays set, retried next turn
+	}
+	s.reloadMu.Lock()
+	s.pendingReload = false
+	s.reloadMu.Unlock()
 	eff, err := s.configurator.EffectiveConfig()
 	if err != nil {
 		xlog.Warn("self-config: effective config", "error", err)

@@ -5,6 +5,10 @@ import (
 	"testing"
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/mudler/cogito"
+	"github.com/mudler/nib/config"
+	"github.com/mudler/nib/manage"
+	"github.com/mudler/nib/plugin"
 	"github.com/mudler/nib/types"
 )
 
@@ -88,5 +92,31 @@ func TestNewSessionWiresSkillsServer(t *testing.T) {
 	}
 	if s.configurator == nil {
 		t.Fatalf("expected NewSession to build a configurator")
+	}
+}
+
+// TestApplyPendingReloadDefersWhileAgentsRunning proves that a pending reload is
+// held off while a background sub-agent is still running (Reload closes MCP
+// client sessions and mutates state detached agents read), and is applied once
+// no agents are live.
+func TestApplyPendingReloadDefersWhileAgentsRunning(t *testing.T) {
+	s := newReloadTestSession(t)
+	s.agentManager = cogito.NewAgentManager()
+	s.configurator = manage.New(plugin.BaseDir(), config.WritablePath())
+	s.pendingReload = true
+
+	// A running agent must defer the reload: pendingReload stays set.
+	agent := &cogito.AgentState{ID: "bg1", Status: cogito.AgentStatusRunning}
+	s.agentManager.Register(agent)
+	s.applyPendingReload()
+	if !s.pendingReload {
+		t.Fatalf("expected reload to be deferred while an agent is running")
+	}
+
+	// Once the agent is no longer running, the reload is applied and cleared.
+	agent.Status = cogito.AgentStatusCompleted
+	s.applyPendingReload()
+	if s.pendingReload {
+		t.Fatalf("expected reload to be applied once no agents are running")
 	}
 }
