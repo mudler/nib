@@ -28,6 +28,7 @@ type ChatMessage struct {
 	Role    string
 	Content string
 	Name    string // tool name, for Role == "tool"
+	AgentID string // issuing sub-agent, for Role == "tool" (empty = root agent)
 }
 
 // Model represents the TUI state
@@ -576,13 +577,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case toolResultMsg:
 		res := chat.ToolResult(msg)
-		if res.AgentID == "" { // root-agent result: show inline (sub-agent output stays in Ctrl+J)
-			// Preview once at append time (truncate + pretty), so we don't retain
-			// a multi-MB raw result or re-format it on every viewport refresh.
-			if preview := chat.PreviewResult(res.Result, toolResultPreviewLines); preview != "" {
-				m.messages = append(m.messages, ChatMessage{Role: "tool", Name: res.Name, Content: preview})
-				m.updateViewport()
-			}
+		// Show every tool result inline — root and sub-agent (the latter labeled
+		// with its agent id). Preview once at append time (truncate + pretty) so
+		// we don't retain a multi-MB raw result or re-format it every refresh.
+		if preview := chat.PreviewResult(res.Result, toolResultPreviewLines); preview != "" {
+			m.messages = append(m.messages, ChatMessage{Role: "tool", Name: res.Name, Content: preview, AgentID: res.AgentID})
+			m.updateViewport()
 		}
 		// Continue listening for more tool results
 		cmds = append(cmds, m.listenToolResult())
@@ -928,7 +928,11 @@ func (m *Model) updateViewport() {
 		case "tool":
 			// Calm, dim block: a header naming the tool, then the pretty/truncated
 			// output indented and dimmed beneath it.
-			sb.WriteString(theme.Subtle.Render(theme.Sep + " " + msg.Name))
+			label := msg.Name
+			if msg.AgentID != "" {
+				label = theme.SubAgent + " " + shortID(msg.AgentID) + " · " + msg.Name
+			}
+			sb.WriteString(theme.Subtle.Render(theme.Sep + " " + label))
 			sb.WriteString("\n")
 			// Content is already previewed (truncated + pretty) at append time.
 			wrapped := wrapText(msg.Content, contentWidth-2)

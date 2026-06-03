@@ -199,15 +199,20 @@ func RunCLI(ctx context.Context, cfg types.Config, transports ...mcp.Transport) 
 			fmt.Fprintln(os.Stderr, theme.Error.Render(theme.Cross+" "+err.Error()))
 		},
 		OnToolResult: func(res chat.ToolResult) {
-			if res.AgentID != "" {
-				return // sub-agent output is surfaced via the agent log, not inline
-			}
 			preview := chat.PreviewResult(res.Result, 12)
 			if preview == "" {
 				return
 			}
+			label := res.Name
+			if res.AgentID != "" {
+				id := res.AgentID
+				if len(id) > 8 {
+					id = id[:8]
+				}
+				label = theme.SubAgent + " " + id + " · " + res.Name
+			}
 			spin.stop()
-			fmt.Println(theme.Subtle.Render(theme.Sep + " " + res.Name))
+			fmt.Println(theme.Subtle.Render(theme.Sep + " " + label))
 			for _, line := range strings.Split(preview, "\n") {
 				fmt.Println(theme.Help.Render("  " + line))
 			}
