@@ -11,11 +11,11 @@ import (
 func TestDeriveName(t *testing.T) {
 	cases := map[string]string{
 		"https://github.com/obra/superpowers":     "superpowers",
-		"https://github.com/obra/superpowers.git":  "superpowers",
-		"https://github.com/obra/superpowers/":     "superpowers",
-		"git@github.com:obra/superpowers.git":      "superpowers",
-		"/home/me/my-skills":                       "my-skills",
-		"/home/me/my-skills/":                      "my-skills",
+		"https://github.com/obra/superpowers.git": "superpowers",
+		"https://github.com/obra/superpowers/":    "superpowers",
+		"git@github.com:obra/superpowers.git":     "superpowers",
+		"/home/me/my-skills":                      "my-skills",
+		"/home/me/my-skills/":                     "my-skills",
 	}
 	for in, want := range cases {
 		if got := deriveName(in); got != want {
