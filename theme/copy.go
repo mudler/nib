@@ -4,9 +4,11 @@ package theme
 const (
 	BrandName = "nib"
 
-	HelpDefault   = "enter send · ctrl+c interrupt · esc exit"
-	HelpApproval  = "approve with y / a / n, or type a change"
-	ApprovePrompt = "y · a always · n · or type a change"
+	HelpDefault      = "enter send · ctrl+c interrupt · esc exit"
+	HelpApproval     = "y yes · a always · n no · e edit · A all · esc deny"
+	HelpApprovalEdit = "enter submit · esc cancel"
+	ApprovePrompt    = "[y] yes  [a] always  [n] no  [e] edit  [A] all"
+	ApproveEditHint  = "describe the change · enter submit · esc cancel"
 
 	EmptyTagline = "a calm assistant for your terminal."
 	EmptyTryLead = "try:"

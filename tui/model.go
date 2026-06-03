@@ -64,6 +64,11 @@ type Model struct {
 	// Tool approval state
 	pendingTool      *chat.ToolCallRequest
 	awaitingApproval bool
+	// approvalEditing distinguishes the two approval sub-modes: false is the
+	// default key-driven choice mode (single y/a/n/e/A/Esc keypresses, input
+	// hidden); true is edit mode where the textarea is shown for a free-form
+	// change.
+	approvalEditing bool
 
 	// ask_user state
 	pendingAsk      *chat.AskRequest
@@ -259,6 +264,44 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			default:
 				m.killArmed = false
 				m.status = ""
+			}
+		}
+		// Tool approval is a distinct key-driven mode: in choice mode the chat
+		// input is hidden and y/a/n/e/A/Esc act as single keypresses; edit mode
+		// (entered with `e`) shows the textarea for a free-form change.
+		if m.awaitingApproval {
+			if !m.approvalEditing {
+				switch {
+				case msg.Type == tea.KeyEsc:
+					return m.resolveApproval(chat.ToolCallResponse{Approved: false})
+				case msg.Type == tea.KeyRunes && len(msg.Runes) == 1:
+					switch msg.Runes[0] {
+					case 'y', 'Y':
+						return m.resolveApproval(chat.ToolCallResponse{Approved: true})
+					case 'a':
+						return m.resolveApproval(chat.ToolCallResponse{Approved: true, AlwaysAllow: true})
+					case 'A':
+						return m.resolveApproval(chat.ToolCallResponse{Approved: true, AllowAllTurn: true})
+					case 'n', 'N':
+						return m.resolveApproval(chat.ToolCallResponse{Approved: false})
+					case 'e', 'E':
+						m.approvalEditing = true
+						m.textarea.Reset()
+						m.updateViewport()
+						return m, nil
+					}
+				}
+				// Swallow every other key in choice mode, but let Ctrl+C fall
+				// through to the normal interrupt/quit handling below.
+				if msg.Type != tea.KeyCtrlC {
+					return m, nil
+				}
+			} else if msg.Type == tea.KeyEsc {
+				// Edit mode: Esc cancels back to choice mode without denying.
+				m.approvalEditing = false
+				m.textarea.Reset()
+				m.updateViewport()
+				return m, nil
 			}
 		}
 		switch msg.Type {
@@ -486,7 +529,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case toolCallMsg:
 		m.pendingTool = (*chat.ToolCallRequest)(&msg)
 		m.awaitingApproval = true
-		m.loading = false  // Allow user input for approval
+		m.approvalEditing = false // every approval starts in key-driven choice mode
+		m.loading = false         // Allow user input for approval
 		m.textarea.Focus() // Ensure textarea is focused for input
 		m.updateViewport()
 		// Continue listening for more tool requests
@@ -634,33 +678,29 @@ func (m Model) listenAskRequest() tea.Cmd {
 	}
 }
 
-// handleToolApproval handles tool approval input
+// handleToolApproval handles a free-form adjustment typed in edit mode. An empty
+// input is treated as a plain approval. (Choice-mode keypresses are handled by
+// the interception block in Update and never reach here.)
 func (m Model) handleToolApproval(input string) (tea.Model, tea.Cmd) {
-	input = strings.ToLower(strings.TrimSpace(input))
-
-	var response chat.ToolCallResponse
-	switch input {
-	case "y", "yes":
-		response = chat.ToolCallResponse{Approved: true}
-	case "a", "always":
-		response = chat.ToolCallResponse{Approved: true, AlwaysAllow: true}
-	case "n", "no":
-		response = chat.ToolCallResponse{Approved: false}
-	default:
-		// Treat as adjustment
-		response = chat.ToolCallResponse{Approved: true, Adjustment: input}
+	input = strings.TrimSpace(input)
+	if input == "" {
+		return m.resolveApproval(chat.ToolCallResponse{Approved: true})
 	}
+	return m.resolveApproval(chat.ToolCallResponse{Approved: true, Adjustment: input})
+}
 
+// resolveApproval finalizes a tool-approval decision: tear down approval state,
+// resume the spinner, and hand the response back to the waiting callback.
+func (m Model) resolveApproval(resp chat.ToolCallResponse) (tea.Model, tea.Cmd) {
 	m.awaitingApproval = false
+	m.approvalEditing = false
 	m.pendingTool = nil
 	m.textarea.Reset()
 	m.loading = true
 	m.status = "Executing tool..."
 	m.updateViewport()
-
-	// Send response back to the waiting callback
 	return m, func() tea.Msg {
-		m.toolResponseChan <- response
+		m.toolResponseChan <- resp
 		return nil
 	}
 }
@@ -886,7 +926,7 @@ func (m *Model) updateViewport() {
 		gutter := theme.Gutter.Render(theme.ApprovalGutter) + " "
 		sb.WriteString(gutter + theme.ApproveKey.Render(toolApprovalLabel(*m.pendingTool)))
 		sb.WriteString("\n")
-		args := wrapText(m.pendingTool.Arguments, contentWidth-4)
+		args := wrapText(chat.PrettyJSON(m.pendingTool.Arguments), contentWidth-4)
 		for _, line := range strings.Split(strings.TrimRight(args, "\n"), "\n") {
 			sb.WriteString(gutter + theme.Help.Render(line) + "\n")
 		}
@@ -896,7 +936,11 @@ func (m *Model) updateViewport() {
 				sb.WriteString(gutter + theme.Reasoning.Render(line) + "\n")
 			}
 		}
-		sb.WriteString(gutter + theme.ApproveKey.Render(theme.ApprovePrompt))
+		prompt := theme.ApprovePrompt
+		if m.approvalEditing {
+			prompt = theme.ApproveEditHint
+		}
+		sb.WriteString(gutter + theme.ApproveKey.Render(prompt))
 		sb.WriteString("\n")
 	}
 
@@ -943,11 +987,16 @@ func (m Model) View() string {
 		sb.WriteString("\n")
 	}
 
-	// Input.
-	if m.sessionReady {
-		sb.WriteString(m.textarea.View())
-	} else {
+	// Input. In key-driven approval choice mode the textarea is hidden (the
+	// approval block in the viewport carries the choice row); edit mode and
+	// normal chat show the textarea.
+	switch {
+	case !m.sessionReady:
 		sb.WriteString(theme.Help.Render(theme.Starting))
+	case m.awaitingApproval && !m.approvalEditing:
+		// no input: choice row lives in the viewport approval block
+	default:
+		sb.WriteString(m.textarea.View())
 	}
 	sb.WriteString("\n")
 	sb.WriteString(theme.Help.Render(m.helpLine()))
@@ -975,6 +1024,8 @@ func (m Model) View() string {
 // helpLine returns the context-appropriate help string.
 func (m Model) helpLine() string {
 	switch {
+	case m.awaitingApproval && m.approvalEditing:
+		return theme.HelpApprovalEdit
 	case m.awaitingApproval:
 		return theme.HelpApproval
 	default:
