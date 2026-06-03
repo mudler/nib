@@ -135,7 +135,9 @@ func NewModel(ctx context.Context, cfg types.Config, height int, shellJobs *wizm
 	ta.FocusedStyle.Prompt = theme.Prompt
 	ta.CharLimit = 4096
 	ta.SetWidth(80)
-	ta.SetHeight(3)
+	// Single-line input: Enter sends (newline insertion is disabled), so a
+	// taller textarea would just repeat the `›` prompt on every empty row.
+	ta.SetHeight(1)
 	ta.ShowLineNumbers = false
 	ta.KeyMap.InsertNewline.SetEnabled(false) // Enter sends message
 
@@ -672,7 +674,7 @@ func (m *Model) updateDimensions() {
 	}
 
 	headerHeight := 2
-	footerHeight := 5 // textarea + border
+	footerHeight := 3 // single-line input + help line + spacing
 	statusHeight := 1
 
 	vpHeight := effectiveHeight - headerHeight - footerHeight - statusHeight
