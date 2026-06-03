@@ -16,6 +16,7 @@ import (
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/mudler/nib/chat"
@@ -102,6 +103,10 @@ type Model struct {
 
 	// Unified `/` completion state
 	completion compState
+
+	// Cached markdown renderer; rebuilt when the wrap width changes.
+	mdRenderer *glamour.TermRenderer
+	mdWidth    int
 
 	// Channels for async communication with callbacks
 	statusChan       chan string
@@ -586,7 +591,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.awaitingApproval = true
 		m.approvalEditing = false // every approval starts in key-driven choice mode
 		m.loading = false         // Allow user input for approval
-		m.textarea.Focus() // Ensure textarea is focused for input
+		m.textarea.Focus()        // Ensure textarea is focused for input
 		m.updateViewport()
 		// Continue listening for more tool requests
 		cmds = append(cmds, m.listenToolRequest())
@@ -917,6 +922,23 @@ func truncateRunes(word string, width int) string {
 }
 
 // updateViewport updates the viewport content with chat messages
+// markdownFor returns a width-cached glamour renderer, rebuilding it when the
+// wrap width changes. Returns nil on construction error (callers fall back).
+func (m *Model) markdownFor(width int) *glamour.TermRenderer {
+	if width < 1 {
+		width = 1
+	}
+	if m.mdRenderer == nil || m.mdWidth != width {
+		r, err := nibMarkdownRenderer(width)
+		if err != nil {
+			return nil
+		}
+		m.mdRenderer = r
+		m.mdWidth = width
+	}
+	return m.mdRenderer
+}
+
 func (m *Model) updateViewport() {
 	var sb strings.Builder
 
@@ -953,7 +975,7 @@ func (m *Model) updateViewport() {
 		case "assistant":
 			prefix := assistantStyle.Render(theme.BrandName) + " " + theme.SepStyle.Render(theme.Sep) + " "
 			prefixWidth := lipgloss.Width(prefix)
-			wrappedContent := wrapText(msg.Content, contentWidth-prefixWidth)
+			wrappedContent := renderMarkdownWith(m.markdownFor(contentWidth-prefixWidth), msg.Content, contentWidth-prefixWidth)
 			// Add prefix to first line, indent continuation lines
 			lines := strings.Split(strings.TrimRight(wrappedContent, "\n"), "\n")
 			for i, line := range lines {
@@ -972,7 +994,7 @@ func (m *Model) updateViewport() {
 		case "agent":
 			prefix := theme.Subtle.Render(theme.SubAgent) + " "
 			prefixWidth := lipgloss.Width(prefix)
-			wrappedContent := wrapText(msg.Content, contentWidth-prefixWidth)
+			wrappedContent := renderMarkdownWith(m.markdownFor(contentWidth-prefixWidth), msg.Content, contentWidth-prefixWidth)
 			lines := strings.Split(strings.TrimRight(wrappedContent, "\n"), "\n")
 			for i, line := range lines {
 				if i == 0 {
