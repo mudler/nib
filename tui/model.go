@@ -84,9 +84,14 @@ type Model struct {
 
 	// Sub-agent jobs state
 	jobs           []agentJob
-	showJobsDetail bool
-	killArmed      bool // Ctrl+K pressed: next digit kills that numbered job
 	agentEventChan chan chat.AgentEvent
+
+	// Ctrl+O log viewer state.
+	showLogs    bool           // viewer open
+	logSel      int            // selected index in the unified jobs list (list mode)
+	logOpenID   string         // when non-empty: drilled into this job's full log
+	logOpenKind string         // "agent" | "shell" for the open job
+	logVP       viewport.Model // scrollable full-log view
 
 	// Auto-notify state: completion notices for backgrounded work that the
 	// assistant should react to.
@@ -170,6 +175,7 @@ func NewModel(ctx context.Context, cfg types.Config, height int, shellJobs *wizm
 
 	m := Model{
 		viewport:         vp,
+		logVP:            viewport.New(80, 10),
 		textarea:         ta,
 		spinner:          s,
 		messages:         []ChatMessage{},
@@ -263,24 +269,57 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
-		// Kill-selection mode (armed by Ctrl+K): a digit kills that numbered job;
-		// Esc/Ctrl+K cancels; any other key cancels and is handled normally.
-		if m.killArmed {
-			switch {
-			case msg.Type == tea.KeyEsc || msg.Type == tea.KeyCtrlK:
-				m.killArmed = false
-				m.status = ""
-				m.updateViewport()
-				return m, nil
-			case msg.Type == tea.KeyRunes && len(msg.Runes) == 1 && msg.Runes[0] >= '1' && msg.Runes[0] <= '9':
-				m.killSelected(int(msg.Runes[0] - '0'))
-				m.killArmed = false
-				m.updateViewport()
-				return m, nil
-			default:
-				m.killArmed = false
-				m.status = ""
+		// Ctrl+O log viewer: intercepts navigation/scroll keys while open. Ctrl+C
+		// falls through so it can still interrupt/quit.
+		if m.showLogs && msg.Type != tea.KeyCtrlC {
+			jobs := m.unifiedJobs()
+			if m.logOpenID == "" {
+				// LIST mode
+				switch {
+				case msg.Type == tea.KeyEsc, msg.Type == tea.KeyCtrlO:
+					m.showLogs = false
+					return m, nil
+				case msg.Type == tea.KeyUp:
+					if m.logSel > 0 {
+						m.logSel--
+					}
+					return m, nil
+				case msg.Type == tea.KeyDown:
+					if m.logSel < len(jobs)-1 {
+						m.logSel++
+					}
+					return m, nil
+				case msg.Type == tea.KeyEnter:
+					if m.logSel >= 0 && m.logSel < len(jobs) {
+						m.logOpenID = jobs[m.logSel].ID
+						m.logOpenKind = jobs[m.logSel].Kind
+						m.syncLogViewport()
+					}
+					return m, nil
+				case msg.Type == tea.KeyRunes && len(msg.Runes) == 1 && (msg.Runes[0] == 'k' || msg.Runes[0] == 'K'):
+					if m.logSel >= 0 && m.logSel < len(jobs) {
+						m.killSelected(m.logSel + 1)
+					}
+					return m, nil
+				}
+				return m, nil // swallow other keys in list mode
 			}
+			// LOG mode (drilled into one job): Esc -> back to list; Ctrl+O -> close.
+			switch msg.Type {
+			case tea.KeyEsc:
+				m.logOpenID = ""
+				m.logOpenKind = ""
+				return m, nil
+			case tea.KeyCtrlO:
+				m.showLogs = false
+				m.logOpenID = ""
+				m.logOpenKind = ""
+				return m, nil
+			}
+			// Anything else scrolls the log viewport (up/down/pgup/pgdn/home/end).
+			var vpCmd tea.Cmd
+			m.logVP, vpCmd = m.logVP.Update(msg)
+			return m, vpCmd
 		}
 		// Tool approval is a distinct key-driven mode: in choice mode the chat
 		// input is hidden and y/a/n/e/A/Esc act as single keypresses; edit mode
@@ -356,19 +395,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 
-		case tea.KeyCtrlJ:
-			// Toggle the expanded jobs detail list.
-			m.showJobsDetail = !m.showJobsDetail
-			return m, nil
-
-		case tea.KeyCtrlK:
-			// Arm kill-selection: open the numbered detail and wait for a digit.
-			if m.sessionReady && len(m.unifiedJobs()) > 0 {
-				m.killArmed = true
-				m.showJobsDetail = true
-				m.status = "Kill which job? press its number · Esc cancels"
-				m.updateViewport()
+		case tea.KeyCtrlO:
+			// Toggle the navigable log viewer.
+			if !m.sessionReady {
+				return m, nil
 			}
+			m.showLogs = !m.showLogs
+			m.logSel = 0
+			m.logOpenID = ""
+			m.logOpenKind = ""
 			return m, nil
 
 		case tea.KeyTab:
@@ -504,6 +539,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, c)
 		}
 		m.updateViewport()
+		if m.showLogs && m.logOpenID != "" {
+			m.syncLogViewport()
+		}
 		if !m.quitting {
 			cmds = append(cmds, m.shellTick())
 		}
@@ -585,6 +623,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.messages = append(m.messages, ChatMessage{Role: "agent", Content: line})
 		}
 		m.updateViewport()
+		if m.showLogs && m.logOpenID != "" {
+			m.syncLogViewport()
+		}
 		// Continue listening for more agent events
 		cmds = append(cmds, m.listenAgentEvents())
 
@@ -780,6 +821,8 @@ func (m *Model) updateDimensions() {
 
 	m.viewport.Width = m.width
 	m.viewport.Height = vpHeight
+	m.logVP.Width = m.width
+	m.logVP.Height = vpHeight
 	m.textarea.SetWidth(m.width - 2)
 }
 
@@ -1045,8 +1088,10 @@ func (m Model) View() string {
 	sb.WriteString(theme.Rule.Render(strings.Repeat("─", max(1, m.width))))
 	sb.WriteString("\n")
 
-	// Body: first-run empty state, otherwise the conversation viewport.
-	if len(m.messages) == 0 && !m.loading && !m.awaitingApproval && !m.awaitingAsk {
+	// Body: log viewer, first-run empty state, otherwise the conversation viewport.
+	if m.showLogs {
+		sb.WriteString(m.renderLogsViewer())
+	} else if len(m.messages) == 0 && !m.loading && !m.awaitingApproval && !m.awaitingAsk {
 		sb.WriteString(renderEmptyState(m.width))
 	} else {
 		sb.WriteString(m.viewport.View())
@@ -1065,6 +1110,8 @@ func (m Model) View() string {
 	switch {
 	case !m.sessionReady:
 		sb.WriteString(theme.Help.Render(theme.Starting))
+	case m.showLogs:
+		// no input: the log viewer owns the body and the keystrokes
 	case m.awaitingApproval && !m.approvalEditing:
 		// no input: choice row lives in the viewport approval block
 	default:
@@ -1077,17 +1124,15 @@ func (m Model) View() string {
 		sb.WriteString("\n" + theme.Error.Render(theme.Cross+" "+m.err.Error()))
 	}
 
-	// Jobs footers (renderers restyle internally; nil-safe when empty).
-	if m.showJobsDetail {
-		if d := renderUnifiedJobsDetail(m.unifiedJobs(), m.width, m.jobActivityTail); d != "" {
-			sb.WriteString("\n" + d)
+	// Jobs footers (renderers restyle internally; nil-safe when empty). Hidden
+	// while the log viewer owns the body.
+	if !m.showLogs {
+		if f := renderJobsFooter(m.jobs, m.width); f != "" {
+			sb.WriteString("\n" + f)
 		}
-	}
-	if f := renderJobsFooter(m.jobs, m.width); f != "" {
-		sb.WriteString("\n" + f)
-	}
-	if f := renderShellJobsFooter(m.shellJobs.List(), m.width); f != "" {
-		sb.WriteString("\n" + f)
+		if f := renderShellJobsFooter(m.shellJobs.List(), m.width); f != "" {
+			sb.WriteString("\n" + f)
+		}
 	}
 
 	return sb.String()
@@ -1096,6 +1141,10 @@ func (m Model) View() string {
 // helpLine returns the context-appropriate help string.
 func (m Model) helpLine() string {
 	switch {
+	case m.showLogs && m.logOpenID != "":
+		return "↑↓ scroll · esc back · ctrl+o close"
+	case m.showLogs:
+		return "↑↓ select · enter open · k kill · esc close"
 	case m.awaitingApproval && m.approvalEditing:
 		return theme.HelpApprovalEdit
 	case m.awaitingApproval:

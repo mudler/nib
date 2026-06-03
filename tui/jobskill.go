@@ -3,10 +3,12 @@ package tui
 import (
 	"fmt"
 	"strings"
+
+	"github.com/mudler/nib/theme"
 )
 
 // jobRef is a unified reference to a killable job — either a sub-agent or a
-// shell job — used by the numbered detail view and Ctrl+K kill selection.
+// shell job — used by the Ctrl+O log viewer's list and kill selection.
 type jobRef struct {
 	Kind   string // "agent" | "shell"
 	ID     string
@@ -15,8 +17,8 @@ type jobRef struct {
 }
 
 // unifiedJobs returns sub-agent jobs followed by shell jobs, in the same order
-// they appear in the footers, so the numbers shown in the detail view line up
-// with what Ctrl+K acts on.
+// they appear in the footers, so the numbers shown in the Ctrl+O viewer line up
+// with what the kill selection acts on.
 func (m Model) unifiedJobs() []jobRef {
 	var out []jobRef
 	for _, j := range m.jobs {
@@ -30,32 +32,6 @@ func (m Model) unifiedJobs() []jobRef {
 		out = append(out, jobRef{Kind: "shell", ID: s.ID, Status: s.Status, Label: s.Script})
 	}
 	return out
-}
-
-// renderUnifiedJobsDetail renders the numbered, unified per-job list (Ctrl+J),
-// whose indices Ctrl+K uses for selection. When tailOf is non-nil, each job's
-// recent activity (a sub-agent's agent_logs, or a shell job's output) is shown
-// indented beneath its line.
-func renderUnifiedJobsDetail(jobs []jobRef, width int, tailOf func(jobRef) string) string {
-	if len(jobs) == 0 {
-		return ""
-	}
-	var b strings.Builder
-	for i, j := range jobs {
-		label := strings.ReplaceAll(j.Label, "\n", " ")
-		if len(label) > 40 {
-			label = label[:37] + "..."
-		}
-		fmt.Fprintf(&b, "  [%d] %-6s %-8s %-10s %s\n", i+1, j.Kind, shortID(j.ID), j.Status, label)
-		if tailOf != nil {
-			for _, line := range lastLines(tailOf(j), 3) {
-				b.WriteString("        ")
-				b.WriteString(dimmedStyle.Render(clipLine(line, width-10)))
-				b.WriteString("\n")
-			}
-		}
-	}
-	return jobsFooterStyle.Width(width).Render(strings.TrimRight(b.String(), "\n"))
 }
 
 // jobActivityTail returns recent activity for a job: a sub-agent's captured
@@ -96,6 +72,55 @@ func clipLine(s string, width int) string {
 		return s[:width-1] + "…"
 	}
 	return s
+}
+
+// syncLogViewport loads the open job's full log into the log viewport.
+func (m *Model) syncLogViewport() {
+	if m.logOpenID == "" {
+		return
+	}
+	content := m.jobActivityTail(jobRef{Kind: m.logOpenKind, ID: m.logOpenID})
+	if strings.TrimSpace(content) == "" {
+		content = "(no activity recorded yet)"
+	}
+	width := m.logVP.Width
+	if width <= 0 {
+		width = m.width
+	}
+	m.logVP.SetContent(theme.Help.Render(wrapText(content, width-1)))
+	m.logVP.GotoBottom()
+}
+
+// renderLogsViewer renders the Ctrl+O viewer: a selectable list of sub-agents +
+// background jobs, or the scrollable full log of the one the user opened.
+func (m Model) renderLogsViewer() string {
+	var b strings.Builder
+	b.WriteString(theme.Brand.Render("logs"))
+	b.WriteString("\n\n")
+	if m.logOpenID != "" {
+		// Open one job's full log.
+		b.WriteString(theme.Meta.Render(m.logOpenKind + " " + shortID(m.logOpenID)))
+		b.WriteString("\n")
+		b.WriteString(m.logVP.View())
+		return b.String()
+	}
+	jobs := m.unifiedJobs()
+	if len(jobs) == 0 {
+		b.WriteString(theme.Meta.Render("  no sub-agents or background jobs yet."))
+		return b.String()
+	}
+	for i, j := range jobs {
+		label := strings.ReplaceAll(j.Label, "\n", " ")
+		label = clipLine(label, m.width-30)
+		row := fmt.Sprintf("[%d] %-6s %-8s %-9s %s", i+1, j.Kind, shortID(j.ID), j.Status, label)
+		if i == m.logSel {
+			b.WriteString(theme.Prompt.Render(theme.PromptGlyph) + " " + theme.Brand.Render(row))
+		} else {
+			b.WriteString("  " + theme.Help.Render(row))
+		}
+		b.WriteString("\n")
+	}
+	return b.String()
 }
 
 // killSelected kills the n-th (1-based) job in the unified list.

@@ -67,7 +67,7 @@ func renderJobsFooter(jobs []agentJob, width int) string {
 	if failed > 0 {
 		parts = append(parts, fmt.Sprintf("%d failed", failed))
 	}
-	parts = append(parts, "(ctrl+b background · ctrl+j detail · ctrl+k kill)")
+	parts = append(parts, "(ctrl+b background · ctrl+o logs)")
 	line := strings.Join(parts, "  ·  ")
 	return jobsFooterStyle.Width(width).Render(line)
 }

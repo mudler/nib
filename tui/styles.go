@@ -20,7 +20,6 @@ var (
 	toolNameStyle      = theme.Gutter
 	sectionHeaderStyle = theme.Brand
 	promptHintStyle    = theme.ApproveKey
-	dimmedStyle        = theme.Help
 
 	// Retained so any remaining reference compiles; the redesign no longer
 	// boxes content. Safe to delete once no call sites remain.

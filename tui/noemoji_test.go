@@ -48,6 +48,13 @@ func TestNoEmojiInRenderHelpers(t *testing.T) {
 		t.Fatalf("toolApprovalLabel (root) contains emoji: %q", root)
 	}
 
+	// Ctrl+O log viewer list.
+	lv := newLogsModel()
+	lv.showLogs = true
+	if out := lv.renderLogsViewer(); containsEmoji(out) {
+		t.Fatalf("renderLogsViewer output contains emoji: %q", out)
+	}
+
 	// Completion popup (tags, names, descriptions, ghost hint).
 	cmds, skills, agents := sampleRegistries()
 	var c compState

@@ -31,6 +31,6 @@ func renderShellJobsFooter(jobs []wizmcp.ShellJobInfo, width int) string {
 	if failed > 0 {
 		parts = append(parts, fmt.Sprintf("%d failed", failed))
 	}
-	parts = append(parts, "(ctrl+b background · ctrl+j detail · ctrl+k kill)")
+	parts = append(parts, "(ctrl+b background · ctrl+o logs)")
 	return jobsFooterStyle.Width(width).Render(strings.Join(parts, "  ·  "))
 }
