@@ -41,9 +41,9 @@ var toolFormatters = map[string]func(map[string]any) string{
 	"ask_user":         func(a map[string]any) string { return "ask: " + argStr(a, "question") },
 	"agent_logs":       func(a map[string]any) string { return "agent logs " + argStr(a, "agent_id") },
 	"schedule_wakeup":  fmtWakeup,
-	"spawn_agent":      func(a map[string]any) string { return "spawn " + argStr(a, "type") + ": " + argStr(a, "task") },
-	"check_agent":      func(a map[string]any) string { return "check agent " + argStr(a, "id") },
-	"get_agent_result": func(a map[string]any) string { return "result of agent " + argStr(a, "id") },
+	"spawn_agent":      func(a map[string]any) string { return "spawn " + argStr(a, "agent_type") + ": " + argStr(a, "task") },
+	"check_agent":      func(a map[string]any) string { return "check agent " + argStr(a, "agent_id") },
+	"get_agent_result": func(a map[string]any) string { return "result of agent " + argStr(a, "agent_id") },
 }
 
 func fmtBash(a map[string]any) string {

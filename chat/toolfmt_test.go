@@ -51,9 +51,9 @@ func TestFormatToolCall_KnownTools(t *testing.T) {
 		{"ask_user", "ask_user", `{"question":"Proceed?"}`, "ask: Proceed?"},
 		{"agent_logs", "agent_logs", `{"agent_id":"a1b2"}`, "agent logs a1b2"},
 		{"schedule_wakeup", "schedule_wakeup", `{"delay_seconds":600,"note":"check build"}`, "wake in 600s — check build"},
-		{"spawn_agent", "spawn_agent", `{"type":"researcher","task":"find docs"}`, "spawn researcher: find docs"},
-		{"check_agent", "check_agent", `{"id":"a1b2"}`, "check agent a1b2"},
-		{"get_agent_result", "get_agent_result", `{"id":"a1b2"}`, "result of agent a1b2"},
+		{"spawn_agent", "spawn_agent", `{"agent_type":"researcher","task":"find docs"}`, "spawn researcher: find docs"},
+		{"check_agent", "check_agent", `{"agent_id":"a1b2"}`, "check agent a1b2"},
+		{"get_agent_result", "get_agent_result", `{"agent_id":"a1b2"}`, "result of agent a1b2"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
