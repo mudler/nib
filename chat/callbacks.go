@@ -37,9 +37,10 @@ type ToolCallRequest struct {
 // ToolResult is the outcome of a tool execution, surfaced to the UI after the
 // tool runs.
 type ToolResult struct {
-	Name    string
-	Result  string
-	AgentID string // non-empty when the tool was run by a sub-agent
+	Name      string
+	Result    string
+	Arguments string // marshaled JSON of the call's arguments, for display
+	AgentID   string // non-empty when the tool was run by a sub-agent
 }
 
 // ToolCallResponse represents the user's decision on a tool call.

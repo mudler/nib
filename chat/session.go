@@ -379,10 +379,15 @@ func (s *Session) SendMessage(text string) (string, error) {
 				})
 			}
 			if s.callbacks.OnToolResult != nil {
+				argsJSON := ""
+				if b, err := json.Marshal(status.ToolArguments.Arguments); err == nil {
+					argsJSON = string(b)
+				}
 				s.callbacks.OnToolResult(ToolResult{
-					Name:    status.Name,
-					Result:  status.Result,
-					AgentID: s.agentLogs.agentFor(status.ToolArguments.ID),
+					Name:      status.Name,
+					Result:    status.Result,
+					Arguments: argsJSON,
+					AgentID:   s.agentLogs.agentFor(status.ToolArguments.ID),
 				})
 			}
 		}),

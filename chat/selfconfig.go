@@ -19,11 +19,6 @@ type toolDef struct {
 // noArgs is the empty JSON-schema shape for parameterless tools.
 type noArgs struct{}
 
-func argStr(args map[string]any, key string) string {
-	v, _ := args[key].(string)
-	return strings.TrimSpace(v)
-}
-
 func argStrSlice(args map[string]any, key string) []string {
 	switch v := args[key].(type) {
 	case []any:
