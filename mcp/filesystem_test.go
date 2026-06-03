@@ -343,6 +343,109 @@ func TestEditFile(t *testing.T) {
 	}
 }
 
+// TestEditRequiresRead verifies that edits are gated on a prior read of the
+// same file: editing a file that was never read must fail, and editing it
+// after a successful read must succeed.
+func TestEditRequiresRead(t *testing.T) {
+	tmpDir := t.TempDir()
+	tmpFile := filepath.Join(tmpDir, "test.txt")
+	if err := os.WriteFile(tmpFile, []byte("hello world"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	fs := newFileSystem()
+	ctx := context.Background()
+
+	// Editing before reading must be rejected and must not modify the file.
+	_, out, err := fs.edit(ctx, &mcp.CallToolRequest{}, editFileInput{
+		Path: tmpFile,
+		Old:  "world",
+		New:  "universe",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if out.Success {
+		t.Fatal("expected edit to fail before the file was read")
+	}
+	if !strings.Contains(out.Error, "read") {
+		t.Errorf("expected error to mention reading the file first, got: %s", out.Error)
+	}
+	content, _ := os.ReadFile(tmpFile)
+	if string(content) != "hello world" {
+		t.Errorf("file should be unchanged, got: %s", string(content))
+	}
+
+	// Read the file, then the same edit must succeed.
+	if _, rout, err := fs.read(ctx, &mcp.CallToolRequest{}, readFileInput{Path: tmpFile}); err != nil || !rout.Success {
+		t.Fatalf("read failed: err=%v success=%v", err, rout.Success)
+	}
+	_, out, err = fs.edit(ctx, &mcp.CallToolRequest{}, editFileInput{
+		Path: tmpFile,
+		Old:  "world",
+		New:  "universe",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !out.Success {
+		t.Fatalf("expected edit to succeed after reading, got error: %s", out.Error)
+	}
+	content, _ = os.ReadFile(tmpFile)
+	if string(content) != "hello universe" {
+		t.Errorf("expected 'hello universe', got: %s", string(content))
+	}
+}
+
+// TestEditAfterWrite verifies that writing a file also unlocks editing it,
+// since the agent already knows the contents it just wrote.
+func TestEditAfterWrite(t *testing.T) {
+	tmpDir := t.TempDir()
+	tmpFile := filepath.Join(tmpDir, "new.txt")
+
+	fs := newFileSystem()
+	ctx := context.Background()
+
+	if _, wout, err := fs.write(ctx, &mcp.CallToolRequest{}, writeFileInput{Path: tmpFile, Content: "foo bar"}); err != nil || !wout.Success {
+		t.Fatalf("write failed: err=%v success=%v", err, wout.Success)
+	}
+	_, out, err := fs.edit(ctx, &mcp.CallToolRequest{}, editFileInput{Path: tmpFile, Old: "bar", New: "baz"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !out.Success {
+		t.Fatalf("expected edit to succeed after writing, got error: %s", out.Error)
+	}
+}
+
+// TestEditReadPathNormalization verifies that the gate matches paths
+// regardless of how they are expressed (relative vs. cleaned).
+func TestEditReadPathNormalization(t *testing.T) {
+	tmpDir := t.TempDir()
+	tmpFile := filepath.Join(tmpDir, "test.txt")
+	if err := os.WriteFile(tmpFile, []byte("hello world"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	fs := newFileSystem()
+	ctx := context.Background()
+
+	// Read via a path containing a redundant "." segment.
+	readPath := filepath.Join(tmpDir, ".", "test.txt")
+	if _, rout, err := fs.read(ctx, &mcp.CallToolRequest{}, readFileInput{Path: readPath}); err != nil || !rout.Success {
+		t.Fatalf("read failed: err=%v success=%v", err, rout.Success)
+	}
+
+	// Edit via the cleaned path: should be recognized as the same file.
+	_, out, err := fs.edit(ctx, &mcp.CallToolRequest{}, editFileInput{Path: tmpFile, Old: "world", New: "universe"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !out.Success {
+		t.Fatalf("expected edit to succeed across equivalent paths, got error: %s", out.Error)
+	}
+}
+
 // TestGlobFiles tests the glob file functionality
 func TestGlobFiles(t *testing.T) {
 	tests := []struct {

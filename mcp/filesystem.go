@@ -9,10 +9,91 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
+
+// fileSystem holds per-server state that gates mutating operations. An edit is
+// only allowed once the agent has seen the file's contents, either by reading
+// it or by writing it. This prevents blind edits against files the agent has
+// never inspected.
+type fileSystem struct {
+	mu   sync.Mutex
+	seen map[string]bool
+}
+
+// newFileSystem creates a filesystem handler with an empty seen-file set.
+func newFileSystem() *fileSystem {
+	return &fileSystem{seen: make(map[string]bool)}
+}
+
+// pathKey normalizes a path so the same file is recognized regardless of how
+// it was spelled (relative vs. absolute, redundant "." segments, etc.).
+func pathKey(path string) string {
+	if abs, err := filepath.Abs(path); err == nil {
+		return abs
+	}
+	return filepath.Clean(path)
+}
+
+// markSeen records that the agent has observed a file's contents.
+func (f *fileSystem) markSeen(path string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.seen[pathKey(path)] = true
+}
+
+// hasSeen reports whether the agent has observed a file's contents.
+func (f *fileSystem) hasSeen(path string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.seen[pathKey(path)]
+}
+
+// read reads a file and records it as seen so it can later be edited.
+func (f *fileSystem) read(ctx context.Context, req *mcp.CallToolRequest, input readFileInput) (
+	*mcp.CallToolResult,
+	readFileOutput,
+	error,
+) {
+	res, out, err := readFile(ctx, req, input)
+	if out.Success {
+		f.markSeen(input.Path)
+	}
+	return res, out, err
+}
+
+// write writes a file and records it as seen: after writing, the agent knows
+// the file's exact contents, so a subsequent edit is no longer blind.
+func (f *fileSystem) write(ctx context.Context, req *mcp.CallToolRequest, input writeFileInput) (
+	*mcp.CallToolResult,
+	writeFileOutput,
+	error,
+) {
+	res, out, err := writeFile(ctx, req, input)
+	if out.Success {
+		f.markSeen(input.Path)
+	}
+	return res, out, err
+}
+
+// edit replaces a string in a file, but only if the file was previously read
+// or written; otherwise it refuses, since editing an unseen file is unsafe.
+func (f *fileSystem) edit(ctx context.Context, req *mcp.CallToolRequest, input editFileInput) (
+	*mcp.CallToolResult,
+	editFileOutput,
+	error,
+) {
+	if !f.hasSeen(input.Path) {
+		return nil, editFileOutput{
+			Success: false,
+			Error:   "file must be read before editing; call read on this path first",
+		}, nil
+	}
+	return editFile(ctx, req, input)
+}
 
 // Input type for reading files
 type readFileInput struct {
@@ -467,23 +548,26 @@ func StartFileSystemMCPServer(ctx context.Context, transport mcp.Transport) erro
 		Version: "v1.0.0",
 	}, nil)
 
+	// Per-server state gating edits behind a prior read or write of the file.
+	fs := newFileSystem()
+
 	// Add tool for reading files
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "read",
 		Description: "Read file with line numbers, supports optional offset and limit for reading specific line ranges",
-	}, readFile)
+	}, fs.read)
 
 	// Add tool for writing files
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "write",
 		Description: "Write content to a file, creates parent directories if needed, overwrites existing files",
-	}, writeFile)
+	}, fs.write)
 
 	// Add tool for editing files
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "edit",
-		Description: "Replace old string with new string in a file, old string must be unique unless all=true",
-	}, editFile)
+		Description: "Replace old string with new string in a file. The file must be read (or written) first; old string must be unique unless all=true",
+	}, fs.edit)
 
 	// Add tool for glob file matching
 	mcp.AddTool(server, &mcp.Tool{
