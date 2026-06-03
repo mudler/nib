@@ -26,11 +26,94 @@ func FormatToolCall(name, argsJSON string) string {
 }
 
 // toolFormatters maps a tool name to a formatter over its decoded arguments.
-// Populated by per-tool functions; empty for now (fallback handles everything).
-var toolFormatters = map[string]func(map[string]any) string{}
+var toolFormatters = map[string]func(map[string]any) string{
+	"bash":             fmtBash,
+	"bash_background":  fmtBashBackground,
+	"bash_jobs":        func(map[string]any) string { return "list shell jobs" },
+	"bash_job_output":  func(a map[string]any) string { return "job output " + argStr(a, "job_id") },
+	"bash_job_kill":    func(a map[string]any) string { return "kill job " + argStr(a, "job_id") },
+	"read":             fmtRead,
+	"write":            func(a map[string]any) string { return "write " + argStr(a, "path") },
+	"edit":             fmtEdit,
+	"glob":             func(a map[string]any) string { return "glob " + argStr(a, "pat") + " in " + argStrOr(a, "path", ".") },
+	"grep":             func(a map[string]any) string { return "grep /" + argStr(a, "pat") + "/ in " + argStrOr(a, "path", ".") },
+	"load_skill":       func(a map[string]any) string { return "load skill " + argStr(a, "name") },
+	"ask_user":         func(a map[string]any) string { return "ask: " + argStr(a, "question") },
+	"agent_logs":       func(a map[string]any) string { return "agent logs " + argStr(a, "agent_id") },
+	"schedule_wakeup":  fmtWakeup,
+	"spawn_agent":      func(a map[string]any) string { return "spawn " + argStr(a, "type") + ": " + argStr(a, "task") },
+	"check_agent":      func(a map[string]any) string { return "check agent " + argStr(a, "id") },
+	"get_agent_result": func(a map[string]any) string { return "result of agent " + argStr(a, "id") },
+}
+
+func fmtBash(a map[string]any) string {
+	s := "$ " + argStr(a, "script")
+	if t := argStr(a, "timeout"); t != "" {
+		s += "  (timeout " + t + "s)"
+	}
+	return s
+}
+
+func fmtBashBackground(a map[string]any) string {
+	return "$ " + argStr(a, "script") + "  (background)"
+}
+
+func fmtRead(a map[string]any) string {
+	s := "read " + argStr(a, "path")
+	off, okOff := argInt(a, "offset")
+	lim, okLim := argInt(a, "limit")
+	if okOff && okLim {
+		s += fmt.Sprintf("  (lines %d–%d)", off, off+lim)
+	} else if okOff {
+		s += fmt.Sprintf("  (from line %d)", off)
+	}
+	return s
+}
+
+func fmtEdit(a map[string]any) string {
+	return "edit " + argStr(a, "path") + "\n  " + argStr(a, "old") + " → " + argStr(a, "new")
+}
+
+func fmtWakeup(a map[string]any) string {
+	s := "wake in " + argStr(a, "delay_seconds") + "s"
+	if note := argStr(a, "note"); note != "" {
+		s += " — " + note
+	}
+	return s
+}
+
+// argStr returns args[key] rendered as a scalar string, or "" if absent.
+func argStr(a map[string]any, key string) string {
+	v, ok := a[key]
+	if !ok {
+		return ""
+	}
+	return stringifyArg(v)
+}
+
+// argStrOr is argStr with a default when the key is absent or empty.
+func argStrOr(a map[string]any, key, def string) string {
+	if s := argStr(a, key); s != "" {
+		return s
+	}
+	return def
+}
+
+// argInt returns args[key] as an int (JSON numbers decode to float64).
+func argInt(a map[string]any, key string) (int, bool) {
+	v, ok := a[key]
+	if !ok {
+		return 0, false
+	}
+	f, ok := v.(float64)
+	if !ok {
+		return 0, false
+	}
+	return int(f), true
+}
 
 // humanizeArgs renders arbitrary arguments as sorted "key: value" lines. Scalar
-// values render inline; multi-line or long strings render as an indented block
+// values render inline; multi-line strings render as an indented block
 // beneath their key.
 func humanizeArgs(args map[string]any) string {
 	keys := make([]string, 0, len(args))
