@@ -27,6 +27,7 @@ import (
 type ChatMessage struct {
 	Role    string
 	Content string
+	Name    string // tool name, for Role == "tool"
 }
 
 // Model represents the TUI state
@@ -100,6 +101,7 @@ type Model struct {
 	reasoningChan    chan string
 	toolRequestChan  chan chat.ToolCallRequest
 	toolResponseChan chan chat.ToolCallResponse
+	toolResultChan   chan chat.ToolResult
 }
 
 // responseMsg is sent when the AI responds
@@ -122,6 +124,9 @@ type askMsg chat.AskRequest
 
 // agentEventMsg is sent for sub-agent lifecycle updates.
 type agentEventMsg chat.AgentEvent
+
+// toolResultMsg carries a finished tool's output to the UI.
+type toolResultMsg chat.ToolResult
 
 // sessionReadyMsg is sent when the session is initialized
 type sessionReadyMsg struct {
@@ -176,6 +181,7 @@ func NewModel(ctx context.Context, cfg types.Config, height int, shellJobs *wizm
 		reasoningChan:    make(chan string, 10),
 		toolRequestChan:  make(chan chat.ToolCallRequest),
 		toolResponseChan: make(chan chat.ToolCallResponse),
+		toolResultChan:   make(chan chat.ToolResult, 64),
 		askRequestChan:   make(chan chat.AskRequest),
 		askResponseChan:  make(chan string),
 		wakeupChan:       make(chan chat.WakeupRequest, 8),
@@ -230,6 +236,12 @@ func (m Model) initSession() tea.Cmd {
 			OnAgentEvent: func(ev chat.AgentEvent) {
 				select {
 				case m.agentEventChan <- ev:
+				default:
+				}
+			},
+			OnToolResult: func(res chat.ToolResult) {
+				select {
+				case m.toolResultChan <- res:
 				default:
 				}
 			},
@@ -456,7 +468,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.session = msg.session
 		m.sessionReady = true
 		// Start listening for callbacks
-		cmds = append(cmds, m.listenStatus(), m.listenReasoning(), m.listenToolRequest(), m.listenAskRequest(), m.listenAgentEvents(), m.shellTick(), m.listenWakeup())
+		cmds = append(cmds, m.listenStatus(), m.listenReasoning(), m.listenToolRequest(), m.listenToolResult(), m.listenAskRequest(), m.listenAgentEvents(), m.shellTick(), m.listenWakeup())
 
 	case responseMsg:
 		m.loading = false
@@ -559,6 +571,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Continue listening for more agent events
 		cmds = append(cmds, m.listenAgentEvents())
 
+	case toolResultMsg:
+		res := chat.ToolResult(msg)
+		if res.AgentID == "" { // root-agent result: show inline (sub-agent output stays in Ctrl+J)
+			if preview := chat.PreviewResult(res.Result, 12); preview != "" {
+				m.messages = append(m.messages, ChatMessage{Role: "tool", Name: res.Name, Content: res.Result})
+				m.updateViewport()
+			}
+		}
+		// Continue listening for more tool results
+		cmds = append(cmds, m.listenToolResult())
+
 	case spinner.TickMsg:
 		m.spinner, cmd = m.spinner.Update(msg)
 		cmds = append(cmds, cmd)
@@ -660,6 +683,18 @@ func (m Model) listenToolRequest() tea.Cmd {
 		select {
 		case req := <-m.toolRequestChan:
 			return toolCallMsg(req)
+		case <-m.ctx.Done():
+			return nil
+		}
+	}
+}
+
+// listenToolResult listens for finished tool results from the session.
+func (m Model) listenToolResult() tea.Cmd {
+	return func() tea.Msg {
+		select {
+		case res := <-m.toolResultChan:
+			return toolResultMsg(res)
 		case <-m.ctx.Done():
 			return nil
 		}
@@ -882,6 +917,18 @@ func (m *Model) updateViewport() {
 					sb.WriteString(strings.Repeat(" ", prefixWidth))
 					sb.WriteString(agentStyle.Render(line))
 				}
+				sb.WriteString("\n")
+			}
+			sb.WriteString("\n")
+		case "tool":
+			// Calm, dim block: a header naming the tool, then the pretty/truncated
+			// output indented and dimmed beneath it.
+			sb.WriteString(theme.Subtle.Render(theme.Sep + " " + msg.Name))
+			sb.WriteString("\n")
+			body := chat.PreviewResult(msg.Content, 12)
+			wrapped := wrapText(body, contentWidth-2)
+			for _, line := range strings.Split(strings.TrimRight(wrapped, "\n"), "\n") {
+				sb.WriteString("  " + theme.Help.Render(line))
 				sb.WriteString("\n")
 			}
 			sb.WriteString("\n")
