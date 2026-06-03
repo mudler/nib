@@ -12,8 +12,8 @@ func TestRegistryRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadRegistry (empty): %v", err)
 	}
-	if len(reg.Plugins) != 0 {
-		t.Fatalf("expected empty registry, got %+v", reg.Plugins)
+	if len(reg.Entries) != 0 {
+		t.Fatalf("expected empty registry, got %+v", reg.Entries)
 	}
 
 	reg.Upsert(Entry{Name: "a", SourceURL: "u1", Ref: "v1", Enabled: true})
@@ -26,14 +26,14 @@ func TestRegistryRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadRegistry (reload): %v", err)
 	}
-	if len(reg2.Plugins) != 2 {
-		t.Fatalf("expected 2 plugins, got %d", len(reg2.Plugins))
+	if len(reg2.Entries) != 2 {
+		t.Fatalf("expected 2 plugins, got %d", len(reg2.Entries))
 	}
 
 	// Upsert updates in place (no duplicate).
 	reg2.Upsert(Entry{Name: "a", SourceURL: "u1", Ref: "v2", Enabled: false})
-	if len(reg2.Plugins) != 2 {
-		t.Fatalf("upsert duplicated entry: %d", len(reg2.Plugins))
+	if len(reg2.Entries) != 2 {
+		t.Fatalf("upsert duplicated entry: %d", len(reg2.Entries))
 	}
 	if e := reg2.Find("a"); e == nil || e.Ref != "v2" || e.Enabled {
 		t.Fatalf("upsert did not update: %+v", e)

@@ -71,6 +71,21 @@ func (f *claudeToolsField) UnmarshalYAML(value *yaml.Node) error {
 	return nil
 }
 
+// ParseSkillMarkdown parses a SKILL.md byte slice into its frontmatter fields
+// (name, description, wiz tool names) and body. Tool names are aliased from
+// Claude names to wiz names. Shared by the plugin Claude adapter and the
+// standalone skill installer (skill package).
+func ParseSkillMarkdown(data []byte) (name, description string, tools []string, body string) {
+	fm, body := splitFrontmatter(data)
+	var meta struct {
+		Name        string           `yaml:"name"`
+		Description string           `yaml:"description"`
+		Tools       claudeToolsField `yaml:"allowed-tools"`
+	}
+	_ = yaml.Unmarshal(fm, &meta)
+	return meta.Name, meta.Description, meta.Tools.tools, body
+}
+
 // loadClaudeSkills reads skills/<name>/SKILL.md files into SkillSpecs (bodies inline).
 func loadClaudeSkills(root string) []SkillSpec {
 	entries, err := os.ReadDir(filepath.Join(root, "skills"))
@@ -86,22 +101,15 @@ func loadClaudeSkills(root string) []SkillSpec {
 		if err != nil {
 			continue
 		}
-		fm, body := splitFrontmatter(data)
-		var meta struct {
-			Name        string           `yaml:"name"`
-			Description string           `yaml:"description"`
-			Tools       claudeToolsField `yaml:"allowed-tools"`
-		}
-		_ = yaml.Unmarshal(fm, &meta)
-		name := meta.Name
+		name, desc, tools, body := ParseSkillMarkdown(data)
 		if name == "" {
 			name = e.Name()
 		}
 		out = append(out, SkillSpec{
 			Name:         name,
-			Description:  meta.Description,
+			Description:  desc,
 			Instructions: InstructionsSpec{Inline: body},
-			Tools:        meta.Tools.tools,
+			Tools:        tools,
 		})
 	}
 	return out

@@ -1,4 +1,4 @@
-// Package plugin loads, installs, and merges wiz plugins. A plugin is a git
+// Package plugin loads, installs, and merges nib plugins. A plugin is a git
 // repo whose contributions (MCP servers, sub-agent types, and — in later
 // phases — prompt fragments, skills, commands, hooks) are normalized into a
 // format-agnostic Manifest and merged into the effective wiz config.

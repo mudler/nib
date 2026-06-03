@@ -42,6 +42,9 @@ func main() {
 	if len(os.Args) >= 2 && os.Args[1] == "plugin" {
 		os.Exit(cmd.RunPluginCommand(os.Args[2:]))
 	}
+	if len(os.Args) >= 2 && os.Args[1] == "skill" {
+		os.Exit(cmd.RunSkillCommand(os.Args[2:]))
+	}
 
 	// Parse command line arguments
 	heightFlag := flag.String("height", "", "Height of the TUI (e.g., '40%' or '20')")

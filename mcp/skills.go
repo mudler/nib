@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/mudler/nib/types"
@@ -21,24 +22,30 @@ type loadSkillOutput struct {
 	Error        string `json:"error,omitempty" jsonschema:"error message if not found"`
 }
 
-// skillIndex builds a name→instructions map and the ordered list of names.
-func skillIndex(skills []types.Skill) (map[string]string, []string) {
-	index := make(map[string]string, len(skills))
+// skillIndex builds a name→skill map and the ordered list of names.
+func skillIndex(skills []types.Skill) (map[string]types.Skill, []string) {
+	index := make(map[string]types.Skill, len(skills))
 	names := make([]string, 0, len(skills))
 	for _, s := range skills {
-		index[s.Name] = s.Instructions
+		index[s.Name] = s
 		names = append(names, s.Name)
 	}
 	return index, names
 }
 
-// loadSkillResult looks a skill up by name in the index.
-func loadSkillResult(index map[string]string, in loadSkillInput) loadSkillOutput {
-	body, ok := index[in.Name]
+// loadSkillResult looks a skill up by name. When the skill has an on-disk Dir
+// (an installed skill pack with bundled scripts/files), it prepends a base
+// directory line so the agent can read those supporting files.
+func loadSkillResult(index map[string]types.Skill, in loadSkillInput) loadSkillOutput {
+	s, ok := index[in.Name]
 	if !ok {
 		return loadSkillOutput{Name: in.Name, Found: false, Error: fmt.Sprintf("unknown skill %q", in.Name)}
 	}
-	return loadSkillOutput{Name: in.Name, Instructions: body, Found: true}
+	instructions := s.Instructions
+	if strings.TrimSpace(s.Dir) != "" {
+		instructions = fmt.Sprintf("Base directory for this skill: %s\n\n%s", s.Dir, s.Instructions)
+	}
+	return loadSkillOutput{Name: in.Name, Instructions: instructions, Found: true}
 }
 
 // StartSkillsMCPServer runs an in-memory MCP server exposing a load_skill tool

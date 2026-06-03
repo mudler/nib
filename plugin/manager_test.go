@@ -4,20 +4,22 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/mudler/nib/internal/vcs"
 )
 
-// withFakeGit replaces gitClone to materialize a fixed manifest, so Manager
+// withFakeGit replaces vcs.Clone to materialize a fixed manifest, so Manager
 // tests don't depend on a network or real remote.
 func withFakeGit(t *testing.T, manifestBody string) {
 	t.Helper()
-	origClone := gitClone
-	gitClone = func(url, ref, dest string) error {
+	origClone := vcs.Clone
+	vcs.Clone = func(url, ref, dest string) error {
 		if err := os.MkdirAll(dest, 0o755); err != nil {
 			return err
 		}
 		return os.WriteFile(filepath.Join(dest, NativeManifestFile), []byte(manifestBody), 0o644)
 	}
-	t.Cleanup(func() { gitClone = origClone })
+	t.Cleanup(func() { vcs.Clone = origClone })
 }
 
 func TestManagerInstallRegistersDisabled(t *testing.T) {

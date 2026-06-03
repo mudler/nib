@@ -40,6 +40,7 @@ type Skill struct {
 	Description  string   `yaml:"description"`
 	Instructions string   `yaml:"instructions"` // resolved body (inline, or loaded from a plugin file)
 	Tools        []string `yaml:"tools,omitempty"`
+	Dir          string   `yaml:"-"` // absolute on-disk dir for bundled files; runtime-only, never serialized
 }
 
 // CommandConfig is a named slash command: a prompt template (text/template with
