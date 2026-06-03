@@ -1041,7 +1041,7 @@ func (m *Model) updateViewport() {
 		gutter := theme.Gutter.Render(theme.ApprovalGutter) + " "
 		sb.WriteString(gutter + theme.ApproveKey.Render(toolApprovalLabel(*m.pendingTool)))
 		sb.WriteString("\n")
-		args := wrapText(chat.PrettyJSON(m.pendingTool.Arguments), contentWidth-4)
+		args := wrapText(chat.FormatToolCall(m.pendingTool.Name, m.pendingTool.Arguments), contentWidth-4)
 		for _, line := range strings.Split(strings.TrimRight(args, "\n"), "\n") {
 			sb.WriteString(gutter + theme.Help.Render(line) + "\n")
 		}
