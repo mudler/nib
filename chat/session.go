@@ -430,6 +430,13 @@ func (s *Session) SendMessage(text string) (string, error) {
 		})),
 	)
 
+	// Wire the native self-configuration tools so the assistant can manage its
+	// own plugins, skills, and MCP servers. requestReload re-wires the live
+	// session on the next turn after any mutating op.
+	for _, d := range selfConfigToolDefs(s.configurator, s.requestReload) {
+		cogitoOpts = append(cogitoOpts, cogito.WithTools(d.def))
+	}
+
 	// Add ForceReasoning only if enabled in config
 	if s.cogitoOptions.ForceReasoning {
 		cogitoOpts = append(cogitoOpts, cogito.WithForceReasoning())
