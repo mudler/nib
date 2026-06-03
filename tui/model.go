@@ -4,10 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
-	"github.com/mudler/wiz/types"
+	"github.com/mudler/nib/theme"
+	"github.com/mudler/nib/types"
 
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textarea"
@@ -15,15 +18,17 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
-	"github.com/mudler/wiz/chat"
-	wizmcp "github.com/mudler/wiz/mcp"
-	"github.com/mudler/wiz/slash"
+	"github.com/mudler/nib/chat"
+	wizmcp "github.com/mudler/nib/mcp"
+	"github.com/mudler/nib/slash"
 )
 
 // ChatMessage represents a message in the chat history
 type ChatMessage struct {
 	Role    string
 	Content string
+	Name    string // tool name, for Role == "tool"
+	AgentID string // issuing sub-agent, for Role == "tool" (empty = root agent)
 }
 
 // Model represents the TUI state
@@ -61,6 +66,11 @@ type Model struct {
 	// Tool approval state
 	pendingTool      *chat.ToolCallRequest
 	awaitingApproval bool
+	// approvalEditing distinguishes the two approval sub-modes: false is the
+	// default key-driven choice mode (single y/a/n/e/A/Esc keypresses, input
+	// hidden); true is edit mode where the textarea is shown for a free-form
+	// change.
+	approvalEditing bool
 
 	// ask_user state
 	pendingAsk      *chat.AskRequest
@@ -74,9 +84,14 @@ type Model struct {
 
 	// Sub-agent jobs state
 	jobs           []agentJob
-	showJobsDetail bool
-	killArmed      bool // Ctrl+K pressed: next digit kills that numbered job
 	agentEventChan chan chat.AgentEvent
+
+	// Ctrl+O log viewer state.
+	showLogs    bool           // viewer open
+	logSel      int            // selected index in the unified jobs list (list mode)
+	logOpenID   string         // when non-empty: drilled into this job's full log
+	logOpenKind string         // "agent" | "shell" for the open job
+	logVP       viewport.Model // scrollable full-log view
 
 	// Auto-notify state: completion notices for backgrounded work that the
 	// assistant should react to.
@@ -92,6 +107,7 @@ type Model struct {
 	reasoningChan    chan string
 	toolRequestChan  chan chat.ToolCallRequest
 	toolResponseChan chan chat.ToolCallResponse
+	toolResultChan   chan chat.ToolResult
 }
 
 // responseMsg is sent when the AI responds
@@ -115,6 +131,12 @@ type askMsg chat.AskRequest
 // agentEventMsg is sent for sub-agent lifecycle updates.
 type agentEventMsg chat.AgentEvent
 
+// toolResultPreviewLines bounds how many lines of a tool result we show inline.
+const toolResultPreviewLines = 12
+
+// toolResultMsg carries a finished tool's output to the UI.
+type toolResultMsg chat.ToolResult
+
 // sessionReadyMsg is sent when the session is initialized
 type sessionReadyMsg struct {
 	session *chat.Session
@@ -126,21 +148,24 @@ func NewModel(ctx context.Context, cfg types.Config, height int, shellJobs *wizm
 	ctx, cancel := context.WithCancel(ctx)
 
 	ta := textarea.New()
-	ta.Placeholder = "Ask the wizard..."
+	ta.Placeholder = "ask anything…"
 	ta.Focus()
-	ta.Prompt = "│ "
+	ta.Prompt = theme.PromptGlyph + " "
+	ta.FocusedStyle.Prompt = theme.Prompt
 	ta.CharLimit = 4096
 	ta.SetWidth(80)
-	ta.SetHeight(3)
+	// Single-line input: Enter sends (newline insertion is disabled), so a
+	// taller textarea would just repeat the `›` prompt on every empty row.
+	ta.SetHeight(1)
 	ta.ShowLineNumbers = false
 	ta.KeyMap.InsertNewline.SetEnabled(false) // Enter sends message
 
 	vp := viewport.New(80, 10)
-	vp.SetContent("✨ Welcome! The wizard awaits your command.\n\nType your question and press Enter. Press Esc to exit.")
+	vp.SetContent("")
 
 	s := spinner.New()
 	s.Spinner = spinner.Points
-	s.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("39"))
+	s.Style = theme.Help
 
 	// Calculate max height - negative means percentage, positive means lines
 	maxH := height
@@ -150,6 +175,7 @@ func NewModel(ctx context.Context, cfg types.Config, height int, shellJobs *wizm
 
 	m := Model{
 		viewport:         vp,
+		logVP:            viewport.New(80, 10),
 		textarea:         ta,
 		spinner:          s,
 		messages:         []ChatMessage{},
@@ -165,6 +191,7 @@ func NewModel(ctx context.Context, cfg types.Config, height int, shellJobs *wizm
 		reasoningChan:    make(chan string, 10),
 		toolRequestChan:  make(chan chat.ToolCallRequest),
 		toolResponseChan: make(chan chat.ToolCallResponse),
+		toolResultChan:   make(chan chat.ToolResult, 64),
 		askRequestChan:   make(chan chat.AskRequest),
 		askResponseChan:  make(chan string),
 		wakeupChan:       make(chan chat.WakeupRequest, 8),
@@ -222,6 +249,12 @@ func (m Model) initSession() tea.Cmd {
 				default:
 				}
 			},
+			OnToolResult: func(res chat.ToolResult) {
+				select {
+				case m.toolResultChan <- res:
+				default:
+				}
+			},
 		}
 
 		session, err := chat.NewSession(m.ctx, m.cfg, callbacks, m.transports...)
@@ -236,23 +269,94 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
-		// Kill-selection mode (armed by Ctrl+K): a digit kills that numbered job;
-		// Esc/Ctrl+K cancels; any other key cancels and is handled normally.
-		if m.killArmed {
-			switch {
-			case msg.Type == tea.KeyEsc || msg.Type == tea.KeyCtrlK:
-				m.killArmed = false
-				m.status = ""
+		// Ctrl+O log viewer: intercepts navigation/scroll keys while open. Ctrl+C
+		// falls through so it can still interrupt/quit.
+		if m.showLogs && msg.Type != tea.KeyCtrlC {
+			jobs := m.unifiedJobs()
+			if m.logOpenID == "" {
+				// LIST mode
+				switch {
+				case msg.Type == tea.KeyEsc, msg.Type == tea.KeyCtrlO:
+					m.showLogs = false
+					return m, nil
+				case msg.Type == tea.KeyUp:
+					if m.logSel > 0 {
+						m.logSel--
+					}
+					return m, nil
+				case msg.Type == tea.KeyDown:
+					if m.logSel < len(jobs)-1 {
+						m.logSel++
+					}
+					return m, nil
+				case msg.Type == tea.KeyEnter:
+					if m.logSel >= 0 && m.logSel < len(jobs) {
+						m.logOpenID = jobs[m.logSel].ID
+						m.logOpenKind = jobs[m.logSel].Kind
+						m.syncLogViewport()
+					}
+					return m, nil
+				case msg.Type == tea.KeyRunes && len(msg.Runes) == 1 && (msg.Runes[0] == 'k' || msg.Runes[0] == 'K'):
+					if m.logSel >= 0 && m.logSel < len(jobs) {
+						m.killSelected(m.logSel + 1)
+					}
+					return m, nil
+				}
+				return m, nil // swallow other keys in list mode
+			}
+			// LOG mode (drilled into one job): Esc -> back to list; Ctrl+O -> close.
+			switch msg.Type {
+			case tea.KeyEsc:
+				m.logOpenID = ""
+				m.logOpenKind = ""
+				return m, nil
+			case tea.KeyCtrlO:
+				m.showLogs = false
+				m.logOpenID = ""
+				m.logOpenKind = ""
+				return m, nil
+			}
+			// Anything else scrolls the log viewport (up/down/pgup/pgdn/home/end).
+			var vpCmd tea.Cmd
+			m.logVP, vpCmd = m.logVP.Update(msg)
+			return m, vpCmd
+		}
+		// Tool approval is a distinct key-driven mode: in choice mode the chat
+		// input is hidden and y/a/n/e/A/Esc act as single keypresses; edit mode
+		// (entered with `e`) shows the textarea for a free-form change.
+		if m.awaitingApproval {
+			if !m.approvalEditing {
+				switch {
+				case msg.Type == tea.KeyEsc:
+					return m.resolveApproval(chat.ToolCallResponse{Approved: false})
+				case msg.Type == tea.KeyRunes && len(msg.Runes) == 1:
+					switch msg.Runes[0] {
+					case 'y', 'Y':
+						return m.resolveApproval(chat.ToolCallResponse{Approved: true})
+					case 'a':
+						return m.resolveApproval(chat.ToolCallResponse{Approved: true, AlwaysAllow: true})
+					case 'A':
+						return m.resolveApproval(chat.ToolCallResponse{Approved: true, AllowAllTurn: true})
+					case 'n', 'N':
+						return m.resolveApproval(chat.ToolCallResponse{Approved: false})
+					case 'e', 'E':
+						m.approvalEditing = true
+						m.textarea.Reset()
+						m.updateViewport()
+						return m, nil
+					}
+				}
+				// Swallow every other key in choice mode, but let Ctrl+C fall
+				// through to the normal interrupt/quit handling below.
+				if msg.Type != tea.KeyCtrlC {
+					return m, nil
+				}
+			} else if msg.Type == tea.KeyEsc {
+				// Edit mode: Esc cancels back to choice mode without denying.
+				m.approvalEditing = false
+				m.textarea.Reset()
 				m.updateViewport()
 				return m, nil
-			case msg.Type == tea.KeyRunes && len(msg.Runes) == 1 && msg.Runes[0] >= '1' && msg.Runes[0] <= '9':
-				m.killSelected(int(msg.Runes[0] - '0'))
-				m.killArmed = false
-				m.updateViewport()
-				return m, nil
-			default:
-				m.killArmed = false
-				m.status = ""
 			}
 		}
 		switch msg.Type {
@@ -291,19 +395,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 
-		case tea.KeyCtrlJ:
-			// Toggle the expanded jobs detail list.
-			m.showJobsDetail = !m.showJobsDetail
-			return m, nil
-
-		case tea.KeyCtrlK:
-			// Arm kill-selection: open the numbered detail and wait for a digit.
-			if m.sessionReady && len(m.unifiedJobs()) > 0 {
-				m.killArmed = true
-				m.showJobsDetail = true
-				m.status = "Kill which job? press its number · Esc cancels"
-				m.updateViewport()
+		case tea.KeyCtrlO:
+			// Toggle the navigable log viewer.
+			if !m.sessionReady {
+				return m, nil
 			}
+			m.showLogs = !m.showLogs
+			m.logSel = 0
+			m.logOpenID = ""
+			m.logOpenKind = ""
 			return m, nil
 
 		case tea.KeyTab:
@@ -388,7 +488,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			default: // slash.KindSend
 				m.loading = true
 				m.interruptArmed = false
-				m.status = "Thinking..."
+				m.status = ""
 				m.updateViewport()
 				return m, m.sendMessage(action.Text)
 			}
@@ -407,7 +507,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.session = msg.session
 		m.sessionReady = true
 		// Start listening for callbacks
-		cmds = append(cmds, m.listenStatus(), m.listenReasoning(), m.listenToolRequest(), m.listenAskRequest(), m.listenAgentEvents(), m.shellTick(), m.listenWakeup())
+		cmds = append(cmds, m.listenStatus(), m.listenReasoning(), m.listenToolRequest(), m.listenToolResult(), m.listenAskRequest(), m.listenAgentEvents(), m.shellTick(), m.listenWakeup())
 
 	case responseMsg:
 		m.loading = false
@@ -416,7 +516,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.reasoning = ""
 		if msg.err != nil {
 			if errors.Is(msg.err, context.Canceled) {
-				m.messages = append(m.messages, ChatMessage{Role: "agent", Content: "⛔ Interrupted."})
+				m.messages = append(m.messages, ChatMessage{Role: "agent", Content: "interrupted."})
 			} else {
 				m.err = msg.err
 				m.messages = append(m.messages, ChatMessage{Role: "error", Content: msg.err.Error()})
@@ -439,6 +539,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, c)
 		}
 		m.updateViewport()
+		if m.showLogs && m.logOpenID != "" {
+			m.syncLogViewport()
+		}
 		if !m.quitting {
 			cmds = append(cmds, m.shellTick())
 		}
@@ -460,7 +563,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if note == "" {
 			note = "(no note)"
 		}
-		m.pendingNotices = append(m.pendingNotices, "⏰ scheduled wake-up: "+note)
+		m.pendingNotices = append(m.pendingNotices, "scheduled wake-up: "+note)
 		if c := m.autoNotifyCmd(); c != nil {
 			cmds = append(cmds, c)
 		}
@@ -480,7 +583,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case toolCallMsg:
 		m.pendingTool = (*chat.ToolCallRequest)(&msg)
 		m.awaitingApproval = true
-		m.loading = false  // Allow user input for approval
+		m.approvalEditing = false // every approval starts in key-driven choice mode
+		m.loading = false         // Allow user input for approval
 		m.textarea.Focus() // Ensure textarea is focused for input
 		m.updateViewport()
 		// Continue listening for more tool requests
@@ -501,13 +605,44 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		am := m
 		(&am).applyAgentEvent(ev)
 		m = am
-		// Durable transcript marker so sub-agent activity stays visible in history.
-		if line := agentTranscriptLine(ev); line != "" {
+		// Quiet by default: on completion surface the sub-agent's FINAL result
+		// inline (one block, labeled with its id); its per-tool activity lives in
+		// the Ctrl+O log viewer. Other lifecycle events get a lightweight marker.
+		if ev.Status == chat.AgentStatusCompleted && strings.TrimSpace(ev.Result) != "" {
+			typ := ev.Type
+			if typ == "" {
+				typ = "agent"
+			}
+			m.messages = append(m.messages, ChatMessage{
+				Role:    "tool",
+				Name:    typ,
+				AgentID: ev.ID,
+				Content: chat.PreviewResult(ev.Result, toolResultPreviewLines),
+			})
+		} else if line := agentTranscriptLine(ev); line != "" {
 			m.messages = append(m.messages, ChatMessage{Role: "agent", Content: line})
 		}
 		m.updateViewport()
+		if m.showLogs && m.logOpenID != "" {
+			m.syncLogViewport()
+		}
 		// Continue listening for more agent events
 		cmds = append(cmds, m.listenAgentEvents())
+
+	case toolResultMsg:
+		res := chat.ToolResult(msg)
+		// Quiet by default: only the ROOT agent's tool results stream inline.
+		// Sub-agent tool activity lives in the Ctrl+O log viewer; a sub-agent's
+		// final result is shown inline on completion (see agentEventMsg). Preview
+		// once at append time so we don't retain a multi-MB raw result.
+		if res.AgentID == "" {
+			if preview := chat.PreviewResult(res.Result, toolResultPreviewLines); preview != "" {
+				m.messages = append(m.messages, ChatMessage{Role: "tool", Name: res.Name, Content: preview})
+				m.updateViewport()
+			}
+		}
+		// Continue listening for more tool results
+		cmds = append(cmds, m.listenToolResult())
 
 	case spinner.TickMsg:
 		m.spinner, cmd = m.spinner.Update(msg)
@@ -616,6 +751,18 @@ func (m Model) listenToolRequest() tea.Cmd {
 	}
 }
 
+// listenToolResult listens for finished tool results from the session.
+func (m Model) listenToolResult() tea.Cmd {
+	return func() tea.Msg {
+		select {
+		case res := <-m.toolResultChan:
+			return toolResultMsg(res)
+		case <-m.ctx.Done():
+			return nil
+		}
+	}
+}
+
 // listenAskRequest listens for ask_user requests from the session.
 func (m Model) listenAskRequest() tea.Cmd {
 	return func() tea.Msg {
@@ -628,33 +775,29 @@ func (m Model) listenAskRequest() tea.Cmd {
 	}
 }
 
-// handleToolApproval handles tool approval input
+// handleToolApproval handles a free-form adjustment typed in edit mode. An empty
+// input is treated as a plain approval. (Choice-mode keypresses are handled by
+// the interception block in Update and never reach here.)
 func (m Model) handleToolApproval(input string) (tea.Model, tea.Cmd) {
-	input = strings.ToLower(strings.TrimSpace(input))
-
-	var response chat.ToolCallResponse
-	switch input {
-	case "y", "yes":
-		response = chat.ToolCallResponse{Approved: true}
-	case "a", "always":
-		response = chat.ToolCallResponse{Approved: true, AlwaysAllow: true}
-	case "n", "no":
-		response = chat.ToolCallResponse{Approved: false}
-	default:
-		// Treat as adjustment
-		response = chat.ToolCallResponse{Approved: true, Adjustment: input}
+	input = strings.TrimSpace(input)
+	if input == "" {
+		return m.resolveApproval(chat.ToolCallResponse{Approved: true})
 	}
+	return m.resolveApproval(chat.ToolCallResponse{Approved: true, Adjustment: input})
+}
 
+// resolveApproval finalizes a tool-approval decision: tear down approval state,
+// resume the spinner, and hand the response back to the waiting callback.
+func (m Model) resolveApproval(resp chat.ToolCallResponse) (tea.Model, tea.Cmd) {
 	m.awaitingApproval = false
+	m.approvalEditing = false
 	m.pendingTool = nil
 	m.textarea.Reset()
 	m.loading = true
 	m.status = "Executing tool..."
 	m.updateViewport()
-
-	// Send response back to the waiting callback
 	return m, func() tea.Msg {
-		m.toolResponseChan <- response
+		m.toolResponseChan <- resp
 		return nil
 	}
 }
@@ -668,7 +811,7 @@ func (m *Model) updateDimensions() {
 	}
 
 	headerHeight := 2
-	footerHeight := 5 // textarea + border
+	footerHeight := 3 // single-line input + help line + spacing
 	statusHeight := 1
 
 	vpHeight := effectiveHeight - headerHeight - footerHeight - statusHeight
@@ -678,49 +821,9 @@ func (m *Model) updateDimensions() {
 
 	m.viewport.Width = m.width
 	m.viewport.Height = vpHeight
+	m.logVP.Width = m.width
+	m.logVP.Height = vpHeight
 	m.textarea.SetWidth(m.width - 2)
-}
-
-// Wizard face animation frames - the wizard winks while thinking!
-var wizardFaces = []string{
-	"◠ ◠", // normal
-	"◠ ─", // wink right
-	"◠ ◠", // normal
-	"─ ◠", // wink left
-	"─ ─", // blink
-	"◠ ◠", // normal
-}
-
-// Sparkle animation for the header
-var wizardSparkles = []string{"✨", "⭐", "💫", "✨", "⭐", "💫"}
-
-// getWizardFace returns the current wizard face animation frame
-func (m *Model) getWizardFace() string {
-	return wizardFaces[m.statusPhase%len(wizardFaces)]
-}
-
-// getWizardSparkle returns the current sparkle animation
-func (m *Model) getWizardSparkle() string {
-	return wizardSparkles[m.statusPhase%len(wizardSparkles)]
-}
-
-// getThinkingStatus returns an animated thinking status message
-func (m *Model) getThinkingStatus() string {
-	phases := []string{
-		"Casting spell",
-		"Casting spell.",
-		"Casting spell..",
-		"Casting spell...",
-		"Conjuring",
-		"Conjuring.",
-		"Conjuring..",
-		"Conjuring...",
-		"Summoning wisdom",
-		"Summoning wisdom.",
-		"Summoning wisdom..",
-		"Summoning wisdom...",
-	}
-	return phases[m.statusPhase%len(phases)]
 }
 
 // wrapText wraps text to fit within the specified width, preserving existing newlines
@@ -759,15 +862,10 @@ func wrapText(text string, width int) string {
 		for i, word := range words {
 			wordWidth := lipgloss.Width(word)
 
-			// If a single word is longer than width, we have to break it
+			// If a single word is longer than width, truncate it on a rune
+			// boundary (byte slicing here would split a multibyte rune).
 			if wordWidth > width && currentWidth == 0 {
-				// Break the word itself (simple approach: just truncate with ellipsis)
-				if width > 3 {
-					result.WriteString(word[:width-3])
-					result.WriteString("...")
-				} else {
-					result.WriteString(word[:width])
-				}
+				result.WriteString(truncateRunes(word, width))
 				result.WriteString("\n")
 				continue
 			}
@@ -801,6 +899,22 @@ func wrapText(text string, width int) string {
 	return result.String()
 }
 
+// truncateRunes shortens word to at most width display columns, breaking on a
+// rune boundary and appending an ellipsis when there is room for it.
+func truncateRunes(word string, width int) string {
+	runes := []rune(word)
+	if width <= 0 {
+		return ""
+	}
+	if len(runes) <= width {
+		return word
+	}
+	if width <= 1 {
+		return string(runes[:width])
+	}
+	return string(runes[:width-1]) + "…"
+}
+
 // updateViewport updates the viewport content with chat messages
 func (m *Model) updateViewport() {
 	var sb strings.Builder
@@ -817,7 +931,7 @@ func (m *Model) updateViewport() {
 	for _, msg := range m.messages {
 		switch msg.Role {
 		case "user":
-			prefix := userStyle.Render("👤 You: ")
+			prefix := userStyle.Render("you") + " " + theme.SepStyle.Render(theme.Sep) + " "
 			prefixWidth := lipgloss.Width(prefix)
 			wrappedContent := wrapText(msg.Content, contentWidth-prefixWidth)
 			// Add prefix to first line, indent continuation lines
@@ -836,7 +950,7 @@ func (m *Model) updateViewport() {
 			}
 			sb.WriteString("\n")
 		case "assistant":
-			prefix := assistantStyle.Render("🧙 Wiz: ")
+			prefix := assistantStyle.Render(theme.BrandName) + " " + theme.SepStyle.Render(theme.Sep) + " "
 			prefixWidth := lipgloss.Width(prefix)
 			wrappedContent := wrapText(msg.Content, contentWidth-prefixWidth)
 			// Add prefix to first line, indent continuation lines
@@ -855,7 +969,7 @@ func (m *Model) updateViewport() {
 			}
 			sb.WriteString("\n")
 		case "agent":
-			prefix := agentStyle.Render("🤖 ")
+			prefix := theme.Subtle.Render(theme.SubAgent) + " "
 			prefixWidth := lipgloss.Width(prefix)
 			wrappedContent := wrapText(msg.Content, contentWidth-prefixWidth)
 			lines := strings.Split(strings.TrimRight(wrappedContent, "\n"), "\n")
@@ -870,8 +984,24 @@ func (m *Model) updateViewport() {
 				sb.WriteString("\n")
 			}
 			sb.WriteString("\n")
+		case "tool":
+			// Calm, dim block: a header naming the tool, then the pretty/truncated
+			// output indented and dimmed beneath it.
+			label := msg.Name
+			if msg.AgentID != "" {
+				label = theme.SubAgent + " " + shortID(msg.AgentID) + " · " + msg.Name
+			}
+			sb.WriteString(theme.Subtle.Render(theme.Sep + " " + label))
+			sb.WriteString("\n")
+			// Content is already previewed (truncated + pretty) at append time.
+			wrapped := wrapText(msg.Content, contentWidth-2)
+			for _, line := range strings.Split(strings.TrimRight(wrapped, "\n"), "\n") {
+				sb.WriteString("  " + theme.Help.Render(line))
+				sb.WriteString("\n")
+			}
+			sb.WriteString("\n")
 		case "error":
-			prefix := errorStyle.Render("✗ Error: ")
+			prefix := errorStyle.Render(theme.Cross) + " "
 			prefixWidth := lipgloss.Width(prefix)
 			wrappedContent := wrapText(msg.Content, contentWidth-prefixWidth)
 			// Add prefix to first line, indent continuation lines
@@ -893,91 +1023,39 @@ func (m *Model) updateViewport() {
 	}
 
 	if m.loading {
-		// Use animated status if no specific status is set
 		displayStatus := m.status
 		if displayStatus == "" || displayStatus == "Thinking..." {
-			displayStatus = m.getThinkingStatus()
+			displayStatus = theme.Status(theme.VerbThinking, m.statusPhase)
 		}
-
-		// Build thinking box content
-		// Account for box padding (1 char each side) and border (1 char each side) = 4 chars total
-		boxContentWidth := contentWidth - 4
-		if boxContentWidth < 20 {
-			boxContentWidth = 20 // minimum width
-		}
-
-		var thinkingContent strings.Builder
-		thinkingContent.WriteString(thinkingStyle.Render(m.spinner.View() + " " + displayStatus))
+		sb.WriteString(theme.SepStyle.Render(theme.Sep) + " " + theme.Reasoning.Render(displayStatus))
+		sb.WriteString("\n")
 		if m.reasoning != "" {
-			thinkingContent.WriteString("\n")
-			reasoningPrefix := reasoningStyle.Render("💭 ")
-			reasoningPrefixWidth := lipgloss.Width(reasoningPrefix)
-			wrappedReasoning := wrapText(m.reasoning, boxContentWidth-reasoningPrefixWidth)
-			reasoningLines := strings.Split(strings.TrimRight(wrappedReasoning, "\n"), "\n")
-			for i, line := range reasoningLines {
-				if i == 0 {
-					thinkingContent.WriteString(reasoningPrefix)
-					thinkingContent.WriteString(line)
-				} else {
-					thinkingContent.WriteString(strings.Repeat(" ", reasoningPrefixWidth))
-					thinkingContent.WriteString(line)
-				}
-				thinkingContent.WriteString("\n")
+			wrapped := wrapText(m.reasoning, contentWidth-4)
+			for _, line := range strings.Split(strings.TrimRight(wrapped, "\n"), "\n") {
+				sb.WriteString("  " + theme.Reasoning.Render(line) + "\n")
 			}
 		}
-
-		sb.WriteString(thinkingBoxStyle.Render(thinkingContent.String()))
-		sb.WriteString("\n")
 	}
 
 	if m.awaitingApproval && m.pendingTool != nil {
-		// Build tool request box content
-		// Account for box padding (1 char each side) and border (1 char each side) = 4 chars total
-		boxContentWidth := contentWidth - 4
-		if boxContentWidth < 20 {
-			boxContentWidth = 20 // minimum width
-		}
-
-		var toolContent strings.Builder
-		toolContent.WriteString(toolNameStyle.Render(toolApprovalLabel(*m.pendingTool)))
-		toolContent.WriteString("\n\n")
-		// Wrap arguments
-		argsPrefix := dimmedStyle.Render("Arguments: ")
-		argsPrefixWidth := lipgloss.Width(argsPrefix)
-		wrappedArgs := wrapText(m.pendingTool.Arguments, boxContentWidth-argsPrefixWidth)
-		argsLines := strings.Split(strings.TrimRight(wrappedArgs, "\n"), "\n")
-		for i, line := range argsLines {
-			if i == 0 {
-				toolContent.WriteString(argsPrefix)
-				toolContent.WriteString(line)
-			} else {
-				toolContent.WriteString(strings.Repeat(" ", argsPrefixWidth))
-				toolContent.WriteString(line)
-			}
-			toolContent.WriteString("\n")
+		gutter := theme.Gutter.Render(theme.ApprovalGutter) + " "
+		sb.WriteString(gutter + theme.ApproveKey.Render(toolApprovalLabel(*m.pendingTool)))
+		sb.WriteString("\n")
+		args := wrapText(chat.PrettyJSON(m.pendingTool.Arguments), contentWidth-4)
+		for _, line := range strings.Split(strings.TrimRight(args, "\n"), "\n") {
+			sb.WriteString(gutter + theme.Help.Render(line) + "\n")
 		}
 		if m.pendingTool.Reasoning != "" {
-			toolContent.WriteString("\n")
-			reasoningPrefix := reasoningStyle.Render("💭 ")
-			reasoningPrefixWidth := lipgloss.Width(reasoningPrefix)
-			wrappedReasoning := wrapText(m.pendingTool.Reasoning, boxContentWidth-reasoningPrefixWidth)
-			reasoningLines := strings.Split(strings.TrimRight(wrappedReasoning, "\n"), "\n")
-			for i, line := range reasoningLines {
-				if i == 0 {
-					toolContent.WriteString(reasoningPrefix)
-					toolContent.WriteString(line)
-				} else {
-					toolContent.WriteString(strings.Repeat(" ", reasoningPrefixWidth))
-					toolContent.WriteString(line)
-				}
-				toolContent.WriteString("\n")
+			rz := wrapText(m.pendingTool.Reasoning, contentWidth-4)
+			for _, line := range strings.Split(strings.TrimRight(rz, "\n"), "\n") {
+				sb.WriteString(gutter + theme.Reasoning.Render(line) + "\n")
 			}
 		}
-		toolContent.WriteString("\n")
-		toolContent.WriteString(promptHintStyle.Render("[y]es  [a]lways  [n]o  "))
-		toolContent.WriteString(dimmedStyle.Render("or type adjustment"))
-
-		sb.WriteString(toolRequestBoxStyle.Render(toolContent.String()))
+		prompt := theme.ApprovePrompt
+		if m.approvalEditing {
+			prompt = theme.ApproveEditHint
+		}
+		sb.WriteString(gutter + theme.ApproveKey.Render(prompt))
 		sb.WriteString("\n")
 	}
 
@@ -990,7 +1068,7 @@ func (m *Model) updateViewport() {
 	m.viewport.GotoBottom()
 }
 
-// View renders the TUI
+// View renders the TUI.
 func (m Model) View() string {
 	if m.quitting {
 		return ""
@@ -998,69 +1076,106 @@ func (m Model) View() string {
 
 	var sb strings.Builder
 
-	// Header with animated wizard
-	sparkle := m.getWizardSparkle()
-	if m.loading {
-		// Animated wizard face when loading
-		face := m.getWizardFace()
-		sb.WriteString(headerStyle.Render(fmt.Sprintf("%s [%s] wiz", sparkle, face)))
+	// Header: brand left, cwd right, one dim hairline beneath.
+	brand := theme.Brand.Render(theme.BrandName)
+	cwd := theme.Meta.Render(shortenPath(currentDir()))
+	gap := m.width - lipgloss.Width(brand) - lipgloss.Width(cwd)
+	if gap < 1 {
+		gap = 1
+	}
+	sb.WriteString(brand + strings.Repeat(" ", gap) + cwd)
+	sb.WriteString("\n")
+	sb.WriteString(theme.Rule.Render(strings.Repeat("─", max(1, m.width))))
+	sb.WriteString("\n")
+
+	// Body: log viewer, first-run empty state, otherwise the conversation viewport.
+	if m.showLogs {
+		sb.WriteString(m.renderLogsViewer())
+	} else if len(m.messages) == 0 && !m.loading && !m.awaitingApproval && !m.awaitingAsk {
+		sb.WriteString(renderEmptyState(m.width))
 	} else {
-		sb.WriteString(headerStyle.Render(fmt.Sprintf("%s [◠ ◠] wiz", sparkle)))
+		sb.WriteString(m.viewport.View())
 	}
 	sb.WriteString("\n")
-	sb.WriteString(strings.Repeat("─", m.width))
-	sb.WriteString("\n")
 
-	// Chat viewport
-	sb.WriteString(m.viewport.View())
-	sb.WriteString("\n")
-
-	// Separator
-	sb.WriteString(strings.Repeat("─", m.width))
-	sb.WriteString("\n")
-
-	// `/` completion popup (above the input)
+	// `/` completion popup, above the input.
 	if comp := renderCompletion(m.completion, strings.TrimSpace(m.textarea.Value()), m.width); comp != "" {
 		sb.WriteString(comp)
 		sb.WriteString("\n")
 	}
 
-	// Input area
-	if m.sessionReady {
+	// Input. In key-driven approval choice mode the textarea is hidden (the
+	// approval block in the viewport carries the choice row); edit mode and
+	// normal chat show the textarea.
+	switch {
+	case !m.sessionReady:
+		sb.WriteString(theme.Help.Render(theme.Starting))
+	case m.showLogs:
+		// no input: the log viewer owns the body and the keystrokes
+	case m.awaitingApproval && !m.approvalEditing:
+		// no input: choice row lives in the viewport approval block
+	default:
 		sb.WriteString(m.textarea.View())
-	} else {
-		sb.WriteString(m.spinner.View() + " Summoning the wizard...")
 	}
-
-	// Help text
 	sb.WriteString("\n")
-	helpText := "Enter: send • Ctrl+C: interrupt/exit • Esc: exit"
-	sb.WriteString(helpStyle.Render(helpText))
+	sb.WriteString(theme.Help.Render(m.helpLine()))
 
 	if m.err != nil {
-		sb.WriteString("\n")
-		sb.WriteString(errorStyle.Render(fmt.Sprintf("Error: %v", m.err)))
+		sb.WriteString("\n" + theme.Error.Render(theme.Cross+" "+m.err.Error()))
 	}
 
-	// Jobs area: a unified numbered detail list (Ctrl+J), whose numbers Ctrl+K
-	// uses for kill selection, above the compact per-kind summary footers. All
-	// add nothing when there are no jobs, so the common case is unchanged.
-	if m.showJobsDetail {
-		if d := renderUnifiedJobsDetail(m.unifiedJobs(), m.width, m.jobActivityTail); d != "" {
-			sb.WriteString("\n")
-			sb.WriteString(d)
+	// Jobs footers (renderers restyle internally; nil-safe when empty). Hidden
+	// while the log viewer owns the body.
+	if !m.showLogs {
+		if f := renderJobsFooter(m.jobs, m.width); f != "" {
+			sb.WriteString("\n" + f)
 		}
-	}
-	if f := renderJobsFooter(m.jobs, m.width); f != "" {
-		sb.WriteString("\n")
-		sb.WriteString(f)
-	}
-	if f := renderShellJobsFooter(m.shellJobs.List(), m.width); f != "" {
-		sb.WriteString("\n")
-		sb.WriteString(f)
+		if f := renderShellJobsFooter(m.shellJobs.List(), m.width); f != "" {
+			sb.WriteString("\n" + f)
+		}
 	}
 
 	return sb.String()
+}
+
+// helpLine returns the context-appropriate help string.
+func (m Model) helpLine() string {
+	switch {
+	case m.showLogs && m.logOpenID != "":
+		return "↑↓ scroll · esc back · ctrl+o close"
+	case m.showLogs:
+		return "↑↓ select · enter open · k kill · esc close"
+	case m.awaitingApproval && m.approvalEditing:
+		return theme.HelpApprovalEdit
+	case m.awaitingApproval:
+		return theme.HelpApproval
+	default:
+		return theme.HelpDefault
+	}
+}
+
+func currentDir() string {
+	d, err := os.Getwd()
+	if err != nil {
+		return ""
+	}
+	return d
+}
+
+// shortenPath replaces the home-dir prefix with ~ for a compact header.
+func shortenPath(p string) string {
+	if p == "" {
+		return ""
+	}
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		if p == home {
+			return "~"
+		}
+		if strings.HasPrefix(p, home+string(filepath.Separator)) {
+			return "~" + p[len(home):]
+		}
+	}
+	return p
 }
 
 // Output returns any command that should be output to the shell

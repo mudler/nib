@@ -34,6 +34,18 @@ func TestAgentLogStoreRecordAndDump(t *testing.T) {
 	s.recordCall("", &cogito.ToolChoice{Name: "noop"})
 }
 
+func TestAgentLogStoreAgentFor(t *testing.T) {
+	s := newAgentLogStore()
+	s.recordCall("agent-7", &cogito.ToolChoice{Name: "bash", ID: "call-7"})
+
+	if got := s.agentFor("call-7"); got != "agent-7" {
+		t.Fatalf("agentFor(known id) = %q, want %q", got, "agent-7")
+	}
+	if got := s.agentFor("call-unknown"); got != "" {
+		t.Fatalf("agentFor(unknown id) = %q, want empty (root-agent call)", got)
+	}
+}
+
 func TestAgentLogStoreCaps(t *testing.T) {
 	s := newAgentLogStore()
 	for i := 0; i < agentLogLimit+25; i++ {

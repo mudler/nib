@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mudler/wiz/types"
+	"github.com/mudler/nib/types"
 )
 
 // TestDefaultPromptListsAgentTypesAndDelegation verifies the default system

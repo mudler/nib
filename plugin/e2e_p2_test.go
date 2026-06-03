@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mudler/wiz/slash"
-	"github.com/mudler/wiz/types"
+	"github.com/mudler/nib/slash"
+	"github.com/mudler/nib/types"
 )
 
 func TestEndToEndCommand(t *testing.T) {
@@ -15,7 +15,7 @@ func TestEndToEndCommand(t *testing.T) {
 	}
 	base := t.TempDir()
 	repo := gitInitRepoFiles(t, map[string]string{
-		"wiz-plugin.yaml": "name: p2demo\n" +
+		"nib-plugin.yaml": "name: p2demo\n" +
 			"commands:\n  - name: review\n    description: review the diff\n    prompt: \"Please review: {{.Args}}\"\n",
 	})
 

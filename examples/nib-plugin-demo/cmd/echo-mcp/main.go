@@ -1,6 +1,6 @@
 // Command echo-mcp is a minimal standalone MCP server exposing a single `echo`
-// tool. It demonstrates how a wiz plugin ships an MCP server: a normal program
-// that speaks MCP over stdio. wiz spawns it (per the plugin's mcp_servers entry)
+// tool. It demonstrates how a nib plugin ships an MCP server: a normal program
+// that speaks MCP over stdio. nib spawns it (per the plugin's mcp_servers entry)
 // and connects as a client.
 package main
 

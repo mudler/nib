@@ -6,7 +6,7 @@ import (
 	"os"
 	"os/exec"
 
-	"github.com/mudler/wiz/types"
+	"github.com/mudler/nib/types"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )

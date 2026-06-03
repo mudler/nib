@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mudler/wiz/chat"
+	"github.com/mudler/nib/chat"
 )
 
 func TestRenderAskAndParse(t *testing.T) {

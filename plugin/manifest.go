@@ -1,4 +1,4 @@
-// Package plugin loads, installs, and merges wiz plugins. A plugin is a git
+// Package plugin loads, installs, and merges nib plugins. A plugin is a git
 // repo whose contributions (MCP servers, sub-agent types, and — in later
 // phases — prompt fragments, skills, commands, hooks) are normalized into a
 // format-agnostic Manifest and merged into the effective wiz config.
@@ -11,19 +11,19 @@ import (
 	"strings"
 
 	"github.com/Masterminds/semver/v3"
-	"github.com/mudler/wiz/types"
+	"github.com/mudler/nib/types"
 
 	"gopkg.in/yaml.v3"
 )
 
 // Manifest is the normalized, format-agnostic representation of a plugin.
-// Both the native (wiz-plugin.yaml) and Claude (.claude-plugin/) adapters
+// Both the native (nib-plugin.yaml) and Claude (.claude-plugin/) adapters
 // produce a Manifest. P0 carries only the config-driven contributions.
 type Manifest struct {
 	Name        string                     `yaml:"name"`
 	Version     string                     `yaml:"version"`
 	Description string                     `yaml:"description"`
-	WizVersion  string                     `yaml:"wiz_version"`
+	NibVersion  string                     `yaml:"nib_version"`
 	MCPServers  map[string]types.MCPServer `yaml:"mcp_servers"`
 	Agents      []types.AgentTypeConfig    `yaml:"agents"`
 
@@ -75,7 +75,7 @@ type InstructionsSpec struct {
 	File   string `yaml:"file"`
 }
 
-// ParseManifest parses a native wiz-plugin.yaml document.
+// ParseManifest parses a native nib-plugin.yaml document.
 func ParseManifest(data []byte) (Manifest, error) {
 	var m Manifest
 	if err := yaml.Unmarshal(data, &m); err != nil {
@@ -84,10 +84,10 @@ func ParseManifest(data []byte) (Manifest, error) {
 	return m, nil
 }
 
-// Validate checks required fields and the wiz_version constraint. wizVersion is
+// Validate checks required fields and the nib_version constraint. nibVersion is
 // the running build version (internal.Version); empty or non-semver values
 // (dev builds) skip the constraint check.
-func (m Manifest) Validate(wizVersion string) error {
+func (m Manifest) Validate(nibVersion string) error {
 	if strings.TrimSpace(m.Name) == "" {
 		return errors.New("plugin manifest: name is required")
 	}
@@ -133,10 +133,10 @@ func (m Manifest) Validate(wizVersion string) error {
 			return fmt.Errorf("plugin manifest: hook #%d (%s) missing command", i, h.Event)
 		}
 	}
-	return checkWizVersion(m.WizVersion, wizVersion)
+	return checkNibVersion(m.NibVersion, nibVersion)
 }
 
-func checkWizVersion(constraint, current string) error {
+func checkNibVersion(constraint, current string) error {
 	if strings.TrimSpace(constraint) == "" {
 		return nil
 	}
@@ -147,10 +147,10 @@ func checkWizVersion(constraint, current string) error {
 	}
 	c, err := semver.NewConstraint(constraint)
 	if err != nil {
-		return fmt.Errorf("plugin manifest: invalid wiz_version %q: %w", constraint, err)
+		return fmt.Errorf("plugin manifest: invalid nib_version %q: %w", constraint, err)
 	}
 	if !c.Check(cur) {
-		return fmt.Errorf("plugin requires wiz %s, running %s", constraint, current)
+		return fmt.Errorf("plugin requires nib %s, running %s", constraint, current)
 	}
 	return nil
 }

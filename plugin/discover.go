@@ -5,15 +5,15 @@ import (
 	"os"
 	"strings"
 
-	"github.com/mudler/wiz/types"
+	"github.com/mudler/nib/types"
 )
 
 // EnabledManifests loads the manifest of every enabled plugin in the registry,
 // in registry order. A plugin that fails to load is skipped with a warning.
-func (mgr *Manager) EnabledManifests(wizVersion string) []Manifest {
+func (mgr *Manager) EnabledManifests(nibVersion string) []Manifest {
 	reg, err := LoadRegistry(mgr.baseDir)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "wiz: plugin registry: %v\n", err)
+		fmt.Fprintf(os.Stderr, "nib: plugin registry: %v\n", err)
 		return nil
 	}
 	var out []Manifest
@@ -21,9 +21,9 @@ func (mgr *Manager) EnabledManifests(wizVersion string) []Manifest {
 		if !e.Enabled {
 			continue
 		}
-		m, err := LoadManifest(pluginDir(mgr.baseDir, e.Name), wizVersion)
+		m, err := LoadManifest(pluginDir(mgr.baseDir, e.Name), nibVersion)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "wiz: skipping plugin %q: %v\n", e.Name, err)
+			fmt.Fprintf(os.Stderr, "nib: skipping plugin %q: %v\n", e.Name, err)
 			continue
 		}
 		out = append(out, m)
@@ -33,8 +33,8 @@ func (mgr *Manager) EnabledManifests(wizVersion string) []Manifest {
 
 // Apply merges all enabled plugins' contributions into cfg. Precedence is
 // plugins < user; user config (already in cfg) always wins.
-func Apply(cfg *types.Config, baseDir, wizVersion string) error {
-	mergeManifests(cfg, NewManager(baseDir).EnabledManifests(wizVersion))
+func Apply(cfg *types.Config, baseDir, nibVersion string) error {
+	mergeManifests(cfg, NewManager(baseDir).EnabledManifests(nibVersion))
 	return nil
 }
 
@@ -57,14 +57,14 @@ func mergeManifests(cfg *types.Config, manifests []Manifest) {
 				continue // user wins
 			}
 			if prev, ok := mcpFrom[k]; ok {
-				fmt.Fprintf(os.Stderr, "wiz: mcp server %q from plugin %q overrides plugin %q\n", k, m.Name, prev)
+				fmt.Fprintf(os.Stderr, "nib: mcp server %q from plugin %q overrides plugin %q\n", k, m.Name, prev)
 			}
 			cfg.MCPServers[k] = expandServerRoot(v, m.root)
 			mcpFrom[k] = m.Name
 		}
 		for _, a := range m.Agents {
 			if prev, ok := agentFrom[a.Name]; ok {
-				fmt.Fprintf(os.Stderr, "wiz: agent %q from plugin %q overrides plugin %q\n", a.Name, m.Name, prev)
+				fmt.Fprintf(os.Stderr, "nib: agent %q from plugin %q overrides plugin %q\n", a.Name, m.Name, prev)
 			}
 			agentFrom[a.Name] = m.Name
 			pluginAgents = append(pluginAgents, a)
@@ -81,14 +81,14 @@ func mergeManifests(cfg *types.Config, manifests []Manifest) {
 	mergeHooks(cfg, manifests)
 }
 
-// expandServerRoot resolves the ${WIZ_PLUGIN_ROOT}/${CLAUDE_PLUGIN_ROOT} token
+// expandServerRoot resolves the ${NIB_PLUGIN_ROOT}/${CLAUDE_PLUGIN_ROOT} token
 // (against the plugin's install dir) in a plugin MCP server's command, args, and
 // env values, so a plugin can ship its own server binary and reference it by an
 // absolute, install-location-independent path. Returns a copy; the manifest is
 // left untouched.
 func expandServerRoot(s types.MCPServer, root string) types.MCPServer {
 	repl := func(v string) string {
-		v = strings.ReplaceAll(v, "${WIZ_PLUGIN_ROOT}", root)
+		v = strings.ReplaceAll(v, "${NIB_PLUGIN_ROOT}", root)
 		v = strings.ReplaceAll(v, "${CLAUDE_PLUGIN_ROOT}", root)
 		return v
 	}
@@ -109,7 +109,7 @@ func expandServerRoot(s types.MCPServer, root string) types.MCPServer {
 }
 
 // mergeHooks accumulates each enabled plugin's hooks into cfg, stamping the
-// plugin root as the hook's Dir (working directory + ${WIZ_PLUGIN_ROOT}). Hooks
+// plugin root as the hook's Dir (working directory + ${NIB_PLUGIN_ROOT}). Hooks
 // never override — they all fire.
 func mergeHooks(cfg *types.Config, manifests []Manifest) {
 	for _, m := range manifests {
@@ -127,7 +127,7 @@ func mergePromptFragments(cfg *types.Config, manifests []Manifest) {
 		for _, fs := range m.PromptFragments {
 			text, err := resolveFragment(fs, m.root)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "wiz: plugin %q prompt fragment: %v\n", m.Name, err)
+				fmt.Fprintf(os.Stderr, "nib: plugin %q prompt fragment: %v\n", m.Name, err)
 				continue
 			}
 			if strings.TrimSpace(text) == "" {
@@ -157,11 +157,11 @@ func mergeSkills(cfg *types.Config, manifests []Manifest) {
 			}
 			skill, err := resolveSkill(ss, m.root)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "wiz: plugin %q skill %q: %v\n", m.Name, ss.Name, err)
+				fmt.Fprintf(os.Stderr, "nib: plugin %q skill %q: %v\n", m.Name, ss.Name, err)
 				continue
 			}
 			if _, ok := byName[ss.Name]; ok {
-				fmt.Fprintf(os.Stderr, "wiz: skill %q from plugin %q overrides plugin %q\n", ss.Name, m.Name, from[ss.Name])
+				fmt.Fprintf(os.Stderr, "nib: skill %q from plugin %q overrides plugin %q\n", ss.Name, m.Name, from[ss.Name])
 			} else {
 				order = append(order, ss.Name)
 			}
@@ -192,7 +192,7 @@ func mergeCommands(cfg *types.Config, manifests []Manifest) {
 				continue
 			}
 			if _, ok := byName[c.Name]; ok {
-				fmt.Fprintf(os.Stderr, "wiz: command %q from plugin %q overrides plugin %q\n", c.Name, m.Name, from[c.Name])
+				fmt.Fprintf(os.Stderr, "nib: command %q from plugin %q overrides plugin %q\n", c.Name, m.Name, from[c.Name])
 			} else {
 				order = append(order, c.Name)
 			}

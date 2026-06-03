@@ -4,10 +4,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mudler/wiz/chat"
+	"github.com/mudler/nib/chat"
 )
 
-func TestUnifiedJobsAgentsAndRender(t *testing.T) {
+func TestUnifiedJobsAgents(t *testing.T) {
 	m := Model{
 		jobs: []agentJob{
 			{ID: "agent-123456789", Type: "explore", Task: "look around", Status: chat.AgentStatusRunning},
@@ -18,19 +18,6 @@ func TestUnifiedJobsAgentsAndRender(t *testing.T) {
 	jobs := m.unifiedJobs()
 	if len(jobs) != 1 || jobs[0].Kind != "agent" || jobs[0].ID != "agent-123456789" {
 		t.Fatalf("unifiedJobs = %+v", jobs)
-	}
-
-	out := renderUnifiedJobsDetail(jobs, 80, nil)
-	if !strings.Contains(out, "[1]") || !strings.Contains(out, "agent") || !strings.Contains(out, "look around") {
-		t.Fatalf("detail render missing numbering/label:\n%s", out)
-	}
-
-	// With a tail provider, recent activity is shown beneath the job line.
-	withTail := renderUnifiedJobsDetail(jobs, 80, func(j jobRef) string {
-		return "→ bash(echo hi)\n← bash: hi"
-	})
-	if !strings.Contains(withTail, "← bash: hi") {
-		t.Fatalf("detail should include activity tail:\n%s", withTail)
 	}
 }
 

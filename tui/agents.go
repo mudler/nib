@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/charmbracelet/lipgloss"
-	"github.com/mudler/wiz/chat"
+	"github.com/mudler/nib/chat"
+	"github.com/mudler/nib/theme"
 )
 
 // agentTranscriptLine renders a durable one-line transcript marker for a
@@ -41,7 +41,7 @@ type agentJob struct {
 	Status chat.AgentStatus
 }
 
-var jobsFooterStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
+var jobsFooterStyle = theme.Meta
 
 // renderJobsFooter renders a compact one-line summary of active jobs.
 // Returns "" when there are no jobs so the footer takes no vertical space.
@@ -60,14 +60,14 @@ func renderJobsFooter(jobs []agentJob, width int) string {
 			failed++
 		}
 	}
-	parts := []string{fmt.Sprintf("⚙ jobs: %d running", running)}
+	parts := []string{fmt.Sprintf("jobs: %d running", running)}
 	if done > 0 {
 		parts = append(parts, fmt.Sprintf("%d done", done))
 	}
 	if failed > 0 {
 		parts = append(parts, fmt.Sprintf("%d failed", failed))
 	}
-	parts = append(parts, "(ctrl+b background · ctrl+j detail · ctrl+k kill)")
+	parts = append(parts, "(ctrl+b background · ctrl+o logs)")
 	line := strings.Join(parts, "  ·  ")
 	return jobsFooterStyle.Width(width).Render(line)
 }
@@ -82,9 +82,9 @@ func shortID(id string) string {
 // toolApprovalLabel builds the tool-approval header, labeling sub-agent calls.
 func toolApprovalLabel(req chat.ToolCallRequest) string {
 	if req.AgentID != "" {
-		return fmt.Sprintf("🤖 %s → run: %s", shortID(req.AgentID), req.Name)
+		return fmt.Sprintf("%s %s · run: %s", theme.SubAgent, shortID(req.AgentID), req.Name)
 	}
-	return fmt.Sprintf("🔧 run: %s", req.Name)
+	return fmt.Sprintf("run: %s", req.Name)
 }
 
 // firstRunningJobID returns the id of the first running job, or "".

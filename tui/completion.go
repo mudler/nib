@@ -4,9 +4,10 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/mudler/wiz/types"
-
 	"github.com/charmbracelet/lipgloss"
+
+	"github.com/mudler/nib/theme"
+	"github.com/mudler/nib/types"
 )
 
 // compCategory tags a completion item by source registry.
@@ -141,10 +142,15 @@ func renderCompletion(c compState, input string, width int) string {
 	}
 	var b strings.Builder
 	for i, it := range c.matches {
-		tag := completionTagStyle.Render(fmt.Sprintf("[%s]", it.Cat))
-		line := fmt.Sprintf("%s %-16s %s", tag, it.Name, dimmedStyle.Render(it.Desc))
-		if i == c.sel {
-			line = completionSelectedStyle.Render("▸ ") + line
+		tag := theme.Meta.Render(fmt.Sprintf("[%s]", it.Cat))
+		selected := i == c.sel
+		nameStyle := theme.Help
+		if selected {
+			nameStyle = theme.Prompt
+		}
+		line := fmt.Sprintf("%s %s %s", tag, nameStyle.Render(fmt.Sprintf("%-16s", it.Name)), theme.Meta.Render(it.Desc))
+		if selected {
+			line = theme.Prompt.Render(theme.PromptGlyph) + " " + line
 		} else {
 			line = "  " + line
 		}
@@ -152,15 +158,8 @@ func renderCompletion(c compState, input string, width int) string {
 		b.WriteString("\n")
 	}
 	if g := c.ghost(input); g != "" {
-		b.WriteString(dimmedStyle.Render("Tab → " + input + g))
+		b.WriteString(theme.Hint.Render("tab → " + input + g))
 		b.WriteString("\n")
 	}
-	return completionBoxStyle.Width(width).Render(strings.TrimRight(b.String(), "\n"))
+	return lipgloss.NewStyle().Width(width).Render(strings.TrimRight(b.String(), "\n"))
 }
-
-// completion styles (kept here so the engine file is self-contained).
-var (
-	completionBoxStyle      = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(0, 1)
-	completionTagStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("39"))
-	completionSelectedStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("212"))
-)

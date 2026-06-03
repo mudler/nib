@@ -4,7 +4,7 @@ import (
 	"testing"
 
 	"github.com/mudler/cogito"
-	"github.com/mudler/wiz/types"
+	"github.com/mudler/nib/types"
 )
 
 func TestToCogitoDefinitionsMapsFields(t *testing.T) {

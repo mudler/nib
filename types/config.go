@@ -55,7 +55,7 @@ type CommandConfig struct {
 // HookConfig is a shell command bound to a lifecycle event. Matcher (optional)
 // is matched against the tool name for PreToolUse/PostToolUse. Dir is the
 // plugin root (set during merge); it is the command's working directory and is
-// exported as ${WIZ_PLUGIN_ROOT}/${CLAUDE_PLUGIN_ROOT}.
+// exported as ${NIB_PLUGIN_ROOT}/${CLAUDE_PLUGIN_ROOT}.
 type HookConfig struct {
 	Event   string `yaml:"event"`
 	Matcher string `yaml:"matcher,omitempty"`
@@ -80,6 +80,14 @@ type Config struct {
 	Commands []CommandConfig `yaml:"commands"`
 
 	Hooks []HookConfig `yaml:"hooks"`
+
+	// ApprovalMode controls tool-call gating: "" / "prompt" (ask the user),
+	// "auto" (approve every tool call), or "allowlist" (auto-approve only the
+	// tools in AllowedTools and prompt for the rest).
+	ApprovalMode string `yaml:"approval_mode"`
+	// AllowedTools are tool names pre-approved without prompting (always honored;
+	// the basis of "allowlist" mode).
+	AllowedTools []string `yaml:"allowed_tools"`
 }
 
 func (c *Config) GetPrompt() string {

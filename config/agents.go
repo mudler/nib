@@ -1,6 +1,6 @@
 package config
 
-import "github.com/mudler/wiz/types"
+import "github.com/mudler/nib/types"
 
 // AgentTypeConfig is re-exported for ergonomic use within the config package.
 type AgentTypeConfig = types.AgentTypeConfig

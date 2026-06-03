@@ -4,11 +4,11 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/mudler/wiz/plugin"
-	"github.com/mudler/wiz/skill"
+	"github.com/mudler/nib/plugin"
+	"github.com/mudler/nib/skill"
 )
 
-// RunSkillCommand dispatches `wiz skill <sub> ...` and returns an exit code.
+// RunSkillCommand dispatches `nib skill <sub> ...` and returns an exit code.
 func RunSkillCommand(args []string) int {
 	if len(args) == 0 {
 		skillUsage()
@@ -36,14 +36,14 @@ func RunSkillCommand(args []string) int {
 }
 
 func skillUsage() {
-	fmt.Fprintln(os.Stderr, "usage: wiz skill <install|list|update|enable|disable|remove> ...")
+	fmt.Fprintln(os.Stderr, "usage: nib skill <install|list|update|enable|disable|remove> ...")
 }
 
 func skillInstall(mgr *skill.Manager, args []string) int {
 	// parseInstallArgs is defined in cmd/plugin.go (same package).
 	src, ref, yes, err := parseInstallArgs(args)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "usage: wiz skill install [--ref REF] [--yes] <git-url|local-path>")
+		fmt.Fprintln(os.Stderr, "usage: nib skill install [--ref REF] [--yes] <git-url|local-path>")
 		return 1
 	}
 
@@ -66,7 +66,7 @@ func skillInstall(mgr *skill.Manager, args []string) int {
 		fmt.Printf("Skill pack %q enabled.\n", name)
 		return 0
 	}
-	fmt.Printf("Skill pack %q installed but left disabled. Enable later: wiz skill enable %s\n", name, name)
+	fmt.Printf("Skill pack %q installed but left disabled. Enable later: nib skill enable %s\n", name, name)
 	return 0
 }
 
@@ -99,7 +99,7 @@ func skillList(mgr *skill.Manager) int {
 
 func skillByName(args []string, verb string, fn func(string) error) int {
 	if len(args) < 2 {
-		fmt.Fprintf(os.Stderr, "usage: wiz skill %s <name>\n", verb)
+		fmt.Fprintf(os.Stderr, "usage: nib skill %s <name>\n", verb)
 		return 1
 	}
 	if err := fn(args[1]); err != nil {
@@ -112,7 +112,7 @@ func skillByName(args []string, verb string, fn func(string) error) int {
 
 func skillSetEnabled(mgr *skill.Manager, args []string, enabled bool) int {
 	if len(args) < 1 {
-		fmt.Fprintln(os.Stderr, "usage: wiz skill enable|disable <name>")
+		fmt.Fprintln(os.Stderr, "usage: nib skill enable|disable <name>")
 		return 1
 	}
 	if err := mgr.SetEnabled(args[0], enabled); err != nil {

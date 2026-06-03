@@ -6,7 +6,7 @@ import (
 	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
-	"github.com/mudler/wiz/types"
+	"github.com/mudler/nib/types"
 )
 
 // loadSkillInput is the argument to the load_skill tool.

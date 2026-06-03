@@ -18,7 +18,7 @@ func TestLoadMergesEnabledPlugin(t *testing.T) {
 	manifest := "name: demo\n" +
 		"mcp_servers:\n  pluginmcp:\n    command: pmcp\n" +
 		"agents:\n  - name: fromplugin\n    description: d\n"
-	if err := os.WriteFile(filepath.Join(pluginRoot, "wiz-plugin.yaml"), []byte(manifest), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(pluginRoot, "nib-plugin.yaml"), []byte(manifest), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	registry := "plugins:\n  - name: demo\n    source_url: u\n    enabled: true\n"

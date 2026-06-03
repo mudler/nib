@@ -54,7 +54,7 @@ func TestRunPluginCommandLifecycle(t *testing.T) {
 	if err := os.MkdirAll(pdir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(pdir, "wiz-plugin.yaml"), []byte("name: demo\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(pdir, "nib-plugin.yaml"), []byte("name: demo\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(wizBase, "plugins.yaml"),

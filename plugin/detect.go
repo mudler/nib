@@ -11,12 +11,12 @@ type Format int
 
 const (
 	FormatUnknown Format = iota
-	FormatNative         // wiz-plugin.yaml
+	FormatNative         // nib-plugin.yaml
 	FormatClaude         // .claude-plugin/plugin.json
 )
 
 // NativeManifestFile is the native manifest filename at a plugin's root.
-const NativeManifestFile = "wiz-plugin.yaml"
+const NativeManifestFile = "nib-plugin.yaml"
 
 // DetectFormat inspects a plugin directory and reports its layout.
 func DetectFormat(dir string) Format {
@@ -30,8 +30,8 @@ func DetectFormat(dir string) Format {
 }
 
 // LoadManifest detects a plugin's format, loads it via the matching adapter,
-// stamps its install dir as root, and validates it against wizVersion.
-func LoadManifest(dir string, wizVersion string) (Manifest, error) {
+// stamps its install dir as root, and validates it against nibVersion.
+func LoadManifest(dir string, nibVersion string) (Manifest, error) {
 	var (
 		m   Manifest
 		err error
@@ -53,7 +53,7 @@ func LoadManifest(dir string, wizVersion string) (Manifest, error) {
 		return Manifest{}, err
 	}
 	m.root = dir
-	if err := m.Validate(wizVersion); err != nil {
+	if err := m.Validate(nibVersion); err != nil {
 		return Manifest{}, err
 	}
 	return m, nil

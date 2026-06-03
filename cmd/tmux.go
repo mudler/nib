@@ -11,7 +11,7 @@ func IsInTmux() bool {
 	return os.Getenv("TMUX") != "" && os.Getenv("TMUX_PANE") != ""
 }
 
-// runTmuxSplit runs wiz in a tmux split pane (like fzf-tmux -d)
+// runTmuxSplit runs nib in a tmux split pane (like fzf-tmux -d)
 func RunTmuxSplit(height string) error {
 	// Get current working directory
 	dir, err := os.Getwd()
@@ -19,15 +19,15 @@ func RunTmuxSplit(height string) error {
 		dir = "."
 	}
 
-	// Get the wiz executable path
+	// Get the nib executable path
 	executable, err := os.Executable()
 	if err != nil {
-		executable = "wiz"
+		executable = "nib"
 	}
 
 	// Build the command to run inside the split pane
 	// Use --no-tmux to prevent infinite recursion
-	wizCmd := fmt.Sprintf("%s --height %s --no-tmux", executable, height)
+	nibCmd := fmt.Sprintf("%s --height %s --no-tmux", executable, height)
 
 	// tmux split-window arguments
 	// -d: don't switch focus to new pane initially (we'll switch after)
@@ -41,7 +41,7 @@ func RunTmuxSplit(height string) error {
 		"-v",         // vertical split (creates pane below)
 		"-l", height, // height of the new pane
 		"-c", dir, // working directory
-		"sh", "-c", wizCmd,
+		"sh", "-c", nibCmd,
 	}
 
 	cmd := exec.Command("tmux", tmuxArgs...)

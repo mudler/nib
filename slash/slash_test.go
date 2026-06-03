@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mudler/wiz/types"
+	"github.com/mudler/nib/types"
 )
 
 func TestExpand(t *testing.T) {

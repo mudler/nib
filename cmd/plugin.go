@@ -7,8 +7,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/mudler/wiz/internal"
-	"github.com/mudler/wiz/plugin"
+	"github.com/mudler/nib/internal"
+	"github.com/mudler/nib/plugin"
 )
 
 // confirmFn reads a yes/no answer. Var for test injection.
@@ -19,7 +19,7 @@ var confirmFn = func(prompt string) bool {
 	return line == "y" || line == "yes"
 }
 
-// RunPluginCommand dispatches `wiz plugin <sub> ...` and returns an exit code.
+// RunPluginCommand dispatches `nib plugin <sub> ...` and returns an exit code.
 func RunPluginCommand(args []string) int {
 	if len(args) == 0 {
 		pluginUsage()
@@ -47,7 +47,7 @@ func RunPluginCommand(args []string) int {
 }
 
 func pluginUsage() {
-	fmt.Fprintln(os.Stderr, "usage: wiz plugin <install|list|update|enable|disable|remove> ...")
+	fmt.Fprintln(os.Stderr, "usage: nib plugin <install|list|update|enable|disable|remove> ...")
 }
 
 // parseInstallArgs parses `[--ref REF] [--yes] <git-url>` with flags allowed
@@ -79,7 +79,7 @@ func parseInstallArgs(args []string) (url, ref string, yes bool, err error) {
 func pluginInstall(mgr *plugin.Manager, args []string) int {
 	url, ref, yes, err := parseInstallArgs(args)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "usage: wiz plugin install [--ref REF] [--yes] <git-url>")
+		fmt.Fprintln(os.Stderr, "usage: nib plugin install [--ref REF] [--yes] <git-url>")
 		return 1
 	}
 
@@ -100,7 +100,7 @@ func pluginInstall(mgr *plugin.Manager, args []string) int {
 		fmt.Printf("Plugin %q enabled.\n", m.Name)
 		return 0
 	}
-	fmt.Printf("Plugin %q installed but left disabled. Enable later: wiz plugin enable %s\n", m.Name, m.Name)
+	fmt.Printf("Plugin %q installed but left disabled. Enable later: nib plugin enable %s\n", m.Name, m.Name)
 	return 0
 }
 
@@ -126,7 +126,7 @@ func pluginList(mgr *plugin.Manager) int {
 
 func pluginByName(args []string, verb string, fn func(string) error) int {
 	if len(args) < 2 {
-		fmt.Fprintf(os.Stderr, "usage: wiz plugin %s <name>\n", verb)
+		fmt.Fprintf(os.Stderr, "usage: nib plugin %s <name>\n", verb)
 		return 1
 	}
 	if err := fn(args[1]); err != nil {
@@ -139,7 +139,7 @@ func pluginByName(args []string, verb string, fn func(string) error) int {
 
 func pluginSetEnabled(mgr *plugin.Manager, args []string, enabled bool) int {
 	if len(args) < 1 {
-		fmt.Fprintln(os.Stderr, "usage: wiz plugin enable|disable <name>")
+		fmt.Fprintln(os.Stderr, "usage: nib plugin enable|disable <name>")
 		return 1
 	}
 	if err := mgr.SetEnabled(args[0], enabled); err != nil {

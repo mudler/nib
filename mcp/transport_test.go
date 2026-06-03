@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/mudler/wiz/types"
+	"github.com/mudler/nib/types"
 )
 
 func TestStartTransportsIncludesSkillsWhenPresent(t *testing.T) {

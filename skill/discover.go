@@ -5,8 +5,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/mudler/wiz/plugin"
-	"github.com/mudler/wiz/types"
+	"github.com/mudler/nib/plugin"
+	"github.com/mudler/nib/types"
 )
 
 // HarvestPack reads skills/<name>/SKILL.md from a skill-pack root and returns
@@ -57,7 +57,7 @@ type pack struct {
 func (mgr *Manager) enabledPacks() []pack {
 	reg, err := LoadRegistry(mgr.baseDir)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "wiz: skill registry: %v\n", err)
+		fmt.Fprintf(os.Stderr, "nib: skill registry: %v\n", err)
 		return nil
 	}
 	var out []pack
@@ -91,7 +91,7 @@ func mergeSkills(cfg *types.Config, packs []pack) {
 	for _, p := range packs {
 		skills, err := HarvestPack(p.dir)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "wiz: skill pack %q: %v\n", p.name, err)
+			fmt.Fprintf(os.Stderr, "nib: skill pack %q: %v\n", p.name, err)
 			continue
 		}
 		for _, s := range skills {
@@ -99,7 +99,7 @@ func mergeSkills(cfg *types.Config, packs []pack) {
 				continue // user wins
 			}
 			if _, ok := byName[s.Name]; ok {
-				fmt.Fprintf(os.Stderr, "wiz: skill %q from pack %q overrides pack %q\n", s.Name, p.name, from[s.Name])
+				fmt.Fprintf(os.Stderr, "nib: skill %q from pack %q overrides pack %q\n", s.Name, p.name, from[s.Name])
 			} else {
 				order = append(order, s.Name)
 			}

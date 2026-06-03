@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/mudler/wiz/internal/vcs"
+	"github.com/mudler/nib/internal/vcs"
 )
 
 func TestDeriveName(t *testing.T) {

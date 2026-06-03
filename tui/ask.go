@@ -5,34 +5,35 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/mudler/wiz/chat"
-
-	"github.com/charmbracelet/lipgloss"
+	"github.com/mudler/nib/chat"
+	"github.com/mudler/nib/theme"
 )
 
 // renderAsk renders the agent's question (and numbered options, if any). The
 // glyph hints the selection mode: ( ) radio for single-select, [ ] checkbox for
-// multi-select.
+// multi-select. The block is set off by a left gutter rule rather than a box,
+// matching the tool-approval idiom.
 func renderAsk(req chat.AskRequest, width int) string {
+	gutter := theme.Gutter.Render(theme.ApprovalGutter) + " "
 	var b strings.Builder
-	b.WriteString(askHeaderStyle.Render("❓ " + req.Question))
+	b.WriteString(gutter + theme.LabelNib.Render(req.Question))
 	b.WriteString("\n")
 	marker := "( )"
 	if req.MultiSelect {
 		marker = "[ ]"
 	}
 	for i, o := range req.Options {
-		fmt.Fprintf(&b, "  %s %d. %s\n", marker, i+1, o)
+		fmt.Fprintf(&b, "%s%s %s %s\n", gutter, theme.Prompt.Render(marker), theme.ApproveKey.Render(fmt.Sprintf("%d.", i+1)), theme.Help.Render(o))
 	}
 	switch {
 	case len(req.Options) > 0 && req.MultiSelect:
-		b.WriteString(dimmedStyle.Render("Type numbers separated by commas (e.g. 1,3), or type your own answer."))
+		b.WriteString(gutter + theme.Hint.Render("type numbers separated by commas (e.g. 1,3), or type your own answer."))
 	case len(req.Options) > 0:
-		b.WriteString(dimmedStyle.Render("Type a number to pick, or type your own answer."))
+		b.WriteString(gutter + theme.Hint.Render("type a number to pick, or type your own answer."))
 	default:
-		b.WriteString(dimmedStyle.Render("Type your answer."))
+		b.WriteString(gutter + theme.Hint.Render("type your answer."))
 	}
-	return askBoxStyle.Width(width).Render(strings.TrimRight(b.String(), "\n"))
+	return strings.TrimRight(b.String(), "\n")
 }
 
 // parseAskAnswer maps a typed answer onto req.Options. For single-select a lone
@@ -69,8 +70,3 @@ func parseAskAnswer(input string, req chat.AskRequest) string {
 	}
 	return input
 }
-
-var (
-	askBoxStyle    = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(0, 1)
-	askHeaderStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("212")).Bold(true)
-)

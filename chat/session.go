@@ -9,8 +9,8 @@ import (
 	"os/exec"
 	"sync"
 
-	"github.com/mudler/wiz/hooks"
-	"github.com/mudler/wiz/types"
+	"github.com/mudler/nib/hooks"
+	"github.com/mudler/nib/types"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/mudler/cogito"
@@ -33,6 +33,8 @@ type Session struct {
 	skills        []types.Skill
 	cogitoOptions types.AgentOptions
 	allowedTools  map[string]bool // Tools that don't need approval this session
+	autoApprove   bool            // approval_mode: auto — approve every tool call
+	allowAllTurn  bool            // user chose "allow all this turn"; reset each top-level turn
 	hooks         *hooks.Dispatcher
 
 	agentManager *cogito.AgentManager
@@ -146,6 +148,10 @@ func NewSession(ctx context.Context, cfg types.Config, callbacks Callbacks, tran
 		apiKey:        cfg.APIKey,
 		baseURL:       cfg.BaseURL,
 	}
+	for _, name := range cfg.AllowedTools {
+		s.allowedTools[name] = true
+	}
+	s.autoApprove = cfg.ApprovalMode == "auto"
 	s.hooks.Fire(ctx, hooks.EventSessionStart, "", map[string]any{"event": "SessionStart"})
 	return s, nil
 }
@@ -183,6 +189,9 @@ func (s *Session) decideToolCall(req ToolCallRequest) cogito.ToolCallDecision {
 		}
 	}
 
+	if s.autoApprove || s.allowAllTurn {
+		return cogito.ToolCallDecision{Approved: true}
+	}
 	if s.allowedTools[req.Name] {
 		return cogito.ToolCallDecision{Approved: true}
 	}
@@ -190,7 +199,10 @@ func (s *Session) decideToolCall(req ToolCallRequest) cogito.ToolCallDecision {
 		return cogito.ToolCallDecision{Approved: true}
 	}
 	resp := s.callbacks.OnToolCall(req)
-	if resp.AlwaysAllow && resp.Approved {
+	if resp.Approved && resp.AllowAllTurn {
+		s.allowAllTurn = true
+	}
+	if resp.Approved && resp.AlwaysAllow {
 		s.allowedTools[req.Name] = true
 	}
 	return cogito.ToolCallDecision{Approved: resp.Approved, Adjustment: resp.Adjustment}
@@ -291,6 +303,7 @@ func (s *Session) SendMessage(text string) (string, error) {
 		s.hooks.Fire(s.ctx, hooks.EventUserPromptSubmit, "", map[string]any{"event": "UserPromptSubmit", "prompt": text})
 	}
 	turnCtx := s.beginTurn()
+	s.allowAllTurn = false
 	defer s.endTurn()
 	if s.systemPrompt != "" {
 		s.fragment = s.fragment.AddMessage("system", s.systemPrompt)
@@ -342,6 +355,13 @@ func (s *Session) SendMessage(text string) (string, error) {
 					"event":  "PostToolUse",
 					"tool":   status.Name,
 					"result": status.Result,
+				})
+			}
+			if s.callbacks.OnToolResult != nil {
+				s.callbacks.OnToolResult(ToolResult{
+					Name:    status.Name,
+					Result:  status.Result,
+					AgentID: s.agentLogs.agentFor(status.ToolArguments.ID),
 				})
 			}
 		}),

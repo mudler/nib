@@ -70,6 +70,14 @@ func (s *agentLogStore) recordResult(status cogito.ToolStatus) {
 	s.append(agentID, fmt.Sprintf("← %s: %s", status.Name, truncMid(strings.TrimSpace(status.Result), 400)))
 }
 
+// agentFor returns the sub-agent id that issued the given tool-call id, or "" if
+// the call came from the root agent.
+func (s *agentLogStore) agentFor(toolID string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.toolAgent[toolID]
+}
+
 // dump returns the captured log for an agent (newest entries last), or "".
 func (s *agentLogStore) dump(agentID string) string {
 	s.mu.Lock()

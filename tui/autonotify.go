@@ -103,7 +103,7 @@ func (m *Model) autoNotifyCmd() tea.Cmd {
 		b.WriteString("\n")
 	}
 
-	m.messages = append(m.messages, ChatMessage{Role: "agent", Content: "🔔 Reacting to background updates…"})
+	m.messages = append(m.messages, ChatMessage{Role: "agent", Content: "reacting to background updates…"})
 	m.loading = true
 	m.interruptArmed = false
 	m.status = "Reacting to finished background work…"

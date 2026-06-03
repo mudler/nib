@@ -5,7 +5,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/mudler/wiz/internal/vcs"
+	"github.com/mudler/nib/internal/vcs"
 )
 
 // Manager performs plugin install/update/remove against a base directory.
@@ -17,7 +17,7 @@ func NewManager(baseDir string) *Manager { return &Manager{baseDir: baseDir} }
 // Install clones a plugin, validates its manifest, places it at
 // plugins/<name>, and records it in the registry as DISABLED. The caller (CLI)
 // enables it after presenting the contribution summary for consent.
-func (mgr *Manager) Install(url, ref, wizVersion string) (Manifest, error) {
+func (mgr *Manager) Install(url, ref, nibVersion string) (Manifest, error) {
 	pluginsDir := PluginsDir(mgr.baseDir)
 	if err := os.MkdirAll(pluginsDir, 0o755); err != nil {
 		return Manifest{}, err
@@ -42,7 +42,7 @@ func (mgr *Manager) Install(url, ref, wizVersion string) (Manifest, error) {
 	} else if err := vcs.Clone(url, ref, tmp); err != nil {
 		return Manifest{}, fmt.Errorf("git clone: %w", err)
 	}
-	m, err := LoadManifest(tmp, wizVersion)
+	m, err := LoadManifest(tmp, nibVersion)
 	if err != nil {
 		return Manifest{}, err
 	}

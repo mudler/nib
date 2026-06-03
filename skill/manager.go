@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/mudler/wiz/internal/vcs"
-	"github.com/mudler/wiz/types"
+	"github.com/mudler/nib/internal/vcs"
+	"github.com/mudler/nib/types"
 )
 
 // Manager performs skill-pack install/update/remove against a base directory.
@@ -74,7 +74,7 @@ func (mgr *Manager) Install(src, ref string) (string, []types.Skill, error) {
 		return "", nil, err
 	}
 	if len(skills) == 0 {
-		return "", nil, fmt.Errorf("no skills found under skills/*/SKILL.md (did you mean `wiz plugin install`?)")
+		return "", nil, fmt.Errorf("no skills found under skills/*/SKILL.md (did you mean `nib plugin install`?)")
 	}
 
 	reg, err := LoadRegistry(mgr.baseDir)
@@ -82,7 +82,7 @@ func (mgr *Manager) Install(src, ref string) (string, []types.Skill, error) {
 		return "", nil, err
 	}
 	if reg.Find(name) != nil {
-		return "", nil, fmt.Errorf("skill pack %q already installed (use `wiz skill update %s` or `wiz skill remove %s`)", name, name, name)
+		return "", nil, fmt.Errorf("skill pack %q already installed (use `nib skill update %s` or `nib skill remove %s`)", name, name, name)
 	}
 
 	dest := filepath.Join(skillsDir, name)

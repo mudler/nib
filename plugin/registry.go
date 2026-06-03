@@ -1,6 +1,6 @@
 package plugin
 
-import "github.com/mudler/wiz/internal/registry"
+import "github.com/mudler/nib/internal/registry"
 
 // Entry is one installed plugin's registry record.
 type Entry = registry.Entry

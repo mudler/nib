@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mudler/wiz/types"
+	"github.com/mudler/nib/types"
 )
 
 // copyTree recursively copies src into dst (files + dirs), preserving structure.
@@ -57,11 +57,11 @@ func TestAcceptanceExamplePlugin(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not available")
 	}
-	exampleSrc, err := filepath.Abs(filepath.Join("..", "examples", "wiz-plugin-demo"))
+	exampleSrc, err := filepath.Abs(filepath.Join("..", "examples", "nib-plugin-demo"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(exampleSrc, "wiz-plugin.yaml")); err != nil {
+	if _, err := os.Stat(filepath.Join(exampleSrc, "nib-plugin.yaml")); err != nil {
 		t.Fatalf("example plugin not found at %s: %v", exampleSrc, err)
 	}
 
@@ -75,10 +75,10 @@ func TestAcceptanceExamplePlugin(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Install: %v", err)
 	}
-	if m.Name != "wiz-demo" {
+	if m.Name != "nib-demo" {
 		t.Fatalf("name = %q", m.Name)
 	}
-	if err := mgr.SetEnabled("wiz-demo", true); err != nil {
+	if err := mgr.SetEnabled("nib-demo", true); err != nil {
 		t.Fatal(err)
 	}
 

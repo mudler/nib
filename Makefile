@@ -14,11 +14,11 @@ else
 endif
 
 build:
-	go build -o wiz .
+	go build -o nib .
 
 run-docker:
-	docker build -t wiz .
-	docker run -it -e LOG_LEVEL=$(LOG_LEVEL) -e MODEL=$(MODEL) -e API_KEY=$(API_KEY) -e BASE_URL=$(BASE_URL) --rm wiz
+	docker build -t nib .
+	docker run -it -e LOG_LEVEL=$(LOG_LEVEL) -e MODEL=$(MODEL) -e API_KEY=$(API_KEY) -e BASE_URL=$(BASE_URL) --rm nib
 
 install:
 	bash install.sh --from-source

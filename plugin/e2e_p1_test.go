@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mudler/wiz/types"
+	"github.com/mudler/nib/types"
 )
 
 func gitInitRepoFiles(t *testing.T, files map[string]string) string {
@@ -35,7 +35,7 @@ func TestEndToEndFragmentAndSkill(t *testing.T) {
 	}
 	base := t.TempDir()
 	repo := gitInitRepoFiles(t, map[string]string{
-		"wiz-plugin.yaml": "name: p1demo\n" +
+		"nib-plugin.yaml": "name: p1demo\n" +
 			"prompt_fragments:\n  - \"FRAGMENT MARKER\"\n" +
 			"skills:\n  - name: demoskill\n    description: a demo skill\n    instructions: { file: skills/demo.md }\n",
 		"skills/demo.md": "SKILL FILE BODY",

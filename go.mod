@@ -1,4 +1,4 @@
-module github.com/mudler/wiz
+module github.com/mudler/nib
 
 go 1.24.1
 

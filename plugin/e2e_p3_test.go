@@ -5,8 +5,8 @@ import (
 	"os/exec"
 	"testing"
 
-	"github.com/mudler/wiz/chat"
-	"github.com/mudler/wiz/types"
+	"github.com/mudler/nib/chat"
+	"github.com/mudler/nib/types"
 )
 
 func TestEndToEndHookBlocksTool(t *testing.T) {
@@ -15,7 +15,7 @@ func TestEndToEndHookBlocksTool(t *testing.T) {
 	}
 	base := t.TempDir()
 	repo := gitInitRepoFiles(t, map[string]string{
-		"wiz-plugin.yaml": "name: p3demo\n" +
+		"nib-plugin.yaml": "name: p3demo\n" +
 			"hooks:\n  - event: PreToolUse\n    matcher: bash\n    command: sh guard.sh\n",
 		"guard.sh": "#!/bin/sh\necho '{\"block\": true, \"reason\": \"bash blocked by plugin\"}'\n",
 	})

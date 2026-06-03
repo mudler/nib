@@ -1,14 +1,14 @@
-name: wiz-demo
+name: nib-demo
 version: 1.0.0
-description: Demo plugin exercising every wiz contribution type
-wiz_version: ">=0.0.0"
+description: Demo plugin exercising every nib contribution type
+nib_version: ">=0.0.0"
 
 # 1) MCP server — a standalone stdio server shipped in cmd/echo-mcp. Build it to
-#    bin/echo-mcp before installing (see README); ${WIZ_PLUGIN_ROOT} resolves to
+#    bin/echo-mcp before installing (see README); ${NIB_PLUGIN_ROOT} resolves to
 #    the plugin's install dir so the path works wherever the plugin lands.
 mcp_servers:
   echo:
-    command: ${WIZ_PLUGIN_ROOT}/bin/echo-mcp
+    command: ${NIB_PLUGIN_ROOT}/bin/echo-mcp
     args: []
 
 # 2) Sub-agent type
