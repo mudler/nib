@@ -113,9 +113,9 @@ func renderMessages(msgs []openai.ChatCompletionMessage) string {
 
 // CompactHistory summarizes the older portion of the conversation via the LLM
 // and rebuilds the fragment as [summary] + recent tail, keeping the display
-// copy consistent. It returns the token counts before and after (before==after
-// signals a no-op). On summary failure it returns the error WITHOUT mutating
-// session state (atomic swap).
+// copy consistent. It returns byte/4 token estimates of the conversation before
+// and after compaction (before==after signals a no-op). On summary failure it
+// returns the error WITHOUT mutating session state (atomic swap).
 func (s *Session) CompactHistory() (before, after int, err error) {
 	ctx := s.ctx
 	if ctx == nil {
@@ -130,13 +130,7 @@ func (s *Session) CompactHistory() (before, after int, err error) {
 func (s *Session) compactHistory(ctx context.Context) (before, after int, err error) {
 	msgs := s.fragment.Messages
 
-	before = 0
-	if s.fragment.Status != nil {
-		before = s.fragment.Status.LastUsage.PromptTokens
-	}
-	if before == 0 {
-		before = estimateTokens(msgs)
-	}
+	before = estimateTokens(msgs)
 
 	head, tail := splitForCompaction(msgs, s.compaction.KeepRecent)
 	headContent := renderMessages(head)
