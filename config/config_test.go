@@ -21,3 +21,13 @@ func TestWithDefaultsCompaction(t *testing.T) {
 		t.Fatal("auto-compaction should be enabled (Disabled=false) by default")
 	}
 }
+
+func TestWithDefaultsKeepsUserValues(t *testing.T) {
+	in := types.Config{Compaction: types.CompactionConfig{
+		MaxContextTokens: 200000, Threshold: 0.5, KeepRecent: 2, Disabled: true,
+	}}
+	got := withDefaults(in)
+	if got.Compaction != in.Compaction {
+		t.Fatalf("withDefaults overrode user values: %+v", got.Compaction)
+	}
+}
