@@ -1,5 +1,7 @@
 package chat
 
+import "time"
+
 // AgentStatus mirrors cogito's sub-agent lifecycle states for UI consumption,
 // decoupling the UI from the cogito type.
 type AgentStatus string
@@ -18,6 +20,10 @@ type AgentEvent struct {
 	Status AgentStatus
 	Result string
 	Err    error
+	// Populated on completion/failure events (zero otherwise):
+	ToolCount   int           // tools the sub-agent executed
+	TotalTokens int           // cumulative tokens consumed across the run
+	Elapsed     time.Duration // wall-clock from spawn to completion
 }
 
 // Message represents a chat message.
