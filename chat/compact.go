@@ -117,6 +117,17 @@ func renderMessages(msgs []openai.ChatCompletionMessage) string {
 // signals a no-op). On summary failure it returns the error WITHOUT mutating
 // session state (atomic swap).
 func (s *Session) CompactHistory() (before, after int, err error) {
+	ctx := s.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return s.compactHistory(ctx)
+}
+
+// compactHistory is the context-aware implementation of CompactHistory. The
+// passed-in ctx governs the summarization LLM call, allowing callers (e.g.
+// auto-compaction) to make it cancellable via a per-turn context.
+func (s *Session) compactHistory(ctx context.Context) (before, after int, err error) {
 	msgs := s.fragment.Messages
 
 	before = 0
@@ -131,11 +142,6 @@ func (s *Session) CompactHistory() (before, after int, err error) {
 	headContent := renderMessages(head)
 	if strings.TrimSpace(headContent) == "" {
 		return before, before, nil // nothing to compact
-	}
-
-	ctx := s.ctx
-	if ctx == nil {
-		ctx = context.Background()
 	}
 
 	prompt := compactInstruction + "\n\n--- CONVERSATION ---\n" + headContent

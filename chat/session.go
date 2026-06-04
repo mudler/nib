@@ -564,7 +564,7 @@ func (s *Session) SendMessage(text string) (string, error) {
 		if s.callbacks.OnStatus != nil {
 			s.callbacks.OnStatus("Compacting conversation…")
 		}
-		cb, ca, cerr := s.CompactHistory()
+		cb, ca, cerr := s.compactHistory(turnCtx)
 		if cerr != nil {
 			xlog.Warn("auto-compaction failed", "error", cerr)
 		} else if cb != ca && s.callbacks.OnCompactDone != nil {
