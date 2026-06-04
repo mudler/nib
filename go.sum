@@ -146,8 +146,8 @@ github.com/modelcontextprotocol/go-sdk v1.0.0 h1:Z4MSjLi38bTgLrd/LjSmofqRqyBiVKR
 github.com/modelcontextprotocol/go-sdk v1.0.0/go.mod h1:nYtYQroQ2KQiM0/SbyEPUWQ6xs4B95gJjEalc9AQyOs=
 github.com/morikuni/aec v1.0.0 h1:nP9CBfwrvYnBRgY6qfDQkygYDmYwOilePFkwzv4dU8A=
 github.com/morikuni/aec v1.0.0/go.mod h1:BbKIizmSmc5MMPqRYbxO4ZU0S0+P200+tUnFx7PXmsc=
-github.com/mudler/cogito v0.10.1-0.20260604082319-fe7fd5de11d1 h1:2Xo02iDGVELS8fjlMM+A9z0Nbwp8fADd/PS+R+Ocin4=
-github.com/mudler/cogito v0.10.1-0.20260604082319-fe7fd5de11d1/go.mod h1:6sfja3lcu2nWRzEc0wwqGNu/eCG3EWgij+8s7xyUeQ4=
+github.com/mudler/cogito v0.10.1-0.20260604212312-77024e447c46 h1:lZGsJnVZSXE6J8BJq4frtmpFU+JYc4zBzP5YCULGZYU=
+github.com/mudler/cogito v0.10.1-0.20260604212312-77024e447c46/go.mod h1:6sfja3lcu2nWRzEc0wwqGNu/eCG3EWgij+8s7xyUeQ4=
 github.com/mudler/xlog v0.0.1 h1:yR3/wszd3ZM6u1n96YITJZ4yUcDgqHSwvQmzUJa+8vg=
 github.com/mudler/xlog v0.0.1/go.mod h1:39f5vcd05Qd6GWKM8IjyHNQ7AmOx3ZM0YfhfIGhC18U=
 github.com/muesli/ansi v0.0.0-20230316100256-276c6243b2f6 h1:ZK8zHtRHOkbHy6Mmr5D264iyp3TiX5OmNcI5cIARiQI=

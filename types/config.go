@@ -31,6 +31,9 @@ type AgentTypeConfig struct {
 	Iterations   int      `yaml:"iterations"`
 	MaxAttempts  int      `yaml:"max_attempts"`
 	MaxRetries   int      `yaml:"max_retries"`
+	// Metadata overlays the global Config.Metadata for this agent type
+	// (per-key: agent keys win, global-only keys are inherited).
+	Metadata map[string]string `yaml:"metadata,omitempty"`
 }
 
 // Skill is a named, on-demand instruction set. Its Description is listed in the
@@ -65,11 +68,17 @@ type HookConfig struct {
 
 // Config holds configuration for creating a new session
 type Config struct {
-	Model        string               `yaml:"model"`
-	APIKey       string               `yaml:"api_key"`
-	BaseURL      string               `yaml:"base_url"`
-	LogLevel     string               `yaml:"log_level"`
-	Prompt       string               `yaml:"prompt"`
+	Model    string `yaml:"model"`
+	APIKey   string `yaml:"api_key"`
+	BaseURL  string `yaml:"base_url"`
+	LogLevel string `yaml:"log_level"`
+	Prompt   string `yaml:"prompt"`
+	// Metadata is a per-request metadata object attached verbatim to every
+	// chat-completion request (the OpenAI "metadata" field). Backends such as
+	// LocalAI use it for per-request flags, e.g. {"enable_thinking": "false"}
+	// to disable reasoning. Applied to the main session and inherited by
+	// sub-agents (see AgentTypeConfig.Metadata for per-agent overrides).
+	Metadata     map[string]string    `yaml:"metadata,omitempty"`
 	MCPServers   map[string]MCPServer `yaml:"mcp_servers"`
 	AgentOptions AgentOptions         `yaml:"agent_options"`
 	Agents       []AgentTypeConfig    `yaml:"agents"`

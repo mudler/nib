@@ -1,6 +1,46 @@
 package chat
 
-import "testing"
+import (
+	"reflect"
+	"testing"
+)
+
+func TestMergeMetadata(t *testing.T) {
+	cases := []struct {
+		name     string
+		global   map[string]string
+		override map[string]string
+		want     map[string]string
+	}{
+		{"both empty -> nil", nil, nil, nil},
+		{"global only", map[string]string{"enable_thinking": "false"}, nil, map[string]string{"enable_thinking": "false"}},
+		{"override only", nil, map[string]string{"enable_thinking": "true"}, map[string]string{"enable_thinking": "true"}},
+		{
+			"override wins per key, global-only inherited",
+			map[string]string{"enable_thinking": "false", "tier": "low"},
+			map[string]string{"enable_thinking": "true"},
+			map[string]string{"enable_thinking": "true", "tier": "low"},
+		},
+	}
+	for _, c := range cases {
+		got := mergeMetadata(c.global, c.override)
+		if !reflect.DeepEqual(got, c.want) {
+			t.Errorf("%s: mergeMetadata(%v, %v) = %v, want %v", c.name, c.global, c.override, got, c.want)
+		}
+	}
+}
+
+func TestMergeMetadataDoesNotMutateInputs(t *testing.T) {
+	global := map[string]string{"enable_thinking": "false"}
+	override := map[string]string{"enable_thinking": "true"}
+	_ = mergeMetadata(global, override)
+	if global["enable_thinking"] != "false" {
+		t.Errorf("global was mutated: %v", global)
+	}
+	if override["enable_thinking"] != "true" {
+		t.Errorf("override was mutated: %v", override)
+	}
+}
 
 func TestResolveAgentModel(t *testing.T) {
 	main := "qwen-main"
