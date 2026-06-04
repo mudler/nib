@@ -192,6 +192,7 @@ func NewSession(ctx context.Context, cfg types.Config, callbacks Callbacks, tran
 		messages:      []openai.ChatCompletionMessage{},
 		callbacks:     callbacks,
 		cogitoOptions: cfg.AgentOptions,
+		compaction:    cfg.Compaction,
 		allowedTools:  make(map[string]bool),
 		agentStart:    make(map[string]time.Time),
 		agentManager:  agentManager,
@@ -553,6 +554,24 @@ func (s *Session) SendMessage(text string) (string, error) {
 		s.hooks.Fire(s.ctx, hooks.EventStop, "", map[string]any{"event": "Stop"})
 	}
 
+	// Auto-compaction: if the last request crossed the configured fraction of
+	// the context window, summarize older turns. Never fail the user's turn.
+	promptTokens := 0
+	if s.fragment.Status != nil {
+		promptTokens = s.fragment.Status.LastUsage.PromptTokens
+	}
+	if shouldAutoCompact(s.compaction, promptTokens) {
+		if s.callbacks.OnStatus != nil {
+			s.callbacks.OnStatus("Compacting conversation…")
+		}
+		cb, ca, cerr := s.CompactHistory()
+		if cerr != nil {
+			xlog.Warn("auto-compaction failed", "error", cerr)
+		} else if cb != ca && s.callbacks.OnCompactDone != nil {
+			s.callbacks.OnCompactDone(cb, ca)
+		}
+	}
+
 	return response, nil
 }
 
@@ -658,6 +677,7 @@ func (s *Session) Reload(cfg types.Config) error {
 	if cfg.Prompt != "" {
 		s.systemPrompt = cfg.GetPrompt() + s.loadedSkills
 	}
+	s.compaction = cfg.Compaction
 	return nil
 }
 
