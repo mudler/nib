@@ -184,3 +184,23 @@ func TestCompactHistoryErrorIsAtomic(t *testing.T) {
 		t.Fatalf("fragment must be unchanged on error, len %d != %d", len(s.fragment.Messages), snapshot)
 	}
 }
+
+func TestCompactHistoryEmptySummaryIsAtomic(t *testing.T) {
+	frag := []openai.ChatCompletionMessage{
+		{Role: "user", Content: "u1"}, {Role: "assistant", Content: "a1"},
+		{Role: "user", Content: "u2"}, {Role: "assistant", Content: "a2"},
+	}
+	llm := &fakeSummaryLLM{reply: ""} // model returns an empty summary
+	s := newCompactTestSession(llm, 1, frag, frag)
+	snapshot := len(s.fragment.Messages)
+	_, _, err := s.CompactHistory()
+	if err == nil {
+		t.Fatal("expected an error when the summary is empty")
+	}
+	if len(s.fragment.Messages) != snapshot {
+		t.Fatalf("fragment must be unchanged on empty-summary error, len %d != %d", len(s.fragment.Messages), snapshot)
+	}
+	if llm.calls != 1 {
+		t.Fatalf("expected the LLM to have been called once, got %d", llm.calls)
+	}
+}
