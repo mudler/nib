@@ -194,6 +194,9 @@ func RunCLI(ctx context.Context, cfg types.Config, transports ...mcp.Transport) 
 			fmt.Println(response)
 			fmt.Println()
 		},
+		OnCompactDone: func(before, after int) {
+			fmt.Println(theme.Subtle.Render(compactNotice(before, after)))
+		},
 		OnError: func(err error) {
 			spin.stop()
 			fmt.Fprintln(os.Stderr, theme.Error.Render(theme.Cross+" "+err.Error()))
@@ -280,6 +283,18 @@ func RunCLI(ctx context.Context, cfg types.Config, transports ...mcp.Transport) 
 					fmt.Println(theme.Subtle.Render(notice))
 				}
 				continue
+			case slash.KindCompact:
+				spin.start(theme.Status(theme.VerbThinking, 0))
+				before, after, err := session.CompactHistory()
+				spin.stop()
+				if err != nil {
+					fmt.Fprintln(os.Stderr, theme.Error.Render(theme.Cross+" "+err.Error()))
+				} else if before == after {
+					fmt.Println(theme.Subtle.Render("Nothing to compact yet."))
+				} else {
+					fmt.Println(theme.Subtle.Render(compactNotice(before, after)))
+				}
+				continue
 			default: // slash.KindSend
 				fmt.Println()
 				spin.start(theme.Status(theme.VerbThinking, 0))
@@ -292,6 +307,11 @@ func RunCLI(ctx context.Context, cfg types.Config, transports ...mcp.Transport) 
 			}
 		}
 	}
+}
+
+// compactNotice formats the one-line summary shown after a conversation is compacted.
+func compactNotice(before, after int) string {
+	return fmt.Sprintf("📦 Compacted conversation — %s → %s tokens", chat.HumanTokens(before), chat.HumanTokens(after))
 }
 
 func help() {
