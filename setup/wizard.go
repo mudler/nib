@@ -39,7 +39,6 @@ type model struct {
 	cfg types.Config
 
 	probing  bool
-	probed   bool
 	probeErr error
 
 	savedPath string
@@ -126,7 +125,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case probeResultMsg:
 		m.probing = false
-		m.probed = true
 		m.probeErr = msg.err
 		return m, nil
 	case tea.KeyMsg:
@@ -185,7 +183,6 @@ func (m model) updateFields(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.collect()
 		m.step = stepProbe
 		m.probing = true
-		m.probed = false
 		return m, m.probeCmd()
 	}
 	var cmd tea.Cmd
@@ -200,7 +197,6 @@ func (m model) updateProbe(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "e":
 		m.step = stepFields
-		m.probed = false
 		return m, textinput.Blink
 	case "esc":
 		m.quitting = true
