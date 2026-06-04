@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"github.com/mudler/cogito"
+	"github.com/mudler/nib/theme"
 )
 
 // agentLogLimit bounds how many activity lines we retain per sub-agent.
@@ -56,7 +57,7 @@ func (s *agentLogStore) recordCall(agentID string, tool *cogito.ToolChoice) {
 			args = truncMid(string(b), 200)
 		}
 	}
-	s.append(agentID, fmt.Sprintf("→ %s(%s)", tool.Name, args))
+	s.append(agentID, fmt.Sprintf("%s %s(%s)", theme.Arrow, tool.Name, args))
 }
 
 // recordResult logs a tool result against the agent that issued the call.

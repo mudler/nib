@@ -1198,9 +1198,9 @@ func (m Model) View() string {
 func (m Model) helpLine() string {
 	switch {
 	case m.showLogs && m.logOpenID != "":
-		return "↑↓ scroll · esc back · ctrl+o close"
+		return theme.ScrollKeys + " scroll · esc back · ctrl+o close"
 	case m.showLogs:
-		return "↑↓ select · enter open · k kill · esc close"
+		return theme.ScrollKeys + " select · enter open · k kill · esc close"
 	case m.awaitingApproval && m.approvalEditing:
 		return theme.HelpApprovalEdit
 	case m.awaitingApproval:

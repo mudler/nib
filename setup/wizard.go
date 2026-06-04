@@ -71,7 +71,7 @@ func newModel(ctx context.Context, existing types.Config) model {
 	mkInput := func(placeholder, val string) textinput.Model {
 		ti := textinput.New()
 		ti.Placeholder = placeholder
-		ti.Prompt = "› "
+		ti.Prompt = theme.PromptGlyph + " "
 		ti.SetValue(val)
 		return ti
 	}
@@ -253,7 +253,7 @@ func (m model) viewProvider() string {
 		}
 		b.WriteString(line + "\n")
 	}
-	b.WriteString("\n" + theme.Hint.Render("↑/↓ move · enter select · esc cancel"))
+	b.WriteString("\n" + theme.Hint.Render(theme.ScrollKeys+" move · enter select · esc cancel"))
 	return b.String()
 }
 
@@ -269,7 +269,7 @@ func (m model) viewFields() string {
 	if m.keyRequired && strings.TrimSpace(m.inputs[fieldAPIKey].Value()) == "" {
 		b.WriteString(theme.Help.Render("This provider requires an API key.") + "\n\n")
 	}
-	b.WriteString(theme.Hint.Render("tab/↑↓ move · enter test & continue · esc back"))
+	b.WriteString(theme.Hint.Render("tab/" + theme.ScrollKeys + " move · enter test & continue · esc back"))
 	return b.String()
 }
 

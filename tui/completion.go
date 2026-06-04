@@ -158,7 +158,7 @@ func renderCompletion(c compState, input string, width int) string {
 		b.WriteString("\n")
 	}
 	if g := c.ghost(input); g != "" {
-		b.WriteString(theme.Hint.Render("tab → " + input + g))
+		b.WriteString(theme.Hint.Render("tab " + theme.Arrow + " " + input + g))
 		b.WriteString("\n")
 	}
 	return lipgloss.NewStyle().Width(width).Render(strings.TrimRight(b.String(), "\n"))

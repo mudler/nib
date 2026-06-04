@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	wizmcp "github.com/mudler/nib/mcp"
+	"github.com/mudler/nib/theme"
 )
 
 // renderShellJobsFooter renders a compact one-line summary of shell jobs
@@ -24,7 +25,7 @@ func renderShellJobsFooter(jobs []wizmcp.ShellJobInfo, width int) string {
 			failed++
 		}
 	}
-	parts := []string{fmt.Sprintf("▷ shell: %d running", running)}
+	parts := []string{fmt.Sprintf("%s shell: %d running", theme.ShellJob, running)}
 	if done > 0 {
 		parts = append(parts, fmt.Sprintf("%d done", done))
 	}
