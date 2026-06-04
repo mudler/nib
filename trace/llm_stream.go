@@ -17,6 +17,10 @@ type recordingStreamingLLM struct {
 	stream cogito.StreamingLLM
 }
 
+// CreateChatCompletionStream taps the inner stream: it forwards every event
+// unchanged and records one reassembled "stream" Record when the stream ends
+// (or the error, if the stream failed mid-way). The consumer must drain the
+// returned channel or cancel ctx; otherwise the forwarding goroutine blocks.
 func (l *recordingStreamingLLM) CreateChatCompletionStream(ctx context.Context, request openai.ChatCompletionRequest) (<-chan cogito.StreamEvent, error) {
 	in, err := l.stream.CreateChatCompletionStream(ctx, request)
 	if err != nil {
@@ -37,6 +41,7 @@ func (l *recordingStreamingLLM) CreateChatCompletionStream(ctx context.Context, 
 		var order []int
 		var finish string
 		var usage cogito.LLMUsage
+		var streamErr error
 
 		for ev := range in {
 			switch ev.Type {
@@ -59,6 +64,8 @@ func (l *recordingStreamingLLM) CreateChatCompletionStream(ctx context.Context, 
 			case cogito.StreamEventDone:
 				finish = ev.FinishReason
 				usage = ev.Usage
+			case cogito.StreamEventError:
+				streamErr = ev.Error
 			}
 
 			// Forward unchanged; stop if the consumer's context is cancelled.
@@ -69,20 +76,19 @@ func (l *recordingStreamingLLM) CreateChatCompletionStream(ctx context.Context, 
 			}
 		}
 
-		msg := openai.ChatCompletionMessage{Role: openai.ChatMessageRoleAssistant, Content: content}
-		for _, i := range order {
-			msg.ToolCalls = append(msg.ToolCalls, *toolCalls[i])
-		}
 		req := request
 		if req.Model == "" {
 			req.Model = l.model
 		}
-		l.write(Record{
-			Model:   l.model,
-			AgentID: l.agentID,
-			Method:  "stream",
-			Request: &req,
-			Response: &openai.ChatCompletionResponse{
+		rec := Record{Model: l.model, AgentID: l.agentID, Method: "stream", Request: &req}
+		if streamErr != nil {
+			rec.Error = streamErr.Error()
+		} else {
+			msg := openai.ChatCompletionMessage{Role: openai.ChatMessageRoleAssistant, Content: content}
+			for _, i := range order {
+				msg.ToolCalls = append(msg.ToolCalls, *toolCalls[i])
+			}
+			rec.Response = &openai.ChatCompletionResponse{
 				Model:   l.model,
 				Choices: []openai.ChatCompletionChoice{{Index: 0, Message: msg, FinishReason: openai.FinishReason(finish)}},
 				Usage: openai.Usage{
@@ -90,8 +96,9 @@ func (l *recordingStreamingLLM) CreateChatCompletionStream(ctx context.Context, 
 					CompletionTokens: usage.CompletionTokens,
 					TotalTokens:      usage.TotalTokens,
 				},
-			},
-		})
+			}
+		}
+		l.write(rec)
 	}()
 	return out, nil
 }
