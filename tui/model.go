@@ -628,9 +628,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		am := m
 		(&am).applyAgentEvent(ev)
 		m = am
-		// Quiet by default: on completion surface the sub-agent's FINAL result
-		// inline (one block, labeled with its id); its per-tool activity lives in
-		// the Ctrl+O log viewer. Other lifecycle events get a lightweight marker.
+		// On completion, always show the stats marker line (e.g.
+		// "sub-agent explore finished · 3 tools · …"); when the agent produced a
+		// final result, also surface it inline as one labeled block. Per-tool
+		// activity stays in the Ctrl+O log viewer.
+		if line := agentTranscriptLine(ev); line != "" {
+			m.messages = append(m.messages, ChatMessage{Role: "agent", Content: line})
+		}
 		if ev.Status == chat.AgentStatusCompleted && strings.TrimSpace(ev.Result) != "" {
 			typ := ev.Type
 			if typ == "" {
@@ -642,8 +646,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				AgentID: ev.ID,
 				Content: chat.PreviewResult(ev.Result, toolResultPreviewLines),
 			})
-		} else if line := agentTranscriptLine(ev); line != "" {
-			m.messages = append(m.messages, ChatMessage{Role: "agent", Content: line})
 		}
 		m.updateViewport()
 		if m.showLogs && m.logOpenID != "" {

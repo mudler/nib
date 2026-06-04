@@ -22,7 +22,7 @@ func agentTranscriptLine(ev chat.AgentEvent) string {
 		}
 		return fmt.Sprintf("sub-agent %s started", typ)
 	case chat.AgentStatusCompleted:
-		return fmt.Sprintf("sub-agent %s finished", typ)
+		return fmt.Sprintf("sub-agent %s finished%s", typ, ev.StatsSuffix())
 	case chat.AgentStatusFailed:
 		if ev.Err != nil {
 			return fmt.Sprintf("sub-agent %s failed: %v", typ, ev.Err)

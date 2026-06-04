@@ -12,7 +12,7 @@ require (
 	github.com/charmbracelet/glamour v1.0.0
 	github.com/charmbracelet/lipgloss v1.1.1-0.20250404203927-76690c660834
 	github.com/modelcontextprotocol/go-sdk v1.0.0
-	github.com/mudler/cogito v0.10.1-0.20260602211422-24b4c564fe15
+	github.com/mudler/cogito v0.10.1-0.20260604082319-fe7fd5de11d1
 	github.com/mudler/xlog v0.0.1
 	github.com/sashabaranov/go-openai v1.41.2
 	gopkg.in/yaml.v3 v3.0.1
