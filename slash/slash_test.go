@@ -51,3 +51,10 @@ func TestResolve(t *testing.T) {
 		t.Fatalf("unknown command should error: %+v", a)
 	}
 }
+
+func TestResolveCompact(t *testing.T) {
+	got := Resolve("/compact", nil, nil, nil)
+	if got.Kind != KindCompact {
+		t.Fatalf("/compact resolved to kind %v, want KindCompact", got.Kind)
+	}
+}
