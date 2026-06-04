@@ -88,6 +88,10 @@ type Config struct {
 	// AllowedTools are tool names pre-approved without prompting (always honored;
 	// the basis of "allowlist" mode).
 	AllowedTools []string `yaml:"allowed_tools"`
+	// TraceDir, when non-empty, enables session tracing: each LLM call's raw
+	// request/response is appended to <TraceDir>/trace.ndjson. Set at runtime
+	// from the --trace-dir flag or NIB_TRACE_DIR env, not from the YAML config.
+	TraceDir string `yaml:"-"`
 }
 
 func (c *Config) GetPrompt() string {
