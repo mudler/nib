@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"reflect"
 	"sync"
+	"time"
 
 	"github.com/mudler/nib/config"
 	"github.com/mudler/nib/hooks"
@@ -46,6 +47,9 @@ type Session struct {
 	autoApprove   bool            // approval_mode: auto — approve every tool call
 	allowAllTurn  bool            // user chose "allow all this turn"; reset each top-level turn
 	hooks         *hooks.Dispatcher
+
+	agentMu    sync.Mutex
+	agentStart map[string]time.Time // sub-agent ID -> spawn time, for elapsed
 
 	agentManager *cogito.AgentManager
 	agentDefs    []cogito.AgentDefinition
@@ -151,6 +155,7 @@ func NewSession(ctx context.Context, cfg types.Config, callbacks Callbacks, tran
 		callbacks:     callbacks,
 		cogitoOptions: cfg.AgentOptions,
 		allowedTools:  make(map[string]bool),
+		agentStart:    make(map[string]time.Time),
 		agentManager:  agentManager,
 		agentLogs:     newAgentLogStore(),
 		llmModel:      cfg.Model,
@@ -262,15 +267,33 @@ func (s *Session) KillAgent(id string) bool {
 // one place. s.callbacks.OnAgentEvent is set once in NewSession and never
 // reassigned, so reading it from cogito's spawn goroutines is safe.
 func (s *Session) emitAgentEvent(a *cogito.AgentState) {
+	ev := AgentEvent{
+		ID:     a.ID,
+		Type:   a.Type,
+		Task:   a.Task,
+		Status: AgentStatus(a.Status),
+		Result: a.Result,
+		Err:    a.Error,
+	}
+	switch ev.Status {
+	case AgentStatusRunning:
+		s.agentMu.Lock()
+		if s.agentStart == nil {
+			s.agentStart = make(map[string]time.Time)
+		}
+		s.agentStart[a.ID] = time.Now()
+		s.agentMu.Unlock()
+	case AgentStatusCompleted, AgentStatusFailed:
+		ev.ToolCount, ev.TotalTokens = agentUsage(a)
+		s.agentMu.Lock()
+		if start, ok := s.agentStart[a.ID]; ok {
+			ev.Elapsed = time.Since(start)
+			delete(s.agentStart, a.ID)
+		}
+		s.agentMu.Unlock()
+	}
 	if s.callbacks.OnAgentEvent != nil {
-		s.callbacks.OnAgentEvent(AgentEvent{
-			ID:     a.ID,
-			Type:   a.Type,
-			Task:   a.Task,
-			Status: AgentStatus(a.Status),
-			Result: a.Result,
-			Err:    a.Error,
-		})
+		s.callbacks.OnAgentEvent(ev)
 	}
 	if s.hooks != nil {
 		s.hooks.Fire(s.ctx, hooks.EventAgentEvent, string(a.Status), map[string]any{
@@ -280,6 +303,16 @@ func (s *Session) emitAgentEvent(a *cogito.AgentState) {
 			"status": string(a.Status),
 		})
 	}
+}
+
+// agentUsage extracts a finished sub-agent's executed-tool count and cumulative
+// token usage from its fragment. Safe against a nil fragment/status (e.g. a
+// failed agent, whose Fragment is never set).
+func agentUsage(a *cogito.AgentState) (toolCount, tokens int) {
+	if a == nil || a.Fragment == nil || a.Fragment.Status == nil {
+		return 0, 0
+	}
+	return len(a.Fragment.Status.ToolsCalled), a.Fragment.Status.CumulativeUsage.TotalTokens
 }
 
 func (s *Session) ClearHistory() {
