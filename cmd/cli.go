@@ -127,7 +127,7 @@ func formatAgentEventLine(ev chat.AgentEvent) string {
 	}
 	switch ev.Status {
 	case chat.AgentStatusCompleted:
-		return theme.Subtle.Render(fmt.Sprintf("%s %s (%s) completed: %s", theme.SubAgent, typ, id, ev.Result))
+		return theme.Subtle.Render(fmt.Sprintf("%s %s (%s) completed%s: %s", theme.SubAgent, typ, id, ev.StatsSuffix(), ev.Result))
 	case chat.AgentStatusFailed:
 		return theme.Error.Render(fmt.Sprintf("%s %s (%s) failed: %v", theme.SubAgent, typ, id, ev.Err))
 	default:
