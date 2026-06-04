@@ -47,3 +47,25 @@ func TestProviderEscCancels(t *testing.T) {
 		t.Fatalf("esc should cancel without saving: quitting=%v saved=%v", m.quitting, m.saved)
 	}
 }
+
+func TestKeyRequiredTracksPreset(t *testing.T) {
+	// OpenAI (index 0) requires a key.
+	m := newModel(context.Background(), types.Config{})
+	mi, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter}) // select index 0
+	m = mi.(model)
+	if !m.keyRequired {
+		t.Errorf("OpenAI preset should set keyRequired=true")
+	}
+
+	// Ollama (index 2) does not.
+	m2 := newModel(context.Background(), types.Config{})
+	for i := 0; i < 2; i++ {
+		mi2, _ := m2.Update(tea.KeyMsg{Type: tea.KeyDown})
+		m2 = mi2.(model)
+	}
+	mi2, _ := m2.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m2 = mi2.(model)
+	if m2.keyRequired {
+		t.Errorf("Ollama preset should leave keyRequired=false")
+	}
+}

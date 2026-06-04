@@ -38,6 +38,8 @@ type model struct {
 
 	cfg types.Config
 
+	keyRequired bool
+
 	probing  bool
 	probeErr error
 
@@ -93,6 +95,7 @@ func (m *model) applyPreset(p Preset) {
 	m.inputs[fieldBaseURL].SetValue(p.BaseURL)
 	m.inputs[fieldModel].SetValue(p.DefaultModel)
 	m.inputs[fieldAPIKey].SetValue(p.DefaultKey)
+	m.keyRequired = p.KeyRequired
 }
 
 func (m *model) focusField(i int) {
@@ -262,6 +265,9 @@ func (m model) viewFields() string {
 	for i, ti := range m.inputs {
 		b.WriteString(theme.LabelYou.Render(labels[i]) + "\n")
 		b.WriteString(ti.View() + "\n\n")
+	}
+	if m.keyRequired && strings.TrimSpace(m.inputs[fieldAPIKey].Value()) == "" {
+		b.WriteString(theme.Help.Render("This provider requires an API key.") + "\n\n")
 	}
 	b.WriteString(theme.Hint.Render("tab/↑↓ move · enter test & continue · esc back"))
 	return b.String()
