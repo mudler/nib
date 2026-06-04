@@ -61,3 +61,5 @@ require (
 	golang.org/x/term v0.36.0 // indirect
 	golang.org/x/text v0.30.0 // indirect
 )
+
+replace github.com/mudler/cogito => /home/mudler/_git/cogito.worktrees/cumulative-usage
