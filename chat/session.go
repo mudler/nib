@@ -44,6 +44,7 @@ type Session struct {
 	loadedSkills  string // eager-loaded /skill instructions, re-applied across reloads
 	skills        []types.Skill
 	cogitoOptions types.AgentOptions
+	compaction    types.CompactionConfig
 	allowedTools  map[string]bool // Tools that don't need approval this session
 	autoApprove   bool            // approval_mode: auto — approve every tool call
 	allowAllTurn  bool            // user chose "allow all this turn"; reset each top-level turn
