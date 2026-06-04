@@ -22,7 +22,11 @@ type recordingLLM struct {
 // the records (cogito builds requests without a model; the underlying client
 // fills it in), and agentID tags the source ("" for the main session).
 func NewRecordingLLM(inner cogito.LLM, rec *Recorder, model, agentID string) cogito.LLM {
-	return &recordingLLM{inner: inner, rec: rec, model: model, agentID: agentID}
+	base := &recordingLLM{inner: inner, rec: rec, model: model, agentID: agentID}
+	if s, ok := inner.(cogito.StreamingLLM); ok {
+		return &recordingStreamingLLM{recordingLLM: base, stream: s}
+	}
+	return base
 }
 
 func (l *recordingLLM) write(rec Record) {
