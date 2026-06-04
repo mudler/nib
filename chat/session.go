@@ -16,6 +16,7 @@ import (
 	"github.com/mudler/nib/manage"
 	wizmcp "github.com/mudler/nib/mcp"
 	"github.com/mudler/nib/plugin"
+	"github.com/mudler/nib/trace"
 	"github.com/mudler/nib/types"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -62,6 +63,8 @@ type Session struct {
 	configurator  *manage.Configurator
 	reloadMu      sync.Mutex
 	pendingReload bool
+
+	tracer *trace.Recorder // non-nil when session tracing is enabled
 }
 
 // AgentLog returns the captured activity log for a sub-agent (for the
@@ -127,7 +130,20 @@ func CommandTransport(cmd string, args []string, env ...string) mcp.Transport {
 
 // NewSession creates a new chat session
 func NewSession(ctx context.Context, cfg types.Config, callbacks Callbacks, transports ...mcp.Transport) (*Session, error) {
-	llm := clients.NewOpenAILLM(cfg.Model, cfg.APIKey, cfg.BaseURL)
+	var llm cogito.LLM = clients.NewOpenAILLM(cfg.Model, cfg.APIKey, cfg.BaseURL)
+
+	// Session tracing: wrap the LLM so every call is appended to the transcript.
+	// A recorder failure must never prevent the session from starting.
+	var tracer *trace.Recorder
+	if cfg.TraceDir != "" {
+		rec, err := trace.NewRecorder(cfg.TraceDir)
+		if err != nil {
+			xlog.Warn("trace: disabled, failed to open recorder", "dir", cfg.TraceDir, "error", err)
+		} else {
+			tracer = rec
+			llm = trace.NewRecordingLLM(llm, rec, cfg.Model, "")
+		}
+	}
 
 	agentManager := cogito.NewAgentManager()
 
@@ -165,6 +181,7 @@ func NewSession(ctx context.Context, cfg types.Config, callbacks Callbacks, tran
 		cfgClients:    map[string]*mcp.ClientSession{},
 		cfgServers:    map[string]types.MCPServer{},
 		configurator:  manage.New(plugin.BaseDir(), config.WritablePath()),
+		tracer:        tracer,
 	}
 	for _, name := range cfg.AllowedTools {
 		s.allowedTools[name] = true
@@ -669,6 +686,10 @@ func (s *Session) Close() error {
 	}
 	for _, c := range s.cfgClients {
 		_ = c.Close()
+	}
+	// s.tracer is nil when tracing is disabled; Close is nil-safe.
+	if err := s.tracer.Close(); err != nil && firstErr == nil {
+		firstErr = err
 	}
 	return firstErr
 }
