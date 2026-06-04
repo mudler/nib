@@ -14,7 +14,9 @@ import (
 	"github.com/mudler/nib/config"
 	"github.com/mudler/nib/internal"
 	"github.com/mudler/nib/mcp"
+	"github.com/mudler/nib/setup"
 	"github.com/mudler/xlog"
+	"golang.org/x/term"
 )
 
 // parseHeight parses a height string like "40%" or "20"
@@ -54,6 +56,7 @@ func main() {
 	noTmuxFlag := flag.Bool("no-tmux", false, "Disable tmux popup even when in tmux")
 	tuiFlag := flag.Bool("tui", false, "Start the full-screen TUI directly (no tmux popup)")
 	cliFlag := flag.Bool("cli", false, "Run in plain CLI mode instead of the TUI")
+	setupFlag := flag.Bool("setup", false, "Run the interactive model setup wizard")
 	flag.Parse()
 
 	// Handle version flag
@@ -91,6 +94,26 @@ func main() {
 	}
 
 	xlog.SetLogger(xlog.NewLogger(xlog.LogLevel(cfg.LogLevel), os.Getenv("LOG_FORMAT")))
+
+	switch decideSetup(cfg.Model != "", *setupFlag, term.IsTerminal(int(os.Stdin.Fd()))) {
+	case setupAbort:
+		if *setupFlag {
+			fmt.Fprintln(os.Stderr, "nib --setup requires an interactive terminal")
+		} else {
+			fmt.Fprintln(os.Stderr, "nib: no model configured. Run `nib --setup`, or set MODEL/API_KEY/BASE_URL.")
+		}
+		os.Exit(1)
+	case setupRun:
+		newCfg, saved, err := setup.Run(ctx, cfg)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "setup: %v\n", err)
+			os.Exit(1)
+		}
+		if !saved {
+			os.Exit(0) // user cancelled
+		}
+		cfg.Model, cfg.APIKey, cfg.BaseURL = newCfg.Model, newCfg.APIKey, newCfg.BaseURL
+	}
 
 	// Shared shell-job registry: the shell MCP server starts/manages jobs in it,
 	// and the TUI lists them (footer) and backgrounds the foreground one (Ctrl+B).

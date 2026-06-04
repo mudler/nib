@@ -15,6 +15,7 @@ require (
 	github.com/mudler/cogito v0.10.1-0.20260602211422-24b4c564fe15
 	github.com/mudler/xlog v0.0.1
 	github.com/sashabaranov/go-openai v1.41.2
+	golang.org/x/term v0.36.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 
@@ -58,6 +59,5 @@ require (
 	golang.org/x/crypto v0.41.0 // indirect
 	golang.org/x/net v0.43.0 // indirect
 	golang.org/x/sys v0.39.0 // indirect
-	golang.org/x/term v0.36.0 // indirect
 	golang.org/x/text v0.30.0 // indirect
 )
