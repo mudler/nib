@@ -221,6 +221,12 @@ base_url: https://api.openai.com/v1
 prompt: |
   You are a calm, helpful terminal assistant...
 
+# Optional: per-request metadata sent verbatim on every LLM request (the OpenAI
+# "metadata" object). Backends such as LocalAI use it for per-request flags —
+# e.g. disable a reasoning model's thinking:
+metadata:
+  enable_thinking: "false"
+
 # Optional: agent behavior
 agent_options:
   iterations: 10
@@ -242,6 +248,9 @@ agents:
     description: investigates a self-contained subtask
     system_prompt: You are a focused research sub-agent.
     tools: [bash]
+    # Per-agent metadata overlays the global metadata above (per key):
+    metadata:
+      enable_thinking: "true"
 
 # Optional: external MCP servers
 mcp_servers:

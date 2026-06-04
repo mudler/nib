@@ -59,6 +59,7 @@ type Session struct {
 	llmModel     string
 	apiKey       string
 	baseURL      string
+	metadata     map[string]string // global per-request metadata; merged with per-agent overrides
 
 	configurator  *manage.Configurator
 	reloadMu      sync.Mutex
@@ -87,6 +88,23 @@ func resolveAgentModel(requested, main string, configured map[string]bool) strin
 	return main
 }
 
+// mergeMetadata overlays per-agent metadata on top of the global metadata,
+// returning a new map (or nil when both are empty). Per-agent keys win; keys
+// present only in the global map are inherited. Inputs are never mutated.
+func mergeMetadata(global, override map[string]string) map[string]string {
+	if len(global) == 0 && len(override) == 0 {
+		return nil
+	}
+	merged := make(map[string]string, len(global)+len(override))
+	for k, v := range global {
+		merged[k] = v
+	}
+	for k, v := range override {
+		merged[k] = v
+	}
+	return merged
+}
+
 // agentModelSet collects the non-empty per-agent-type model overrides so the
 // agent LLM factory can tell a configured model apart from an invented one.
 func agentModelSet(defs []cogito.AgentDefinition) map[string]bool {
@@ -110,6 +128,7 @@ func toCogitoDefinitions(cfgs []types.AgentTypeConfig) []cogito.AgentDefinition 
 			Tools:        t.Tools,
 			Model:        t.Model,
 			Temperature:  t.Temperature,
+			Metadata:     t.Metadata,
 			Iterations:   t.Iterations,
 			MaxAttempts:  t.MaxAttempts,
 			MaxRetries:   t.MaxRetries,
@@ -130,7 +149,9 @@ func CommandTransport(cmd string, args []string, env ...string) mcp.Transport {
 
 // NewSession creates a new chat session
 func NewSession(ctx context.Context, cfg types.Config, callbacks Callbacks, transports ...mcp.Transport) (*Session, error) {
-	var llm cogito.LLM = clients.NewOpenAILLM(cfg.Model, cfg.APIKey, cfg.BaseURL)
+	var llm cogito.LLM = clients.NewOpenAILLMWithOptions(cfg.Model, cfg.APIKey, cfg.BaseURL, clients.OpenAIOptions{
+		Metadata: cfg.Metadata,
+	})
 
 	// Session tracing: wrap the LLM so every call is appended to the transcript.
 	// A recorder failure must never prevent the session from starting.
@@ -177,6 +198,7 @@ func NewSession(ctx context.Context, cfg types.Config, callbacks Callbacks, tran
 		llmModel:      cfg.Model,
 		apiKey:        cfg.APIKey,
 		baseURL:       cfg.BaseURL,
+		metadata:      cfg.Metadata,
 		mcpClient:     client,
 		cfgClients:    map[string]*mcp.ClientSession{},
 		cfgServers:    map[string]types.MCPServer{},
@@ -453,7 +475,7 @@ func (s *Session) SendMessage(text string) (string, error) {
 		cogito.EnableAgentSpawning,
 		cogito.WithAgentManager(s.agentManager),
 		cogito.WithAgentDefinitions(s.agentDefs...),
-		cogito.WithAgentLLMFactory(func(model string, temperature float32) cogito.LLM {
+		cogito.WithAgentLLMFactory(func(model string, temperature float32, metadata map[string]string) cogito.LLM {
 			// The spawn_agent tool lets the LLM request a `model`, which it may
 			// fill with a name the endpoint doesn't serve (e.g. "sonar") and
 			// 404 the sub-agent. Honor a requested model only when wiz actually
@@ -465,7 +487,12 @@ func (s *Session) SendMessage(text string) (string, error) {
 				xlog.Warn("sub-agent requested an unserved model; using the main model",
 					"requested", model, "model", chosen)
 			}
-			return clients.NewOpenAILLMWithOptions(chosen, s.apiKey, s.baseURL, clients.OpenAIOptions{Temperature: temperature})
+			// metadata is this agent type's override; overlay it on the global
+			// session metadata (per-key: agent wins, global-only keys inherited).
+			return clients.NewOpenAILLMWithOptions(chosen, s.apiKey, s.baseURL, clients.OpenAIOptions{
+				Temperature: temperature,
+				Metadata:    mergeMetadata(s.metadata, metadata),
+			})
 		}),
 		cogito.WithAgentSpawnCallback(func(a *cogito.AgentState) {
 			s.emitAgentEvent(a)
