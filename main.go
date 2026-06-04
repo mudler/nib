@@ -57,6 +57,7 @@ func main() {
 	tuiFlag := flag.Bool("tui", false, "Start the full-screen TUI directly (no tmux popup)")
 	cliFlag := flag.Bool("cli", false, "Run in plain CLI mode instead of the TUI")
 	setupFlag := flag.Bool("setup", false, "Run the interactive model setup wizard")
+	traceDirFlag := flag.String("trace-dir", "", "Write a session LLM trace (NDJSON) to this directory; also via NIB_TRACE_DIR")
 	flag.Parse()
 
 	// Handle version flag
@@ -88,6 +89,13 @@ func main() {
 	}()
 
 	cfg := config.Load()
+
+	// Tracing is runtime-only: the flag wins, otherwise fall back to the env var.
+	if *traceDirFlag != "" {
+		cfg.TraceDir = *traceDirFlag
+	} else if env := os.Getenv("NIB_TRACE_DIR"); env != "" {
+		cfg.TraceDir = env
+	}
 
 	if cfg.LogLevel == "" {
 		cfg.LogLevel = "error"
