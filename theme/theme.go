@@ -6,7 +6,11 @@
 // like one product.
 package theme
 
-import "github.com/charmbracelet/lipgloss"
+import (
+	"os"
+
+	"github.com/charmbracelet/lipgloss"
+)
 
 // Inks — 256-color, foreground only. Body text uses the terminal default fg.
 var (
@@ -17,14 +21,54 @@ var (
 	Faint  = lipgloss.Color("240") // ghost hints, metadata
 )
 
-// Glyphs — typographic marks, no emoji.
-const (
-	Sep            = "·" // separator between label and message / list items
-	PromptGlyph    = "›" // input prompt
-	ApprovalGutter = "▏" // left rule on a tool-approval block
-	SubAgent       = "↳" // sub-agent line marker
-	Cross          = "×" // error marker
+// Glyphs — typographic marks, no emoji. These are vars, not consts, because
+// RestrictedGlyphs() swaps the non-Latin-1 marks for ASCII stand-ins at startup
+// (see init below). Render through these names rather than hardcoding the rune
+// so a single switch covers every call site.
+var (
+	Sep            = "·"  // separator between label and message / list items
+	PromptGlyph    = "›"  // input prompt
+	ApprovalGutter = "▏"  // left rule on a tool-approval block
+	SubAgent       = "↳"  // sub-agent line marker
+	Cross          = "×"  // error marker
+	Arrow          = "→"  // tool-call / edit / mapping arrow
+	ShellJob       = "▷"  // shell-jobs footer marker
+	ScrollKeys     = "↑↓" // up/down navigation hint
 )
+
+// RestrictedGlyphs reports whether glyphs must fall back to ASCII because the
+// terminal can only render a fixed bitmap font with no arrows, geometric
+// shapes, or eighth-block glyphs. The Linux VT console (TERM=linux) is the
+// canonical case — there, the unmapped runes paint as blank cells. NIB_ASCII
+// overrides the autodetection: "1"/"true"/"yes" forces the stand-ins on any
+// terminal, "0"/"false"/"no" forces the full set.
+func RestrictedGlyphs() bool {
+	switch os.Getenv("NIB_ASCII") {
+	case "1", "true", "yes":
+		return true
+	case "0", "false", "no":
+		return false
+	}
+	return os.Getenv("TERM") == "linux"
+}
+
+func init() { applyGlyphProfile() }
+
+// applyGlyphProfile (re)assigns the swappable glyphs for the current terminal.
+// On restricted terminals the non-Latin-1 marks become ASCII stand-ins so they
+// never paint as blank cells; otherwise the full typographic set is used. It
+// sets both branches explicitly so it is idempotent and reversible (tests flip
+// the env and call it again). Latin-1 marks (Sep ·, Cross ×) and box-drawing
+// (─, used inline for rules) render on the VT console font and are left as-is.
+func applyGlyphProfile() {
+	if RestrictedGlyphs() {
+		PromptGlyph, ApprovalGutter, SubAgent = ">", "|", ">"
+		Arrow, ShellJob, ScrollKeys = "->", ">", "up/dn"
+		return
+	}
+	PromptGlyph, ApprovalGutter, SubAgent = "›", "▏", "↳"
+	Arrow, ShellJob, ScrollKeys = "→", "▷", "↑↓"
+}
 
 // Styles. Bold is reserved for the brand mark and the active approval keys.
 var (

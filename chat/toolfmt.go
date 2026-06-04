@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"github.com/mudler/nib/theme"
 )
 
 // FormatToolCall renders a tool call's arguments as a compact, human-readable
@@ -71,7 +73,7 @@ func fmtRead(a map[string]any) string {
 }
 
 func fmtEdit(a map[string]any) string {
-	return "edit " + argStr(a, "path") + "\n  " + argStr(a, "old") + " → " + argStr(a, "new")
+	return "edit " + argStr(a, "path") + "\n  " + argStr(a, "old") + " " + theme.Arrow + " " + argStr(a, "new")
 }
 
 func fmtWakeup(a map[string]any) string {
