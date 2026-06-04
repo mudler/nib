@@ -58,7 +58,8 @@ func shouldAutoCompact(cfg types.CompactionConfig, promptTokens int) bool {
 }
 
 // estimateTokens is a cheap byte/4 approximation, used when no real usage figure
-// is available (e.g. right after a rebuild, before the next live turn).
+// is available (e.g. right after a rebuild, before the next live turn). It only
+// counts m.Content and tool calls, ignoring m.MultiContent (multimedia parts).
 func estimateTokens(msgs []openai.ChatCompletionMessage) int {
 	n := 0
 	for _, m := range msgs {
@@ -70,30 +71,42 @@ func estimateTokens(msgs []openai.ChatCompletionMessage) int {
 	return n / 4
 }
 
-// HumanTokens formats a token count compactly (e.g. 47200 → "47.2k").
-func HumanTokens(n int) string {
+// formatTokenCount returns the bare magnitude string for a token count, e.g.
+// 950 → "950", 12000 → "12k", 47200 → "47.2k". A trailing ".0" is trimmed.
+// Returns "" for zero/negative so callers can omit the segment.
+func formatTokenCount(n int) string {
+	if n <= 0 {
+		return ""
+	}
 	if n < 1000 {
 		return fmt.Sprintf("%d", n)
 	}
-	return fmt.Sprintf("%.1fk", float64(n)/1000)
+	s := fmt.Sprintf("%.1f", float64(n)/1000.0)
+	s = strings.TrimSuffix(s, ".0")
+	return s + "k"
+}
+
+// HumanTokens formats a token count compactly (e.g. 47200 → "47.2k").
+func HumanTokens(n int) string {
+	return formatTokenCount(n)
 }
 
 // renderMessages flattens messages to plain "role: content" lines for the
 // summarization prompt, skipping system boilerplate and rendering tool calls
-// inline.
+// inline. A message carrying both content and tool calls renders both. Like
+// estimateTokens, this ignores m.MultiContent (multimedia parts).
 func renderMessages(msgs []openai.ChatCompletionMessage) string {
 	var b strings.Builder
 	for _, m := range msgs {
 		if m.Role == "system" {
 			continue
 		}
-		if m.Content == "" && len(m.ToolCalls) > 0 {
-			for _, tc := range m.ToolCalls {
-				fmt.Fprintf(&b, "%s: [tool call %s(%s)]\n", m.Role, tc.Function.Name, tc.Function.Arguments)
-			}
-			continue
+		if m.Content != "" {
+			fmt.Fprintf(&b, "%s: %s\n", m.Role, m.Content)
 		}
-		fmt.Fprintf(&b, "%s: %s\n", m.Role, m.Content)
+		for _, tc := range m.ToolCalls {
+			fmt.Fprintf(&b, "%s: [tool call %s(%s)]\n", m.Role, tc.Function.Name, tc.Function.Arguments)
+		}
 	}
 	return b.String()
 }
