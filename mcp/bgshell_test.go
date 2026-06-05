@@ -160,6 +160,64 @@ func TestListBackgroundedFlagAndOutput(t *testing.T) {
 	}
 }
 
+func TestShellJobsHasRunning(t *testing.T) {
+	jobs := NewShellJobs()
+	if jobs.HasRunning() {
+		t.Fatal("an empty registry should report no running jobs")
+	}
+	j := jobs.mgr.launch(context.Background(), "sleep 0.3", false)
+	if !jobs.HasRunning() {
+		t.Fatal("a registry with a running job should report HasRunning")
+	}
+	waitJob(t, j)
+	if jobs.HasRunning() {
+		t.Fatal("once the job finishes, HasRunning should be false")
+	}
+	// nil receiver is safe.
+	var nilJobs *ShellJobs
+	if nilJobs.HasRunning() {
+		t.Fatal("nil registry should report no running jobs")
+	}
+}
+
+func TestSetOnJobDoneFires(t *testing.T) {
+	jobs := NewShellJobs()
+	done := make(chan ShellJobInfo, 4)
+	jobs.SetOnJobDone(func(info ShellJobInfo) { done <- info })
+
+	// A bash_background job is backgrounded.
+	bg := jobs.mgr.launch(context.Background(), "echo HELLO", false)
+	select {
+	case info := <-done:
+		if info.ID != bg.id {
+			t.Fatalf("callback id = %q, want %q", info.ID, bg.id)
+		}
+		if !info.Backgrounded {
+			t.Fatal("a bash_background job should be reported Backgrounded")
+		}
+		if info.Status != "completed" {
+			t.Fatalf("status = %q, want completed", info.Status)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("completion callback did not fire for a background job")
+	}
+
+	// A plain foreground job (never detached) also fires, but is not Backgrounded;
+	// the session-level handler is responsible for ignoring it.
+	fg := jobs.mgr.launch(context.Background(), "echo FG", true)
+	select {
+	case info := <-done:
+		if info.ID != fg.id {
+			t.Fatalf("callback id = %q, want %q", info.ID, fg.id)
+		}
+		if info.Backgrounded {
+			t.Fatal("a plain foreground job should not be Backgrounded")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("completion callback did not fire for a foreground job")
+	}
+}
+
 func TestLockedBufferTruncates(t *testing.T) {
 	var w lockedBuffer
 	big := strings.Repeat("x", bgMaxOutput+100)

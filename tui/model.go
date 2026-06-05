@@ -59,11 +59,20 @@ type Model struct {
 	// so a second Ctrl+C exits instead of just re-interrupting. Reset when a new
 	// turn starts and when the turn ends.
 	interruptArmed bool
-	status         string
-	reasoning      string
-	err            error
-	output         string // Command to output to shell on exit
-	quitting       bool
+	// parked is true while the live run is parked (the assistant replied but the
+	// run is still alive waiting on the injection channel — background work
+	// pending, or simply ready for a follow-up). While parked the composer is
+	// usable and Enter injects into the SAME run instead of starting a new turn.
+	parked bool
+	// lastParkedReply is the assistant text most recently surfaced via a park
+	// event, so the terminal responseMsg can avoid re-appending an identical
+	// final reply.
+	lastParkedReply string
+	status          string
+	reasoning       string
+	err             error
+	output          string // Command to output to shell on exit
+	quitting        bool
 
 	// Tool approval state
 	pendingTool      *chat.ToolCallRequest
@@ -80,7 +89,8 @@ type Model struct {
 	askRequestChan  chan chat.AskRequest
 	askResponseChan chan string
 	wakeupChan      chan chat.WakeupRequest
-	compactChan     chan [2]int // {before, after} token counts from auto-compaction
+	parkChan        chan parkEvent // park/resume signals from the live run
+	compactChan     chan [2]int    // {before, after} token counts from auto-compaction
 
 	// contextTokens is the current conversation size shown in the footer badge.
 	// Updated after each turn and after compaction; 0 hides the badge.
@@ -99,12 +109,6 @@ type Model struct {
 	logOpenID   string         // when non-empty: drilled into this job's full log
 	logOpenKind string         // "agent" | "shell" for the open job
 	logVP       viewport.Model // scrollable full-log view
-
-	// Auto-notify state: completion notices for backgrounded work that the
-	// assistant should react to.
-	notifiedJobs   map[string]bool // job/agent ids already notified (or suppressed)
-	pendingNotices []string        // queued notices awaiting an idle moment
-	bgAgents       map[string]bool // sub-agent ids the user backgrounded (Ctrl+B)
 
 	// Unified `/` completion state
 	completion compState
@@ -136,6 +140,17 @@ type compactResultMsg struct {
 
 // compactNoticeMsg is an auto-compaction notice pushed from the session goroutine.
 type compactNoticeMsg [2]int
+
+// parkEvent carries a park/resume signal from the live run. parked=true means
+// the run parked (assistant replied, run still alive); parked=false means an
+// injected message resumed it.
+type parkEvent struct {
+	parked bool
+	reply  string
+}
+
+// parkMsg delivers a parkEvent to the update loop.
+type parkMsg parkEvent
 
 // statusMsg is sent for status updates
 type statusMsg string
@@ -216,6 +231,7 @@ func NewModel(ctx context.Context, cfg types.Config, height int, shellJobs *wizm
 		askRequestChan:   make(chan chat.AskRequest),
 		askResponseChan:  make(chan string),
 		wakeupChan:       make(chan chat.WakeupRequest, 8),
+		parkChan:         make(chan parkEvent, 16),
 		compactChan:      make(chan [2]int, 4),
 		mdRenderers:      make(map[int]*glamour.TermRenderer),
 	}
@@ -258,12 +274,26 @@ func (m Model) initSession() tea.Cmd {
 				return <-m.askResponseChan
 			},
 			OnScheduleWakeup: func(req chat.WakeupRequest) string {
-				// Non-blocking: hand the request to the UI loop and confirm now.
+				// Non-blocking: hand the request to the UI loop and confirm now. The
+				// UI arms a timer; when it fires it injects the note into the live
+				// run (see wakeupFireMsg).
 				select {
 				case m.wakeupChan <- req:
 					return fmt.Sprintf("Scheduled a wake-up in %ds: %q. You'll be re-invoked then to check on it.", req.DelaySeconds, req.Note)
 				default:
 					return "Could not schedule wake-up (too many pending)."
+				}
+			},
+			OnParked: func(reply string) {
+				select {
+				case m.parkChan <- parkEvent{parked: true, reply: reply}:
+				default:
+				}
+			},
+			OnResumed: func() {
+				select {
+				case m.parkChan <- parkEvent{parked: false}:
+				default:
 				}
 			},
 			OnAgentEvent: func(ev chat.AgentEvent) {
@@ -287,6 +317,11 @@ func (m Model) initSession() tea.Cmd {
 		}
 
 		session, err := chat.NewSession(m.ctx, m.cfg, callbacks, m.transports...)
+		if session != nil {
+			// Wire the shell-job registry so backgrounded shell jobs keep the run
+			// parked and inject a completion notice when they finish.
+			session.SetShellJobs(m.shellJobs)
+		}
 		return sessionReadyMsg{session: session, err: err}
 	}
 }
@@ -425,11 +460,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// otherwise a running foreground shell command.
 			if m.sessionReady && m.session != nil {
 				if id := m.firstRunningJobID(); id != "" {
+					// Detach the sub-agent so it keeps running in the background; its
+					// completion is auto-injected into the live run by cogito.
 					_ = m.session.AgentManager().Detach(id)
-					if m.bgAgents == nil {
-						m.bgAgents = map[string]bool{}
-					}
-					m.bgAgents[id] = true // eligible for auto-notify on completion
 					return m, nil
 				}
 			}
@@ -509,6 +542,27 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m.handleToolApproval(input)
 			}
 
+			// Mid-run follow-up: while the run is parked, route the input into the
+			// SAME live run via the injection channel instead of starting a new
+			// turn. The run resumes (OnResumed re-locks the composer) and the
+			// assistant continues with the follow-up appended.
+			if m.parked && m.session != nil {
+				if m.session.Inject(input) {
+					m.messages = append(m.messages, ChatMessage{Role: "user", Content: input})
+					m.textarea.Reset()
+					m.completion.sync("")
+					m.parked = false
+					m.loading = true
+					m.interruptArmed = false
+					m.status = "Thinking…"
+					m.updateViewport()
+					return m, nil
+				}
+				// The run ended between park and Enter (or the channel was full):
+				// fall through and start a fresh turn with this input.
+				m.parked = false
+			}
+
 			// Echo the user's literal input, then resolve it (command/skill/agent).
 			m.messages = append(m.messages, ChatMessage{Role: "user", Content: input})
 			m.textarea.Reset()
@@ -557,10 +611,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.session = msg.session
 		m.sessionReady = true
 		// Start listening for callbacks
-		cmds = append(cmds, m.listenStatus(), m.listenReasoning(), m.listenToolRequest(), m.listenToolResult(), m.listenAskRequest(), m.listenAgentEvents(), m.shellTick(), m.listenWakeup(), m.listenCompact())
+		cmds = append(cmds, m.listenStatus(), m.listenReasoning(), m.listenToolRequest(), m.listenToolResult(), m.listenAskRequest(), m.listenAgentEvents(), m.shellTick(), m.listenWakeup(), m.listenPark(), m.listenCompact())
 
 	case responseMsg:
+		// The run returned: it is no longer parked (all background work drained).
 		m.loading = false
+		m.parked = false
 		m.interruptArmed = false
 		m.status = ""
 		m.reasoning = ""
@@ -571,18 +627,51 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.err = msg.err
 				m.messages = append(m.messages, ChatMessage{Role: "error", Content: msg.err.Error()})
 			}
-		} else {
+		} else if content := strings.TrimSpace(msg.content); content != "" && content != m.lastParkedReply {
+			// Skip the final reply when it duplicates the text already surfaced at
+			// the park gate (a run that parked and returned with the same answer).
 			m.messages = append(m.messages, ChatMessage{Role: "assistant", Content: msg.content})
 		}
+		m.lastParkedReply = ""
 		if m.session != nil {
 			m.contextTokens = m.session.ContextTokens()
 		}
 		m.updateViewport()
-		// A background job may have finished during this turn; react to it now
-		// that we're idle again.
-		if c := m.autoNotifyCmd(); c != nil {
-			cmds = append(cmds, c)
+
+	case parkMsg:
+		if msg.parked {
+			// The run parked: the assistant has replied but stays alive (background
+			// work pending, or ready for a follow-up). Surface the reply as a
+			// durable transcript line and unlock the composer so the user can keep
+			// chatting — their input injects into this same run.
+			reply := strings.TrimSpace(msg.reply)
+			if reply != "" && reply != m.lastParkedReply {
+				m.messages = append(m.messages, ChatMessage{Role: "assistant", Content: reply})
+				m.lastParkedReply = reply
+			}
+			m.parked = true
+			m.loading = false
+			m.interruptArmed = false
+			m.reasoning = ""
+			if m.isWorking() {
+				m.status = "Working in the background — type to add a follow-up"
+			} else {
+				m.status = ""
+			}
+			if m.session != nil {
+				m.contextTokens = m.session.ContextTokens()
+			}
+			m.textarea.Focus()
+		} else {
+			// An injected message resumed the run: re-lock the composer and show
+			// the working indicator again.
+			m.parked = false
+			m.loading = true
+			m.interruptArmed = false
+			m.status = "Thinking…"
 		}
+		m.updateViewport()
+		cmds = append(cmds, m.listenPark())
 
 	case compactResultMsg:
 		m.loading = false
@@ -605,12 +694,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.listenCompact()
 
 	case shellTickMsg:
-		// Periodic refresh so the shell-jobs footer reflects jobs that finish
-		// (or are started by the model) while the user is idle, and auto-notify
-		// the assistant about finished background work.
-		if c := m.autoNotifyCmd(); c != nil {
-			cmds = append(cmds, c)
-		}
+		// Periodic refresh so the shell-jobs footer reflects jobs that finish (or
+		// are started by the model) while the user is idle. Completion handling no
+		// longer lives here: finished background work injects into the live run
+		// (shell jobs via SetShellJobs, sub-agents via cogito's auto-injection).
 		m.updateViewport()
 		if m.showLogs && m.logOpenID != "" {
 			m.syncLogViewport()
@@ -630,15 +717,27 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		)
 
 	case wakeupFireMsg:
-		// The delay elapsed: queue a wake-up notice and react when idle (reusing
-		// the auto-notify turn machinery).
+		// The delay elapsed: inject the wake-up note into the live run if one is
+		// parked. If no run is live (the conversation is idle), start a fresh turn
+		// so the assistant re-engages with the note.
 		note := msg.note
 		if note == "" {
 			note = "(no note)"
 		}
-		m.pendingNotices = append(m.pendingNotices, "scheduled wake-up: "+note)
-		if c := m.autoNotifyCmd(); c != nil {
-			cmds = append(cmds, c)
+		notice := "scheduled wake-up: " + note
+		if m.session != nil && m.parked && m.session.Inject(notice) {
+			m.parked = false
+			m.loading = true
+			m.interruptArmed = false
+			m.status = "Thinking…"
+			m.updateViewport()
+		} else if m.sessionReady && m.session != nil && !m.loading && !m.awaitingApproval && !m.awaitingAsk {
+			m.messages = append(m.messages, ChatMessage{Role: "agent", Content: "reacting to scheduled wake-up…"})
+			m.loading = true
+			m.interruptArmed = false
+			m.status = notice
+			m.updateViewport()
+			cmds = append(cmds, m.sendMessage(notice))
 		}
 
 	case statusMsg:
@@ -772,6 +871,18 @@ func (m Model) listenWakeup() tea.Cmd {
 		select {
 		case req := <-m.wakeupChan:
 			return wakeupScheduledMsg(req)
+		case <-m.ctx.Done():
+			return nil
+		}
+	}
+}
+
+// listenPark waits for a park/resume signal from the live run.
+func (m Model) listenPark() tea.Cmd {
+	return func() tea.Msg {
+		select {
+		case ev := <-m.parkChan:
+			return parkMsg(ev)
 		case <-m.ctx.Done():
 			return nil
 		}
@@ -1285,6 +1396,8 @@ func (m Model) helpLine() string {
 		return theme.HelpApprovalEdit
 	case m.awaitingApproval:
 		return theme.HelpApproval
+	case m.parked:
+		return "enter add a follow-up · ctrl+c interrupt · ctrl+o logs"
 	default:
 		return theme.HelpDefault
 	}
@@ -1319,9 +1432,11 @@ func (m Model) Output() string {
 	return m.output
 }
 
-// isWorking reports whether a turn or sub-agent is currently running.
+// isWorking reports whether a turn or sub-agent is currently running, or the
+// run is parked (alive, waiting on the injection channel). A parked run is still
+// in flight, so the first Ctrl+C should interrupt it rather than quit.
 func (m Model) isWorking() bool {
-	if m.loading {
+	if m.loading || m.parked {
 		return true
 	}
 	if m.session != nil && m.session.AgentManager() != nil {

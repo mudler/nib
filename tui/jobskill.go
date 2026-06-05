@@ -146,10 +146,5 @@ func (m *Model) killSelected(n int) {
 	case "shell":
 		m.shellJobs.Kill(j.ID)
 	}
-	// A job the user killed shouldn't trigger an auto-notify turn.
-	if m.notifiedJobs == nil {
-		m.notifiedJobs = map[string]bool{}
-	}
-	m.notifiedJobs[j.ID] = true
 	m.status = "Killed " + j.ID
 }
