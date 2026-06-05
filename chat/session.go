@@ -53,14 +53,15 @@ type Session struct {
 	agentMu    sync.Mutex
 	agentStart map[string]time.Time // sub-agent ID -> spawn time, for elapsed
 
-	agentManager *cogito.AgentManager
-	agentDefs    []cogito.AgentDefinition
-	agentModels  map[string]bool // models configured per agent type (for the LLM-model guard)
-	agentLogs    *agentLogStore  // per-sub-agent activity log (for the agent_logs tool)
-	llmModel     string
-	apiKey       string
-	baseURL      string
-	metadata     map[string]string // global per-request metadata; merged with per-agent overrides
+	agentManager    *cogito.AgentManager
+	agentDefs       []cogito.AgentDefinition
+	agentModels     map[string]bool // models configured per agent type (for the LLM-model guard)
+	agentLogs       *agentLogStore  // per-sub-agent activity log (for the agent_logs tool)
+	llmModel        string
+	apiKey          string
+	baseURL         string
+	metadata        map[string]string // global per-request metadata; merged with per-agent overrides
+	reasoningEffort string            // OpenAI reasoning_effort sent on every request (e.g. "none")
 
 	configurator  *manage.Configurator
 	reloadMu      sync.Mutex
@@ -151,7 +152,8 @@ func CommandTransport(cmd string, args []string, env ...string) mcp.Transport {
 // NewSession creates a new chat session
 func NewSession(ctx context.Context, cfg types.Config, callbacks Callbacks, transports ...mcp.Transport) (*Session, error) {
 	var llm cogito.LLM = clients.NewOpenAILLMWithOptions(cfg.Model, cfg.APIKey, cfg.BaseURL, clients.OpenAIOptions{
-		Metadata: cfg.Metadata,
+		Metadata:        cfg.Metadata,
+		ReasoningEffort: cfg.ReasoningEffort,
 	})
 
 	// Session tracing: wrap the LLM so every call is appended to the transcript.
@@ -185,27 +187,28 @@ func NewSession(ctx context.Context, cfg types.Config, callbacks Callbacks, tran
 	}
 
 	s := &Session{
-		ctx:           ctx,
-		llm:           llm,
-		clients:       clients,
-		fragment:      cogito.NewEmptyFragment(),
-		messages:      []openai.ChatCompletionMessage{},
-		callbacks:     callbacks,
-		cogitoOptions: cfg.AgentOptions,
-		compaction:    cfg.Compaction,
-		allowedTools:  make(map[string]bool),
-		agentStart:    make(map[string]time.Time),
-		agentManager:  agentManager,
-		agentLogs:     newAgentLogStore(),
-		llmModel:      cfg.Model,
-		apiKey:        cfg.APIKey,
-		baseURL:       cfg.BaseURL,
-		metadata:      cfg.Metadata,
-		mcpClient:     client,
-		cfgClients:    map[string]*mcp.ClientSession{},
-		cfgServers:    map[string]types.MCPServer{},
-		configurator:  manage.New(plugin.BaseDir(), config.WritablePath()),
-		tracer:        tracer,
+		ctx:             ctx,
+		llm:             llm,
+		clients:         clients,
+		fragment:        cogito.NewEmptyFragment(),
+		messages:        []openai.ChatCompletionMessage{},
+		callbacks:       callbacks,
+		cogitoOptions:   cfg.AgentOptions,
+		compaction:      cfg.Compaction,
+		allowedTools:    make(map[string]bool),
+		agentStart:      make(map[string]time.Time),
+		agentManager:    agentManager,
+		agentLogs:       newAgentLogStore(),
+		llmModel:        cfg.Model,
+		apiKey:          cfg.APIKey,
+		baseURL:         cfg.BaseURL,
+		metadata:        cfg.Metadata,
+		reasoningEffort: cfg.ReasoningEffort,
+		mcpClient:       client,
+		cfgClients:      map[string]*mcp.ClientSession{},
+		cfgServers:      map[string]types.MCPServer{},
+		configurator:    manage.New(plugin.BaseDir(), config.WritablePath()),
+		tracer:          tracer,
 	}
 	for _, name := range cfg.AllowedTools {
 		s.allowedTools[name] = true
@@ -492,8 +495,9 @@ func (s *Session) SendMessage(text string) (string, error) {
 			// metadata is this agent type's override; overlay it on the global
 			// session metadata (per-key: agent wins, global-only keys inherited).
 			return clients.NewOpenAILLMWithOptions(chosen, s.apiKey, s.baseURL, clients.OpenAIOptions{
-				Temperature: temperature,
-				Metadata:    mergeMetadata(s.metadata, metadata),
+				Temperature:     temperature,
+				Metadata:        mergeMetadata(s.metadata, metadata),
+				ReasoningEffort: s.reasoningEffort,
 			})
 		}),
 		cogito.WithAgentSpawnCallback(func(a *cogito.AgentState) {

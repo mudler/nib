@@ -93,11 +93,17 @@ type Config struct {
 	// LocalAI use it for per-request flags, e.g. {"enable_thinking": "false"}
 	// to disable reasoning. Applied to the main session and inherited by
 	// sub-agents (see AgentTypeConfig.Metadata for per-agent overrides).
-	Metadata     map[string]string    `yaml:"metadata,omitempty"`
-	MCPServers   map[string]MCPServer `yaml:"mcp_servers"`
-	AgentOptions AgentOptions         `yaml:"agent_options"`
-	Compaction   CompactionConfig     `yaml:"compaction"`
-	Agents       []AgentTypeConfig    `yaml:"agents"`
+	Metadata map[string]string `yaml:"metadata,omitempty"`
+	// ReasoningEffort sets the OpenAI "reasoning_effort" on every request
+	// ("none"/"low"/"medium"/"high"). Unlike Metadata.enable_thinking, this binds
+	// even when the model's chat template has no enable_thinking toggle (e.g.
+	// LFM2.5), so it's the reliable way to disable a reasoning model's thinking
+	// ("none"). Empty leaves the field unset.
+	ReasoningEffort string               `yaml:"reasoning_effort,omitempty"`
+	MCPServers      map[string]MCPServer `yaml:"mcp_servers"`
+	AgentOptions    AgentOptions         `yaml:"agent_options"`
+	Compaction      CompactionConfig     `yaml:"compaction"`
+	Agents          []AgentTypeConfig    `yaml:"agents"`
 
 	PromptFragments []string `yaml:"prompt_fragments"`
 	Skills          []Skill  `yaml:"skills"`
