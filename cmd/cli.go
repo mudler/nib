@@ -145,7 +145,10 @@ func RunCLI(ctx context.Context, cfg types.Config, transports ...mcp.Transport) 
 		},
 		OnReasoning: func(reasoning string) {
 			spin.stop()
-			fmt.Println(theme.Reasoning.Render(reasoning))
+			fmt.Println(theme.ReasoningHeader())
+			for _, line := range strings.Split(strings.TrimRight(reasoning, "\n"), "\n") {
+				fmt.Println("  " + theme.Reasoning.Render(line))
+			}
 			spin.start(theme.Status(theme.VerbThinking, 0))
 		},
 		OnToolCall: func(req chat.ToolCallRequest) chat.ToolCallResponse {

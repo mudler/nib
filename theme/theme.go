@@ -34,6 +34,7 @@ var (
 	Arrow          = "→"  // tool-call / edit / mapping arrow
 	ShellJob       = "▷"  // shell-jobs footer marker
 	ScrollKeys     = "↑↓" // up/down navigation hint
+	ReasoningGlyph = "✻"  // marks a block of model thinking/reasoning
 )
 
 // RestrictedGlyphs reports whether glyphs must fall back to ASCII because the
@@ -64,10 +65,12 @@ func applyGlyphProfile() {
 	if RestrictedGlyphs() {
 		PromptGlyph, ApprovalGutter, SubAgent = ">", "|", ">"
 		Arrow, ShellJob, ScrollKeys = "->", ">", "up/dn"
+		ReasoningGlyph = "*"
 		return
 	}
 	PromptGlyph, ApprovalGutter, SubAgent = "›", "▏", "↳"
 	Arrow, ShellJob, ScrollKeys = "→", "▷", "↑↓"
+	ReasoningGlyph = "✻"
 }
 
 // Styles. Bold is reserved for the brand mark and the active approval keys.
@@ -89,3 +92,11 @@ var (
 	Running    = lipgloss.NewStyle().Foreground(Accent)
 	Done       = lipgloss.NewStyle().Foreground(Sage)
 )
+
+// ReasoningHeader renders the labeled header that tags a block of model
+// thinking, so it reads as a distinct channel from the assistant's answer:
+// an accent glyph (✻ / * in restricted mode) and a dim, non-italic label.
+// The body beneath is rendered with the Reasoning style by the caller.
+func ReasoningHeader() string {
+	return Gutter.Render(ReasoningGlyph) + " " + Help.Render("reasoning")
+}
