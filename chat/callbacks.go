@@ -86,4 +86,7 @@ type Callbacks struct {
 	// (schedule_wakeup tool). It returns immediately with a confirmation; the
 	// host re-engages the agent with the note once the delay elapses.
 	OnScheduleWakeup func(req WakeupRequest) string
+	// OnCompactDone is called after the conversation is compacted, with the
+	// approximate token counts before and after. Optional.
+	OnCompactDone func(before, after int)
 }

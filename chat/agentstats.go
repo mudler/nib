@@ -9,15 +9,11 @@ import (
 // humanTokens renders a token count like "847 tokens" or "12.4k tokens".
 // Returns "" for zero/negative so the segment can be omitted.
 func humanTokens(n int) string {
-	if n <= 0 {
+	s := formatTokenCount(n)
+	if s == "" {
 		return ""
 	}
-	if n < 1000 {
-		return fmt.Sprintf("%d tokens", n)
-	}
-	s := fmt.Sprintf("%.1f", float64(n)/1000.0)
-	s = strings.TrimSuffix(s, ".0")
-	return s + "k tokens"
+	return s + " tokens"
 }
 
 // humanDuration renders a duration like "12s", "1m 03s", or "1h 01m".

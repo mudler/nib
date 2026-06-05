@@ -20,6 +20,7 @@ const (
 	KindSend      Kind = iota // send Text to the agent
 	KindLoadSkill             // eagerly load Skill into the session prompt
 	KindError                 // report Err to the user, send nothing
+	KindCompact               // compact the current conversation
 )
 
 // Action is the resolved result of a submitted input line.
@@ -75,6 +76,8 @@ func Resolve(input string, cmds []types.CommandConfig, skills []types.Skill, age
 			return Action{Kind: KindError, Err: fmt.Sprintf("unknown agent %q", name)}
 		}
 		return Action{Kind: KindSend, Text: delegation(name, task)}
+	case "compact":
+		return Action{Kind: KindCompact}
 	default:
 		c, ok := findCommand(cmds, verb)
 		if !ok {

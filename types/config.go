@@ -19,6 +19,21 @@ type AgentOptions struct {
 	ForceReasoning bool `yaml:"force_reasoning"`
 }
 
+// CompactionConfig controls conversation compaction: summarizing older turns
+// into a single summary message while keeping recent turns verbatim.
+type CompactionConfig struct {
+	// Disabled turns OFF automatic compaction. Zero value (false) = auto ON.
+	Disabled bool `yaml:"disabled"`
+	// MaxContextTokens is the model context window used to compute the trigger.
+	// 0 → default 128000.
+	MaxContextTokens int `yaml:"max_context_tokens"`
+	// Threshold is the fraction of MaxContextTokens at which auto-compaction
+	// fires. 0 → default 0.8.
+	Threshold float64 `yaml:"threshold"`
+	// KeepRecent is the number of trailing messages kept verbatim. 0 → default 8.
+	KeepRecent int `yaml:"keep_recent"`
+}
+
 // AgentTypeConfig is a wiz-facing sub-agent type. It maps 1:1 to a
 // cogito.AgentDefinition. Zero-valued numeric fields mean "inherit".
 type AgentTypeConfig struct {
@@ -81,6 +96,7 @@ type Config struct {
 	Metadata     map[string]string    `yaml:"metadata,omitempty"`
 	MCPServers   map[string]MCPServer `yaml:"mcp_servers"`
 	AgentOptions AgentOptions         `yaml:"agent_options"`
+	Compaction   CompactionConfig     `yaml:"compaction"`
 	Agents       []AgentTypeConfig    `yaml:"agents"`
 
 	PromptFragments []string `yaml:"prompt_fragments"`

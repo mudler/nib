@@ -116,22 +116,7 @@ func Load() types.Config {
 		cfg.BaseURL = baseURL
 	}
 
-	if cfg.Prompt == "" {
-		cfg.Prompt = defaultPrompt
-	}
-
-	// Set default cogito options
-	if cfg.AgentOptions.Iterations == 0 {
-		cfg.AgentOptions.Iterations = 10
-	}
-	if cfg.AgentOptions.MaxAttempts == 0 {
-		cfg.AgentOptions.MaxAttempts = 3
-	}
-	if cfg.AgentOptions.MaxRetries == 0 {
-		cfg.AgentOptions.MaxRetries = 3
-	}
-	// ForceReasoning defaults to false (zero value), which is intentional
-	// Users must explicitly enable it in config
+	cfg = withDefaults(cfg)
 
 	// Merge enabled skill-pack skills before plugins, so precedence is
 	// built-in defaults < plugins < skill-packs < user. plugin.Apply skips any
@@ -149,5 +134,36 @@ func Load() types.Config {
 	// Merge user-provided agent types with the built-in defaults.
 	cfg.Agents = MergeAgentTypes(cfg.Agents)
 
+	return cfg
+}
+
+// withDefaults fills in zero-valued config fields with their defaults. It is
+// pure (no file/env access) so it can be unit-tested directly.
+func withDefaults(cfg types.Config) types.Config {
+	if cfg.Prompt == "" {
+		cfg.Prompt = defaultPrompt
+	}
+	if cfg.AgentOptions.Iterations == 0 {
+		cfg.AgentOptions.Iterations = 10
+	}
+	if cfg.AgentOptions.MaxAttempts == 0 {
+		cfg.AgentOptions.MaxAttempts = 3
+	}
+	if cfg.AgentOptions.MaxRetries == 0 {
+		cfg.AgentOptions.MaxRetries = 3
+	}
+	// ForceReasoning defaults to false (zero value), which is intentional;
+	// users must explicitly enable it in config.
+
+	// Compaction defaults (auto-compaction is ON unless Disabled).
+	if cfg.Compaction.MaxContextTokens == 0 {
+		cfg.Compaction.MaxContextTokens = 128000
+	}
+	if cfg.Compaction.Threshold == 0 {
+		cfg.Compaction.Threshold = 0.8
+	}
+	if cfg.Compaction.KeepRecent == 0 {
+		cfg.Compaction.KeepRecent = 8
+	}
 	return cfg
 }

@@ -80,6 +80,11 @@ type Model struct {
 	askRequestChan  chan chat.AskRequest
 	askResponseChan chan string
 	wakeupChan      chan chat.WakeupRequest
+	compactChan     chan [2]int // {before, after} token counts from auto-compaction
+
+	// contextTokens is the current conversation size shown in the footer badge.
+	// Updated after each turn and after compaction; 0 hides the badge.
+	contextTokens int
 
 	// Animation state
 	statusPhase int
@@ -122,6 +127,15 @@ type responseMsg struct {
 	content string
 	err     error
 }
+
+// compactResultMsg is the outcome of a manual /compact run.
+type compactResultMsg struct {
+	before, after int
+	err           error
+}
+
+// compactNoticeMsg is an auto-compaction notice pushed from the session goroutine.
+type compactNoticeMsg [2]int
 
 // statusMsg is sent for status updates
 type statusMsg string
@@ -202,6 +216,7 @@ func NewModel(ctx context.Context, cfg types.Config, height int, shellJobs *wizm
 		askRequestChan:   make(chan chat.AskRequest),
 		askResponseChan:  make(chan string),
 		wakeupChan:       make(chan chat.WakeupRequest, 8),
+		compactChan:      make(chan [2]int, 4),
 		mdRenderers:      make(map[int]*glamour.TermRenderer),
 	}
 	m.completion.setRegistries(cfg.Commands, cfg.Skills, cfg.Agents)
@@ -254,6 +269,12 @@ func (m Model) initSession() tea.Cmd {
 			OnAgentEvent: func(ev chat.AgentEvent) {
 				select {
 				case m.agentEventChan <- ev:
+				default:
+				}
+			},
+			OnCompactDone: func(before, after int) {
+				select {
+				case m.compactChan <- [2]int{before, after}:
 				default:
 				}
 			},
@@ -508,6 +529,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				m.updateViewport()
 				return m, nil
+			case slash.KindCompact:
+				m.loading = true
+				m.interruptArmed = false
+				m.status = "Compacting conversation…"
+				m.updateViewport()
+				return m, m.compactCmd()
 			default: // slash.KindSend
 				m.loading = true
 				m.interruptArmed = false
@@ -530,7 +557,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.session = msg.session
 		m.sessionReady = true
 		// Start listening for callbacks
-		cmds = append(cmds, m.listenStatus(), m.listenReasoning(), m.listenToolRequest(), m.listenToolResult(), m.listenAskRequest(), m.listenAgentEvents(), m.shellTick(), m.listenWakeup())
+		cmds = append(cmds, m.listenStatus(), m.listenReasoning(), m.listenToolRequest(), m.listenToolResult(), m.listenAskRequest(), m.listenAgentEvents(), m.shellTick(), m.listenWakeup(), m.listenCompact())
 
 	case responseMsg:
 		m.loading = false
@@ -547,12 +574,35 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.messages = append(m.messages, ChatMessage{Role: "assistant", Content: msg.content})
 		}
+		if m.session != nil {
+			m.contextTokens = m.session.ContextTokens()
+		}
 		m.updateViewport()
 		// A background job may have finished during this turn; react to it now
 		// that we're idle again.
 		if c := m.autoNotifyCmd(); c != nil {
 			cmds = append(cmds, c)
 		}
+
+	case compactResultMsg:
+		m.loading = false
+		m.status = ""
+		if msg.err != nil {
+			m.messages = append(m.messages, ChatMessage{Role: "error", Content: "compaction failed: " + msg.err.Error()})
+		} else if msg.before == msg.after {
+			m.messages = append(m.messages, ChatMessage{Role: "agent", Content: "Nothing to compact yet."})
+		} else {
+			m.messages = append(m.messages, ChatMessage{Role: "agent", Content: compactNotice(msg.before, msg.after)})
+			m.contextTokens = msg.after
+		}
+		m.updateViewport()
+		return m, nil
+
+	case compactNoticeMsg:
+		m.messages = append(m.messages, ChatMessage{Role: "agent", Content: compactNotice(msg[0], msg[1])})
+		m.contextTokens = msg[1]
+		m.updateViewport()
+		return m, m.listenCompact()
 
 	case shellTickMsg:
 		// Periodic refresh so the shell-jobs footer reflects jobs that finish
@@ -725,6 +775,26 @@ func (m Model) listenWakeup() tea.Cmd {
 		case <-m.ctx.Done():
 			return nil
 		}
+	}
+}
+
+// listenCompact waits for an auto-compaction notice from the session.
+func (m Model) listenCompact() tea.Cmd {
+	return func() tea.Msg {
+		select {
+		case v := <-m.compactChan:
+			return compactNoticeMsg(v)
+		case <-m.ctx.Done():
+			return nil
+		}
+	}
+}
+
+// compactCmd runs a manual /compact (an LLM call) off the event loop.
+func (m Model) compactCmd() tea.Cmd {
+	return func() tea.Msg {
+		before, after, err := m.session.CompactHistory()
+		return compactResultMsg{before: before, after: after, err: err}
 	}
 }
 
@@ -1174,7 +1244,16 @@ func (m Model) View() string {
 		sb.WriteString(m.textarea.View())
 	}
 	sb.WriteString("\n")
-	sb.WriteString(theme.Help.Render(m.helpLine()))
+	help := theme.Help.Render(m.helpLine())
+	if badge := m.contextBadge(); badge != "" {
+		gap := m.width - lipgloss.Width(help) - lipgloss.Width(badge)
+		if gap < 1 {
+			gap = 1
+		}
+		sb.WriteString(help + strings.Repeat(" ", gap) + badge)
+	} else {
+		sb.WriteString(help)
+	}
 
 	if m.err != nil {
 		sb.WriteString("\n" + theme.Error.Render(theme.Cross+" "+m.err.Error()))
@@ -1248,6 +1327,40 @@ func (m Model) isWorking() bool {
 		return m.session.AgentManager().HasRunning()
 	}
 	return false
+}
+
+// compactNotice formats a one-line compaction summary for the transcript.
+func compactNotice(before, after int) string {
+	return fmt.Sprintf("📦 Compacted conversation — %s → %s tokens", chat.HumanTokens(before), chat.HumanTokens(after))
+}
+
+// ctxBadgeWarn highlights the context badge once usage nears the auto-compaction
+// threshold (clay — the palette's warmest attention color).
+var ctxBadgeWarn = lipgloss.NewStyle().Foreground(theme.Accent)
+
+// contextBadge renders the right-aligned context-size indicator for the bottom
+// bar, e.g. "ctx 8k (6%)". It highlights once usage reaches the auto-compaction
+// threshold. Returns "" when there's nothing to show yet.
+func (m Model) contextBadge() string {
+	used := m.contextTokens
+	if used <= 0 {
+		return ""
+	}
+	window := m.cfg.Compaction.MaxContextTokens
+	if window <= 0 {
+		// No configured window (auto-compaction off): show the bare size.
+		return theme.Meta.Render("ctx " + chat.HumanTokens(used))
+	}
+	pct := used * 100 / window
+	label := fmt.Sprintf("ctx %s (%d%%)", chat.HumanTokens(used), pct)
+	threshold := m.cfg.Compaction.Threshold
+	if threshold <= 0 || threshold > 1 {
+		threshold = 0.8
+	}
+	if float64(used) >= float64(window)*threshold {
+		return ctxBadgeWarn.Render(label)
+	}
+	return theme.Meta.Render(label)
 }
 
 // quit tears down the session and exits.
