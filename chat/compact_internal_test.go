@@ -10,6 +10,23 @@ import (
 	openai "github.com/sashabaranov/go-openai"
 )
 
+func TestContextTokensPrefersReportedUsage(t *testing.T) {
+	msgs := []openai.ChatCompletionMessage{{Role: "user", Content: strings.Repeat("a", 40)}}
+	s := &Session{}
+	s.fragment = cogito.NewFragment(msgs...)
+
+	// No reported usage yet → byte/4 estimate (40/4 = 10).
+	if got := s.ContextTokens(); got != 10 {
+		t.Fatalf("estimate path: ContextTokens = %d, want 10", got)
+	}
+
+	// Once the backend reports prompt tokens, that real figure wins.
+	s.fragment.Status.LastUsage.PromptTokens = 1234
+	if got := s.ContextTokens(); got != 1234 {
+		t.Fatalf("reported path: ContextTokens = %d, want 1234", got)
+	}
+}
+
 func TestSplitForCompactionKeepsToolGroupsIntact(t *testing.T) {
 	msgs := []openai.ChatCompletionMessage{
 		{Role: "user", Content: "u1"},

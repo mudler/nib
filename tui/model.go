@@ -82,6 +82,10 @@ type Model struct {
 	wakeupChan      chan chat.WakeupRequest
 	compactChan     chan [2]int // {before, after} token counts from auto-compaction
 
+	// contextTokens is the current conversation size shown in the footer badge.
+	// Updated after each turn and after compaction; 0 hides the badge.
+	contextTokens int
+
 	// Animation state
 	statusPhase int
 
@@ -570,6 +574,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.messages = append(m.messages, ChatMessage{Role: "assistant", Content: msg.content})
 		}
+		if m.session != nil {
+			m.contextTokens = m.session.ContextTokens()
+		}
 		m.updateViewport()
 		// A background job may have finished during this turn; react to it now
 		// that we're idle again.
@@ -586,12 +593,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.messages = append(m.messages, ChatMessage{Role: "agent", Content: "Nothing to compact yet."})
 		} else {
 			m.messages = append(m.messages, ChatMessage{Role: "agent", Content: compactNotice(msg.before, msg.after)})
+			m.contextTokens = msg.after
 		}
 		m.updateViewport()
 		return m, nil
 
 	case compactNoticeMsg:
 		m.messages = append(m.messages, ChatMessage{Role: "agent", Content: compactNotice(msg[0], msg[1])})
+		m.contextTokens = msg[1]
 		m.updateViewport()
 		return m, m.listenCompact()
 
@@ -1235,7 +1244,16 @@ func (m Model) View() string {
 		sb.WriteString(m.textarea.View())
 	}
 	sb.WriteString("\n")
-	sb.WriteString(theme.Help.Render(m.helpLine()))
+	help := theme.Help.Render(m.helpLine())
+	if badge := m.contextBadge(); badge != "" {
+		gap := m.width - lipgloss.Width(help) - lipgloss.Width(badge)
+		if gap < 1 {
+			gap = 1
+		}
+		sb.WriteString(help + strings.Repeat(" ", gap) + badge)
+	} else {
+		sb.WriteString(help)
+	}
 
 	if m.err != nil {
 		sb.WriteString("\n" + theme.Error.Render(theme.Cross+" "+m.err.Error()))
@@ -1314,6 +1332,35 @@ func (m Model) isWorking() bool {
 // compactNotice formats a one-line compaction summary for the transcript.
 func compactNotice(before, after int) string {
 	return fmt.Sprintf("📦 Compacted conversation — %s → %s tokens", chat.HumanTokens(before), chat.HumanTokens(after))
+}
+
+// ctxBadgeWarn highlights the context badge once usage nears the auto-compaction
+// threshold (clay — the palette's warmest attention color).
+var ctxBadgeWarn = lipgloss.NewStyle().Foreground(theme.Accent)
+
+// contextBadge renders the right-aligned context-size indicator for the bottom
+// bar, e.g. "ctx 8k (6%)". It highlights once usage reaches the auto-compaction
+// threshold. Returns "" when there's nothing to show yet.
+func (m Model) contextBadge() string {
+	used := m.contextTokens
+	if used <= 0 {
+		return ""
+	}
+	window := m.cfg.Compaction.MaxContextTokens
+	if window <= 0 {
+		// No configured window (auto-compaction off): show the bare size.
+		return theme.Meta.Render("ctx " + chat.HumanTokens(used))
+	}
+	pct := used * 100 / window
+	label := fmt.Sprintf("ctx %s (%d%%)", chat.HumanTokens(used), pct)
+	threshold := m.cfg.Compaction.Threshold
+	if threshold <= 0 || threshold > 1 {
+		threshold = 0.8
+	}
+	if float64(used) >= float64(window)*threshold {
+		return ctxBadgeWarn.Render(label)
+	}
+	return theme.Meta.Render(label)
 }
 
 // quit tears down the session and exits.

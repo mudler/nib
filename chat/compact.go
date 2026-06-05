@@ -71,6 +71,17 @@ func estimateTokens(msgs []openai.ChatCompletionMessage) int {
 	return n / 4
 }
 
+// ContextTokens reports the current conversation size in tokens for display:
+// the last request's reported prompt tokens, or a byte/4 estimate when the
+// backend hasn't reported usage yet (e.g. before the first turn). This is the
+// same signal the auto-compaction trigger watches.
+func (s *Session) ContextTokens() int {
+	if s.fragment.Status != nil && s.fragment.Status.LastUsage.PromptTokens > 0 {
+		return s.fragment.Status.LastUsage.PromptTokens
+	}
+	return estimateTokens(s.fragment.Messages)
+}
+
 // formatTokenCount returns the bare magnitude string for a token count, e.g.
 // 950 → "950", 12000 → "12k", 47200 → "47.2k". A trailing ".0" is trimmed.
 // Returns "" for zero/negative so callers can omit the segment.
