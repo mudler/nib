@@ -1156,6 +1156,7 @@ func (m *Model) updateViewport() {
 		sb.WriteString(theme.SepStyle.Render(theme.Sep) + " " + theme.Reasoning.Render(displayStatus))
 		sb.WriteString("\n")
 		if m.reasoning != "" {
+			sb.WriteString(theme.ReasoningHeader() + "\n")
 			wrapped := wrapText(m.reasoning, contentWidth-4)
 			for _, line := range strings.Split(strings.TrimRight(wrapped, "\n"), "\n") {
 				sb.WriteString("  " + theme.Reasoning.Render(line) + "\n")
