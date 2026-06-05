@@ -227,6 +227,12 @@ prompt: |
 metadata:
   enable_thinking: "false"
 
+# Optional: OpenAI-standard reasoning effort, sent on every request as
+# "reasoning_effort" ("none"/"low"/"medium"/"high"). Unlike metadata.enable_thinking,
+# this works even when the model's chat template has no enable_thinking toggle
+# (e.g. LFM2.5) — so it's the reliable way to turn a reasoning model's thinking off:
+reasoning_effort: "none"
+
 # Optional: agent behavior
 agent_options:
   iterations: 10
