@@ -652,6 +652,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.updateViewport()
 			return m, cmd
 		}
+		// A tail of non-turn entries (skill loads / resolve errors) may have
+		// appended notices without starting a turn; re-render so they show now.
+		m.updateViewport()
 
 	case parkMsg:
 		if msg.parked {
@@ -709,6 +712,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.updateViewport()
 			return m, cmd
 		}
+		m.updateViewport()
 		return m, nil
 
 	case compactNoticeMsg:
