@@ -42,6 +42,30 @@ func TestInjectRequiresLiveRun(t *testing.T) {
 	}
 }
 
+func TestRunLiveReflectsRunState(t *testing.T) {
+	s, err := NewSession(context.Background(), types.Config{}, Callbacks{})
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	defer s.Close()
+
+	if s.RunLive() {
+		t.Fatal("RunLive should be false before any run")
+	}
+	s.runMu.Lock()
+	s.runLive = true
+	s.runMu.Unlock()
+	if !s.RunLive() {
+		t.Fatal("RunLive should be true while a run is live")
+	}
+	s.runMu.Lock()
+	s.runLive = false
+	s.runMu.Unlock()
+	if s.RunLive() {
+		t.Fatal("RunLive should be false after the run ends")
+	}
+}
+
 func TestSetShellJobsNilSafe(t *testing.T) {
 	s, err := NewSession(context.Background(), types.Config{}, Callbacks{})
 	if err != nil {

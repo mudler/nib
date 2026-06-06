@@ -462,6 +462,17 @@ func (s *Session) Inject(msg string) bool {
 	}
 }
 
+// RunLive reports whether a run is currently in flight (between SendMessage
+// start and return), including while it is parked. The TUI uses this as the
+// authoritative signal for whether a typed message should be queued into the
+// live run or start a new turn, rather than its own loading/parked UI flags
+// which can briefly desync across park/resume events.
+func (s *Session) RunLive() bool {
+	s.runMu.Lock()
+	defer s.runMu.Unlock()
+	return s.runLive
+}
+
 // jobTail returns the trailing portion of a job's output for an injection
 // notice, trimmed and capped.
 func jobTail(s string) string {
