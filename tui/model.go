@@ -285,7 +285,7 @@ func (m Model) initSession() tea.Cmd {
 				// run (see wakeupFireMsg).
 				select {
 				case m.wakeupChan <- req:
-					return fmt.Sprintf("Scheduled a wake-up in %ds: %q. You'll be re-invoked then to check on it.", req.DelaySeconds, req.Note)
+					return fmt.Sprintf("Scheduled a wake-up in %ds: %q. You'll be re-invoked then.", req.DelaySeconds, req.Prompt)
 				default:
 					return "Could not schedule wake-up (too many pending)."
 				}
@@ -734,7 +734,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Arm a timer for the requested delay, then keep listening for more.
 		req := chat.WakeupRequest(msg)
 		d := time.Duration(req.DelaySeconds) * time.Second
-		note := req.Note
+		note := req.Prompt
 		cmds = append(cmds,
 			tea.Tick(d, func(time.Time) tea.Msg { return wakeupFireMsg{note: note} }),
 			m.listenWakeup(),
