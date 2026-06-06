@@ -638,6 +638,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.contextTokens = m.session.ContextTokens()
 		}
 		m.updateViewport()
+		// The run ended with messages still queued: send the oldest as a fresh
+		// turn now; the remainder stay queued and flush on subsequent run ends.
+		if len(m.queue) > 0 {
+			front := m.queue[0]
+			m.queue = m.queue[1:]
+			if m.queueSel > len(m.queue)-1 {
+				m.queueSel = len(m.queue) - 1
+			}
+			if m.queueSel < 0 {
+				m.queueSel = 0
+			}
+			m.messages = append(m.messages, ChatMessage{Role: "user", Content: front})
+			m.loading = true
+			m.interruptArmed = false
+			m.status = "Thinking…"
+			m.updateViewport()
+			return m, m.sendMessage(front)
+		}
 
 	case parkMsg:
 		if msg.parked {
@@ -663,6 +681,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.contextTokens = m.session.ContextTokens()
 			}
 			m.textarea.Focus()
+			// Parked == the agent is idle waiting; release the next queued
+			// follow-up now (flips back to loading via releaseQueueFront).
+			if m.releaseQueueFront() {
+				m.status = "Thinking…"
+			}
 		} else {
 			// An injected message resumed the run: re-lock the composer and show
 			// the working indicator again.
@@ -816,6 +839,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.updateViewport()
 			}
 		}
+		// A step just completed: release the next queued follow-up into the run.
+		m.releaseQueueFront()
 		// Continue listening for more tool results
 		cmds = append(cmds, m.listenToolResult())
 

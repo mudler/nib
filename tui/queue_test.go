@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -8,6 +9,8 @@ import (
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/mudler/nib/chat"
+	"github.com/mudler/nib/types"
 )
 
 func newQueueTestModel() Model {
@@ -81,6 +84,37 @@ func TestQueueMutators(t *testing.T) {
 	m.queueDeleteSel()
 	if m.queueSel != 0 || strings.Join(m.queue, ",") != "a" {
 		t.Fatalf("queueDeleteSel last: sel=%d queue=%v", m.queueSel, m.queue)
+	}
+}
+
+func TestResponseMsgFlushesQueueAsNewTurn(t *testing.T) {
+	s, err := chat.NewSession(context.Background(), types.Config{}, chat.Callbacks{})
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	defer s.Close()
+
+	m := newQueueTestModel()
+	m.session = s
+	m.loading = true
+	m.queue = []string{"next turn please", "and another"}
+
+	next, cmd := m.Update(responseMsg{content: "done"})
+	nm := next.(Model)
+
+	// Front entry becomes the next turn; the rest stay queued.
+	if len(nm.queue) != 1 || nm.queue[0] != "and another" {
+		t.Fatalf("queue after flush = %v, want [and another]", nm.queue)
+	}
+	if !nm.loading {
+		t.Fatal("loading should be true: a new turn is starting")
+	}
+	last := nm.messages[len(nm.messages)-1]
+	if last.Role != "user" || last.Content != "next turn please" {
+		t.Fatalf("last message = %+v, want user/next turn please", last)
+	}
+	if cmd == nil {
+		t.Fatal("expected a sendMessage command for the flushed turn")
 	}
 }
 
