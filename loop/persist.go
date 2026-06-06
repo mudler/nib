@@ -35,8 +35,9 @@ func (r *Registry) Save(path string) error {
 
 // Load reads durable jobs from path and registers them (re-parsing exprs and
 // recomputing next-fire from the current clock). A missing file is not an
-// error. Returns the number of jobs loaded. One-shot jobs whose fire time has
-// already passed are dropped.
+// error. Returns the number of jobs loaded. Jobs are re-registered with
+// next-fire recomputed from the current clock; jobs whose expression no longer
+// parses (or can never fire) are skipped.
 func (r *Registry) Load(path string) (int, error) {
 	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
@@ -51,11 +52,9 @@ func (r *Registry) Load(path string) (int, error) {
 	}
 	loaded := 0
 	for _, j := range stored {
-		added, err := r.Add(j.Expr, j.Prompt, j.Recurring, true)
-		if err != nil {
-			continue // drop jobs that no longer parse
+		if _, err := r.Add(j.Expr, j.Prompt, j.Recurring, true); err != nil {
+			continue // drop jobs that no longer parse or can never fire
 		}
-		_ = added
 		loaded++
 	}
 	return loaded, nil
