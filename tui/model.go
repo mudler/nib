@@ -285,6 +285,9 @@ func (m Model) initSession() tea.Cmd {
 				// run (see wakeupFireMsg).
 				select {
 				case m.wakeupChan <- req:
+					if req.Reason != "" {
+						return fmt.Sprintf("Scheduled a wake-up in %ds (%s). You'll be re-invoked then.", req.DelaySeconds, req.Reason)
+					}
 					return fmt.Sprintf("Scheduled a wake-up in %ds: %q. You'll be re-invoked then.", req.DelaySeconds, req.Prompt)
 				default:
 					return "Could not schedule wake-up (too many pending)."

@@ -38,10 +38,15 @@ func TestScheduleWakeupClampsAndCalls(t *testing.T) {
 	}
 }
 
-// The tool definition must build (cogito schema gen) and use a map-free arg struct.
+// The tool definition must build AND its schema must generate without panicking
+// (cogito reflects the arg struct lazily in Tool()); a map field would blow up here.
 func TestScheduleWakeupDefinitionBuilds(t *testing.T) {
 	def := scheduleWakeupToolDefinition(func(WakeupRequest) string { return "" })
 	if def == nil {
 		t.Fatal("nil definition")
+	}
+	tool := def.Tool()
+	if tool.Function == nil || tool.Function.Name != "schedule_wakeup" {
+		t.Fatalf("unexpected tool: %+v", tool)
 	}
 }
