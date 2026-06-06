@@ -10,7 +10,7 @@ import (
 )
 
 // Schedule is a parsed 5-field cron expression: minute hour day-of-month month
-// day-of-week, all in local time.
+// day-of-week, all evaluated in the timezone of the time passed to Next.
 type Schedule struct {
 	min, hour, dom, mon, dow uint64 // bitmask per field
 }
@@ -18,8 +18,13 @@ type Schedule struct {
 // field bounds: {min,max} inclusive.
 var bounds = [5][2]int{{0, 59}, {0, 23}, {1, 31}, {1, 12}, {0, 6}}
 
-// Parse parses a standard 5-field cron expression. Supports '*', '*/n', 'a-b',
+// Parse parses a 5-field cron expression. Supports '*', '*/n', 'a-b',
 // 'a,b,c', and single values per field. Day-of-week 0 = Sunday.
+//
+// All five fields are ANDed together — including day-of-month and day-of-week.
+// This differs from POSIX/Vixie cron, which ORs day-of-month and day-of-week
+// when both are restricted. The deviation is acceptable here because nib's
+// /loop never restricts both fields at once.
 func Parse(expr string) (Schedule, error) {
 	fields := strings.Fields(expr)
 	if len(fields) != 5 {
