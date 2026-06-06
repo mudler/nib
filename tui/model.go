@@ -478,6 +478,29 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 
+		case tea.KeyCtrlE:
+			// Pull the selected queued entry back into the composer to edit; it
+			// re-queues (appended) on the next Enter. Only when the composer is
+			// empty, so it never clobbers in-progress typing.
+			if strings.TrimSpace(m.textarea.Value()) == "" && len(m.queue) > 0 {
+				entry := m.queueDeleteSel()
+				if entry != "" {
+					m.textarea.SetValue(entry)
+					m.textarea.Focus()
+					m.completion.sync(entry)
+					m.updateViewport()
+				}
+			}
+			return m, nil
+
+		case tea.KeyCtrlX:
+			// Delete the selected queued entry.
+			if strings.TrimSpace(m.textarea.Value()) == "" && len(m.queue) > 0 {
+				m.queueDeleteSel()
+				m.updateViewport()
+			}
+			return m, nil
+
 		case tea.KeyCtrlO:
 			// Toggle the navigable log viewer.
 			if !m.sessionReady {
@@ -503,10 +526,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.completion.up()
 				return m, nil
 			}
+			if strings.TrimSpace(m.textarea.Value()) == "" && len(m.queue) > 0 {
+				m.queueMoveSel(-1)
+				return m, nil
+			}
 
 		case tea.KeyDown:
 			if m.completion.active {
 				m.completion.down()
+				return m, nil
+			}
+			if strings.TrimSpace(m.textarea.Value()) == "" && len(m.queue) > 0 {
+				m.queueMoveSel(1)
 				return m, nil
 			}
 

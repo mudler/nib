@@ -118,6 +118,47 @@ func TestResponseMsgFlushesQueueAsNewTurn(t *testing.T) {
 	}
 }
 
+func TestQueueNavAndEditKeys(t *testing.T) {
+	// Empty composer: Down moves selection through the queue.
+	m := newQueueTestModel()
+	m.queue = []string{"a", "b", "c"}
+	m.queueSel = 0
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	nm := next.(Model)
+	if nm.queueSel != 1 {
+		t.Fatalf("Down with empty composer: sel = %d, want 1", nm.queueSel)
+	}
+
+	// ^x deletes the selected entry.
+	next, _ = nm.Update(tea.KeyMsg{Type: tea.KeyCtrlX})
+	nm = next.(Model)
+	if strings.Join(nm.queue, ",") != "a,c" {
+		t.Fatalf("^x: queue = %v, want [a c]", nm.queue)
+	}
+
+	// ^e pulls the selected entry into the composer and removes it from the queue.
+	nm.queueSel = 0
+	next, _ = nm.Update(tea.KeyMsg{Type: tea.KeyCtrlE})
+	nm = next.(Model)
+	if nm.textarea.Value() != "a" {
+		t.Fatalf("^e: composer = %q, want a", nm.textarea.Value())
+	}
+	if strings.Join(nm.queue, ",") != "c" {
+		t.Fatalf("^e: queue = %v, want [c]", nm.queue)
+	}
+
+	// With text in the composer, Down is NOT a queue nav (cursor/history instead).
+	m2 := newQueueTestModel()
+	m2.queue = []string{"a", "b"}
+	m2.queueSel = 0
+	m2.textarea.SetValue("typed")
+	next, _ = m2.Update(tea.KeyMsg{Type: tea.KeyDown})
+	nm2 := next.(Model)
+	if nm2.queueSel != 0 {
+		t.Fatalf("Down with typed text must not move queue sel: got %d", nm2.queueSel)
+	}
+}
+
 func TestRenderQueueContent(t *testing.T) {
 	if renderQueue(nil, 0, 80) != "" {
 		t.Fatal("empty queue should render nothing")
