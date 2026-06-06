@@ -1363,8 +1363,17 @@ func (m *Model) updateViewport() {
 		sb.WriteString("\n")
 	}
 
+	// Preserve the user's scroll position: only follow to the bottom when they
+	// were already there. Otherwise a re-render (spinner tick, status update,
+	// streamed token) would yank them back down while they're reading history.
+	wasAtBottom := m.viewport.AtBottom()
+	offset := m.viewport.YOffset
 	m.viewport.SetContent(sb.String())
-	m.viewport.GotoBottom()
+	if wasAtBottom {
+		m.viewport.GotoBottom()
+	} else {
+		m.viewport.SetYOffset(offset)
+	}
 }
 
 // View renders the TUI.
