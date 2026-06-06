@@ -113,6 +113,12 @@ type Model struct {
 	// Unified `/` completion state
 	completion compState
 
+	// Pending message queue: text typed while a run is in flight. Entries are
+	// editable until they fire (FIFO) into the live run at step boundaries.
+	// queueSel is the entry highlighted for ^e/^x when the composer is empty.
+	queue    []string
+	queueSel int
+
 	// Markdown renderers cached per wrap width (glamour renderers are
 	// width-bound and expensive to build). At most a couple of distinct
 	// widths exist in practice (one per message-prefix width).
