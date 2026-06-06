@@ -89,4 +89,16 @@ type Callbacks struct {
 	// OnCompactDone is called after the conversation is compacted, with the
 	// approximate token counts before and after. Optional.
 	OnCompactDone func(before, after int)
+	// OnParked is called when the live run parks: the assistant has produced a
+	// reply but cogito keeps the loop alive because background work (sub-agents
+	// or shell jobs) is still pending or because the user may inject a follow-up.
+	// reply is the assistant's text at the park point (may be empty). The host
+	// can finalize the assistant turn in the transcript and unlock the composer
+	// so the user can keep chatting (their input is injected into this same run).
+	// May fire multiple times across one run. Optional.
+	OnParked func(reply string)
+	// OnResumed is called when an injected message wakes a parked run. The host
+	// can re-lock the composer and show the working indicator again. May fire
+	// multiple times across one run. Optional.
+	OnResumed func()
 }

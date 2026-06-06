@@ -110,6 +110,11 @@ type bgJobManager struct {
 	mu   sync.Mutex
 	jobs map[string]*bgJob
 	seq  int
+
+	// onDone, when set, is invoked once for each job that finishes, from the
+	// job's wait goroutine. Used to push a completion notice into the live run's
+	// message-injection channel (cogito has no concept of shell jobs).
+	onDone func(*bgJob)
 }
 
 func newBgJobManager() *bgJobManager { return &bgJobManager{jobs: map[string]*bgJob{}} }
@@ -141,6 +146,7 @@ func (m *bgJobManager) launch(parent context.Context, script string, foreground 
 		j.done, j.exitCode, j.errMsg = true, -1, err.Error()
 		j.mu.Unlock()
 		close(j.doneCh)
+		m.notifyDone(j)
 	} else {
 		go func() {
 			err := cmd.Wait()
@@ -156,6 +162,7 @@ func (m *bgJobManager) launch(parent context.Context, script string, foreground 
 			}
 			j.mu.Unlock()
 			close(j.doneCh)
+			m.notifyDone(j)
 		}()
 	}
 
@@ -163,6 +170,38 @@ func (m *bgJobManager) launch(parent context.Context, script string, foreground 
 	m.jobs[id] = j
 	m.mu.Unlock()
 	return j
+}
+
+// notifyDone invokes the registered completion hook (if any) for a finished job.
+// Called from the job's wait goroutine, after j.done is set.
+func (m *bgJobManager) notifyDone(j *bgJob) {
+	m.mu.Lock()
+	cb := m.onDone
+	m.mu.Unlock()
+	if cb != nil {
+		cb(j)
+	}
+}
+
+// backgrounded reports whether a job runs detached from a turn: a bash_background
+// job (detach == nil) or a foreground job the user backgrounded with Ctrl+B
+// (detached). Reads detach/detached under m.mu, matching List.
+func (m *bgJobManager) backgrounded(j *bgJob) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return j.detach == nil || j.detached
+}
+
+// hasRunning reports whether any tracked shell job is still running.
+func (m *bgJobManager) hasRunning() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, j := range m.jobs {
+		if done, _, _ := j.snapshot(); !done {
+			return true
+		}
+	}
+	return false
 }
 
 func (m *bgJobManager) get(id string) (*bgJob, bool) {
@@ -322,6 +361,41 @@ func (s *ShellJobs) DetachForeground() (string, bool) {
 // currently running.
 func (s *ShellJobs) HasForeground() bool {
 	return s != nil && s.mgr.hasForeground()
+}
+
+// HasRunning reports whether any shell job (background or foreground) is still
+// running. Used as a WithPendingWork predicate so the live agent run parks while
+// a backgrounded shell command is still in flight.
+func (s *ShellJobs) HasRunning() bool {
+	return s != nil && s.mgr.hasRunning()
+}
+
+// SetOnJobDone registers a callback invoked once for each shell job that
+// finishes (from the job's wait goroutine). The session uses it to inject a
+// completion notice into the live run. fn receives a UI-facing snapshot; it is
+// called for every job — the caller decides whether to act (e.g. only on
+// backgrounded jobs). Safe to call once at setup.
+func (s *ShellJobs) SetOnJobDone(fn func(ShellJobInfo)) {
+	if s == nil {
+		return
+	}
+	s.mgr.mu.Lock()
+	defer s.mgr.mu.Unlock()
+	if fn == nil {
+		s.mgr.onDone = nil
+		return
+	}
+	mgr := s.mgr
+	mgr.onDone = func(j *bgJob) {
+		done, _, _ := j.snapshot()
+		fn(ShellJobInfo{
+			ID:           j.id,
+			Script:       j.script,
+			Status:       j.status(),
+			Running:      !done,
+			Backgrounded: mgr.backgrounded(j),
+		})
+	}
 }
 
 // Kill stops a shell job by id.

@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"reflect"
+	"strings"
 	"sync"
 	"time"
 
@@ -52,6 +53,25 @@ type Session struct {
 
 	agentMu    sync.Mutex
 	agentStart map[string]time.Time // sub-agent ID -> spawn time, for elapsed
+
+	// inject is the per-session message-injection channel handed to cogito. While
+	// a run parks (background work pending, or simply waiting for the user), the
+	// loop blocks on this channel; sending a message wakes it and continues the
+	// SAME run. Shell-job completions, scheduled wake-ups, and mid-run user
+	// follow-ups all flow through here. Buffered so non-blocking sends rarely drop.
+	inject chan openai.ChatCompletionMessage
+	// runLive is set while ExecuteTools is in flight (between SendMessage start
+	// and return), so Inject can tell whether there is a live run to inject into.
+	runMu   sync.Mutex
+	runLive bool
+	// lastReply holds the most recent assistant reasoning/reply text, captured
+	// from the reasoning callback so OnPark can surface the parked reply.
+	lastReply string
+
+	// shellJobs lets the pending-work predicate keep the run parked while a
+	// backgrounded shell command is still running (cogito only knows about
+	// sub-agents). May be nil (e.g. headless CLI without a job registry).
+	shellJobs *wizmcp.ShellJobs
 
 	agentManager    *cogito.AgentManager
 	agentDefs       []cogito.AgentDefinition
@@ -193,6 +213,7 @@ func NewSession(ctx context.Context, cfg types.Config, callbacks Callbacks, tran
 		fragment:        cogito.NewEmptyFragment(),
 		messages:        []openai.ChatCompletionMessage{},
 		callbacks:       callbacks,
+		inject:          make(chan openai.ChatCompletionMessage, 16),
 		cogitoOptions:   cfg.AgentOptions,
 		compaction:      cfg.Compaction,
 		allowedTools:    make(map[string]bool),
@@ -394,6 +415,75 @@ func (s *Session) Interrupt() {
 	}
 }
 
+// SetShellJobs wires the shared shell-job registry into the session so the
+// pending-work predicate keeps a run parked while a backgrounded shell command
+// is still running, and so finished shell jobs inject a completion notice into
+// the live run. Registers the completion hook. Call once at setup.
+func (s *Session) SetShellJobs(jobs *wizmcp.ShellJobs) {
+	s.shellJobs = jobs
+	if jobs == nil {
+		return
+	}
+	jobs.SetOnJobDone(func(info wizmcp.ShellJobInfo) {
+		// Only backgrounded jobs interest the live run: a plain foreground
+		// command is consumed inline by the tool call that started it.
+		if !info.Backgrounded {
+			return
+		}
+		notice := "shell job " + info.ID + " " + info.Status
+		if so, se, ok := jobs.Output(info.ID); ok {
+			if tail := jobTail(so + se); tail != "" {
+				notice += ":\n" + tail
+			}
+		}
+		s.Inject(notice)
+	})
+}
+
+// Inject delivers msg into the live run's message-injection channel, waking a
+// parked loop so the assistant continues in the SAME run. Non-blocking: returns
+// false when there is no live run, the channel is full, or msg is empty. Used
+// for mid-run user follow-ups, shell-job completions, and scheduled wake-ups.
+func (s *Session) Inject(msg string) bool {
+	if strings.TrimSpace(msg) == "" {
+		return false
+	}
+	s.runMu.Lock()
+	live := s.runLive
+	s.runMu.Unlock()
+	if !live {
+		return false
+	}
+	select {
+	case s.inject <- openai.ChatCompletionMessage{Role: "user", Content: msg}:
+		return true
+	default:
+		return false
+	}
+}
+
+// RunLive reports whether a run is currently in flight (between SendMessage
+// start and return), including while it is parked. The TUI uses this as the
+// authoritative signal for whether a typed message should be queued into the
+// live run or start a new turn, rather than its own loading/parked UI flags
+// which can briefly desync across park/resume events.
+func (s *Session) RunLive() bool {
+	s.runMu.Lock()
+	defer s.runMu.Unlock()
+	return s.runLive
+}
+
+// jobTail returns the trailing portion of a job's output for an injection
+// notice, trimmed and capped.
+func jobTail(s string) string {
+	const limit = 600
+	s = strings.TrimSpace(s)
+	if len(s) > limit {
+		s = "…" + s[len(s)-limit:]
+	}
+	return s
+}
+
 // SendMessage sends a message to the assistant and processes the response
 func (s *Session) SendMessage(text string) (string, error) {
 	if s.hooks != nil {
@@ -403,6 +493,25 @@ func (s *Session) SendMessage(text string) (string, error) {
 	s.applyPendingReload()
 	s.allowAllTurn = false
 	defer s.endTurn()
+
+	// Mark the run live so Inject can target it; clear on return. Drain any stale
+	// injection-channel entries left from a prior parked run that was cancelled.
+	s.runMu.Lock()
+	s.runLive = true
+	s.lastReply = ""
+	s.runMu.Unlock()
+	defer func() {
+		s.runMu.Lock()
+		s.runLive = false
+		s.runMu.Unlock()
+		for {
+			select {
+			case <-s.inject:
+			default:
+				return
+			}
+		}
+	}()
 	if s.systemPrompt != "" {
 		s.fragment = s.fragment.AddMessage("system", s.systemPrompt)
 	}
@@ -424,6 +533,14 @@ func (s *Session) SendMessage(text string) (string, error) {
 			}
 		}),
 		cogito.WithReasoningCallback(func(reasoning string) {
+			// Track the latest reasoning so OnPark can surface the parked reply:
+			// when the LLM replies instead of calling a tool, cogito fires this
+			// with the reply text immediately before parking.
+			if strings.TrimSpace(reasoning) != "" {
+				s.runMu.Lock()
+				s.lastReply = reasoning
+				s.runMu.Unlock()
+			}
 			if s.callbacks.OnReasoning != nil {
 				s.callbacks.OnReasoning(reasoning)
 			}
@@ -466,6 +583,30 @@ func (s *Session) SendMessage(text string) (string, error) {
 					Arguments: argsJSON,
 					AgentID:   s.agentLogs.agentFor(status.ToolArguments.ID),
 				})
+			}
+		}),
+		// Park/inject/resume: keep the run alive (parked on the injection channel)
+		// whenever a sub-agent or a backgrounded shell job is still running, and
+		// let the user inject mid-run follow-ups. cogito auto-injects sub-agent
+		// completion results; shell-job completions and wake-ups inject via s.inject.
+		cogito.WithMessageInjectionChan(s.inject),
+		cogito.WithPendingWork(func() bool {
+			return s.agentManager.HasRunning() || s.shellJobs.HasRunning()
+		}),
+		cogito.WithOnPark(func() {
+			s.runMu.Lock()
+			reply := s.lastReply
+			s.runMu.Unlock()
+			if s.callbacks.OnParked != nil {
+				s.callbacks.OnParked(reply)
+			}
+		}),
+		cogito.WithOnResume(func() {
+			s.runMu.Lock()
+			s.lastReply = ""
+			s.runMu.Unlock()
+			if s.callbacks.OnResumed != nil {
+				s.callbacks.OnResumed()
 			}
 		}),
 	}
