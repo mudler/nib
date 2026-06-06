@@ -39,6 +39,33 @@ func (m *Model) queueDeleteSel() string {
 	return removed
 }
 
+// releaseQueueFront injects the oldest queued entry into the live run and
+// reflects it as a transcript line. It is a no-op (returns false) when the
+// queue is empty or no run is live; the entry stays queued and retries at the
+// next boundary if the injection channel is momentarily full.
+func (m *Model) releaseQueueFront() bool {
+	if len(m.queue) == 0 || m.session == nil || !m.session.RunLive() {
+		return false
+	}
+	front := m.queue[0]
+	if !m.session.Inject(front) {
+		return false
+	}
+	m.queue = m.queue[1:]
+	if m.queueSel > len(m.queue)-1 {
+		m.queueSel = len(m.queue) - 1
+	}
+	if m.queueSel < 0 {
+		m.queueSel = 0
+	}
+	m.messages = append(m.messages, ChatMessage{Role: "user", Content: front})
+	m.parked = false
+	m.loading = true
+	m.interruptArmed = false
+	m.status = "Thinking…"
+	return true
+}
+
 // renderQueue renders the pending-message queue shown above the composer.
 // Returns "" when the queue is empty. The selected entry (sel) is marked for
 // edit/delete; selection only matters while the composer is empty.

@@ -3,7 +3,53 @@ package tui
 import (
 	"strings"
 	"testing"
+
+	"github.com/charmbracelet/bubbles/spinner"
+	"github.com/charmbracelet/bubbles/textarea"
+	"github.com/charmbracelet/bubbles/viewport"
+	tea "github.com/charmbracelet/bubbletea"
 )
+
+func newQueueTestModel() Model {
+	ta := textarea.New()
+	ta.Focus()
+	return Model{
+		textarea:     ta,
+		viewport:     viewport.New(80, 10),
+		spinner:      spinner.New(),
+		sessionReady: true,
+	}
+}
+
+func TestEnterQueuesWhileWorking(t *testing.T) {
+	m := newQueueTestModel()
+	m.loading = true // a run is in flight
+	m.textarea.SetValue("follow up please")
+
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	nm := next.(Model)
+
+	if len(nm.queue) != 1 || nm.queue[0] != "follow up please" {
+		t.Fatalf("queue = %v, want one entry", nm.queue)
+	}
+	if strings.TrimSpace(nm.textarea.Value()) != "" {
+		t.Fatalf("composer should be cleared, got %q", nm.textarea.Value())
+	}
+	if !nm.loading {
+		t.Fatal("run should still be loading after queueing")
+	}
+}
+
+func TestTypingAllowedWhileWorking(t *testing.T) {
+	m := newQueueTestModel()
+	m.loading = true
+
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
+	nm := next.(Model)
+	if nm.textarea.Value() != "x" {
+		t.Fatalf("composer should accept keystrokes while loading, got %q", nm.textarea.Value())
+	}
+}
 
 func TestQueueMutators(t *testing.T) {
 	m := Model{queue: []string{"a", "b", "c"}, queueSel: 0}

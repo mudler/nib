@@ -520,7 +520,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 
-			if m.loading || !m.sessionReady {
+			if !m.sessionReady {
 				return m, nil
 			}
 
@@ -548,25 +548,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m.handleToolApproval(input)
 			}
 
-			// Mid-run follow-up: while the run is parked, route the input into the
-			// SAME live run via the injection channel instead of starting a new
-			// turn. The run resumes (OnResumed re-locks the composer) and the
-			// assistant continues with the follow-up appended.
-			if m.parked && m.session != nil {
-				if m.session.Inject(input) {
-					m.messages = append(m.messages, ChatMessage{Role: "user", Content: input})
-					m.textarea.Reset()
-					m.completion.sync("")
-					m.parked = false
-					m.loading = true
-					m.interruptArmed = false
-					m.status = "Thinking…"
-					m.updateViewport()
-					return m, nil
+			// While a run is in flight (working or parked), the input does not start
+			// a new turn — it queues into the live run. Queued entries are editable
+			// until they fire (FIFO) at the next step boundary. A parked run is idle
+			// and waiting, so release the front entry immediately to resume it.
+			if m.loading || m.parked {
+				m.queue = append(m.queue, input)
+				m.textarea.Reset()
+				m.completion.sync("")
+				m.interruptArmed = false
+				if m.parked {
+					m.releaseQueueFront()
 				}
-				// The run ended between park and Enter (or the channel was full):
-				// fall through and start a fresh turn with this input.
-				m.parked = false
+				m.updateViewport()
+				return m, nil
 			}
 
 			// Echo the user's literal input, then resolve it (command/skill/agent).
@@ -834,13 +829,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 
-	// Update textarea (only if not loading)
-	// Note: We allow updates during approval states so users can type their response
-	if !m.loading {
-		m.textarea, cmd = m.textarea.Update(msg)
-		cmds = append(cmds, cmd)
-		m.completion.sync(m.textarea.Value())
-	}
+	// Update textarea. The composer is always editable — even while a run is in
+	// flight — so the user can type follow-ups that queue into the live run.
+	m.textarea, cmd = m.textarea.Update(msg)
+	cmds = append(cmds, cmd)
+	m.completion.sync(m.textarea.Value())
 
 	// Update viewport
 	m.viewport, cmd = m.viewport.Update(msg)
