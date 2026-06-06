@@ -495,12 +495,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case tea.KeyCtrlX:
-			// Delete the selected queued entry.
+			// Delete the selected queued entry. Only when the composer is empty,
+			// so it never interferes with in-progress typing — otherwise fall
+			// through to the textarea.
 			if strings.TrimSpace(m.textarea.Value()) == "" && len(m.queue) > 0 {
 				m.queueDeleteSel()
 				m.updateViewport()
+				return m, nil
 			}
-			return m, nil
 
 		case tea.KeyCtrlO:
 			// Toggle the navigable log viewer.
@@ -596,39 +598,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 
-			// Echo the user's literal input, then resolve it (command/skill/agent).
-			m.messages = append(m.messages, ChatMessage{Role: "user", Content: input})
+			// Echo + resolve + dispatch (command/skill/message).
 			m.textarea.Reset()
 			m.completion.sync("")
-
-			action := slash.Resolve(input, m.cfg.Commands, m.cfg.Skills, m.cfg.Agents)
-			switch action.Kind {
-			case slash.KindError:
-				m.messages = append(m.messages, ChatMessage{Role: "error", Content: action.Err})
-				m.updateViewport()
-				return m, nil
-			case slash.KindLoadSkill:
-				notice, err := m.session.LoadSkill(action.Skill)
-				if err != nil {
-					m.messages = append(m.messages, ChatMessage{Role: "error", Content: err.Error()})
-				} else {
-					m.messages = append(m.messages, ChatMessage{Role: "agent", Content: notice})
-				}
-				m.updateViewport()
-				return m, nil
-			case slash.KindCompact:
-				m.loading = true
-				m.interruptArmed = false
-				m.status = "Compacting conversation…"
-				m.updateViewport()
-				return m, m.compactCmd()
-			default: // slash.KindSend
-				m.loading = true
-				m.interruptArmed = false
-				m.status = ""
-				m.updateViewport()
-				return m, m.sendMessage(action.Text)
-			}
+			cmd := m.dispatchInput(input)
+			m.updateViewport()
+			return m, cmd
 		}
 
 	case tea.WindowSizeMsg:
@@ -670,23 +645,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.contextTokens = m.session.ContextTokens()
 		}
 		m.updateViewport()
-		// The run ended with messages still queued: send the oldest as a fresh
-		// turn now; the remainder stay queued and flush on subsequent run ends.
-		if len(m.queue) > 0 {
-			front := m.queue[0]
-			m.queue = m.queue[1:]
-			if m.queueSel > len(m.queue)-1 {
-				m.queueSel = len(m.queue) - 1
-			}
-			if m.queueSel < 0 {
-				m.queueSel = 0
-			}
-			m.messages = append(m.messages, ChatMessage{Role: "user", Content: front})
-			m.loading = true
-			m.interruptArmed = false
-			m.status = "Thinking…"
+		// The run ended with messages still queued: dispatch them as fresh turns
+		// (resolving slash commands/skills) until one starts a turn or the queue
+		// drains; the remainder stay queued and flush on subsequent run ends.
+		if cmd := m.flushQueueAsTurn(); cmd != nil {
 			m.updateViewport()
-			return m, m.sendMessage(front)
+			return m, cmd
 		}
 
 	case parkMsg:
@@ -741,6 +705,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.contextTokens = msg.after
 		}
 		m.updateViewport()
+		if cmd := m.flushQueueAsTurn(); cmd != nil {
+			m.updateViewport()
+			return m, cmd
+		}
 		return m, nil
 
 	case compactNoticeMsg:
@@ -884,13 +852,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.statusPhase = (m.statusPhase + 1) % 12
 			m.updateViewport()
 		}
-		// Defensive: if the UI still thinks it's loading but no run is actually
-		// live, clear the flag so the composer/status can never get stuck busy.
-		if m.loading && m.session != nil && !m.session.RunLive() {
-			m.loading = false
-			m.status = ""
-			m.updateViewport()
-		}
 	}
 
 	// Update textarea. The composer is always editable — even while a run is in
@@ -904,6 +865,39 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	cmds = append(cmds, cmd)
 
 	return m, tea.Batch(cmds...)
+}
+
+// dispatchInput echoes the user's literal input to the transcript, resolves it
+// as a slash command / skill / message, and starts the appropriate action.
+// Returns the command to run (nil for actions that don't start a turn, e.g. a
+// skill load or a resolve error). Shared by the Enter handler and the queue
+// flush so typed-while-idle and queued-while-busy input behave identically.
+func (m *Model) dispatchInput(input string) tea.Cmd {
+	m.messages = append(m.messages, ChatMessage{Role: "user", Content: input})
+	action := slash.Resolve(input, m.cfg.Commands, m.cfg.Skills, m.cfg.Agents)
+	switch action.Kind {
+	case slash.KindError:
+		m.messages = append(m.messages, ChatMessage{Role: "error", Content: action.Err})
+		return nil
+	case slash.KindLoadSkill:
+		notice, err := m.session.LoadSkill(action.Skill)
+		if err != nil {
+			m.messages = append(m.messages, ChatMessage{Role: "error", Content: err.Error()})
+		} else {
+			m.messages = append(m.messages, ChatMessage{Role: "agent", Content: notice})
+		}
+		return nil
+	case slash.KindCompact:
+		m.loading = true
+		m.interruptArmed = false
+		m.status = "Compacting conversation…"
+		return m.compactCmd()
+	default: // slash.KindSend
+		m.loading = true
+		m.interruptArmed = false
+		m.status = ""
+		return m.sendMessage(action.Text)
+	}
 }
 
 // sendMessage sends a message to the AI
@@ -1469,7 +1463,7 @@ func (m Model) helpLine() string {
 	case m.parked:
 		return "enter add a follow-up · ctrl+c interrupt · ctrl+o logs"
 	case strings.TrimSpace(m.textarea.Value()) == "" && len(m.queue) > 0:
-		return "↑↓ pick · ^e edit · ^x delete · enter add"
+		return "↑↓ pick · ^e edit · ^x delete"
 	default:
 		return theme.HelpDefault
 	}

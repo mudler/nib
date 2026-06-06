@@ -118,6 +118,24 @@ func TestResponseMsgFlushesQueueAsNewTurn(t *testing.T) {
 	}
 }
 
+func TestFlushQueueSkipsNonTurnEntries(t *testing.T) {
+	s, err := chat.NewSession(context.Background(), types.Config{}, chat.Callbacks{})
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	defer s.Close()
+	m := newQueueTestModel()
+	m.session = s
+	m.queue = []string{"/totally-unknown-cmd", "plain follow up"}
+	cmd := m.flushQueueAsTurn()
+	if cmd == nil {
+		t.Fatal("expected a turn to start for the plain message")
+	}
+	if len(m.queue) != 0 {
+		t.Fatalf("queue should be drained, got %v", m.queue)
+	}
+}
+
 func TestQueueNavAndEditKeys(t *testing.T) {
 	// Empty composer: Down moves selection through the queue.
 	m := newQueueTestModel()
@@ -180,23 +198,5 @@ func TestViewShowsQueue(t *testing.T) {
 	out := m.View()
 	if !strings.Contains(out, "queued follow-up") {
 		t.Fatalf("View should render the queue, got:\n%s", out)
-	}
-}
-
-func TestTickReconcilesStuckLoading(t *testing.T) {
-	s, err := chat.NewSession(context.Background(), types.Config{}, chat.Callbacks{})
-	if err != nil {
-		t.Fatalf("NewSession: %v", err)
-	}
-	defer s.Close()
-
-	m := newQueueTestModel()
-	m.session = s
-	m.loading = true // stuck: no live run, but loading never cleared
-
-	next, _ := m.Update(spinner.TickMsg{})
-	nm := next.(Model)
-	if nm.loading {
-		t.Fatal("tick should clear loading when the run is not live")
 	}
 }

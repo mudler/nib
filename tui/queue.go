@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/mudler/nib/slash"
 	"github.com/mudler/nib/theme"
 )
 
@@ -48,7 +50,14 @@ func (m *Model) releaseQueueFront() bool {
 		return false
 	}
 	front := m.queue[0]
-	if !m.session.Inject(front) {
+	// Only plain messages inject into a live run. Slash commands / skills can't
+	// run mid-turn, so leave them queued; flushQueueAsTurn resolves them when the
+	// run ends.
+	action := slash.Resolve(front, m.cfg.Commands, m.cfg.Skills, m.cfg.Agents)
+	if action.Kind != slash.KindSend {
+		return false
+	}
+	if !m.session.Inject(action.Text) {
 		return false
 	}
 	m.queue = m.queue[1:]
@@ -64,6 +73,28 @@ func (m *Model) releaseQueueFront() bool {
 	m.interruptArmed = false
 	m.status = "Thinking…"
 	return true
+}
+
+// flushQueueAsTurn dispatches queued entries as fresh turns, FIFO, until one
+// starts an async turn (returns a non-nil cmd) or the queue drains. Entries
+// that don't start a turn (a skill load or a resolve error) are handled inline
+// and the loop continues to the next entry. Used when a run ends with messages
+// still queued.
+func (m *Model) flushQueueAsTurn() tea.Cmd {
+	for len(m.queue) > 0 {
+		input := m.queue[0]
+		m.queue = m.queue[1:]
+		if m.queueSel > len(m.queue)-1 {
+			m.queueSel = len(m.queue) - 1
+		}
+		if m.queueSel < 0 {
+			m.queueSel = 0
+		}
+		if cmd := m.dispatchInput(input); cmd != nil {
+			return cmd
+		}
+	}
+	return nil
 }
 
 // renderQueue renders the pending-message queue shown above the composer.
