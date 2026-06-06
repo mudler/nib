@@ -481,7 +481,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case tea.KeyCtrlE:
 			// Pull the selected queued entry back into the composer to edit; it
 			// re-queues (appended) on the next Enter. Only when the composer is
-			// empty, so it never clobbers in-progress typing.
+			// empty, so it never clobbers in-progress typing — otherwise fall
+			// through so ctrl+e keeps its textarea meaning (move to line end).
 			if strings.TrimSpace(m.textarea.Value()) == "" && len(m.queue) > 0 {
 				entry := m.queueDeleteSel()
 				if entry != "" {
@@ -490,8 +491,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.completion.sync(entry)
 					m.updateViewport()
 				}
+				return m, nil
 			}
-			return m, nil
 
 		case tea.KeyCtrlX:
 			// Delete the selected queued entry.
@@ -881,6 +882,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Rotate status phase for animated messages
 		if m.loading {
 			m.statusPhase = (m.statusPhase + 1) % 12
+			m.updateViewport()
+		}
+		// Defensive: if the UI still thinks it's loading but no run is actually
+		// live, clear the flag so the composer/status can never get stuck busy.
+		if m.loading && m.session != nil && !m.session.RunLive() {
+			m.loading = false
+			m.status = ""
 			m.updateViewport()
 		}
 	}
@@ -1397,6 +1405,13 @@ func (m Model) View() string {
 		sb.WriteString("\n")
 	}
 
+	// Pending message queue, above the input. Selection only matters when the
+	// composer is empty (that's when up/down navigate it).
+	if q := renderQueue(m.queue, m.queueSel, m.width); q != "" {
+		sb.WriteString(q)
+		sb.WriteString("\n")
+	}
+
 	// Input. In key-driven approval choice mode the textarea is hidden (the
 	// approval block in the viewport carries the choice row); edit mode and
 	// normal chat show the textarea.
@@ -1453,6 +1468,8 @@ func (m Model) helpLine() string {
 		return theme.HelpApproval
 	case m.parked:
 		return "enter add a follow-up · ctrl+c interrupt · ctrl+o logs"
+	case strings.TrimSpace(m.textarea.Value()) == "" && len(m.queue) > 0:
+		return "↑↓ pick · ^e edit · ^x delete · enter add"
 	default:
 		return theme.HelpDefault
 	}

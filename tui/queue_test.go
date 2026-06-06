@@ -171,3 +171,32 @@ func TestRenderQueueContent(t *testing.T) {
 		t.Fatalf("renderQueue must not contain emoji: %q", out)
 	}
 }
+
+func TestViewShowsQueue(t *testing.T) {
+	m := newQueueTestModel()
+	m.width = 80
+	m.height = 24
+	m.queue = []string{"queued follow-up"}
+	out := m.View()
+	if !strings.Contains(out, "queued follow-up") {
+		t.Fatalf("View should render the queue, got:\n%s", out)
+	}
+}
+
+func TestTickReconcilesStuckLoading(t *testing.T) {
+	s, err := chat.NewSession(context.Background(), types.Config{}, chat.Callbacks{})
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	defer s.Close()
+
+	m := newQueueTestModel()
+	m.session = s
+	m.loading = true // stuck: no live run, but loading never cleared
+
+	next, _ := m.Update(spinner.TickMsg{})
+	nm := next.(Model)
+	if nm.loading {
+		t.Fatal("tick should clear loading when the run is not live")
+	}
+}
