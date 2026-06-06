@@ -1,6 +1,7 @@
 .env
 .envlocal
 wiz
+.claude/
 docs/superpowers/
 
 /nib
