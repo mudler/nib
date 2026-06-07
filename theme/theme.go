@@ -33,6 +33,7 @@ var (
 	Cross          = "×"  // error marker
 	Arrow          = "→"  // tool-call / edit / mapping arrow
 	Loop           = "↻"  // recurring-loop footer marker
+	Goal           = "◎"  // active-goal footer marker
 	ShellJob       = "▷"  // shell-jobs footer marker
 	ScrollKeys     = "↑↓" // up/down navigation hint
 	ReasoningGlyph = "✻"  // marks a block of model thinking/reasoning
@@ -67,12 +68,14 @@ func applyGlyphProfile() {
 		PromptGlyph, ApprovalGutter, SubAgent = ">", "|", ">"
 		Arrow, ShellJob, ScrollKeys = "->", ">", "up/dn"
 		Loop = "~"
+		Goal = "*"
 		ReasoningGlyph = "*"
 		return
 	}
 	PromptGlyph, ApprovalGutter, SubAgent = "›", "▏", "↳"
 	Arrow, ShellJob, ScrollKeys = "→", "▷", "↑↓"
 	Loop = "↻"
+	Goal = "◎"
 	ReasoningGlyph = "✻"
 }
 

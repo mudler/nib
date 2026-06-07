@@ -15,8 +15,8 @@ func sampleRegistries() ([]types.CommandConfig, []types.Skill, []types.AgentType
 func TestBuildAndFilter(t *testing.T) {
 	cmds, skills, agents := sampleRegistries()
 	items := buildCompItems(cmds, skills, agents)
-	if len(items) != 5 {
-		t.Fatalf("want 5 items, got %d", len(items))
+	if len(items) != 6 {
+		t.Fatalf("want 6 items, got %d", len(items))
 	}
 	got := filterComp(items, "rev")
 	if len(got) != 2 {
@@ -95,4 +95,17 @@ func TestCompStateNavigation(t *testing.T) {
 	if c.sel != 0 {
 		t.Fatalf("up clamp: sel=%d", c.sel)
 	}
+}
+
+func TestGoalBuiltinInCompletion(t *testing.T) {
+	items := buildCompItems(nil, nil, nil)
+	for _, it := range items {
+		if it.Cat == compBuiltin && it.Name == "goal" {
+			if it.Insert != "/goal " {
+				t.Fatalf("goal Insert = %q, want %q", it.Insert, "/goal ")
+			}
+			return
+		}
+	}
+	t.Fatalf("expected /goal built-in in completion items, got %+v", items)
 }

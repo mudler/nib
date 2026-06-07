@@ -108,3 +108,21 @@ func TestResolveLoop(t *testing.T) {
 		t.Fatalf("interval-only: %+v", a)
 	}
 }
+
+func TestResolveGoal(t *testing.T) {
+	cases := []struct {
+		in   string
+		want Action
+	}{
+		{"/goal make all tests pass", Action{Kind: KindGoalSet, Text: "make all tests pass"}},
+		{"/goal", Action{Kind: KindGoalShow}},
+		{"/goal clear", Action{Kind: KindGoalClear}},
+		{"/goal   ", Action{Kind: KindGoalShow}},
+	}
+	for _, c := range cases {
+		got := Resolve(c.in, nil, nil, nil)
+		if got != c.want {
+			t.Errorf("Resolve(%q) = %+v, want %+v", c.in, got, c.want)
+		}
+	}
+}

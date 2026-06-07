@@ -68,6 +68,12 @@ type Session struct {
 	// from the reasoning callback so OnPark can surface the parked reply.
 	lastReply string
 
+	// goal is the active session goal (the /goal stop-gate). While non-empty,
+	// SendMessage re-runs the turn until the model calls goal_done. goalDone is
+	// set by that tool within a run. Both guarded by runMu.
+	goal     string
+	goalDone bool
+
 	// shellJobs lets the pending-work predicate keep the run parked while a
 	// backgrounded shell command is still running (cogito only knows about
 	// sub-agents). May be nil (e.g. headless CLI without a job registry).
@@ -385,6 +391,30 @@ func (s *Session) ClearHistory() {
 	s.fragment = cogito.NewEmptyFragment()
 }
 
+// SetGoal sets (or replaces) the active session goal. While a goal is set, a
+// turn re-runs until the model calls goal_done or the user interrupts. Call
+// between turns, not during a live run: the goal_done tool is wired at the
+// start of a turn, so arming a goal mid-run would not expose goal_done.
+func (s *Session) SetGoal(goal string) {
+	s.runMu.Lock()
+	s.goal = goal
+	s.runMu.Unlock()
+}
+
+// Goal returns the active session goal, or "" if none.
+func (s *Session) Goal() string {
+	s.runMu.Lock()
+	defer s.runMu.Unlock()
+	return s.goal
+}
+
+// ClearGoal removes the active session goal.
+func (s *Session) ClearGoal() {
+	s.runMu.Lock()
+	s.goal = ""
+	s.runMu.Unlock()
+}
+
 // beginTurn starts a per-turn cancellable context derived from the session
 // context and stores its cancel func so Interrupt can cancel just this turn.
 func (s *Session) beginTurn() context.Context {
@@ -680,6 +710,20 @@ func (s *Session) SendMessage(text string) (string, error) {
 		})),
 	)
 
+	// Register the goal_done tool only while a goal is active, so it never
+	// appears as a no-op tool in ordinary turns. The callback records
+	// completion: it sets the per-run flag (read by the stop-gate) and clears
+	// the goal so it does not re-arm on the next message.
+	if s.Goal() != "" {
+		cogitoOpts = append(cogitoOpts, cogito.WithTools(goalDoneToolDefinition(func(justification string) string {
+			s.runMu.Lock()
+			s.goalDone = true
+			s.goal = ""
+			s.runMu.Unlock()
+			return "Goal marked complete: " + justification
+		})))
+	}
+
 	// Wire the native self-configuration tools so the assistant can manage its
 	// own plugins, skills, and MCP servers. requestReload re-wires the live
 	// session on the next turn after any mutating op.
@@ -694,20 +738,64 @@ func (s *Session) SendMessage(text string) (string, error) {
 
 	// Run the agent loop. With sink-state disabled, ExecuteTools runs the whole
 	// turn and leaves the final natural-language answer as the last message.
+	//
+	// Stop-gate (/goal): while a goal is active, re-run after each stop until
+	// the model calls goal_done (which clears the goal and sets goalDone) or the
+	// turn is interrupted. The user can chat/steer mid-pursuit via the existing
+	// inject path; Ctrl+C cancels turnCtx and clears the goal.
 	var err error
-	s.fragment, err = cogito.ExecuteTools(s.llm, s.fragment, cogitoOpts...)
-	if err != nil && !errors.Is(err, cogito.ErrNoToolSelected) {
-		if s.callbacks.OnError != nil {
-			s.callbacks.OnError(err)
-		}
-		return "", err
-	}
+	var response string
+	for {
+		s.runMu.Lock()
+		s.goalDone = false
+		s.runMu.Unlock()
 
-	response := s.fragment.LastMessage().Content
-	s.messages = append(s.messages, openai.ChatCompletionMessage{
-		Role:    "assistant",
-		Content: response,
-	})
+		s.fragment, err = cogito.ExecuteTools(s.llm, s.fragment, cogitoOpts...)
+		if err != nil && !errors.Is(err, cogito.ErrNoToolSelected) {
+			// Interrupt (turnCtx cancelled) surfaces here as a context error;
+			// clear the goal so the user's stop sticks and it doesn't re-arm.
+			// Other (transient) errors leave the goal active intentionally.
+			if turnCtx.Err() != nil {
+				s.ClearGoal()
+			}
+			if s.callbacks.OnError != nil {
+				s.callbacks.OnError(err)
+			}
+			return "", err
+		}
+
+		response = s.fragment.LastMessage().Content
+		s.messages = append(s.messages, openai.ChatCompletionMessage{
+			Role:    "assistant",
+			Content: response,
+		})
+
+		s.runMu.Lock()
+		done := s.goalDone
+		goal := s.goal
+		s.runMu.Unlock()
+
+		// Stop when there is no goal, the model declared it done, or the turn
+		// was interrupted. Interrupt also clears the goal (user stopped it).
+		if goal == "" || done {
+			break
+		}
+		if turnCtx.Err() != nil {
+			s.ClearGoal()
+			break
+		}
+
+		// Goal still active and unconfirmed: re-feed it and run again.
+		reminder := goalReminder(goal)
+		s.fragment = s.fragment.AddMessage("user", reminder)
+		s.messages = append(s.messages, openai.ChatCompletionMessage{
+			Role:    "user",
+			Content: reminder,
+		})
+		if s.callbacks.OnStatus != nil {
+			s.callbacks.OnStatus("Goal not yet met — continuing…")
+		}
+	}
 
 	if s.callbacks.OnResponse != nil {
 		s.callbacks.OnResponse(response)

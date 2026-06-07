@@ -977,6 +977,25 @@ func (m *Model) dispatchInput(input string) tea.Cmd {
 	case slash.KindLoopList:
 		m.messages = append(m.messages, ChatMessage{Role: "agent", Content: m.listLoops()})
 		return nil
+	case slash.KindGoalSet:
+		m.session.SetGoal(action.Text)
+		m.messages = append(m.messages, ChatMessage{Role: "agent", Content: theme.Goal + " Goal set: " + action.Text + "\nI'll pursue it on your next message, re-checking until it's met. Press Ctrl+C or /goal clear to stop."})
+		return nil
+	case slash.KindGoalShow:
+		if g := m.session.Goal(); g != "" {
+			m.messages = append(m.messages, ChatMessage{Role: "agent", Content: theme.Goal + " Current goal: " + g})
+		} else {
+			m.messages = append(m.messages, ChatMessage{Role: "agent", Content: "No goal set. Use /goal <text> to set one."})
+		}
+		return nil
+	case slash.KindGoalClear:
+		if m.session.Goal() != "" {
+			m.session.ClearGoal()
+			m.messages = append(m.messages, ChatMessage{Role: "agent", Content: "Goal cleared."})
+		} else {
+			m.messages = append(m.messages, ChatMessage{Role: "agent", Content: "No goal to clear."})
+		}
+		return nil
 	default: // slash.KindSend
 		m.loading = true
 		m.interruptArmed = false
@@ -1551,6 +1570,11 @@ func (m Model) View() string {
 		}
 		if f := renderLoopsFooter(m.loops, m.selfPaced, m.width); f != "" {
 			sb.WriteString("\n" + f)
+		}
+		if m.session != nil {
+			if f := renderGoalFooter(m.session.Goal(), m.width); f != "" {
+				sb.WriteString("\n" + f)
+			}
 		}
 	}
 
