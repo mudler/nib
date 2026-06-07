@@ -979,7 +979,7 @@ func (m *Model) dispatchInput(input string) tea.Cmd {
 		return nil
 	case slash.KindGoalSet:
 		m.session.SetGoal(action.Text)
-		m.messages = append(m.messages, ChatMessage{Role: "agent", Content: theme.Goal + " Goal set: " + action.Text + "\nI'll keep working and re-checking until it's met. Press Ctrl+C or /goal clear to stop."})
+		m.messages = append(m.messages, ChatMessage{Role: "agent", Content: theme.Goal + " Goal set: " + action.Text + "\nI'll pursue it on your next message, re-checking until it's met. Press Ctrl+C or /goal clear to stop."})
 		return nil
 	case slash.KindGoalShow:
 		if g := m.session.Goal(); g != "" {
