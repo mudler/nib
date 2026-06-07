@@ -736,20 +736,58 @@ func (s *Session) SendMessage(text string) (string, error) {
 
 	// Run the agent loop. With sink-state disabled, ExecuteTools runs the whole
 	// turn and leaves the final natural-language answer as the last message.
+	//
+	// Stop-gate (/goal): while a goal is active, re-run after each stop until
+	// the model calls goal_done (which clears the goal and sets goalDone) or the
+	// turn is interrupted. The user can chat/steer mid-pursuit via the existing
+	// inject path; Ctrl+C cancels turnCtx and clears the goal.
 	var err error
-	s.fragment, err = cogito.ExecuteTools(s.llm, s.fragment, cogitoOpts...)
-	if err != nil && !errors.Is(err, cogito.ErrNoToolSelected) {
-		if s.callbacks.OnError != nil {
-			s.callbacks.OnError(err)
-		}
-		return "", err
-	}
+	var response string
+	for {
+		s.runMu.Lock()
+		s.goalDone = false
+		s.runMu.Unlock()
 
-	response := s.fragment.LastMessage().Content
-	s.messages = append(s.messages, openai.ChatCompletionMessage{
-		Role:    "assistant",
-		Content: response,
-	})
+		s.fragment, err = cogito.ExecuteTools(s.llm, s.fragment, cogitoOpts...)
+		if err != nil && !errors.Is(err, cogito.ErrNoToolSelected) {
+			if s.callbacks.OnError != nil {
+				s.callbacks.OnError(err)
+			}
+			return "", err
+		}
+
+		response = s.fragment.LastMessage().Content
+		s.messages = append(s.messages, openai.ChatCompletionMessage{
+			Role:    "assistant",
+			Content: response,
+		})
+
+		s.runMu.Lock()
+		done := s.goalDone
+		goal := s.goal
+		s.runMu.Unlock()
+
+		// Stop when there is no goal, the model declared it done, or the turn
+		// was interrupted. Interrupt also clears the goal (user stopped it).
+		if goal == "" || done {
+			break
+		}
+		if turnCtx.Err() != nil {
+			s.ClearGoal()
+			break
+		}
+
+		// Goal still active and unconfirmed: re-feed it and run again.
+		reminder := goalReminder(goal)
+		s.fragment = s.fragment.AddMessage("user", reminder)
+		s.messages = append(s.messages, openai.ChatCompletionMessage{
+			Role:    "user",
+			Content: reminder,
+		})
+		if s.callbacks.OnStatus != nil {
+			s.callbacks.OnStatus("Goal not yet met — continuing…")
+		}
+	}
 
 	if s.callbacks.OnResponse != nil {
 		s.callbacks.OnResponse(response)
