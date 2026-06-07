@@ -112,7 +112,9 @@ func TestDurationToCron(t *testing.T) {
 		d    time.Duration
 		want string
 	}{
-		{30 * time.Second, "* * * * *"}, // sub-minute → every minute (floor)
+		{30 * time.Second, "*/30 * * * * *"}, // sub-minute → 6-field seconds expr
+		{5 * time.Second, "*/5 * * * * *"},
+		{1 * time.Second, "*/1 * * * * *"},
 		{5 * time.Minute, "*/5 * * * *"},
 		{1 * time.Hour, "0 */1 * * *"},
 		{90 * time.Minute, "0 * * * *"}, // ≥1h non-aligned → hourly (minute step can't exceed 59)
@@ -120,6 +122,14 @@ func TestDurationToCron(t *testing.T) {
 	for _, c := range cases {
 		if got := durationToCron(c.d); got != c.want {
 			t.Fatalf("durationToCron(%s) = %q want %q", c.d, got, c.want)
+		}
+	}
+}
+
+func TestDurationToCronParses(t *testing.T) {
+	for _, d := range []time.Duration{1 * time.Second, 5 * time.Second, 30 * time.Second, 5 * time.Minute, 1 * time.Hour, 90 * time.Minute} {
+		if _, err := loop.Parse(durationToCron(d)); err != nil {
+			t.Fatalf("durationToCron(%s)=%q failed to parse: %v", d, durationToCron(d), err)
 		}
 	}
 }
