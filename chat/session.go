@@ -68,6 +68,12 @@ type Session struct {
 	// from the reasoning callback so OnPark can surface the parked reply.
 	lastReply string
 
+	// goal is the active session goal (the /goal stop-gate). While non-empty,
+	// SendMessage re-runs the turn until the model calls goal_done. goalDone is
+	// set by that tool within a run. Both guarded by runMu.
+	goal     string
+	goalDone bool
+
 	// shellJobs lets the pending-work predicate keep the run parked while a
 	// backgrounded shell command is still running (cogito only knows about
 	// sub-agents). May be nil (e.g. headless CLI without a job registry).
@@ -383,6 +389,28 @@ func agentUsage(a *cogito.AgentState) (toolCount, tokens int) {
 func (s *Session) ClearHistory() {
 	s.messages = []openai.ChatCompletionMessage{}
 	s.fragment = cogito.NewEmptyFragment()
+}
+
+// SetGoal sets (or replaces) the active session goal. While a goal is set, a
+// turn re-runs until the model calls goal_done or the user interrupts.
+func (s *Session) SetGoal(goal string) {
+	s.runMu.Lock()
+	s.goal = goal
+	s.runMu.Unlock()
+}
+
+// Goal returns the active session goal, or "" if none.
+func (s *Session) Goal() string {
+	s.runMu.Lock()
+	defer s.runMu.Unlock()
+	return s.goal
+}
+
+// ClearGoal removes the active session goal.
+func (s *Session) ClearGoal() {
+	s.runMu.Lock()
+	s.goal = ""
+	s.runMu.Unlock()
 }
 
 // beginTurn starts a per-turn cancellable context derived from the session
