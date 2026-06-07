@@ -14,9 +14,10 @@ import (
 type compCategory string
 
 const (
-	compCmd   compCategory = "cmd"
-	compSkill compCategory = "skill"
-	compAgent compCategory = "agent"
+	compBuiltin compCategory = "builtin"
+	compCmd     compCategory = "cmd"
+	compSkill   compCategory = "skill"
+	compAgent   compCategory = "agent"
 )
 
 // compItem is one entry in the unified `/` completion list.
@@ -29,7 +30,11 @@ type compItem struct {
 
 // buildCompItems flattens the three registries into tagged completion items.
 func buildCompItems(cmds []types.CommandConfig, skills []types.Skill, agents []types.AgentTypeConfig) []compItem {
-	items := make([]compItem, 0, len(cmds)+len(skills)+len(agents))
+	items := make([]compItem, 0, 2+len(cmds)+len(skills)+len(agents))
+	items = append(items,
+		compItem{Cat: compBuiltin, Name: "loop", Desc: "recurring or self-paced task", Insert: "/loop "},
+		compItem{Cat: compBuiltin, Name: "compact", Desc: "compact the conversation", Insert: "/compact "},
+	)
 	for _, c := range cmds {
 		items = append(items, compItem{Cat: compCmd, Name: c.Name, Desc: c.Description, Insert: "/" + c.Name + " "})
 	}

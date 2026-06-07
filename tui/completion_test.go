@@ -15,15 +15,25 @@ func sampleRegistries() ([]types.CommandConfig, []types.Skill, []types.AgentType
 func TestBuildAndFilter(t *testing.T) {
 	cmds, skills, agents := sampleRegistries()
 	items := buildCompItems(cmds, skills, agents)
-	if len(items) != 3 {
-		t.Fatalf("want 3 items, got %d", len(items))
+	if len(items) != 5 {
+		t.Fatalf("want 5 items, got %d", len(items))
 	}
 	got := filterComp(items, "rev")
 	if len(got) != 2 {
 		t.Fatalf("want 2 matches for 'rev', got %d: %+v", len(got), got)
 	}
+	if got := filterComp(items, "loop"); len(got) != 1 || got[0].Insert != "/loop " {
+		t.Fatalf("filter 'loop' should surface the builtin, got %+v", got)
+	}
 	for _, it := range items {
 		switch it.Cat {
+		case compBuiltin:
+			if it.Name == "loop" && it.Insert != "/loop " {
+				t.Fatalf("loop insert wrong: %q", it.Insert)
+			}
+			if it.Name == "compact" && it.Insert != "/compact " {
+				t.Fatalf("compact insert wrong: %q", it.Insert)
+			}
 		case compCmd:
 			if it.Insert != "/review " {
 				t.Fatalf("cmd insert wrong: %q", it.Insert)
