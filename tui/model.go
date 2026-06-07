@@ -68,11 +68,19 @@ type Model struct {
 	// event, so the terminal responseMsg can avoid re-appending an identical
 	// final reply.
 	lastParkedReply string
-	status          string
-	reasoning       string
-	err             error
-	output          string // Command to output to shell on exit
-	quitting        bool
+	// wakeupGen invalidates pending self-paced wake-up ticks. /loop stop bumps
+	// it so an in-flight tea.Tick fired for a now-cancelled self-paced loop is
+	// ignored when it arrives.
+	wakeupGen int
+	// selfPaced counts active self-paced loops (for the footer). 0 or 1 in
+	// practice; incremented on /loop <prompt>, cleared on /loop stop or when the
+	// model stops re-arming.
+	selfPaced int
+	status    string
+	reasoning string
+	err       error
+	output    string // Command to output to shell on exit
+	quitting  bool
 
 	// Tool approval state
 	pendingTool      *chat.ToolCallRequest
@@ -737,34 +745,42 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Arm a timer for the requested delay, then keep listening for more.
 		req := chat.WakeupRequest(msg)
 		d := time.Duration(req.DelaySeconds) * time.Second
-		note := req.Prompt
+		prompt := req.Prompt
+		gen := m.wakeupGen
 		cmds = append(cmds,
-			tea.Tick(d, func(time.Time) tea.Msg { return wakeupFireMsg{note: note} }),
+			tea.Tick(d, func(time.Time) tea.Msg { return wakeupFireMsg{prompt: prompt, gen: gen} }),
 			m.listenWakeup(),
 		)
 
 	case wakeupFireMsg:
-		// The delay elapsed: inject the wake-up note into the live run if one is
-		// parked. If no run is live (the conversation is idle), start a fresh turn
-		// so the assistant re-engages with the note.
-		note := msg.note
-		if note == "" {
-			note = "(no note)"
+		// A stale tick from a cancelled self-paced loop: ignore.
+		if msg.gen != m.wakeupGen {
+			break
 		}
-		notice := "scheduled wake-up: " + note
-		if m.session != nil && m.parked && m.session.Inject(notice) {
+		// The delay elapsed: re-run the carried prompt as the next turn. Resolve
+		// the payload so a /command re-runs as that command (self-paced loop).
+		prompt := strings.TrimSpace(msg.prompt)
+		if prompt == "" {
+			prompt = "continue"
+		}
+		action := slash.Resolve(prompt, m.cfg.Commands, m.cfg.Skills, m.cfg.Agents)
+		text := action.Text
+		if action.Kind != slash.KindSend || text == "" {
+			text = prompt // fall back to the raw text for non-send payloads
+		}
+		if m.session != nil && m.parked && m.session.Inject(text) {
 			m.parked = false
 			m.loading = true
 			m.interruptArmed = false
 			m.status = "Thinking…"
 			m.updateViewport()
 		} else if m.sessionReady && m.session != nil && !m.loading && !m.awaitingApproval && !m.awaitingAsk {
-			m.messages = append(m.messages, ChatMessage{Role: "agent", Content: "reacting to scheduled wake-up…"})
+			m.messages = append(m.messages, ChatMessage{Role: "user", Content: prompt})
 			m.loading = true
 			m.interruptArmed = false
-			m.status = notice
+			m.status = "Thinking…"
 			m.updateViewport()
-			cmds = append(cmds, m.sendMessage(notice))
+			cmds = append(cmds, m.sendMessage(text))
 		}
 
 	case statusMsg:
@@ -923,7 +939,10 @@ func (m Model) shellTick() tea.Cmd {
 type wakeupScheduledMsg chat.WakeupRequest
 
 // wakeupFireMsg is emitted when a scheduled wake-up's delay elapses.
-type wakeupFireMsg struct{ note string }
+type wakeupFireMsg struct {
+	prompt string
+	gen    int
+}
 
 // listenWakeup waits for the agent to schedule a wake-up.
 func (m Model) listenWakeup() tea.Cmd {
