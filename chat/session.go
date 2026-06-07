@@ -392,7 +392,9 @@ func (s *Session) ClearHistory() {
 }
 
 // SetGoal sets (or replaces) the active session goal. While a goal is set, a
-// turn re-runs until the model calls goal_done or the user interrupts.
+// turn re-runs until the model calls goal_done or the user interrupts. Call
+// between turns, not during a live run: the goal_done tool is wired at the
+// start of a turn, so arming a goal mid-run would not expose goal_done.
 func (s *Session) SetGoal(goal string) {
 	s.runMu.Lock()
 	s.goal = goal
@@ -750,6 +752,12 @@ func (s *Session) SendMessage(text string) (string, error) {
 
 		s.fragment, err = cogito.ExecuteTools(s.llm, s.fragment, cogitoOpts...)
 		if err != nil && !errors.Is(err, cogito.ErrNoToolSelected) {
+			// Interrupt (turnCtx cancelled) surfaces here as a context error;
+			// clear the goal so the user's stop sticks and it doesn't re-arm.
+			// Other (transient) errors leave the goal active intentionally.
+			if turnCtx.Err() != nil {
+				s.ClearGoal()
+			}
 			if s.callbacks.OnError != nil {
 				s.callbacks.OnError(err)
 			}
