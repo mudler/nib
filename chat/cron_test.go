@@ -49,3 +49,16 @@ func TestCronToolsCallCallbacks(t *testing.T) {
 		t.Fatalf("list out: %q", out)
 	}
 }
+
+func TestCronRecurringDefault(t *testing.T) {
+	var got CronRequest
+	ct := &cronTool{create: func(r CronRequest) string { got = r; return "" }}
+	ct.Run(map[string]any{"expr": "*/5 * * * *", "prompt": "/foo"}) // recurring omitted
+	if !got.Recurring {
+		t.Fatalf("omitted recurring should default true, got %+v", got)
+	}
+	ct.Run(map[string]any{"expr": "*/5 * * * *", "prompt": "/foo", "recurring": false})
+	if got.Recurring {
+		t.Fatalf("explicit recurring=false should be false, got %+v", got)
+	}
+}
