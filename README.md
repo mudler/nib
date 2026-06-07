@@ -135,6 +135,18 @@ configure). Background a running job with `Ctrl+B` and watch the jobs footer wit
   <img alt="nib delegating to the explore sub-agent, with the jobs footer" src="docs/images/demo-agents.gif" width="800">
 </p>
 
+### `/loop` — recurring & self-paced tasks
+
+- `/loop 5m /foo` — run `/foo` (a slash command or prompt) every 5 minutes.
+- `/loop /foo` — self-paced: the model runs `/foo`, then decides when to repeat
+  by scheduling its own wake-ups; it stops when the task is done.
+- `/loop list` — show active loops.
+- `/loop stop [id]` — stop one loop, or all loops if no id is given.
+
+Loops are session-only by default. The model can also schedule jobs directly
+with the `cron`, `cron_list`, and `cron_delete` tools; `cron(durable: true)`
+persists across restarts to `.nib/loops.json`.
+
 ## Plugins
 
 A **plugin** is a single installable unit — a git repo (or local dir) with a

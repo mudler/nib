@@ -68,6 +68,14 @@ type AskRequest struct {
 	MultiSelect bool
 }
 
+// CronRequest is a recurring/one-shot job the agent registers (cron tool).
+type CronRequest struct {
+	Expr      string
+	Prompt    string
+	Recurring bool
+	Durable   bool
+}
+
 // Callbacks defines the interface for UI interactions.
 type Callbacks struct {
 	OnStatus    func(status string)
@@ -86,6 +94,12 @@ type Callbacks struct {
 	// (schedule_wakeup tool). It returns immediately with a confirmation; the
 	// host re-engages the agent with the note once the delay elapses.
 	OnScheduleWakeup func(req WakeupRequest) string
+	// OnCronCreate registers a cron job and returns a confirmation (incl. its id).
+	OnCronCreate func(req CronRequest) string
+	// OnCronList returns a human-readable listing of active cron jobs.
+	OnCronList func() string
+	// OnCronDelete cancels a cron job by id and returns a confirmation.
+	OnCronDelete func(id string) string
 	// OnCompactDone is called after the conversation is compacted, with the
 	// approximate token counts before and after. Optional.
 	OnCompactDone func(before, after int)

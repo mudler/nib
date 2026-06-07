@@ -56,7 +56,7 @@ func TestApplyGlyphProfile(t *testing.T) {
 	t.Cleanup(applyGlyphProfile)
 
 	swappable := func() []string {
-		return []string{PromptGlyph, ApprovalGutter, SubAgent, Arrow, ShellJob, ScrollKeys, ReasoningGlyph}
+		return []string{PromptGlyph, ApprovalGutter, SubAgent, Arrow, Loop, ShellJob, ScrollKeys, ReasoningGlyph}
 	}
 
 	t.Setenv("NIB_ASCII", "1")

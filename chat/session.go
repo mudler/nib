@@ -660,6 +660,24 @@ func (s *Session) SendMessage(text string) (string, error) {
 			}
 			return "Scheduling is not available in this session."
 		})),
+		cogito.WithTools(cronToolDefinition(func(req CronRequest) string {
+			if s.callbacks.OnCronCreate != nil {
+				return s.callbacks.OnCronCreate(req)
+			}
+			return "Scheduling is not available in this session."
+		})),
+		cogito.WithTools(cronListToolDefinition(func() string {
+			if s.callbacks.OnCronList != nil {
+				return s.callbacks.OnCronList()
+			}
+			return "No scheduler available."
+		})),
+		cogito.WithTools(cronDeleteToolDefinition(func(id string) string {
+			if s.callbacks.OnCronDelete != nil {
+				return s.callbacks.OnCronDelete(id)
+			}
+			return "No scheduler available."
+		})),
 	)
 
 	// Wire the native self-configuration tools so the assistant can manage its

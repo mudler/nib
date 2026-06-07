@@ -43,6 +43,9 @@ var toolFormatters = map[string]func(map[string]any) string{
 	"ask_user":         func(a map[string]any) string { return "ask: " + argStr(a, "question") },
 	"agent_logs":       func(a map[string]any) string { return "agent logs " + argStr(a, "agent_id") },
 	"schedule_wakeup":  fmtWakeup,
+	"cron":             fmtCron,
+	"cron_list":        func(map[string]any) string { return "list cron jobs" },
+	"cron_delete":      func(a map[string]any) string { return "cancel cron " + argStr(a, "id") },
 	"spawn_agent":      func(a map[string]any) string { return "spawn " + argStr(a, "agent_type") + ": " + argStr(a, "task") },
 	"check_agent":      func(a map[string]any) string { return "check agent " + argStr(a, "agent_id") },
 	"get_agent_result": func(a map[string]any) string { return "result of agent " + argStr(a, "agent_id") },
@@ -76,10 +79,23 @@ func fmtEdit(a map[string]any) string {
 	return "edit " + argStr(a, "path") + "\n  " + argStr(a, "old") + " " + theme.Arrow + " " + argStr(a, "new")
 }
 
+func fmtCron(a map[string]any) string {
+	s := "cron " + argStr(a, "expr") + " " + theme.Arrow + " " + argStr(a, "prompt")
+	if r, ok := a["recurring"].(bool); ok && !r {
+		s += " (once)"
+	}
+	if d, ok := a["durable"].(bool); ok && d {
+		s += " (durable)"
+	}
+	return s
+}
+
 func fmtWakeup(a map[string]any) string {
 	s := "wake in " + argStr(a, "delay_seconds") + "s"
-	if note := argStr(a, "note"); note != "" {
-		s += " — " + note
+	// Args were renamed note→prompt (plus a new reason); note remains an input
+	// back-compat alias. Prefer reason, then prompt, then note for the detail.
+	if detail := argStrOr(a, "reason", argStrOr(a, "prompt", argStr(a, "note"))); detail != "" {
+		s += " — " + detail
 	}
 	return s
 }
