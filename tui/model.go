@@ -20,6 +20,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/mudler/nib/chat"
+	"github.com/mudler/nib/loop"
 	wizmcp "github.com/mudler/nib/mcp"
 	"github.com/mudler/nib/slash"
 )
@@ -76,6 +77,10 @@ type Model struct {
 	// practice; incremented on /loop <prompt>, cleared on /loop stop or when the
 	// model stops re-arming.
 	selfPaced int
+	// loops holds active fixed-interval (cron) jobs. Self-paced loops keep no
+	// state here — they ride the wake-up timer (see wakeupGen).
+	loops     *loop.Registry
+	loopsPath string // .nib/loops.json for durable jobs
 	status    string
 	reasoning string
 	err       error
@@ -248,6 +253,8 @@ func NewModel(ctx context.Context, cfg types.Config, height int, shellJobs *wizm
 		parkChan:         make(chan parkEvent, 16),
 		compactChan:      make(chan [2]int, 4),
 		mdRenderers:      make(map[int]*glamour.TermRenderer),
+		loops:            loop.NewRegistry(),
+		loopsPath:        filepath.Join(".nib", "loops.json"),
 	}
 	m.completion.setRegistries(cfg.Commands, cfg.Skills, cfg.Agents)
 	return m
@@ -300,6 +307,34 @@ func (m Model) initSession() tea.Cmd {
 				default:
 					return "Could not schedule wake-up (too many pending)."
 				}
+			},
+			OnCronCreate: func(req chat.CronRequest) string {
+				j, err := m.loops.Add(req.Expr, req.Prompt, req.Recurring, req.Durable)
+				if err != nil {
+					return "cron rejected: " + err.Error()
+				}
+				if req.Durable {
+					_ = m.loops.Save(m.loopsPath)
+				}
+				return fmt.Sprintf("Scheduled %s (%s) → %q", j.ID, j.Expr, j.Prompt)
+			},
+			OnCronList: func() string {
+				jobs := m.loops.List()
+				if len(jobs) == 0 {
+					return "No active cron loops."
+				}
+				var b strings.Builder
+				for _, j := range jobs {
+					fmt.Fprintf(&b, "%s · %s · %q\n", j.ID, j.Expr, j.Prompt)
+				}
+				return strings.TrimRight(b.String(), "\n")
+			},
+			OnCronDelete: func(id string) string {
+				if m.loops.Delete(id) {
+					_ = m.loops.Save(m.loopsPath)
+					return "Cancelled " + id
+				}
+				return "No such loop: " + id
 			},
 			OnParked: func(reply string) {
 				select {
@@ -629,8 +664,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.session = msg.session
 		m.sessionReady = true
+		// Reload durable cron loops persisted from a previous session.
+		if n, err := m.loops.Load(m.loopsPath); err == nil && n > 0 {
+			m.messages = append(m.messages, ChatMessage{Role: "agent", Content: fmt.Sprintf("Reloaded %d durable loop(s).", n)})
+		}
 		// Start listening for callbacks
-		cmds = append(cmds, m.listenStatus(), m.listenReasoning(), m.listenToolRequest(), m.listenToolResult(), m.listenAskRequest(), m.listenAgentEvents(), m.shellTick(), m.listenWakeup(), m.listenPark(), m.listenCompact())
+		cmds = append(cmds, m.listenStatus(), m.listenReasoning(), m.listenToolRequest(), m.listenToolResult(), m.listenAskRequest(), m.listenAgentEvents(), m.shellTick(), m.loopTick(), m.listenWakeup(), m.listenPark(), m.listenCompact())
 
 	case responseMsg:
 		// The run returned: it is no longer parked (all background work drained).
@@ -739,6 +778,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if !m.quitting {
 			cmds = append(cmds, m.shellTick())
+		}
+
+	case loopTickMsg:
+		for _, j := range m.loops.Due() {
+			if c := m.dispatchLoop(j.Prompt); c != nil {
+				cmds = append(cmds, c)
+			}
+		}
+		if !m.quitting {
+			cmds = append(cmds, m.loopTick())
 		}
 
 	case wakeupScheduledMsg:
@@ -914,6 +963,14 @@ func (m *Model) dispatchInput(input string) tea.Cmd {
 		m.interruptArmed = false
 		m.status = "Compacting conversation…"
 		return m.compactCmd()
+	case slash.KindLoopStart:
+		return m.startLoop(action)
+	case slash.KindLoopStop:
+		m.messages = append(m.messages, ChatMessage{Role: "agent", Content: m.stopLoop(action.LoopID)})
+		return nil
+	case slash.KindLoopList:
+		m.messages = append(m.messages, ChatMessage{Role: "agent", Content: m.listLoops()})
+		return nil
 	default: // slash.KindSend
 		m.loading = true
 		m.interruptArmed = false
@@ -936,6 +993,14 @@ type shellTickMsg struct{}
 // shellTick schedules the next shell-jobs footer refresh.
 func (m Model) shellTick() tea.Cmd {
 	return tea.Tick(time.Second, func(time.Time) tea.Msg { return shellTickMsg{} })
+}
+
+// loopTickMsg drives the cron scheduler poll.
+type loopTickMsg struct{}
+
+// loopTick schedules the next scheduler poll.
+func (m Model) loopTick() tea.Cmd {
+	return tea.Tick(time.Second, func(time.Time) tea.Msg { return loopTickMsg{} })
 }
 
 // wakeupScheduledMsg is emitted when the agent schedules an in-session wake-up.
@@ -1467,6 +1532,9 @@ func (m Model) View() string {
 			sb.WriteString("\n" + f)
 		}
 		if f := renderShellJobsFooter(m.shellJobs.List(), m.width); f != "" {
+			sb.WriteString("\n" + f)
+		}
+		if f := renderLoopsFooter(m.loops, m.selfPaced, m.width); f != "" {
 			sb.WriteString("\n" + f)
 		}
 	}
