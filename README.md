@@ -147,6 +147,19 @@ Loops are session-only by default. The model can also schedule jobs directly
 with the `cron`, `cron_list`, and `cron_delete` tools; `cron(durable: true)`
 persists across restarts to `.nib/loops.json`.
 
+### `/goal` — keep going until a goal is met
+
+- `/goal <text>` — set a goal. nib keeps working and re-checks it every time
+  the model would stop, only finishing when the model decides the goal is met
+  (it calls a `goal_done` tool) or you stop it.
+- `/goal` — show the current goal.
+- `/goal clear` — clear it. Pressing `Ctrl+C` during pursuit also clears it.
+
+Unlike `/loop`, `/goal` is not scheduling — there are no timers. It's an
+in-turn "keep going" gate: the model self-judges progress and continues until
+done. You can still chat and steer while a goal is being pursued. Goals are
+session-only and single (setting a new one replaces the old).
+
 ## Plugins
 
 A **plugin** is a single installable unit — a git repo (or local dir) with a
