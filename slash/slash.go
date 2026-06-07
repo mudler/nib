@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 	"text/template"
+	"time"
 
 	"github.com/mudler/nib/types"
 )
@@ -21,6 +22,9 @@ const (
 	KindLoadSkill             // eagerly load Skill into the session prompt
 	KindError                 // report Err to the user, send nothing
 	KindCompact               // compact the current conversation
+	KindLoopStart             // start a recurring/self-paced loop
+	KindLoopStop              // stop one loop (LoopID) or all (empty)
+	KindLoopList              // list active loops
 )
 
 // Action is the resolved result of a submitted input line.
@@ -29,6 +33,11 @@ type Action struct {
 	Text  string // for KindSend: the message to send
 	Skill string // for KindLoadSkill: the skill name
 	Err   string // for KindError
+
+	// Loop actions:
+	Interval time.Duration // KindLoopStart: 0 = self-paced
+	Payload  string        // KindLoopStart: the prompt/slash-command to repeat
+	LoopID   string        // KindLoopStop: empty = stop all
 }
 
 // Expand renders a command's prompt template with the given args.
@@ -78,6 +87,8 @@ func Resolve(input string, cmds []types.CommandConfig, skills []types.Skill, age
 		return Action{Kind: KindSend, Text: delegation(name, task)}
 	case "compact":
 		return Action{Kind: KindCompact}
+	case "loop":
+		return resolveLoop(rest)
 	default:
 		c, ok := findCommand(cmds, verb)
 		if !ok {
@@ -92,6 +103,36 @@ func Resolve(input string, cmds []types.CommandConfig, skills []types.Skill, age
 		}
 		return Action{Kind: KindSend, Text: text}
 	}
+}
+
+// loopFloor is the minimum fixed interval; shorter requests are clamped up.
+const loopFloor = 5 * time.Second
+
+func resolveLoop(rest string) Action {
+	rest = strings.TrimSpace(rest)
+	if rest == "" {
+		return Action{Kind: KindError, Err: "usage: /loop [interval] <prompt|/command> · /loop stop [id] · /loop list"}
+	}
+	first, after := splitVerb(rest)
+	switch first {
+	case "stop":
+		return Action{Kind: KindLoopStop, LoopID: strings.TrimSpace(after)}
+	case "list":
+		return Action{Kind: KindLoopList}
+	}
+	// Fixed interval if the first token parses as a duration.
+	if d, err := time.ParseDuration(first); err == nil {
+		payload := strings.TrimSpace(after)
+		if payload == "" {
+			return Action{Kind: KindError, Err: "usage: /loop " + first + " <prompt|/command>"}
+		}
+		if d < loopFloor {
+			d = loopFloor
+		}
+		return Action{Kind: KindLoopStart, Interval: d, Payload: payload}
+	}
+	// Otherwise self-paced: the whole remainder is the payload.
+	return Action{Kind: KindLoopStart, Interval: 0, Payload: rest}
 }
 
 // delegation builds a directive instructing the agent to delegate to a named

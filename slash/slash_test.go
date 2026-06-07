@@ -3,6 +3,7 @@ package slash
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mudler/nib/types"
 )
@@ -56,5 +57,48 @@ func TestResolveCompact(t *testing.T) {
 	got := Resolve("/compact", nil, nil, nil)
 	if got.Kind != KindCompact {
 		t.Fatalf("/compact resolved to kind %v, want KindCompact", got.Kind)
+	}
+}
+
+func TestResolveLoop(t *testing.T) {
+	var none []types.CommandConfig
+	var noSkills []types.Skill
+	var noAgents []types.AgentTypeConfig
+
+	// Fixed interval: "/loop 5m /foo".
+	a := Resolve("/loop 5m /foo", none, noSkills, noAgents)
+	if a.Kind != KindLoopStart || a.Interval != 5*time.Minute || a.Payload != "/foo" {
+		t.Fatalf("fixed: %+v", a)
+	}
+
+	// Self-paced: "/loop /foo" (no parseable interval → interval 0).
+	a = Resolve("/loop /foo", none, noSkills, noAgents)
+	if a.Kind != KindLoopStart || a.Interval != 0 || a.Payload != "/foo" {
+		t.Fatalf("self-paced: %+v", a)
+	}
+
+	// Sub-5s interval is clamped to 5s.
+	a = Resolve("/loop 1s ping", none, noSkills, noAgents)
+	if a.Kind != KindLoopStart || a.Interval != 5*time.Second {
+		t.Fatalf("clamp: %+v", a)
+	}
+
+	// Control verbs.
+	if a := Resolve("/loop stop", none, noSkills, noAgents); a.Kind != KindLoopStop || a.LoopID != "" {
+		t.Fatalf("stop-all: %+v", a)
+	}
+	if a := Resolve("/loop stop loop-2", none, noSkills, noAgents); a.Kind != KindLoopStop || a.LoopID != "loop-2" {
+		t.Fatalf("stop-id: %+v", a)
+	}
+	if a := Resolve("/loop list", none, noSkills, noAgents); a.Kind != KindLoopList {
+		t.Fatalf("list: %+v", a)
+	}
+
+	// Empty payload → error.
+	if a := Resolve("/loop", none, noSkills, noAgents); a.Kind != KindError {
+		t.Fatalf("empty: %+v", a)
+	}
+	if a := Resolve("/loop 5m", none, noSkills, noAgents); a.Kind != KindError {
+		t.Fatalf("interval-only: %+v", a)
 	}
 }

@@ -20,6 +20,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/mudler/nib/chat"
+	"github.com/mudler/nib/loop"
 	wizmcp "github.com/mudler/nib/mcp"
 	"github.com/mudler/nib/slash"
 )
@@ -68,11 +69,25 @@ type Model struct {
 	// event, so the terminal responseMsg can avoid re-appending an identical
 	// final reply.
 	lastParkedReply string
-	status          string
-	reasoning       string
-	err             error
-	output          string // Command to output to shell on exit
-	quitting        bool
+	// wakeupGen invalidates pending self-paced wake-up ticks. /loop stop bumps
+	// it so an in-flight tea.Tick fired for a now-cancelled self-paced loop is
+	// ignored when it arrives.
+	wakeupGen int
+	// selfPaced counts active self-paced loops (for the footer). 0 or 1 in
+	// practice. Incremented on /loop <prompt>; reset to 0 by /loop stop. Note: it
+	// is NOT auto-cleared when a self-paced loop ends naturally (the TUI has no
+	// signal that the model chose not to re-arm), so the footer may show a
+	// self-paced loop until /loop stop.
+	selfPaced int
+	// loops holds active fixed-interval (cron) jobs. Self-paced loops keep no
+	// state here — they ride the wake-up timer (see wakeupGen).
+	loops     *loop.Registry
+	loopsPath string // .nib/loops.json for durable jobs
+	status    string
+	reasoning string
+	err       error
+	output    string // Command to output to shell on exit
+	quitting  bool
 
 	// Tool approval state
 	pendingTool      *chat.ToolCallRequest
@@ -240,6 +255,8 @@ func NewModel(ctx context.Context, cfg types.Config, height int, shellJobs *wizm
 		parkChan:         make(chan parkEvent, 16),
 		compactChan:      make(chan [2]int, 4),
 		mdRenderers:      make(map[int]*glamour.TermRenderer),
+		loops:            loop.NewRegistry(),
+		loopsPath:        filepath.Join(".nib", "loops.json"),
 	}
 	m.completion.setRegistries(cfg.Commands, cfg.Skills, cfg.Agents)
 	return m
@@ -285,10 +302,41 @@ func (m Model) initSession() tea.Cmd {
 				// run (see wakeupFireMsg).
 				select {
 				case m.wakeupChan <- req:
-					return fmt.Sprintf("Scheduled a wake-up in %ds: %q. You'll be re-invoked then to check on it.", req.DelaySeconds, req.Note)
+					if req.Reason != "" {
+						return fmt.Sprintf("Scheduled a wake-up in %ds (%s). You'll be re-invoked then.", req.DelaySeconds, req.Reason)
+					}
+					return fmt.Sprintf("Scheduled a wake-up in %ds: %q. You'll be re-invoked then.", req.DelaySeconds, req.Prompt)
 				default:
 					return "Could not schedule wake-up (too many pending)."
 				}
+			},
+			OnCronCreate: func(req chat.CronRequest) string {
+				j, err := m.loops.Add(req.Expr, req.Prompt, req.Recurring, req.Durable)
+				if err != nil {
+					return "cron rejected: " + err.Error()
+				}
+				if req.Durable {
+					_ = m.loops.Save(m.loopsPath)
+				}
+				return fmt.Sprintf("Scheduled %s (%s) → %q", j.ID, j.Expr, j.Prompt)
+			},
+			OnCronList: func() string {
+				jobs := m.loops.List()
+				if len(jobs) == 0 {
+					return "No active cron loops."
+				}
+				var b strings.Builder
+				for _, j := range jobs {
+					fmt.Fprintf(&b, "%s · %s · %q\n", j.ID, j.Expr, j.Prompt)
+				}
+				return strings.TrimRight(b.String(), "\n")
+			},
+			OnCronDelete: func(id string) string {
+				if m.loops.Delete(id) {
+					_ = m.loops.Save(m.loopsPath)
+					return "Cancelled " + id
+				}
+				return "No such loop: " + id
 			},
 			OnParked: func(reply string) {
 				select {
@@ -618,8 +666,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.session = msg.session
 		m.sessionReady = true
+		// Reload durable cron loops persisted from a previous session.
+		if n, err := m.loops.Load(m.loopsPath); err == nil && n > 0 {
+			m.messages = append(m.messages, ChatMessage{Role: "agent", Content: fmt.Sprintf("Reloaded %d durable loop(s).", n)})
+		}
 		// Start listening for callbacks
-		cmds = append(cmds, m.listenStatus(), m.listenReasoning(), m.listenToolRequest(), m.listenToolResult(), m.listenAskRequest(), m.listenAgentEvents(), m.shellTick(), m.listenWakeup(), m.listenPark(), m.listenCompact())
+		cmds = append(cmds, m.listenStatus(), m.listenReasoning(), m.listenToolRequest(), m.listenToolResult(), m.listenAskRequest(), m.listenAgentEvents(), m.shellTick(), m.loopTick(), m.listenWakeup(), m.listenPark(), m.listenCompact())
 
 	case responseMsg:
 		// The run returned: it is no longer parked (all background work drained).
@@ -734,39 +786,60 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, m.shellTick())
 		}
 
+	case loopTickMsg:
+		for _, j := range m.loops.Due() {
+			if c := m.dispatchLoop(j.Prompt); c != nil {
+				cmds = append(cmds, c)
+			}
+		}
+		if !m.quitting {
+			cmds = append(cmds, m.loopTick())
+		}
+
 	case wakeupScheduledMsg:
 		// Arm a timer for the requested delay, then keep listening for more.
 		req := chat.WakeupRequest(msg)
 		d := time.Duration(req.DelaySeconds) * time.Second
-		note := req.Note
+		prompt := req.Prompt
+		gen := m.wakeupGen
 		cmds = append(cmds,
-			tea.Tick(d, func(time.Time) tea.Msg { return wakeupFireMsg{note: note} }),
+			tea.Tick(d, func(time.Time) tea.Msg { return wakeupFireMsg{prompt: prompt, gen: gen} }),
 			m.listenWakeup(),
 		)
 
 	case wakeupFireMsg:
-		// The delay elapsed: inject the wake-up note into the live run if one is
-		// parked. If no run is live (the conversation is idle), start a fresh turn
-		// so the assistant re-engages with the note.
-		note := msg.note
-		if note == "" {
-			note = "(no note)"
+		// A stale tick from a cancelled self-paced loop: ignore.
+		if msg.gen != m.wakeupGen {
+			break
 		}
-		notice := "scheduled wake-up: " + note
-		if m.session != nil && m.parked && m.session.Inject(notice) {
+		// The delay elapsed: re-run the carried prompt as the next turn. Resolve
+		// the payload so a /command re-runs as that command (self-paced loop).
+		prompt := strings.TrimSpace(msg.prompt)
+		if prompt == "" {
+			prompt = "continue"
+		}
+		action := slash.Resolve(prompt, m.cfg.Commands, m.cfg.Skills, m.cfg.Agents)
+		text := action.Text
+		if action.Kind != slash.KindSend || text == "" {
+			// Non-KindSend payloads (skill/compact/error) intentionally degrade to literal text — loops carry slash-commands or prompts, not those.
+			text = prompt // fall back to the raw text for non-send payloads
+		}
+		if m.session != nil && m.parked && m.session.Inject(text) {
+			m.messages = append(m.messages, ChatMessage{Role: "user", Content: prompt})
 			m.parked = false
 			m.loading = true
 			m.interruptArmed = false
 			m.status = "Thinking…"
 			m.updateViewport()
 		} else if m.sessionReady && m.session != nil && !m.loading && !m.awaitingApproval && !m.awaitingAsk {
-			m.messages = append(m.messages, ChatMessage{Role: "agent", Content: "reacting to scheduled wake-up…"})
+			m.messages = append(m.messages, ChatMessage{Role: "user", Content: prompt})
 			m.loading = true
 			m.interruptArmed = false
-			m.status = notice
+			m.status = "Thinking…"
 			m.updateViewport()
-			cmds = append(cmds, m.sendMessage(notice))
+			cmds = append(cmds, m.sendMessage(text))
 		}
+		// If a wake-up fires mid-run (loading and not parked) it is dropped: the model drives self-pacing at turn end, so this is rare; cron loops queue instead (see releaseQueueFront).
 
 	case statusMsg:
 		m.status = string(msg)
@@ -896,6 +969,14 @@ func (m *Model) dispatchInput(input string) tea.Cmd {
 		m.interruptArmed = false
 		m.status = "Compacting conversation…"
 		return m.compactCmd()
+	case slash.KindLoopStart:
+		return m.startLoop(action)
+	case slash.KindLoopStop:
+		m.messages = append(m.messages, ChatMessage{Role: "agent", Content: m.stopLoop(action.LoopID)})
+		return nil
+	case slash.KindLoopList:
+		m.messages = append(m.messages, ChatMessage{Role: "agent", Content: m.listLoops()})
+		return nil
 	default: // slash.KindSend
 		m.loading = true
 		m.interruptArmed = false
@@ -920,11 +1001,22 @@ func (m Model) shellTick() tea.Cmd {
 	return tea.Tick(time.Second, func(time.Time) tea.Msg { return shellTickMsg{} })
 }
 
+// loopTickMsg drives the cron scheduler poll.
+type loopTickMsg struct{}
+
+// loopTick schedules the next scheduler poll.
+func (m Model) loopTick() tea.Cmd {
+	return tea.Tick(time.Second, func(time.Time) tea.Msg { return loopTickMsg{} })
+}
+
 // wakeupScheduledMsg is emitted when the agent schedules an in-session wake-up.
 type wakeupScheduledMsg chat.WakeupRequest
 
 // wakeupFireMsg is emitted when a scheduled wake-up's delay elapses.
-type wakeupFireMsg struct{ note string }
+type wakeupFireMsg struct {
+	prompt string
+	gen    int
+}
 
 // listenWakeup waits for the agent to schedule a wake-up.
 func (m Model) listenWakeup() tea.Cmd {
@@ -1455,6 +1547,9 @@ func (m Model) View() string {
 			sb.WriteString("\n" + f)
 		}
 		if f := renderShellJobsFooter(m.shellJobs.List(), m.width); f != "" {
+			sb.WriteString("\n" + f)
+		}
+		if f := renderLoopsFooter(m.loops, m.selfPaced, m.width); f != "" {
 			sb.WriteString("\n" + f)
 		}
 	}
