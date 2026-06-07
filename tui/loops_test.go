@@ -87,6 +87,26 @@ func TestDispatchLoopIdle(t *testing.T) {
 	}
 }
 
+func TestDispatchLoopNoConcurrentTurns(t *testing.T) {
+	m := newLoopTestModel() // sessionReady=true, session=&chat.Session{}, parked=false, loading=false
+	// First due job: idle → starts a turn (returns a non-nil cmd, sets loading).
+	cmd1 := m.dispatchLoop("/foo")
+	if cmd1 == nil {
+		t.Fatal("first dispatch should start a turn (non-nil cmd)")
+	}
+	if !m.loading {
+		t.Fatal("first dispatch should set loading")
+	}
+	// Second job in the SAME tick: must NOT start another turn; it queues.
+	cmd2 := m.dispatchLoop("/bar")
+	if cmd2 != nil {
+		t.Fatal("second dispatch must NOT start a concurrent turn")
+	}
+	if len(m.queue) != 1 || m.queue[0] != "/bar" {
+		t.Fatalf("second dispatch should queue, got queue=%v", m.queue)
+	}
+}
+
 func TestDurationToCron(t *testing.T) {
 	cases := []struct {
 		d    time.Duration

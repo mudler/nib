@@ -56,16 +56,20 @@ func renderLoopsFooter(r *loop.Registry, selfPaced, width int) string {
 }
 
 // dispatchLoop runs a due loop payload, routing by run-state: inject into a
-// parked run, queue while mid-run, or start a fresh turn when idle. Returns a
-// Cmd to run (the fresh-turn send) or nil.
+// parked run, queue while a run is live or starting, or start a fresh turn when
+// idle. Returns a Cmd to run (the fresh-turn send) or nil.
 func (m *Model) dispatchLoop(payload string) tea.Cmd {
 	action := slash.Resolve(payload, m.cfg.Commands, m.cfg.Skills, m.cfg.Agents)
 	text := action.Text
 	if action.Kind != slash.KindSend || text == "" {
 		text = payload
 	}
+	// A run is in flight (or about to be: m.loading is set the instant we return
+	// a send Cmd, before the goroutine flips RunLive). Treat both as "live" so
+	// multiple jobs due in one tick don't launch concurrent turns.
+	live := m.session != nil && (m.session.RunLive() || m.loading)
 	switch {
-	case m.session != nil && m.session.RunLive() && m.parked:
+	case live && m.parked:
 		if m.session.Inject(text) {
 			m.messages = append(m.messages, ChatMessage{Role: "user", Content: payload})
 			m.parked = false
@@ -75,8 +79,8 @@ func (m *Model) dispatchLoop(payload string) tea.Cmd {
 			m.updateViewport()
 		}
 		return nil
-	case m.session != nil && m.session.RunLive():
-		// Mid-run: queue; drains at the next boundary.
+	case live:
+		// Run live or starting: queue; drains at the next boundary.
 		m.queue = append(m.queue, payload)
 		m.updateViewport()
 		return nil
