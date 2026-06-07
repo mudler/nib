@@ -1552,6 +1552,11 @@ func (m Model) View() string {
 		if f := renderLoopsFooter(m.loops, m.selfPaced, m.width); f != "" {
 			sb.WriteString("\n" + f)
 		}
+		if m.session != nil {
+			if f := renderGoalFooter(m.session.Goal(), m.width); f != "" {
+				sb.WriteString("\n" + f)
+			}
+		}
 	}
 
 	return sb.String()
