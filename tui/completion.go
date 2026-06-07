@@ -28,7 +28,8 @@ type compItem struct {
 	Insert string // canonical token placed in the input on accept (trailing space)
 }
 
-// buildCompItems flattens the three registries into tagged completion items.
+// buildCompItems builds the tagged completion list: the built-in verbs first,
+// then the command, skill, and agent registries.
 func buildCompItems(cmds []types.CommandConfig, skills []types.Skill, agents []types.AgentTypeConfig) []compItem {
 	items := make([]compItem, 0, 2+len(cmds)+len(skills)+len(agents))
 	items = append(items,
