@@ -766,9 +766,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		action := slash.Resolve(prompt, m.cfg.Commands, m.cfg.Skills, m.cfg.Agents)
 		text := action.Text
 		if action.Kind != slash.KindSend || text == "" {
+			// Non-KindSend payloads (skill/compact/error) intentionally degrade to literal text — loops carry slash-commands or prompts, not those.
 			text = prompt // fall back to the raw text for non-send payloads
 		}
 		if m.session != nil && m.parked && m.session.Inject(text) {
+			m.messages = append(m.messages, ChatMessage{Role: "user", Content: prompt})
 			m.parked = false
 			m.loading = true
 			m.interruptArmed = false
@@ -782,6 +784,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.updateViewport()
 			cmds = append(cmds, m.sendMessage(text))
 		}
+		// If a wake-up fires mid-run (loading and not parked) it is dropped: the model drives self-pacing at turn end, so this is rare; cron loops queue instead (see releaseQueueFront).
 
 	case statusMsg:
 		m.status = string(msg)

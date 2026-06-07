@@ -57,6 +57,9 @@ func TestWakeupFireMatchingGenStartsTurn(t *testing.T) {
 	}
 }
 
+// The parked-inject path (m.parked && session.Inject succeeds) is covered by the
+// end-to-end test: Session.Inject returns false without a live run, so a zero-value
+// &chat.Session{} cannot exercise it here without a brittle fake/seam.
 func TestWakeupFireEmptyPromptDefaultsToContinue(t *testing.T) {
 	m := newWakeupTestModel()
 
