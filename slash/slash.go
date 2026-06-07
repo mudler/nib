@@ -25,6 +25,9 @@ const (
 	KindLoopStart             // start a recurring/self-paced loop
 	KindLoopStop              // stop one loop (LoopID) or all (empty)
 	KindLoopList              // list active loops
+	KindGoalSet               // set/replace the session goal (Text)
+	KindGoalShow              // show the current goal
+	KindGoalClear             // clear the current goal
 )
 
 // Action is the resolved result of a submitted input line.
@@ -89,6 +92,8 @@ func Resolve(input string, cmds []types.CommandConfig, skills []types.Skill, age
 		return Action{Kind: KindCompact}
 	case "loop":
 		return resolveLoop(rest)
+	case "goal":
+		return resolveGoal(rest)
 	default:
 		c, ok := findCommand(cmds, verb)
 		if !ok {
@@ -134,6 +139,19 @@ func resolveLoop(rest string) Action {
 	}
 	// Otherwise self-paced: the whole remainder is the payload.
 	return Action{Kind: KindLoopStart, Interval: 0, Payload: rest}
+}
+
+// resolveGoal maps the /goal subcommands: "/goal <text>" sets, "/goal" shows,
+// "/goal clear" clears.
+func resolveGoal(rest string) Action {
+	rest = strings.TrimSpace(rest)
+	switch rest {
+	case "":
+		return Action{Kind: KindGoalShow}
+	case "clear":
+		return Action{Kind: KindGoalClear}
+	}
+	return Action{Kind: KindGoalSet, Text: rest}
 }
 
 // delegation builds a directive instructing the agent to delegate to a named
