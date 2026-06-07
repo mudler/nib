@@ -92,8 +92,10 @@ func fmtCron(a map[string]any) string {
 
 func fmtWakeup(a map[string]any) string {
 	s := "wake in " + argStr(a, "delay_seconds") + "s"
-	if note := argStr(a, "note"); note != "" {
-		s += " — " + note
+	// Args were renamed note→prompt (plus a new reason); note remains an input
+	// back-compat alias. Prefer reason, then prompt, then note for the detail.
+	if detail := argStrOr(a, "reason", argStrOr(a, "prompt", argStr(a, "note"))); detail != "" {
+		s += " — " + detail
 	}
 	return s
 }

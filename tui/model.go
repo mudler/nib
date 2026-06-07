@@ -74,8 +74,10 @@ type Model struct {
 	// ignored when it arrives.
 	wakeupGen int
 	// selfPaced counts active self-paced loops (for the footer). 0 or 1 in
-	// practice; incremented on /loop <prompt>, cleared on /loop stop or when the
-	// model stops re-arming.
+	// practice. Incremented on /loop <prompt>; reset to 0 by /loop stop. Note: it
+	// is NOT auto-cleared when a self-paced loop ends naturally (the TUI has no
+	// signal that the model chose not to re-arm), so the footer may show a
+	// self-paced loop until /loop stop.
 	selfPaced int
 	// loops holds active fixed-interval (cron) jobs. Self-paced loops keep no
 	// state here — they ride the wake-up timer (see wakeupGen).
