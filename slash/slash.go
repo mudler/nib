@@ -106,7 +106,8 @@ func Resolve(input string, cmds []types.CommandConfig, skills []types.Skill, age
 }
 
 // loopFloor is the minimum fixed interval; shorter requests are clamped up.
-const loopFloor = 5 * time.Second
+// 1s matches the ~1s scheduler poll, which is the real precision floor.
+const loopFloor = 1 * time.Second
 
 func resolveLoop(rest string) Action {
 	rest = strings.TrimSpace(rest)

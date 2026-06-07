@@ -11,14 +11,19 @@ import (
 	"github.com/mudler/nib/theme"
 )
 
-// durationToCron maps a /loop interval to a 5-field cron expression. Intervals
-// under a minute fire every minute (cron's finest granularity); hour-aligned
-// intervals use the hour field; other minute intervals use the minute field,
-// falling back to hourly when the minute step would exceed 59.
+// durationToCron maps a /loop interval to a cron expression. Sub-minute
+// intervals emit a 6-field (seconds) expression (e.g. 5s → "*/5 * * * * *"),
+// honoured to within the ~1s scheduler poll; hour-aligned intervals use the
+// hour field; other minute intervals use the minute field, falling back to
+// hourly when the minute step would exceed 59.
 func durationToCron(d time.Duration) string {
 	switch {
 	case d < time.Minute:
-		return "* * * * *"
+		secs := int(d / time.Second)
+		if secs < 1 {
+			secs = 1
+		}
+		return fmt.Sprintf("*/%d * * * * *", secs)
 	case d%time.Hour == 0:
 		h := int(d / time.Hour)
 		return fmt.Sprintf("0 */%d * * *", h)

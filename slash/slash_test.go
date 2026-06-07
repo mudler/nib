@@ -77,9 +77,15 @@ func TestResolveLoop(t *testing.T) {
 		t.Fatalf("self-paced: %+v", a)
 	}
 
-	// Sub-5s interval is clamped to 5s.
+	// 1s is at the floor now → NOT clamped.
 	a = Resolve("/loop 1s ping", none, noSkills, noAgents)
-	if a.Kind != KindLoopStart || a.Interval != 5*time.Second {
+	if a.Kind != KindLoopStart || a.Interval != 1*time.Second {
+		t.Fatalf("1s floor: %+v", a)
+	}
+
+	// Sub-second interval is clamped up to the 1s floor.
+	a = Resolve("/loop 500ms ping", none, noSkills, noAgents)
+	if a.Kind != KindLoopStart || a.Interval != 1*time.Second {
 		t.Fatalf("clamp: %+v", a)
 	}
 
