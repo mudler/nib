@@ -32,6 +32,7 @@ var (
 	SubAgent       = "↳"  // sub-agent line marker
 	Cross          = "×"  // error marker
 	Arrow          = "→"  // tool-call / edit / mapping arrow
+	Loop           = "↻"  // recurring-loop footer marker
 	ShellJob       = "▷"  // shell-jobs footer marker
 	ScrollKeys     = "↑↓" // up/down navigation hint
 	ReasoningGlyph = "✻"  // marks a block of model thinking/reasoning
@@ -65,11 +66,13 @@ func applyGlyphProfile() {
 	if RestrictedGlyphs() {
 		PromptGlyph, ApprovalGutter, SubAgent = ">", "|", ">"
 		Arrow, ShellJob, ScrollKeys = "->", ">", "up/dn"
+		Loop = "~"
 		ReasoningGlyph = "*"
 		return
 	}
 	PromptGlyph, ApprovalGutter, SubAgent = "›", "▏", "↳"
 	Arrow, ShellJob, ScrollKeys = "→", "▷", "↑↓"
+	Loop = "↻"
 	ReasoningGlyph = "✻"
 }
 

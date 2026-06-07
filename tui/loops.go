@@ -38,18 +38,11 @@ func renderLoopsFooter(r *loop.Registry, selfPaced, width int) string {
 	}
 	var parts []string
 	for _, j := range jobs {
-		parts = append(parts, fmt.Sprintf("%s %s%s%s", j.ID, j.Expr, theme.Arrow, truncate(j.Prompt, 24)))
+		parts = append(parts, fmt.Sprintf("%s %s%s%s", j.ID, j.Expr, theme.Arrow, truncateRunes(j.Prompt, 24)))
 	}
 	if selfPaced > 0 {
 		parts = append(parts, fmt.Sprintf("%d self-paced", selfPaced))
 	}
-	line := fmt.Sprintf("↻ %d loop(s): %s  (/loop list · /loop stop)", len(jobs)+selfPaced, strings.Join(parts, " · "))
+	line := fmt.Sprintf("%s %d loop(s): %s  (/loop list · /loop stop)", theme.Loop, len(jobs)+selfPaced, strings.Join(parts, " · "))
 	return theme.Subtle.Render(line)
-}
-
-func truncate(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return s[:n-1] + "…"
 }
