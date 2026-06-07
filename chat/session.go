@@ -708,6 +708,20 @@ func (s *Session) SendMessage(text string) (string, error) {
 		})),
 	)
 
+	// Register the goal_done tool only while a goal is active, so it never
+	// appears as a no-op tool in ordinary turns. The callback records
+	// completion: it sets the per-run flag (read by the stop-gate) and clears
+	// the goal so it does not re-arm on the next message.
+	if s.Goal() != "" {
+		cogitoOpts = append(cogitoOpts, cogito.WithTools(goalDoneToolDefinition(func(justification string) string {
+			s.runMu.Lock()
+			s.goalDone = true
+			s.goal = ""
+			s.runMu.Unlock()
+			return "Goal marked complete: " + justification
+		})))
+	}
+
 	// Wire the native self-configuration tools so the assistant can manage its
 	// own plugins, skills, and MCP servers. requestReload re-wires the live
 	// session on the next turn after any mutating op.
