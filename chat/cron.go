@@ -3,7 +3,7 @@ package chat
 import "github.com/mudler/cogito"
 
 type cronArgs struct {
-	Expr      string `json:"expr" jsonschema:"5-field cron expression in local time: 'M H DoM Mon DoW' (e.g. '*/5 * * * *' = every 5 minutes, '0 9 * * 1-5' = weekdays 9am)"`
+	Expr      string `json:"expr" jsonschema:"5- or 6-field cron in local time: '[S] M H DoM Mon DoW' — a 6th leading field adds seconds (e.g. '*/10 * * * * *' = every 10s, '*/5 * * * *' = every 5 min, '0 9 * * 1-5' = weekdays 9am)"`
 	Prompt    string `json:"prompt" jsonschema:"the task to run at each fire — a slash command like /foo or a plain instruction"`
 	Recurring bool   `json:"recurring" jsonschema:"true = fire on every match (default); false = fire once then auto-delete"`
 	Durable   bool   `json:"durable" jsonschema:"true = persist across restarts to .nib/loops.json; false = session-only (default)"`
