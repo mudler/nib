@@ -110,10 +110,6 @@ func (s Schedule) matchClock(t time.Time) bool {
 		s.dow&(1<<uint(int(t.Weekday()))) != 0
 }
 
-func (s Schedule) match(t time.Time) bool {
-	return s.sec&(1<<uint(t.Second())) != 0 && s.matchClock(t)
-}
-
 // Next returns the first instant strictly after `after` that matches the
 // schedule, at second granularity. ok is false if none is found within ~4
 // years (guards bad exprs).
