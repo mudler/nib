@@ -70,13 +70,15 @@ func lastLines(s string, n int) []string {
 	return lines
 }
 
-// clipLine truncates a single line to width runes with an ellipsis.
+// clipLine truncates a single line to width runes with an ellipsis. It counts
+// runes (not bytes) so multibyte characters in tool labels and paths are never
+// split into invalid UTF-8.
 func clipLine(s string, width int) string {
 	if width < 8 {
 		width = 8
 	}
-	if len(s) > width {
-		return s[:width-1] + "…"
+	if r := []rune(s); len(r) > width {
+		return string(r[:width-1]) + "…"
 	}
 	return s
 }

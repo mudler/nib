@@ -16,9 +16,9 @@ const (
 	compactTaskWidth = 72
 )
 
-// compactTask returns the first line of s, trimmed and ellipsized to max runes
-// (the ellipsis counts toward max). Returns "" for blank input.
-func compactTask(s string, max int) string {
+// compactTask returns the first line of s, trimmed and ellipsized to maxRunes
+// (the ellipsis counts toward maxRunes). Returns "" for blank input.
+func compactTask(s string, maxRunes int) string {
 	s = strings.TrimSpace(s)
 	if s == "" {
 		return ""
@@ -27,26 +27,26 @@ func compactTask(s string, max int) string {
 		s = strings.TrimSpace(s[:nl])
 	}
 	r := []rune(s)
-	if max > 0 && len(r) > max {
-		if max == 1 {
+	if maxRunes > 0 && len(r) > maxRunes {
+		if maxRunes == 1 {
 			return "…"
 		}
-		return string(r[:max-1]) + "…"
+		return string(r[:maxRunes-1]) + "…"
 	}
 	return s
 }
 
 // capThreadLines returns the lines to render for one sub-agent thread run: when
-// len(lines) exceeds cap, a leading "… +N earlier" marker followed by the last
-// `cap` lines; otherwise lines unchanged.
-func capThreadLines(lines []string, cap int) []string {
-	if cap <= 0 || len(lines) <= cap {
+// len(lines) exceeds limit, a leading "… +N earlier" marker followed by the
+// last `limit` lines; otherwise lines unchanged.
+func capThreadLines(lines []string, limit int) []string {
+	if limit <= 0 || len(lines) <= limit {
 		return lines
 	}
-	hidden := len(lines) - cap
-	out := make([]string, 0, cap+1)
+	hidden := len(lines) - limit
+	out := make([]string, 0, limit+1)
 	out = append(out, fmt.Sprintf("… +%d earlier", hidden))
-	out = append(out, lines[len(lines)-cap:]...)
+	out = append(out, lines[len(lines)-limit:]...)
 	return out
 }
 
