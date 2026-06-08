@@ -31,3 +31,9 @@ dist:
 
 test:
 	$(GO) test ./...
+
+# Integration tests hit the live network (e.g. the web_search DuckDuckGo scrape)
+# and are excluded from the default `test` target. They guard against upstream
+# markup drift, so they run nightly in CI rather than on every change.
+test-integration:
+	$(GO) test -tags integration ./...
