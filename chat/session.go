@@ -267,6 +267,21 @@ func (s *Session) LoadSkill(name string) (string, error) {
 
 // decideToolCall resolves a tool-call request: PreToolUse hooks first (a hook
 // may block/approve/adjust), then the session allow-list, then the user gate.
+// emitSubAgentToolLine surfaces a sub-agent's tool call as a compact inline
+// thread line via OnToolResult, from the tool-CALL callback where the AgentID is
+// reliable. cogito propagates the tool-call callback into spawned sub-agents
+// (with state.AgentID set) but NOT the tool-result callback, so OnToolResult
+// never fires for a sub-agent's tools on its own — keying the thread off the
+// result callback would show nothing. It is a no-op for the root agent
+// (agentID == "", whose tools stream with their output via the result
+// callback), for denied calls, and when no callback is registered.
+func (s *Session) emitSubAgentToolLine(approved bool, agentID, name, args string) {
+	if !approved || agentID == "" || s.callbacks.OnToolResult == nil {
+		return
+	}
+	s.callbacks.OnToolResult(ToolResult{Name: name, Arguments: args, AgentID: agentID})
+}
+
 func (s *Session) decideToolCall(req ToolCallRequest) cogito.ToolCallDecision {
 	if s.hooks != nil {
 		decisions := s.hooks.Fire(s.ctx, hooks.EventPreToolUse, req.Name, map[string]any{
@@ -586,12 +601,14 @@ func (s *Session) SendMessage(text string) (string, error) {
 			if err != nil {
 				return cogito.ToolCallDecision{Approved: false}
 			}
-			return s.decideToolCall(ToolCallRequest{
+			decision := s.decideToolCall(ToolCallRequest{
 				Name:      tool.Name,
 				Arguments: string(args),
 				Reasoning: tool.Reasoning,
 				AgentID:   state.AgentID,
 			})
+			s.emitSubAgentToolLine(decision.Approved, state.AgentID, tool.Name, string(args))
+			return decision
 		}),
 		cogito.WithToolCallResultCallback(func(status cogito.ToolStatus) {
 			s.agentLogs.recordResult(status) // no-op for root-agent tool calls
