@@ -8,6 +8,48 @@ import (
 	"github.com/mudler/nib/theme"
 )
 
+const (
+	// agentThreadInlineCap bounds how many sub-agent tool lines render inline in
+	// the transcript thread before older ones collapse to a "+N earlier" note.
+	agentThreadInlineCap = 8
+	// compactTaskWidth bounds the sub-agent task shown in the transcript header.
+	compactTaskWidth = 72
+)
+
+// compactTask returns the first line of s, trimmed and ellipsized to max runes
+// (the ellipsis counts toward max). Returns "" for blank input.
+func compactTask(s string, max int) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return ""
+	}
+	if nl := strings.IndexByte(s, '\n'); nl >= 0 {
+		s = strings.TrimSpace(s[:nl])
+	}
+	r := []rune(s)
+	if max > 0 && len(r) > max {
+		if max == 1 {
+			return "…"
+		}
+		return string(r[:max-1]) + "…"
+	}
+	return s
+}
+
+// capThreadLines returns the lines to render for one sub-agent thread run: when
+// len(lines) exceeds cap, a leading "… +N earlier" marker followed by the last
+// `cap` lines; otherwise lines unchanged.
+func capThreadLines(lines []string, cap int) []string {
+	if cap <= 0 || len(lines) <= cap {
+		return lines
+	}
+	hidden := len(lines) - cap
+	out := make([]string, 0, cap+1)
+	out = append(out, fmt.Sprintf("… +%d earlier", hidden))
+	out = append(out, lines[len(lines)-cap:]...)
+	return out
+}
+
 // agentTranscriptLine renders a durable one-line transcript marker for a
 // sub-agent lifecycle event, or "" for statuses that should not be logged.
 func agentTranscriptLine(ev chat.AgentEvent) string {
@@ -17,8 +59,8 @@ func agentTranscriptLine(ev chat.AgentEvent) string {
 	}
 	switch ev.Status {
 	case chat.AgentStatusRunning:
-		if ev.Task != "" {
-			return fmt.Sprintf("sub-agent %s started: %s", typ, ev.Task)
+		if t := compactTask(ev.Task, compactTaskWidth); t != "" {
+			return fmt.Sprintf("sub-agent %s started: %s", typ, t)
 		}
 		return fmt.Sprintf("sub-agent %s started", typ)
 	case chat.AgentStatusCompleted:
@@ -109,4 +151,14 @@ func (m *Model) applyAgentEvent(ev chat.AgentEvent) {
 		}
 	}
 	m.jobs = append(m.jobs, agentJob{ID: ev.ID, Type: ev.Type, Task: ev.Task, Status: ev.Status})
+}
+
+// jobByID returns the tracked sub-agent job with the given id.
+func (m Model) jobByID(id string) (agentJob, bool) {
+	for _, j := range m.jobs {
+		if j.ID == id {
+			return j, true
+		}
+	}
+	return agentJob{}, false
 }
