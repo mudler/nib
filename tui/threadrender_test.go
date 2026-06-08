@@ -17,6 +17,40 @@ func renderMsgs(msgs []ChatMessage) string {
 	return m.viewport.View()
 }
 
+// lineIndex returns the index of the first rendered line containing sub, or -1.
+func lineIndex(lines []string, sub string) int {
+	for i, l := range lines {
+		if strings.Contains(l, sub) {
+			return i
+		}
+	}
+	return -1
+}
+
+// TestThreadHeaderHugsThread verifies the tightened spacing: a sub-agent's
+// lifecycle header, its tool lines, the finished line, and its result render as
+// one tight block with no blank separator lines between them (tests run without
+// a TTY, so rendered lines carry no ANSI codes and blanks are literally empty).
+func TestThreadHeaderHugsThread(t *testing.T) {
+	out := renderMsgs([]ChatMessage{
+		{Role: "agent", AgentID: "a1", Content: "sub-agent explore started: find reporting"},
+		{Role: "agent_tool", AgentID: "a1", Content: "read model.go"},
+		{Role: "agent", AgentID: "a1", Content: "sub-agent explore finished · 1 tool"},
+		{Role: "agent_result", AgentID: "a1", Content: "Found it at model.go:1386"},
+	})
+	lines := strings.Split(out, "\n")
+	start := lineIndex(lines, "started: find reporting")
+	end := lineIndex(lines, "Found it at model.go:1386")
+	if start == -1 || end == -1 || end <= start {
+		t.Fatalf("expected header before result; start=%d end=%d, got:\n%s", start, end, out)
+	}
+	for k := start + 1; k < end; k++ {
+		if strings.TrimSpace(lines[k]) == "" {
+			t.Errorf("unexpected blank separator at line %d within the thread block:\n%s", k, out)
+		}
+	}
+}
+
 func TestThreadRunIndentsToolLinesUnderHeader(t *testing.T) {
 	out := renderMsgs([]ChatMessage{
 		{Role: "agent", AgentID: "a1", Content: "sub-agent explore started: find reporting"},

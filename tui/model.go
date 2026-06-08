@@ -1331,8 +1331,10 @@ func (m *Model) markdownFor(width int) *glamour.TermRenderer {
 // messages (agent_tool labels and/or agent_result blocks, all same AgentID) as
 // an indented block. It prints a short continuation header (↳ <type>) when
 // reprint is true (i.e. the previous rendered line did not belong to this
-// agent), caps the tool lines, and renders each result with a → marker.
-func (m *Model) renderAgentThreadRun(sb *strings.Builder, run []ChatMessage, contentWidth int, reprint bool) {
+// agent), caps the tool lines, and renders each result with a → marker. The
+// trailing blank separator is omitted when hugNext is true (the next message
+// still belongs to this agent's run), keeping the whole thread visually tight.
+func (m *Model) renderAgentThreadRun(sb *strings.Builder, run []ChatMessage, contentWidth int, reprint, hugNext bool) {
 	if len(run) == 0 {
 		return
 	}
@@ -1369,7 +1371,23 @@ func (m *Model) renderAgentThreadRun(sb *strings.Builder, run []ChatMessage, con
 			sb.WriteString("\n")
 		}
 	}
-	sb.WriteString("\n")
+	if !hugNext {
+		sb.WriteString("\n")
+	}
+}
+
+// sameAgentMsg reports whether the message at idx is part of agentID's run —
+// a lifecycle line, tool line, or result tagged with that id. Used to decide
+// whether a thread item should hug the next one (omit the blank separator).
+func (m *Model) sameAgentMsg(idx int, agentID string) bool {
+	if agentID == "" || idx < 0 || idx >= len(m.messages) {
+		return false
+	}
+	x := m.messages[idx]
+	if x.AgentID != agentID {
+		return false
+	}
+	return x.Role == "agent" || x.Role == "agent_tool" || x.Role == "agent_result"
 }
 
 func (m *Model) updateViewport() {
@@ -1396,7 +1414,7 @@ func (m *Model) updateViewport() {
 				m.messages[j].AgentID == msg.AgentID {
 				j++
 			}
-			m.renderAgentThreadRun(&sb, m.messages[i:j], contentWidth, lastAgent != msg.AgentID)
+			m.renderAgentThreadRun(&sb, m.messages[i:j], contentWidth, lastAgent != msg.AgentID, m.sameAgentMsg(j, msg.AgentID))
 			lastAgent = msg.AgentID
 			i = j - 1
 			continue
@@ -1453,8 +1471,8 @@ func (m *Model) updateViewport() {
 			prefixWidth := lipgloss.Width(prefix)
 			wrappedContent := renderMarkdownWith(m.markdownFor(contentWidth-prefixWidth), msg.Content, contentWidth-prefixWidth)
 			lines := strings.Split(strings.TrimRight(wrappedContent, "\n"), "\n")
-			for i, line := range lines {
-				if i == 0 {
+			for li, line := range lines {
+				if li == 0 {
 					sb.WriteString(prefix)
 					sb.WriteString(agentStyle.Render(line))
 				} else {
@@ -1463,7 +1481,11 @@ func (m *Model) updateViewport() {
 				}
 				sb.WriteString("\n")
 			}
-			sb.WriteString("\n")
+			// Tighten: a sub-agent lifecycle header hugs its own thread run that
+			// follows (tool lines / result) — omit the blank separator.
+			if !m.sameAgentMsg(i+1, msg.AgentID) {
+				sb.WriteString("\n")
+			}
 		case "tool":
 			// Calm, dim block: a header naming the tool, then the pretty/truncated
 			// output indented and dimmed beneath it.
