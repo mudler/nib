@@ -1,0 +1,32 @@
+name: Integration tests
+
+# Integration tests hit the live network (the web_search DuckDuckGo scrape) and
+# are gated behind the `integration` build tag, so they are excluded from the
+# normal test workflow. They run on a nightly schedule to catch upstream HTML
+# markup drift, on demand via workflow_dispatch, and on pull requests that touch
+# the scraper or this workflow.
+
+on:
+  schedule:
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'mcp/websearch*.go'
+      - '.github/workflows/integration.yml'
+
+jobs:
+  integration:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: 1.25
+      - name: Run integration tests
+        run: |
+          make test-integration
