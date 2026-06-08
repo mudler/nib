@@ -39,9 +39,16 @@ func (m Model) unifiedJobs() []jobRef {
 func (m Model) jobActivityTail(j jobRef) string {
 	switch j.Kind {
 	case "agent":
-		if m.session != nil {
-			return m.session.AgentLog(j.ID)
+		var b strings.Builder
+		if job, ok := m.jobByID(j.ID); ok && strings.TrimSpace(job.Task) != "" {
+			b.WriteString("prompt:\n")
+			b.WriteString(strings.TrimSpace(job.Task))
+			b.WriteString("\n\n")
 		}
+		if m.session != nil {
+			b.WriteString(m.session.AgentLog(j.ID))
+		}
+		return strings.TrimRight(b.String(), "\n")
 	case "shell":
 		if so, se, ok := m.shellJobs.Output(j.ID); ok {
 			return strings.TrimRight(so+se, "\n")
