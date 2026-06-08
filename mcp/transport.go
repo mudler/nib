@@ -32,6 +32,15 @@ func StartTransports(ctx context.Context, cfg types.Config, shellJobs *ShellJobs
 		}
 	}()
 
-	transports := []mcp.Transport{bashMCPServerClient, filesystemMCPServerClient}
+	// Start web MCP server (web_fetch + web_search)
+	webMCPServerTransport, webMCPServerClient := mcp.NewInMemoryTransports()
+
+	go func() {
+		if err := StartWebMCPServer(ctx, webMCPServerTransport, cfg); err != nil {
+			fmt.Fprintf(os.Stderr, "Web MCP server error: %v\n", err)
+		}
+	}()
+
+	transports := []mcp.Transport{bashMCPServerClient, filesystemMCPServerClient, webMCPServerClient}
 	return transports, nil
 }
