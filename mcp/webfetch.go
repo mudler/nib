@@ -52,9 +52,16 @@ func htmlToText(body string) string {
 	return strings.Join(strings.Fields(b.String()), " ")
 }
 
-// fetchURL GETs url (permissive: any host), extracts readable text, and
-// truncates it to fetchMaxContentRune. Returns the text, the final URL after
-// redirects, and whether truncation occurred.
+// fetchURL GETs target and extracts readable text, truncating it to
+// fetchMaxContentRune. It returns the text, the final URL after redirects, and
+// whether truncation occurred.
+//
+// By design this is permissive: any host is allowed, including localhost and
+// private/LAN addresses, because wiz frequently runs as a local dev agent that
+// legitimately needs to fetch local services. There is intentionally no SSRF
+// blocking here; gating which URLs may be fetched is the responsibility of the
+// tool-permission layer, not this function. Requests are bounded by a timeout,
+// a maximum body size, and a redirect cap.
 func fetchURL(ctx context.Context, target string) (text, finalURL string, truncated bool, err error) {
 	ctx, cancel := context.WithTimeout(ctx, fetchTimeoutSeconds*time.Second)
 	defer cancel()

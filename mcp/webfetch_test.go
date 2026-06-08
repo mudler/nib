@@ -117,3 +117,58 @@ func TestWebFetchRequiresInput(t *testing.T) {
 		t.Error("expected error for empty url")
 	}
 }
+
+func TestFetchURLNon2xx(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	_, _, _, err := fetchURL(context.Background(), srv.URL)
+	if err == nil {
+		t.Fatal("expected an error for a 404 response")
+	}
+}
+
+func TestFetchURLNonHTML(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		_, _ = w.Write([]byte("plain   text   body"))
+	}))
+	defer srv.Close()
+
+	text, _, _, err := fetchURL(context.Background(), srv.URL)
+	if err != nil {
+		t.Fatalf("fetchURL: %v", err)
+	}
+	if text != "plain text body" {
+		t.Errorf("text = %q, want whitespace-collapsed plain text", text)
+	}
+}
+
+func TestWebFetchRequiresPrompt(t *testing.T) {
+	ws := &webServer{llm: &fakeLLM{}}
+	_, out, _ := ws.fetch(context.Background(), nil, webFetchInput{URL: "http://example.com", Prompt: "   "})
+	if out.Error == "" {
+		t.Error("expected error for empty prompt")
+	}
+}
+
+func TestWebFetchSurfacesFetchError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	ws := &webServer{llm: &fakeLLM{answer: "unused"}}
+	_, out, err := ws.fetch(context.Background(), nil, webFetchInput{URL: srv.URL, Prompt: "anything"})
+	if err != nil {
+		t.Fatalf("unexpected go error: %v", err)
+	}
+	if out.Error == "" {
+		t.Error("expected out.Error to be set when the fetch fails")
+	}
+	if out.Answer != "" {
+		t.Errorf("expected no answer when fetch fails, got %q", out.Answer)
+	}
+}
