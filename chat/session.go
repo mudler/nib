@@ -689,6 +689,8 @@ func (s *Session) SendMessage(text string) (string, error) {
 				return s.callbacks.OnScheduleWakeup(req)
 			}
 			return "Scheduling is not available in this session."
+		}, func() bool {
+			return s.agentManager.HasRunning() || (s.shellJobs != nil && s.shellJobs.HasRunning())
 		})),
 		cogito.WithTools(cronToolDefinition(func(req CronRequest) string {
 			if s.callbacks.OnCronCreate != nil {
