@@ -90,52 +90,81 @@ func hasClass(n *html.Node, class string) bool {
 	return false
 }
 
-// parseDDGResults extracts up to max results from a DuckDuckGo HTML response.
-// Titles/URLs come from <a class="result__a">, snippets from
-// <* class="result__snippet">; the two are zipped by document order.
-func parseDDGResults(body string, max int) ([]webSearchResult, error) {
+// firstByClass returns the first element in the subtree (preorder) whose class
+// attribute contains the given token, or nil.
+func firstByClass(n *html.Node, class string) *html.Node {
+	var found *html.Node
+	var walk func(*html.Node)
+	walk = func(c *html.Node) {
+		if found != nil {
+			return
+		}
+		if c.Type == html.ElementNode && hasClass(c, class) {
+			found = c
+			return
+		}
+		for ch := c.FirstChild; ch != nil; ch = ch.NextSibling {
+			walk(ch)
+		}
+	}
+	walk(n)
+	return found
+}
+
+// resultFromContainer extracts a single search result from a DDG result
+// container node, pairing the title/URL and snippet that live WITHIN that
+// container (so a missing snippet can never shift onto another result).
+func resultFromContainer(n *html.Node) (webSearchResult, bool) {
+	a := firstByClass(n, "result__a")
+	if a == nil {
+		return webSearchResult{}, false
+	}
+	title := nodeText(a)
+	u := decodeDDGHref(attr(a, "href"))
+	if title == "" || u == "" {
+		return webSearchResult{}, false
+	}
+	r := webSearchResult{Title: title, URL: u}
+	if s := firstByClass(n, "result__snippet"); s != nil {
+		r.Snippet = nodeText(s)
+	}
+	return r, true
+}
+
+// parseDDGResults extracts up to limit results from a DuckDuckGo HTML response.
+// It locates each result container (class "result") and pairs the title/URL and
+// snippet found within that container, so results with no snippet do not
+// misalign subsequent results. Sponsored ("result--ad") blocks are skipped.
+func parseDDGResults(body string, limit int) ([]webSearchResult, error) {
 	doc, err := html.Parse(strings.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
 
-	type link struct{ title, url string }
-	var links []link
-	var snippets []string
-
+	var out []webSearchResult
 	var walk func(*html.Node)
 	walk = func(n *html.Node) {
-		if n.Type == html.ElementNode {
-			switch {
-			case n.Data == "a" && hasClass(n, "result__a"):
-				links = append(links, link{
-					title: nodeText(n),
-					url:   decodeDDGHref(attr(n, "href")),
-				})
-			case hasClass(n, "result__snippet"):
-				snippets = append(snippets, nodeText(n))
+		if limit > 0 && len(out) >= limit {
+			return
+		}
+		if n.Type == html.ElementNode && hasClass(n, "result") {
+			if !hasClass(n, "result--ad") {
+				if r, ok := resultFromContainer(n); ok {
+					out = append(out, r)
+				}
 			}
+			// A result container is not nested inside another result, so once
+			// we have consumed it we do not descend further into it.
+			return
 		}
 		for c := n.FirstChild; c != nil; c = c.NextSibling {
+			if limit > 0 && len(out) >= limit {
+				return
+			}
 			walk(c)
 		}
 	}
 	walk(doc)
-
-	var out []webSearchResult
-	for i, l := range links {
-		if l.title == "" || l.url == "" {
-			continue
-		}
-		r := webSearchResult{Title: l.title, URL: l.url}
-		if i < len(snippets) {
-			r.Snippet = snippets[i]
-		}
-		out = append(out, r)
-		if max > 0 && len(out) >= max {
-			break
-		}
-	}
 	return out, nil
 }
 

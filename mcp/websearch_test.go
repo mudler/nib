@@ -76,6 +76,31 @@ func TestParseDDGResults(t *testing.T) {
 	})
 }
 
+func TestParseDDGResultsStructuralPairing(t *testing.T) {
+	body, err := os.ReadFile("testdata/ddg_partial.html")
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
+	}
+	got, err := parseDDGResults(string(body), 10)
+	if err != nil {
+		t.Fatalf("parseDDGResults: %v", err)
+	}
+	// Sponsored result is skipped; three organic results remain.
+	want := []webSearchResult{
+		{Title: "Alpha", URL: "https://alpha.example.com/", Snippet: "Snippet for alpha."},
+		{Title: "Beta no snippet", URL: "https://beta.example.com/", Snippet: ""},
+		{Title: "Gamma", URL: "https://gamma.example.com/", Snippet: "Snippet for gamma."},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("got %d results, want %d: %+v", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("result %d = %+v, want %+v", i, got[i], want[i])
+		}
+	}
+}
+
 func TestSearchWebHandler(t *testing.T) {
 	body, err := os.ReadFile("testdata/ddg_golang.html")
 	if err != nil {
@@ -106,6 +131,38 @@ func TestSearchWebHandler(t *testing.T) {
 	}
 	if out.Results[0].URL != "https://go.dev/" {
 		t.Errorf("first url = %q", out.Results[0].URL)
+	}
+}
+
+func TestSearchWebEmptyQuery(t *testing.T) {
+	_, out, err := searchWeb(context.Background(), nil, webSearchInput{Query: "   "})
+	if err != nil {
+		t.Fatalf("unexpected go error: %v", err)
+	}
+	if out.Error == "" {
+		t.Error("expected an error for an empty query")
+	}
+	if len(out.Results) != 0 {
+		t.Errorf("expected no results, got %d", len(out.Results))
+	}
+}
+
+func TestSearchWebNon200(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	old := ddgBaseURL
+	ddgBaseURL = srv.URL + "/"
+	defer func() { ddgBaseURL = old }()
+
+	_, out, err := searchWeb(context.Background(), nil, webSearchInput{Query: "golang"})
+	if err != nil {
+		t.Fatalf("unexpected go error: %v", err)
+	}
+	if out.Error == "" {
+		t.Error("expected an error for a non-200 response")
 	}
 }
 
