@@ -1327,6 +1327,51 @@ func (m *Model) markdownFor(width int) *glamour.TermRenderer {
 	return r
 }
 
+// renderAgentThreadRun renders one contiguous run of a sub-agent's thread
+// messages (agent_tool labels and/or agent_result blocks, all same AgentID) as
+// an indented block. It prints a short continuation header (↳ <type>) when
+// reprint is true (i.e. the previous rendered line did not belong to this
+// agent), caps the tool lines, and renders each result with a → marker.
+func (m *Model) renderAgentThreadRun(sb *strings.Builder, run []ChatMessage, contentWidth int, reprint bool) {
+	if len(run) == 0 {
+		return
+	}
+	if reprint {
+		typ := "agent"
+		if j, ok := m.jobByID(run[0].AgentID); ok && j.Type != "" {
+			typ = j.Type
+		}
+		sb.WriteString(theme.Subtle.Render(theme.SubAgent + " " + typ))
+		sb.WriteString("\n")
+	}
+	// Tool labels are capped; results render in full after them.
+	var toolLines []string
+	var results []ChatMessage
+	for _, msg := range run {
+		if msg.Role == "agent_result" {
+			results = append(results, msg)
+			continue
+		}
+		toolLines = append(toolLines, msg.Content)
+	}
+	for _, line := range capThreadLines(toolLines, agentThreadInlineCap) {
+		sb.WriteString("   " + theme.Help.Render(clipLine(line, contentWidth-3)))
+		sb.WriteString("\n")
+	}
+	for _, r := range results {
+		wrapped := wrapText(r.Content, contentWidth-5)
+		for i, line := range strings.Split(strings.TrimRight(wrapped, "\n"), "\n") {
+			if i == 0 {
+				sb.WriteString("   " + theme.Subtle.Render(theme.Arrow+" "+line))
+			} else {
+				sb.WriteString("     " + theme.Subtle.Render(line))
+			}
+			sb.WriteString("\n")
+		}
+	}
+	sb.WriteString("\n")
+}
+
 func (m *Model) updateViewport() {
 	var sb strings.Builder
 
@@ -1339,7 +1384,31 @@ func (m *Model) updateViewport() {
 		contentWidth = 80 // fallback
 	}
 
-	for _, msg := range m.messages {
+	lastAgent := "" // id of the agent whose line was rendered last, "" for non-agent
+	for i := 0; i < len(m.messages); i++ {
+		msg := m.messages[i]
+
+		// Group a contiguous run of one sub-agent's thread messages.
+		if msg.Role == "agent_tool" || msg.Role == "agent_result" {
+			j := i
+			for j < len(m.messages) &&
+				(m.messages[j].Role == "agent_tool" || m.messages[j].Role == "agent_result") &&
+				m.messages[j].AgentID == msg.AgentID {
+				j++
+			}
+			m.renderAgentThreadRun(&sb, m.messages[i:j], contentWidth, lastAgent != msg.AgentID)
+			lastAgent = msg.AgentID
+			i = j - 1
+			continue
+		}
+
+		// Track agent context so a following thread run knows whether to reprint.
+		if msg.Role == "agent" && msg.AgentID != "" {
+			lastAgent = msg.AgentID
+		} else {
+			lastAgent = ""
+		}
+
 		switch msg.Role {
 		case "user":
 			prefix := userStyle.Render("you") + " " + theme.SepStyle.Render(theme.Sep) + " "
