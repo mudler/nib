@@ -39,9 +39,16 @@ func (m Model) unifiedJobs() []jobRef {
 func (m Model) jobActivityTail(j jobRef) string {
 	switch j.Kind {
 	case "agent":
-		if m.session != nil {
-			return m.session.AgentLog(j.ID)
+		var b strings.Builder
+		if job, ok := m.jobByID(j.ID); ok && strings.TrimSpace(job.Task) != "" {
+			b.WriteString("prompt:\n")
+			b.WriteString(strings.TrimSpace(job.Task))
+			b.WriteString("\n\n")
 		}
+		if m.session != nil {
+			b.WriteString(m.session.AgentLog(j.ID))
+		}
+		return strings.TrimRight(b.String(), "\n")
 	case "shell":
 		if so, se, ok := m.shellJobs.Output(j.ID); ok {
 			return strings.TrimRight(so+se, "\n")
@@ -63,13 +70,15 @@ func lastLines(s string, n int) []string {
 	return lines
 }
 
-// clipLine truncates a single line to width runes with an ellipsis.
+// clipLine truncates a single line to width runes with an ellipsis. It counts
+// runes (not bytes) so multibyte characters in tool labels and paths are never
+// split into invalid UTF-8.
 func clipLine(s string, width int) string {
 	if width < 8 {
 		width = 8
 	}
-	if len(s) > width {
-		return s[:width-1] + "…"
+	if r := []rune(s); len(r) > width {
+		return string(r[:width-1]) + "…"
 	}
 	return s
 }

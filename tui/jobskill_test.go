@@ -34,6 +34,18 @@ func TestLastLinesAndClip(t *testing.T) {
 	}
 }
 
+func TestJobActivityTailPrependsPrompt(t *testing.T) {
+	m := Model{}
+	m.jobs = []agentJob{{ID: "a1", Type: "explore", Task: "the full multi-word prompt that should appear in details"}}
+	out := m.jobActivityTail(jobRef{Kind: "agent", ID: "a1"})
+	if !strings.Contains(out, "prompt:") {
+		t.Fatalf("details should include a prompt: header, got:\n%s", out)
+	}
+	if !strings.Contains(out, "the full multi-word prompt that should appear in details") {
+		t.Fatalf("details should include the full task, got:\n%s", out)
+	}
+}
+
 func TestKillSelectedOutOfRangeIsNoop(t *testing.T) {
 	m := Model{jobs: []agentJob{{ID: "a1", Status: chat.AgentStatusRunning}}}
 	// These must not panic and must not set a "Killed" status.

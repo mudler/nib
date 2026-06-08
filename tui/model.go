@@ -909,7 +909,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// final result, also surface it inline as one labeled block. Per-tool
 		// activity stays in the Ctrl+O log viewer.
 		if line := agentTranscriptLine(ev); line != "" {
-			m.messages = append(m.messages, ChatMessage{Role: "agent", Content: line})
+			m.messages = append(m.messages, ChatMessage{Role: "agent", AgentID: ev.ID, Content: line})
 		}
 		if ev.Status == chat.AgentStatusCompleted && strings.TrimSpace(ev.Result) != "" {
 			typ := ev.Type
@@ -917,7 +917,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				typ = "agent"
 			}
 			m.messages = append(m.messages, ChatMessage{
-				Role:    "tool",
+				Role:    "agent_result",
 				Name:    typ,
 				AgentID: ev.ID,
 				Content: chat.PreviewResult(ev.Result, toolResultPreviewLines),
@@ -932,14 +932,26 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case toolResultMsg:
 		res := chat.ToolResult(msg)
-		// Quiet by default: only the ROOT agent's tool results stream inline.
-		// Sub-agent tool activity lives in the Ctrl+O log viewer; a sub-agent's
-		// final result is shown inline on completion (see agentEventMsg). Preview
-		// once at append time so we don't retain a multi-MB raw result.
 		if res.AgentID == "" {
+			// Root agent: stream the result inline with its (previewed) body.
 			if preview := chat.PreviewResult(res.Result, toolResultPreviewLines); preview != "" {
 				m.messages = append(m.messages, ChatMessage{Role: "tool", Name: res.Name, Arguments: res.Arguments, Content: preview})
 				m.updateViewport()
+			}
+		} else {
+			// Sub-agent: append a compact, body-less line to its inline thread.
+			// The output body lives in the Ctrl+O log viewer.
+			label := chat.FormatToolCall(res.Name, res.Arguments)
+			if nl := strings.IndexByte(label, '\n'); nl >= 0 {
+				label = label[:nl]
+			}
+			if label == "" {
+				label = res.Name
+			}
+			m.messages = append(m.messages, ChatMessage{Role: "agent_tool", Name: res.Name, Arguments: res.Arguments, AgentID: res.AgentID, Content: label})
+			m.updateViewport()
+			if m.showLogs && m.logOpenID != "" {
+				m.syncLogViewport()
 			}
 		}
 		// A step just completed: release the next queued follow-up into the run.
@@ -1344,6 +1356,69 @@ func (m *Model) markdownFor(width int) *glamour.TermRenderer {
 	return r
 }
 
+// renderAgentThreadRun renders one contiguous run of a sub-agent's thread
+// messages (agent_tool labels and/or agent_result blocks, all same AgentID) as
+// an indented block. It prints a short continuation header (↳ <type>) when
+// reprint is true (i.e. the previous rendered line did not belong to this
+// agent), caps the tool lines, and renders each result with a → marker. The
+// trailing blank separator is omitted when hugNext is true (the next message
+// still belongs to this agent's run), keeping the whole thread visually tight.
+func (m *Model) renderAgentThreadRun(sb *strings.Builder, run []ChatMessage, contentWidth int, reprint, hugNext bool) {
+	if len(run) == 0 {
+		return
+	}
+	if reprint {
+		typ := "agent"
+		if j, ok := m.jobByID(run[0].AgentID); ok && j.Type != "" {
+			typ = j.Type
+		}
+		sb.WriteString(theme.Subtle.Render(theme.SubAgent + " " + typ))
+		sb.WriteString("\n")
+	}
+	// Tool labels are capped; results render in full after them.
+	var toolLines []string
+	var results []ChatMessage
+	for _, msg := range run {
+		if msg.Role == "agent_result" {
+			results = append(results, msg)
+			continue
+		}
+		toolLines = append(toolLines, msg.Content)
+	}
+	for _, line := range capThreadLines(toolLines, agentThreadInlineCap) {
+		sb.WriteString("   " + theme.Help.Render(clipLine(line, contentWidth-3)))
+		sb.WriteString("\n")
+	}
+	for _, r := range results {
+		wrapped := wrapText(r.Content, contentWidth-5)
+		for i, line := range strings.Split(strings.TrimRight(wrapped, "\n"), "\n") {
+			if i == 0 {
+				sb.WriteString("   " + theme.Subtle.Render(theme.Arrow+" "+line))
+			} else {
+				sb.WriteString("     " + theme.Subtle.Render(line))
+			}
+			sb.WriteString("\n")
+		}
+	}
+	if !hugNext {
+		sb.WriteString("\n")
+	}
+}
+
+// sameAgentMsg reports whether the message at idx is part of agentID's run —
+// a lifecycle line, tool line, or result tagged with that id. Used to decide
+// whether a thread item should hug the next one (omit the blank separator).
+func (m *Model) sameAgentMsg(idx int, agentID string) bool {
+	if agentID == "" || idx < 0 || idx >= len(m.messages) {
+		return false
+	}
+	x := m.messages[idx]
+	if x.AgentID != agentID {
+		return false
+	}
+	return x.Role == "agent" || x.Role == "agent_tool" || x.Role == "agent_result"
+}
+
 func (m *Model) updateViewport() {
 	var sb strings.Builder
 
@@ -1356,7 +1431,31 @@ func (m *Model) updateViewport() {
 		contentWidth = 80 // fallback
 	}
 
-	for _, msg := range m.messages {
+	lastAgent := "" // id of the agent whose line was rendered last, "" for non-agent
+	for i := 0; i < len(m.messages); i++ {
+		msg := m.messages[i]
+
+		// Group a contiguous run of one sub-agent's thread messages.
+		if msg.Role == "agent_tool" || msg.Role == "agent_result" {
+			j := i
+			for j < len(m.messages) &&
+				(m.messages[j].Role == "agent_tool" || m.messages[j].Role == "agent_result") &&
+				m.messages[j].AgentID == msg.AgentID {
+				j++
+			}
+			m.renderAgentThreadRun(&sb, m.messages[i:j], contentWidth, lastAgent != msg.AgentID, m.sameAgentMsg(j, msg.AgentID))
+			lastAgent = msg.AgentID
+			i = j - 1
+			continue
+		}
+
+		// Track agent context so a following thread run knows whether to reprint.
+		if msg.Role == "agent" && msg.AgentID != "" {
+			lastAgent = msg.AgentID
+		} else {
+			lastAgent = ""
+		}
+
 		switch msg.Role {
 		case "user":
 			prefix := userStyle.Render("you") + " " + theme.SepStyle.Render(theme.Sep) + " "
@@ -1401,8 +1500,8 @@ func (m *Model) updateViewport() {
 			prefixWidth := lipgloss.Width(prefix)
 			wrappedContent := renderMarkdownWith(m.markdownFor(contentWidth-prefixWidth), msg.Content, contentWidth-prefixWidth)
 			lines := strings.Split(strings.TrimRight(wrappedContent, "\n"), "\n")
-			for i, line := range lines {
-				if i == 0 {
+			for li, line := range lines {
+				if li == 0 {
 					sb.WriteString(prefix)
 					sb.WriteString(agentStyle.Render(line))
 				} else {
@@ -1411,7 +1510,11 @@ func (m *Model) updateViewport() {
 				}
 				sb.WriteString("\n")
 			}
-			sb.WriteString("\n")
+			// Tighten: a sub-agent lifecycle header hugs its own thread run that
+			// follows (tool lines / result) — omit the blank separator.
+			if !m.sameAgentMsg(i+1, msg.AgentID) {
+				sb.WriteString("\n")
+			}
 		case "tool":
 			// Calm, dim block: a header naming the tool, then the pretty/truncated
 			// output indented and dimmed beneath it.

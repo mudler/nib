@@ -2,6 +2,7 @@ package tui
 
 import (
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -25,6 +26,67 @@ func TestAgentTranscriptLine(t *testing.T) {
 	// Unknown status produces no line.
 	if got := agentTranscriptLine(chat.AgentEvent{Status: chat.AgentStatus("weird")}); got != "" {
 		t.Fatalf("unknown status should be empty, got %q", got)
+	}
+}
+
+func TestCompactTask(t *testing.T) {
+	cases := []struct {
+		name, in string
+		max      int
+		want     string
+	}{
+		{"empty", "", 72, ""},
+		{"short single line unchanged", "find reporting code", 72, "find reporting code"},
+		{"first line only", "find reporting code\nand also do X\nand Y", 72, "find reporting code"},
+		{"ellipsized when too long", "abcdefghij", 5, "abcd…"},
+		{"leading and trailing space trimmed", "  hello  ", 72, "hello"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := compactTask(c.in, c.max); got != c.want {
+				t.Errorf("compactTask(%q,%d) = %q, want %q", c.in, c.max, got, c.want)
+			}
+		})
+	}
+}
+
+func TestCapThreadLines(t *testing.T) {
+	t.Run("under cap unchanged", func(t *testing.T) {
+		in := []string{"a", "b", "c"}
+		if got := capThreadLines(in, 8); !reflect.DeepEqual(got, in) {
+			t.Errorf("got %v, want %v", got, in)
+		}
+	})
+	t.Run("exactly cap unchanged", func(t *testing.T) {
+		in := []string{"a", "b", "c"}
+		if got := capThreadLines(in, 3); !reflect.DeepEqual(got, in) {
+			t.Errorf("got %v, want %v", got, in)
+		}
+	})
+	t.Run("over cap collapses older with count", func(t *testing.T) {
+		in := []string{"a", "b", "c", "d", "e"}
+		got := capThreadLines(in, 2)
+		want := []string{"… +3 earlier", "d", "e"}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("got %v, want %v", got, want)
+		}
+	})
+	t.Run("nil input", func(t *testing.T) {
+		if got := capThreadLines(nil, 8); len(got) != 0 {
+			t.Errorf("got %v, want empty", got)
+		}
+	})
+}
+
+func TestAgentTranscriptLineCompactsTask(t *testing.T) {
+	long := "find the reporting code and also map every caller and rendering path across the whole tui package so we know what to change"
+	ev := chat.AgentEvent{Type: "explore", Task: long, Status: chat.AgentStatusRunning}
+	line := agentTranscriptLine(ev)
+	if len([]rune(line)) > len("sub-agent explore started: ")+compactTaskWidth {
+		t.Errorf("header not compacted: %q", line)
+	}
+	if !strings.Contains(line, "…") {
+		t.Errorf("expected ellipsis in compacted header, got %q", line)
 	}
 }
 
