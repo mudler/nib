@@ -326,8 +326,10 @@ your config.
 
 ## MCP Servers
 
-nib speaks the [Model Context Protocol](https://modelcontextprotocol.io/). `bash` is
-built in; add any external server in your config:
+nib speaks the [Model Context Protocol](https://modelcontextprotocol.io/). A set of
+tools is built in — `bash`, the filesystem tools (`read`, `write`, `edit`, `glob`,
+`grep`), and the web tools (`web_fetch`, `web_search`); add any external server in
+your config:
 
 ```yaml
 mcp_servers:
