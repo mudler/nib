@@ -38,10 +38,40 @@ func TestScheduleWakeupClampsAndCalls(t *testing.T) {
 	}
 }
 
+func TestScheduleWakeupPollDefaultAndOverride(t *testing.T) {
+	var got WakeupRequest
+	record := func(r WakeupRequest) string { got = r; return "ok" }
+
+	// No pending predicate and no explicit flag → not a poll.
+	(&scheduleWakeupTool{schedule: record}).Run(map[string]any{"delay_seconds": float64(10), "prompt": "x"})
+	if got.Poll {
+		t.Fatal("default with no pending work should not be a poll")
+	}
+
+	// Background work running → defaults to poll.
+	busy := &scheduleWakeupTool{schedule: record, pending: func() bool { return true }}
+	busy.Run(map[string]any{"delay_seconds": float64(10), "prompt": "x"})
+	if !got.Poll {
+		t.Fatal("default while background work runs should be a poll")
+	}
+
+	// Explicit polling=false overrides the busy default (a reminder during work).
+	busy.Run(map[string]any{"delay_seconds": float64(10), "prompt": "x", "polling": false})
+	if got.Poll {
+		t.Fatal("explicit polling=false should override the busy default")
+	}
+
+	// Explicit polling=true wins even with no pending work.
+	(&scheduleWakeupTool{schedule: record}).Run(map[string]any{"delay_seconds": float64(10), "prompt": "x", "polling": true})
+	if !got.Poll {
+		t.Fatal("explicit polling=true should force a poll")
+	}
+}
+
 // The tool definition must build AND its schema must generate without panicking
 // (cogito reflects the arg struct lazily in Tool()); a map field would blow up here.
 func TestScheduleWakeupDefinitionBuilds(t *testing.T) {
-	def := scheduleWakeupToolDefinition(func(WakeupRequest) string { return "" })
+	def := scheduleWakeupToolDefinition(func(WakeupRequest) string { return "" }, nil)
 	if def == nil {
 		t.Fatal("nil definition")
 	}

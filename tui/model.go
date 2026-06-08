@@ -69,10 +69,17 @@ type Model struct {
 	// event, so the terminal responseMsg can avoid re-appending an identical
 	// final reply.
 	lastParkedReply string
-	// wakeupGen invalidates pending self-paced wake-up ticks. /loop stop bumps
-	// it so an in-flight tea.Tick fired for a now-cancelled self-paced loop is
-	// ignored when it arrives.
+	// wakeupGen invalidates pending reminder/self-paced wake-up ticks: a fired
+	// tea.Tick is honored only if its captured gen still matches. Bumped by
+	// /loop stop to cancel a self-paced loop. Poll wake-ups ride pollGen instead.
 	wakeupGen int
+	// pollGen invalidates pending *poll* wake-up ticks (those that only watch
+	// in-flight background work). Bumped on every park→resume so an orphan poll
+	// armed while parked cannot re-dispatch the task once the work it watched
+	// completes on its own (cogito resumes us with the result). Reminders are
+	// unaffected — they ride wakeupGen — so a real reminder scheduled during
+	// background work still fires. See the parkMsg resume branch / wakeupFireMsg.
+	pollGen int
 	// selfPaced counts active self-paced loops (for the footer). 0 or 1 in
 	// practice. Incremented on /loop <prompt>; reset to 0 by /loop stop. Note: it
 	// is NOT auto-cleared when a self-paced loop ends naturally (the TUI has no
@@ -744,6 +751,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.loading = true
 			m.interruptArmed = false
 			m.status = "Thinking…"
+			// Invalidate any orphan poll wake-up. A poll wake-up only exists to
+			// nudge the run if it stays stuck on background work; once that work
+			// completes it injects its own result and resumes us here, so a
+			// still-pending poll tick would otherwise fire after the turn ends and
+			// re-dispatch the finished task as a fresh turn. Each live poll cycle
+			// re-arms with the bumped gen, so only the now-moot orphan dies.
+			// Reminders ride wakeupGen and are left intact.
+			m.pollGen++
 		}
 		m.updateViewport()
 		cmds = append(cmds, m.listenPark())
@@ -798,18 +813,29 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case wakeupScheduledMsg:
 		// Arm a timer for the requested delay, then keep listening for more.
+		// Poll wake-ups capture pollGen (dropped on park→resume); reminders and
+		// self-paced steps capture wakeupGen (dropped only by /loop stop).
 		req := chat.WakeupRequest(msg)
 		d := time.Duration(req.DelaySeconds) * time.Second
 		prompt := req.Prompt
+		poll := req.Poll
 		gen := m.wakeupGen
+		if poll {
+			gen = m.pollGen
+		}
 		cmds = append(cmds,
-			tea.Tick(d, func(time.Time) tea.Msg { return wakeupFireMsg{prompt: prompt, gen: gen} }),
+			tea.Tick(d, func(time.Time) tea.Msg { return wakeupFireMsg{prompt: prompt, gen: gen, poll: poll} }),
 			m.listenWakeup(),
 		)
 
 	case wakeupFireMsg:
-		// A stale tick from a cancelled self-paced loop: ignore.
-		if msg.gen != m.wakeupGen {
+		// A stale tick — a cancelled self-paced loop, or a poll whose background
+		// work already completed (park→resume bumped pollGen): ignore.
+		curGen := m.wakeupGen
+		if msg.poll {
+			curGen = m.pollGen
+		}
+		if msg.gen != curGen {
 			break
 		}
 		// The delay elapsed: re-run the carried prompt as the next turn. Resolve
@@ -1031,10 +1057,13 @@ func (m Model) loopTick() tea.Cmd {
 // wakeupScheduledMsg is emitted when the agent schedules an in-session wake-up.
 type wakeupScheduledMsg chat.WakeupRequest
 
-// wakeupFireMsg is emitted when a scheduled wake-up's delay elapses.
+// wakeupFireMsg is emitted when a scheduled wake-up's delay elapses. poll marks
+// a tick that watches background work; it is validated against pollGen rather
+// than wakeupGen so only poll ticks are dropped on park→resume.
 type wakeupFireMsg struct {
 	prompt string
 	gen    int
+	poll   bool
 }
 
 // listenWakeup waits for the agent to schedule a wake-up.
