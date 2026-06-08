@@ -10,8 +10,8 @@ import (
 )
 
 // StartWebMCPServer starts the web MCP server exposing web_fetch and web_search.
-// web_fetch reuses the session's main model (cfg.Model/APIKey/BaseURL) for its
-// extraction pass.
+// web_fetch reuses the session's main model and request options (model, API key,
+// base URL, metadata, and reasoning effort) for its extraction pass.
 func StartWebMCPServer(ctx context.Context, transport mcp.Transport, cfg types.Config) error {
 	server := mcp.NewServer(&mcp.Implementation{
 		Name:    "web",
@@ -19,12 +19,15 @@ func StartWebMCPServer(ctx context.Context, transport mcp.Transport, cfg types.C
 	}, nil)
 
 	ws := &webServer{
-		llm: clients.NewOpenAILLMWithOptions(cfg.Model, cfg.APIKey, cfg.BaseURL, clients.OpenAIOptions{}),
+		llm: clients.NewOpenAILLMWithOptions(cfg.Model, cfg.APIKey, cfg.BaseURL, clients.OpenAIOptions{
+			Metadata:        cfg.Metadata,
+			ReasoningEffort: cfg.ReasoningEffort,
+		}),
 	}
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "web_fetch",
-		Description: "Fetch a URL and answer a prompt against its content. Returns the model's answer based on the page text. Works with any host including localhost.",
+		Description: "Fetch a URL and answer a prompt against its content. Both url and prompt are required. Returns the model's answer based on the page text. Works with any host including localhost.",
 	}, ws.fetch)
 
 	mcp.AddTool(server, &mcp.Tool{
