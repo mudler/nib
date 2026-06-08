@@ -906,14 +906,26 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case toolResultMsg:
 		res := chat.ToolResult(msg)
-		// Quiet by default: only the ROOT agent's tool results stream inline.
-		// Sub-agent tool activity lives in the Ctrl+O log viewer; a sub-agent's
-		// final result is shown inline on completion (see agentEventMsg). Preview
-		// once at append time so we don't retain a multi-MB raw result.
 		if res.AgentID == "" {
+			// Root agent: stream the result inline with its (previewed) body.
 			if preview := chat.PreviewResult(res.Result, toolResultPreviewLines); preview != "" {
 				m.messages = append(m.messages, ChatMessage{Role: "tool", Name: res.Name, Arguments: res.Arguments, Content: preview})
 				m.updateViewport()
+			}
+		} else {
+			// Sub-agent: append a compact, body-less line to its inline thread.
+			// The output body lives in the Ctrl+O log viewer.
+			label := chat.FormatToolCall(res.Name, res.Arguments)
+			if nl := strings.IndexByte(label, '\n'); nl >= 0 {
+				label = label[:nl]
+			}
+			if label == "" {
+				label = res.Name
+			}
+			m.messages = append(m.messages, ChatMessage{Role: "agent_tool", Name: res.Name, Arguments: res.Arguments, AgentID: res.AgentID, Content: label})
+			m.updateViewport()
+			if m.showLogs && m.logOpenID != "" {
+				m.syncLogViewport()
 			}
 		}
 		// A step just completed: release the next queued follow-up into the run.
