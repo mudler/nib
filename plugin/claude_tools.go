@@ -1,8 +1,8 @@
 package plugin
 
 // claudeToolAliases maps Claude Code tool names to wiz's built-in tool names.
-// Unlisted Claude tools (Task, WebFetch, WebSearch, TodoWrite, ...) have no wiz
-// equivalent and are dropped during mapping.
+// Unlisted Claude tools (Task, TodoWrite, ...) have no wiz equivalent and are
+// dropped during mapping.
 var claudeToolAliases = map[string]string{
 	"Bash":      "bash",
 	"Read":      "read",
@@ -11,6 +11,8 @@ var claudeToolAliases = map[string]string{
 	"MultiEdit": "edit",
 	"Glob":      "glob",
 	"Grep":      "grep",
+	"WebFetch":  "web_fetch",
+	"WebSearch": "web_search",
 }
 
 // aliasClaudeTool returns the wiz tool name for a Claude tool name.
