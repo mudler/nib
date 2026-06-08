@@ -1,9 +1,15 @@
 package mcp
 
 import (
+	"context"
+	"fmt"
+	"io"
+	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"golang.org/x/net/html"
 )
 
@@ -131,4 +137,61 @@ func parseDDGResults(body string, max int) ([]webSearchResult, error) {
 		}
 	}
 	return out, nil
+}
+
+// normalizeMaxResults clamps a requested result count to [1, maxSearchResults],
+// defaulting to defaultSearchResults when n <= 0.
+func normalizeMaxResults(n int) int {
+	if n <= 0 {
+		return defaultSearchResults
+	}
+	if n > maxSearchResults {
+		return maxSearchResults
+	}
+	return n
+}
+
+// searchWeb runs a DuckDuckGo HTML search and returns structured results.
+func searchWeb(ctx context.Context, _ *mcp.CallToolRequest, in webSearchInput) (*mcp.CallToolResult, webSearchOutput, error) {
+	out := webSearchOutput{Query: in.Query}
+	if strings.TrimSpace(in.Query) == "" {
+		out.Error = "query is required"
+		return nil, out, nil
+	}
+	max := normalizeMaxResults(in.MaxResults)
+
+	reqURL := ddgBaseURL + "?q=" + url.QueryEscape(in.Query)
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
+	if err != nil {
+		out.Error = err.Error()
+		return nil, out, nil
+	}
+	// DDG's HTML endpoint expects a browser-ish UA.
+	req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; wiz/1.0)")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		out.Error = err.Error()
+		return nil, out, nil
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		out.Error = fmt.Sprintf("duckduckgo returned status %d", resp.StatusCode)
+		return nil, out, nil
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	if err != nil {
+		out.Error = err.Error()
+		return nil, out, nil
+	}
+	results, err := parseDDGResults(string(body), max)
+	if err != nil {
+		out.Error = err.Error()
+		return nil, out, nil
+	}
+	out.Results = results
+	out.Count = len(results)
+	return nil, out, nil
 }

@@ -1,6 +1,9 @@
 package mcp
 
 import (
+	"context"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"testing"
 )
@@ -71,4 +74,49 @@ func TestParseDDGResults(t *testing.T) {
 			t.Fatalf("expected 2 results, got %d", len(got))
 		}
 	})
+}
+
+func TestSearchWebHandler(t *testing.T) {
+	body, err := os.ReadFile("testdata/ddg_golang.html")
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.URL.Query().Get("q"); got != "golang" {
+			t.Errorf("query q = %q, want golang", got)
+		}
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = w.Write(body)
+	}))
+	defer srv.Close()
+
+	old := ddgBaseURL
+	ddgBaseURL = srv.URL + "/"
+	defer func() { ddgBaseURL = old }()
+
+	_, out, err := searchWeb(context.Background(), nil, webSearchInput{Query: "golang"})
+	if err != nil {
+		t.Fatalf("searchWeb returned error: %v", err)
+	}
+	if out.Error != "" {
+		t.Fatalf("output error: %s", out.Error)
+	}
+	if out.Count != 3 || len(out.Results) != 3 {
+		t.Fatalf("expected 3 results, got count=%d len=%d", out.Count, len(out.Results))
+	}
+	if out.Results[0].URL != "https://go.dev/" {
+		t.Errorf("first url = %q", out.Results[0].URL)
+	}
+}
+
+func TestSearchWebDefaultsAndCaps(t *testing.T) {
+	if got := normalizeMaxResults(0); got != defaultSearchResults {
+		t.Errorf("normalizeMaxResults(0) = %d, want %d", got, defaultSearchResults)
+	}
+	if got := normalizeMaxResults(1000); got != maxSearchResults {
+		t.Errorf("normalizeMaxResults(1000) = %d, want %d", got, maxSearchResults)
+	}
+	if got := normalizeMaxResults(3); got != 3 {
+		t.Errorf("normalizeMaxResults(3) = %d, want 3", got)
+	}
 }
