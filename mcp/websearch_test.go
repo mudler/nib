@@ -1,6 +1,9 @@
 package mcp
 
-import "testing"
+import (
+	"os"
+	"testing"
+)
 
 func TestDecodeDDGHref(t *testing.T) {
 	tests := []struct {
@@ -31,4 +34,41 @@ func TestDecodeDDGHref(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestParseDDGResults(t *testing.T) {
+	body, err := os.ReadFile("testdata/ddg_golang.html")
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
+	}
+
+	t.Run("parses title, decoded url, and snippet", func(t *testing.T) {
+		got, err := parseDDGResults(string(body), 10)
+		if err != nil {
+			t.Fatalf("parseDDGResults: %v", err)
+		}
+		if len(got) != 3 {
+			t.Fatalf("expected 3 results, got %d", len(got))
+		}
+		first := got[0]
+		if first.Title != "The Go Programming Language" {
+			t.Errorf("title = %q", first.Title)
+		}
+		if first.URL != "https://go.dev/" {
+			t.Errorf("url = %q, want decoded https://go.dev/", first.URL)
+		}
+		if first.Snippet != "Build simple, secure, scalable systems with Go." {
+			t.Errorf("snippet = %q", first.Snippet)
+		}
+	})
+
+	t.Run("respects max results", func(t *testing.T) {
+		got, err := parseDDGResults(string(body), 2)
+		if err != nil {
+			t.Fatalf("parseDDGResults: %v", err)
+		}
+		if len(got) != 2 {
+			t.Fatalf("expected 2 results, got %d", len(got))
+		}
+	})
 }
