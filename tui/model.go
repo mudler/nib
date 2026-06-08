@@ -883,7 +883,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// final result, also surface it inline as one labeled block. Per-tool
 		// activity stays in the Ctrl+O log viewer.
 		if line := agentTranscriptLine(ev); line != "" {
-			m.messages = append(m.messages, ChatMessage{Role: "agent", Content: line})
+			m.messages = append(m.messages, ChatMessage{Role: "agent", AgentID: ev.ID, Content: line})
 		}
 		if ev.Status == chat.AgentStatusCompleted && strings.TrimSpace(ev.Result) != "" {
 			typ := ev.Type
@@ -891,7 +891,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				typ = "agent"
 			}
 			m.messages = append(m.messages, ChatMessage{
-				Role:    "tool",
+				Role:    "agent_result",
 				Name:    typ,
 				AgentID: ev.ID,
 				Content: chat.PreviewResult(ev.Result, toolResultPreviewLines),

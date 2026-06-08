@@ -50,12 +50,16 @@ func TestToolResultMessageRenders(t *testing.T) {
 		}
 	})
 
-	t.Run("sub-agent final result renders labeled with its id", func(t *testing.T) {
+	t.Run("sub-agent final result renders indented under its thread", func(t *testing.T) {
 		m := Model{viewport: viewport.New(80, 10)}
-		m.messages = append(m.messages, ChatMessage{Role: "tool", Name: "explore", AgentID: "agent1234", Content: "done"})
+		m.messages = append(m.messages, ChatMessage{Role: "agent_result", Name: "explore", AgentID: "agent1234", Content: "done"})
 		m.updateViewport()
-		if out := m.viewport.View(); !strings.Contains(out, theme.SubAgent) {
-			t.Errorf("sub-agent final result should render the %q marker, got:\n%s", theme.SubAgent, out)
+		out := m.viewport.View()
+		if !strings.Contains(out, theme.Arrow) {
+			t.Errorf("agent result should render the %q marker, got:\n%s", theme.Arrow, out)
+		}
+		if !strings.Contains(out, "done") {
+			t.Errorf("agent result should render its content, got:\n%s", out)
 		}
 	})
 
