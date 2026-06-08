@@ -6,6 +6,9 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/mudler/cogito"
+	openai "github.com/sashabaranov/go-openai"
 )
 
 func TestHTMLToText(t *testing.T) {
@@ -59,5 +62,58 @@ func TestFetchURLTruncates(t *testing.T) {
 	}
 	if len([]rune(text)) > fetchMaxContentRune {
 		t.Errorf("text exceeds cap: %d runes", len([]rune(text)))
+	}
+}
+
+// fakeLLM records the prompt it receives and returns a canned answer.
+type fakeLLM struct {
+	gotPrompt string
+	answer    string
+}
+
+func (f *fakeLLM) Ask(_ context.Context, frag cogito.Fragment) (cogito.Fragment, error) {
+	if m := frag.LastMessage(); m != nil {
+		f.gotPrompt = m.Content
+	}
+	return cogito.NewFragment().AddMessage(cogito.AssistantMessageRole, f.answer), nil
+}
+
+func (f *fakeLLM) CreateChatCompletion(_ context.Context, _ openai.ChatCompletionRequest) (cogito.LLMReply, cogito.LLMUsage, error) {
+	return cogito.LLMReply{}, cogito.LLMUsage{}, nil
+}
+
+func TestWebFetchHandler(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = w.Write([]byte("<html><body><p>The capital of France is Paris.</p></body></html>"))
+	}))
+	defer srv.Close()
+
+	llm := &fakeLLM{answer: "Paris"}
+	ws := &webServer{llm: llm}
+
+	_, out, err := ws.fetch(context.Background(), nil, webFetchInput{URL: srv.URL, Prompt: "What is the capital?"})
+	if err != nil {
+		t.Fatalf("fetch: %v", err)
+	}
+	if out.Error != "" {
+		t.Fatalf("output error: %s", out.Error)
+	}
+	if out.Answer != "Paris" {
+		t.Errorf("answer = %q, want Paris", out.Answer)
+	}
+	if !strings.Contains(llm.gotPrompt, "What is the capital?") {
+		t.Errorf("prompt missing question: %q", llm.gotPrompt)
+	}
+	if !strings.Contains(llm.gotPrompt, "capital of France is Paris") {
+		t.Errorf("prompt missing page content: %q", llm.gotPrompt)
+	}
+}
+
+func TestWebFetchRequiresInput(t *testing.T) {
+	ws := &webServer{llm: &fakeLLM{}}
+	_, out, _ := ws.fetch(context.Background(), nil, webFetchInput{URL: "", Prompt: "x"})
+	if out.Error == "" {
+		t.Error("expected error for empty url")
 	}
 }

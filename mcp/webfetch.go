@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/mudler/cogito"
 	"golang.org/x/net/html"
 )
 
@@ -98,4 +100,57 @@ func fetchURL(ctx context.Context, target string) (text, finalURL string, trunca
 		truncated = true
 	}
 	return content, resp.Request.URL.String(), truncated, nil
+}
+
+type webFetchInput struct {
+	URL    string `json:"url" jsonschema:"the URL to fetch"`
+	Prompt string `json:"prompt" jsonschema:"what to extract or answer from the page"`
+}
+
+type webFetchOutput struct {
+	URL       string `json:"url" jsonschema:"the requested URL"`
+	FinalURL  string `json:"final_url,omitempty" jsonschema:"the URL after redirects, if different"`
+	Answer    string `json:"answer,omitempty" jsonschema:"the model's answer based on the page content"`
+	Truncated bool   `json:"truncated,omitempty" jsonschema:"true if page content was truncated before extraction"`
+	Error     string `json:"error,omitempty" jsonschema:"error message if the fetch failed"`
+}
+
+// webServer holds the dependencies shared by the web tools.
+type webServer struct {
+	llm cogito.LLM
+}
+
+// fetch retrieves a URL, extracts its readable text, and answers the prompt
+// against it using the configured model.
+func (ws *webServer) fetch(ctx context.Context, _ *mcp.CallToolRequest, in webFetchInput) (*mcp.CallToolResult, webFetchOutput, error) {
+	out := webFetchOutput{URL: in.URL}
+	if strings.TrimSpace(in.URL) == "" {
+		out.Error = "url is required"
+		return nil, out, nil
+	}
+	if strings.TrimSpace(in.Prompt) == "" {
+		out.Error = "prompt is required"
+		return nil, out, nil
+	}
+
+	content, finalURL, truncated, err := fetchURL(ctx, in.URL)
+	if err != nil {
+		out.Error = err.Error()
+		return nil, out, nil
+	}
+	out.FinalURL = finalURL
+	out.Truncated = truncated
+
+	prompt := "Answer the following based on the web page content below.\n\nQuestion: " +
+		in.Prompt + "\n\n---\n" + content
+
+	res, err := ws.llm.Ask(ctx, cogito.NewFragment().AddMessage(cogito.UserMessageRole, prompt))
+	if err != nil {
+		out.Error = "extraction failed: " + err.Error()
+		return nil, out, nil
+	}
+	if last := res.LastMessage(); last != nil {
+		out.Answer = strings.TrimSpace(last.Content)
+	}
+	return nil, out, nil
 }
