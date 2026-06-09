@@ -1617,7 +1617,7 @@ func (m *Model) updateViewport() {
 		sb.WriteString(gutter + theme.ApproveKey.Render(toolApprovalLabel(*m.pendingTool)))
 		sb.WriteString("\n")
 		if rows, ok := chat.ToolArgRows(m.pendingTool.Name, m.pendingTool.Arguments); ok {
-			// Fallback args render as an aligned card: dim keys padded to a
+			// Structured args render as an aligned card: dim keys padded to a
 			// column; values truncated to the row (multi-line hints included).
 			maxKey := 0
 			for _, r := range rows {

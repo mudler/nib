@@ -49,7 +49,7 @@ var chainingCommands = map[string]bool{
 // BashGrantPrefix derives the prefix-grant key for a bash tool call: the
 // script's first word, when the script is a single simple command. ok is
 // false when no safe prefix can be derived (compound or chaining commands,
-// unparseable args) — callers fall back to a whole-tool grant.
+// unparseable args) — the UI then offers a whole-tool grant instead.
 func BashGrantPrefix(argsJSON string) (string, bool) {
 	var args struct {
 		Script string `json:"script"`
