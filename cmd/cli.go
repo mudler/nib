@@ -155,14 +155,15 @@ func RunCLI(ctx context.Context, cfg types.Config, transports ...mcp.Transport) 
 			spin.stop()
 			g := theme.Gutter.Render(theme.ApprovalGutter) + " "
 			fmt.Println()
-			fmt.Println(g + theme.ApproveKey.Render("run  "+req.Name))
+			fmt.Println(g + theme.ApproveKey.Render(req.Name+" wants to run"))
 			for _, line := range strings.Split(chat.FormatToolCall(req.Name, req.Arguments), "\n") {
 				fmt.Println(g + theme.Help.Render(line))
 			}
 			if req.Reasoning != "" {
 				fmt.Println(g + theme.Reasoning.Render(req.Reasoning))
 			}
-			fmt.Print(g + theme.ApproveKey.Render(theme.CLIApprovePrompt(req.Name)) + " ")
+			scope, prefix := chat.GrantScope(req.Name, req.Arguments)
+			fmt.Print(g + theme.ApproveKey.Render(theme.CLIApprovePrompt(scope)) + " ")
 
 			text, _ := readStringCancellable(ctx, reader)
 			text = strings.TrimSpace(text)
@@ -170,14 +171,18 @@ func RunCLI(ctx context.Context, cfg types.Config, transports ...mcp.Transport) 
 
 			var response chat.ToolCallResponse
 			switch strings.ToLower(text) {
-			case "y", "yes":
+			case "y", "yes", "1":
 				response = chat.ToolCallResponse{Approved: true}
 				spin.start(theme.Status(theme.VerbWorking, 0))
-			case "a", "always":
-				response = chat.ToolCallResponse{Approved: true, AlwaysAllow: true}
-				fmt.Println(theme.Subtle.Render("added '" + req.Name + "' to the session allow list"))
+			case "a", "always", "2":
+				response = chat.ToolCallResponse{Approved: true, AlwaysAllow: true, AlwaysPrefix: prefix}
+				if prefix != "" {
+					fmt.Println(theme.Subtle.Render("allowing " + prefix + " … commands for this session"))
+				} else {
+					fmt.Println(theme.Subtle.Render("added '" + req.Name + "' to the session allow list"))
+				}
 				spin.start(theme.Status(theme.VerbWorking, 0))
-			case "all":
+			case "all", "3":
 				response = chat.ToolCallResponse{Approved: true, AllowAllTurn: true}
 				fmt.Println(theme.Subtle.Render("approving all tool calls for this turn"))
 				spin.start(theme.Status(theme.VerbWorking, 0))
