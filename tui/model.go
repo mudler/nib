@@ -453,7 +453,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, vpCmd
 		}
 		// Tool approval is a distinct key-driven mode: in choice mode the chat
-		// input is hidden and y/a/n/e/A/Esc act as single keypresses; edit mode
+		// input is hidden and a numbered menu takes single keypresses (1/2/3,
+		// with y/a/A as silent legacy aliases, n/Esc deny, e edits); edit mode
 		// (entered with `e`) shows the textarea for a free-form change.
 		if m.awaitingApproval {
 			if !m.approvalEditing {
@@ -462,11 +463,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m.resolveApproval(chat.ToolCallResponse{Approved: false})
 				case msg.Type == tea.KeyRunes && len(msg.Runes) == 1:
 					switch msg.Runes[0] {
-					case 'y', 'Y':
+					case '1', 'y', 'Y':
 						return m.resolveApproval(chat.ToolCallResponse{Approved: true})
-					case 'a':
-						return m.resolveApproval(chat.ToolCallResponse{Approved: true, AlwaysAllow: true})
-					case 'A':
+					case '2', 'a':
+						var prefix string
+						if m.pendingTool != nil {
+							_, prefix = chat.GrantScope(m.pendingTool.Name, m.pendingTool.Arguments)
+						}
+						return m.resolveApproval(chat.ToolCallResponse{Approved: true, AlwaysAllow: true, AlwaysPrefix: prefix})
+					case '3', 'A':
 						return m.resolveApproval(chat.ToolCallResponse{Approved: true, AllowAllTurn: true})
 					case 'n', 'N':
 						return m.resolveApproval(chat.ToolCallResponse{Approved: false})
@@ -1261,6 +1266,18 @@ func (m *Model) updateDimensions() {
 	m.textarea.SetWidth(m.width - 2)
 }
 
+// truncateLine caps a single line at w runes, ending with an ellipsis.
+func truncateLine(s string, w int) string {
+	if w <= 1 {
+		return s
+	}
+	r := []rune(s)
+	if len(r) <= w {
+		return s
+	}
+	return string(r[:w-1]) + "…"
+}
+
 // wrapText wraps text to fit within the specified width, preserving existing newlines
 func wrapText(text string, width int) string {
 	if width <= 0 {
@@ -1599,9 +1616,25 @@ func (m *Model) updateViewport() {
 		gutter := theme.Gutter.Render(theme.ApprovalGutter) + " "
 		sb.WriteString(gutter + theme.ApproveKey.Render(toolApprovalLabel(*m.pendingTool)))
 		sb.WriteString("\n")
-		args := wrapText(chat.FormatToolCall(m.pendingTool.Name, m.pendingTool.Arguments), contentWidth-4)
-		for _, line := range strings.Split(strings.TrimRight(args, "\n"), "\n") {
-			sb.WriteString(gutter + theme.Help.Render(line) + "\n")
+		if rows, ok := chat.ToolArgRows(m.pendingTool.Name, m.pendingTool.Arguments); ok {
+			// Fallback args render as an aligned card: dim keys padded to a
+			// column; values truncated to the row (multi-line hints included).
+			maxKey := 0
+			for _, r := range rows {
+				if len(r.Key) > maxKey {
+					maxKey = len(r.Key)
+				}
+			}
+			for _, r := range rows {
+				key := r.Key + strings.Repeat(" ", maxKey-len(r.Key))
+				val := truncateLine(r.ValueDisplay(), contentWidth-8-maxKey)
+				sb.WriteString(gutter + "  " + theme.Meta.Render(key) + "  " + theme.Help.Render(val) + "\n")
+			}
+		} else {
+			args := wrapText(chat.FormatToolCall(m.pendingTool.Name, m.pendingTool.Arguments), contentWidth-4)
+			for _, line := range strings.Split(strings.TrimRight(args, "\n"), "\n") {
+				sb.WriteString(gutter + theme.Help.Render(line) + "\n")
+			}
 		}
 		if m.pendingTool.Reasoning != "" {
 			rz := wrapText(m.pendingTool.Reasoning, contentWidth-4)
@@ -1609,12 +1642,17 @@ func (m *Model) updateViewport() {
 				sb.WriteString(gutter + theme.Reasoning.Render(line) + "\n")
 			}
 		}
-		prompt := theme.ApproveOnce
 		if m.approvalEditing {
-			prompt = theme.ApproveEditHint
+			sb.WriteString(gutter + theme.ApproveKey.Render(theme.ApproveEditHint))
+			sb.WriteString("\n")
+		} else {
+			scope, _ := chat.GrantScope(m.pendingTool.Name, m.pendingTool.Arguments)
+			sb.WriteString(gutter + "\n")
+			sb.WriteString(gutter + theme.ApproveKey.Render(theme.ApproveOnce) + "\n")
+			sb.WriteString(gutter + theme.ApproveKey.Render(theme.ApproveAlwaysPrefix+scope+theme.ApproveAlwaysSuffix) + "\n")
+			sb.WriteString(gutter + theme.ApproveKey.Render(theme.ApproveTurn) + "\n")
+			sb.WriteString(gutter + theme.Help.Render(theme.ApproveDenyEdit) + "\n")
 		}
-		sb.WriteString(gutter + theme.ApproveKey.Render(prompt))
-		sb.WriteString("\n")
 	}
 
 	if m.awaitingAsk && m.pendingAsk != nil {
