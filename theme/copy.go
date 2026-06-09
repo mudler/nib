@@ -5,14 +5,17 @@ const (
 	BrandName = "nib"
 
 	HelpDefault      = "enter send · ctrl+y use command · esc exit"
-	HelpApproval     = "y yes · a always · n no · e edit · A all · esc deny"
+	HelpApproval     = "1 once · 2 always · 3 this turn · n no · e edit · esc deny"
 	HelpApprovalEdit = "enter submit · esc cancel"
-	ApprovePrompt    = "[y] yes  [a] always  [n] no  [e] edit  [A] all"
 	ApproveEditHint  = "describe the change · enter submit · esc cancel"
 
-	// CLIApprovePrompt is the line-based CLI approval prompt (the TUI uses the
-	// single-key ApprovePrompt instead).
-	CLIApprovePrompt = "y yes · a always · all (this turn) · n no · or type a change"
+	// The numbered approval menu. Line 2 is dynamic — the TUI composes
+	// ApproveAlwaysPrefix + chat.GrantScope(...) + ApproveAlwaysSuffix.
+	ApproveOnce         = "[1] run it once"
+	ApproveAlwaysPrefix = "[2] always allow "
+	ApproveAlwaysSuffix = "  (this session)"
+	ApproveTurn         = "[3] yes to everything this turn"
+	ApproveDenyEdit     = "[n] no · [e] edit"
 
 	EmptyTagline = "a calm assistant for your terminal."
 	EmptyTryLead = "try:"
@@ -23,6 +26,13 @@ const (
 	CLIWelcome = "a calm assistant for your terminal."
 	CLIExit    = "ctrl+c or 'exit' to leave · 'help' for commands"
 )
+
+// CLIApprovePrompt builds the line-based CLI approval prompt (the TUI uses
+// the numbered single-key menu instead). alwaysScope describes what `a`
+// grants for this call — e.g. "`git …`", "any bash command", or a tool name.
+func CLIApprovePrompt(alwaysScope string) string {
+	return "y yes · a always (" + alwaysScope + ") · all this turn · n no · or type a change"
+}
 
 // Status verbs shown while the agent works.
 const (

@@ -305,20 +305,30 @@ export BASE_URL=https://api.openai.com/v1
 When nib wants to run a command, you decide:
 
 ```
-▏ run: bash
-▏ {
-▏   "script": "df -h"
-▏ }
-▏ [y] yes  [a] always  [n] no  [e] edit  [A] all
+▏ bash wants to run
+▏ $ df -h
+▏
+▏ [1] run it once
+▏ [2] always allow `df …`  (this session)
+▏ [3] yes to everything this turn
+▏ [n] no · [e] edit
 ```
 
 In the **TUI**, approval is a single keypress (no Enter):
 
-- `y` — approve this call
-- `a` — always allow **this tool** for the session (sub-agents share the allow list)
-- `A` — allow **all** tool calls for the rest of this turn (handy after delegating a multi-step task)
+- `1` — run this call once
+- `2` — always allow, scoped: for a simple shell command this grants just that
+  command prefix (`df …`); for anything compound — or any other tool — it grants
+  the whole tool. Session-only; sub-agents share the allow list. A command that
+  chains (`&&`, `;`, `|`, `$( )`, …) never rides a prefix grant. A prefix grant
+  trusts everything that command can do with its arguments — grant prefixes
+  you'd trust with any flags.
+- `3` — allow **all** tool calls for the rest of this turn (handy after delegating
+  a multi-step task)
 - `n` / `Esc` — deny
 - `e` — edit the call, then submit
+
+(`y`/`a`/`A` still work as aliases for `1`/`2`/`3`.)
 
 In the **CLI** (`--cli`) the prompt is line-based: type `y`, `a`, `all`, `n`, or a free-form
 change, then Enter. To skip prompting entirely, set `approval_mode` / `allowed_tools` in

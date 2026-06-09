@@ -1,22 +1,66 @@
 package chat
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestFormatToolCall_Fallback(t *testing.T) {
-	// Unknown tool → humanized, sorted key: value lines.
+	// Keys sorted and padded to a column; no JSON syntax.
 	got := FormatToolCall("some_mcp_tool", `{"beta":"two","alpha":1}`)
-	want := "alpha: 1\nbeta: two"
+	want := "alpha  1\nbeta   two"
 	if got != want {
-		t.Fatalf("got %q want %q", got, want)
+		t.Fatalf("got %q, want %q", got, want)
 	}
 }
 
 func TestFormatToolCall_FallbackMultiline(t *testing.T) {
-	// Multi-line / long string values go on their own indented block.
+	// Multi-line values show their first line plus a hidden-line count.
 	got := FormatToolCall("x", `{"body":"line one\nline two"}`)
-	want := "body:\n  line one\n  line two"
+	want := "body  line one… (+1 line)"
 	if got != want {
-		t.Fatalf("got %q want %q", got, want)
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+func TestFormatToolCall_FallbackNested(t *testing.T) {
+	// Nested objects flatten to dotted keys; scalar arrays join with ", ";
+	// object arrays flatten with an index. No braces, brackets, or quotes.
+	got := FormatToolCall("x", `{"server":{"url":"http://x"},"labels":["bug","auth"],"items":[{"name":"a"}],"count":2}`)
+	want := "count         2\nitems.0.name  a\nlabels        bug, auth\nserver.url    http://x"
+	if got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+	for _, forbidden := range []string{"{", "}", "[", "]", `"`} {
+		if strings.Contains(got, forbidden) {
+			t.Fatalf("fallback output contains JSON syntax %q: %q", forbidden, got)
+		}
+	}
+}
+
+func TestToolArgRows(t *testing.T) {
+	// Unknown tool with object args → rows.
+	rows, ok := ToolArgRows("some_mcp_tool", `{"body":"l1\nl2\nl3","title":"x"}`)
+	if !ok || len(rows) != 2 {
+		t.Fatalf("expected 2 rows ok=true, got %v ok=%v", rows, ok)
+	}
+	if rows[0].Key != "body" || rows[0].Value != "l1" || rows[0].HiddenLines != 2 {
+		t.Fatalf("unexpected body row: %+v", rows[0])
+	}
+	if rows[0].ValueDisplay() != "l1… (+2 lines)" {
+		t.Fatalf("unexpected ValueDisplay: %q", rows[0].ValueDisplay())
+	}
+	if rows[1].Key != "title" || rows[1].Value != "x" || rows[1].HiddenLines != 0 {
+		t.Fatalf("unexpected title row: %+v", rows[1])
+	}
+
+	// Known tools keep their purpose-built one-liners — no rows.
+	if _, ok := ToolArgRows("bash", `{"script":"ls"}`); ok {
+		t.Fatal("known formatter tools must not return rows")
+	}
+	// Non-object args → no rows.
+	if _, ok := ToolArgRows("x", `not json`); ok {
+		t.Fatal("invalid JSON must not return rows")
 	}
 }
 

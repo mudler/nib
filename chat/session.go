@@ -30,27 +30,28 @@ import (
 
 // Session represents a chat session with the AI assistant
 type Session struct {
-	ctx           context.Context
-	turnMu        sync.Mutex
-	turnCancel    context.CancelFunc
-	llm           cogito.LLM
-	clients       []*mcp.ClientSession
-	mcpClient     *mcp.Client
-	cfgClients    map[string]*mcp.ClientSession // config/plugin MCP servers, by name
-	cfgServers    map[string]types.MCPServer    // desired set, for diffing
-	skillsClient  *mcp.ClientSession            // the load_skill server
-	fragment      cogito.Fragment
-	messages      []openai.ChatCompletionMessage
-	callbacks     Callbacks
-	systemPrompt  string
-	loadedSkills  string // eager-loaded /skill instructions, re-applied across reloads
-	skills        []types.Skill
-	cogitoOptions types.AgentOptions
-	compaction    types.CompactionConfig
-	allowedTools  map[string]bool // Tools that don't need approval this session
-	autoApprove   bool            // approval_mode: auto — approve every tool call
-	allowAllTurn  bool            // user chose "allow all this turn"; reset each top-level turn
-	hooks         *hooks.Dispatcher
+	ctx                 context.Context
+	turnMu              sync.Mutex
+	turnCancel          context.CancelFunc
+	llm                 cogito.LLM
+	clients             []*mcp.ClientSession
+	mcpClient           *mcp.Client
+	cfgClients          map[string]*mcp.ClientSession // config/plugin MCP servers, by name
+	cfgServers          map[string]types.MCPServer    // desired set, for diffing
+	skillsClient        *mcp.ClientSession            // the load_skill server
+	fragment            cogito.Fragment
+	messages            []openai.ChatCompletionMessage
+	callbacks           Callbacks
+	systemPrompt        string
+	loadedSkills        string // eager-loaded /skill instructions, re-applied across reloads
+	skills              []types.Skill
+	cogitoOptions       types.AgentOptions
+	compaction          types.CompactionConfig
+	allowedTools        map[string]bool // Tools that don't need approval this session
+	allowedBashPrefixes map[string]bool // bash first-word grants ("git" → simple `git …` auto-approved)
+	autoApprove         bool            // approval_mode: auto — approve every tool call
+	allowAllTurn        bool            // user chose "allow all this turn"; reset each top-level turn
+	hooks               *hooks.Dispatcher
 
 	agentMu    sync.Mutex
 	agentStart map[string]time.Time // sub-agent ID -> spawn time, for elapsed
@@ -218,29 +219,30 @@ func NewSession(ctx context.Context, cfg types.Config, callbacks Callbacks, tran
 	}
 
 	s := &Session{
-		ctx:             ctx,
-		llm:             llm,
-		clients:         clients,
-		fragment:        cogito.NewEmptyFragment(),
-		messages:        []openai.ChatCompletionMessage{},
-		callbacks:       callbacks,
-		inject:          make(chan openai.ChatCompletionMessage, 16),
-		cogitoOptions:   cfg.AgentOptions,
-		compaction:      cfg.Compaction,
-		allowedTools:    make(map[string]bool),
-		agentStart:      make(map[string]time.Time),
-		agentManager:    agentManager,
-		agentLogs:       newAgentLogStore(),
-		llmModel:        cfg.Model,
-		apiKey:          cfg.APIKey,
-		baseURL:         cfg.BaseURL,
-		metadata:        cfg.Metadata,
-		reasoningEffort: cfg.ReasoningEffort,
-		mcpClient:       client,
-		cfgClients:      map[string]*mcp.ClientSession{},
-		cfgServers:      map[string]types.MCPServer{},
-		configurator:    manage.New(plugin.BaseDir(), config.WritablePath()),
-		tracer:          tracer,
+		ctx:                 ctx,
+		llm:                 llm,
+		clients:             clients,
+		fragment:            cogito.NewEmptyFragment(),
+		messages:            []openai.ChatCompletionMessage{},
+		callbacks:           callbacks,
+		inject:              make(chan openai.ChatCompletionMessage, 16),
+		cogitoOptions:       cfg.AgentOptions,
+		compaction:          cfg.Compaction,
+		allowedTools:        make(map[string]bool),
+		allowedBashPrefixes: make(map[string]bool),
+		agentStart:          make(map[string]time.Time),
+		agentManager:        agentManager,
+		agentLogs:           newAgentLogStore(),
+		llmModel:            cfg.Model,
+		apiKey:              cfg.APIKey,
+		baseURL:             cfg.BaseURL,
+		metadata:            cfg.Metadata,
+		reasoningEffort:     cfg.ReasoningEffort,
+		mcpClient:           client,
+		cfgClients:          map[string]*mcp.ClientSession{},
+		cfgServers:          map[string]types.MCPServer{},
+		configurator:        manage.New(plugin.BaseDir(), config.WritablePath()),
+		tracer:              tracer,
 	}
 	for _, name := range cfg.AllowedTools {
 		s.allowedTools[name] = true
@@ -311,6 +313,11 @@ func (s *Session) decideToolCall(req ToolCallRequest) cogito.ToolCallDecision {
 	if s.allowedTools[req.Name] {
 		return cogito.ToolCallDecision{Approved: true}
 	}
+	if req.Name == "bash" {
+		if p, ok := BashGrantPrefix(req.Arguments); ok && s.allowedBashPrefixes[p] {
+			return cogito.ToolCallDecision{Approved: true}
+		}
+	}
 	if s.callbacks.OnToolCall == nil {
 		return cogito.ToolCallDecision{Approved: true}
 	}
@@ -319,7 +326,23 @@ func (s *Session) decideToolCall(req ToolCallRequest) cogito.ToolCallDecision {
 		s.allowAllTurn = true
 	}
 	if resp.Approved && resp.AlwaysAllow {
-		s.allowedTools[req.Name] = true
+		switch {
+		case resp.AlwaysPrefix == "":
+			s.allowedTools[req.Name] = true
+		case req.Name == "bash":
+			// Mint a prefix grant only when the approved request itself
+			// derives that prefix — the response string is presentation-only
+			// and cannot widen the grant. A non-bash request or a mismatched
+			// prefix mints nothing at all: the call stays approved, but we
+			// deliberately do not fall back to a whole-tool grant the user
+			// never saw offered.
+			if p, ok := BashGrantPrefix(req.Arguments); ok && p == resp.AlwaysPrefix {
+				if s.allowedBashPrefixes == nil {
+					s.allowedBashPrefixes = make(map[string]bool)
+				}
+				s.allowedBashPrefixes[p] = true
+			}
+		}
 	}
 	return cogito.ToolCallDecision{Approved: resp.Approved, Adjustment: resp.Adjustment}
 }

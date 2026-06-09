@@ -24,7 +24,7 @@ func TestApprovalChoiceKeysResolve(t *testing.T) {
 			viewport:         viewport.New(80, 10),
 			awaitingApproval: true,
 			approvalEditing:  false,
-			pendingTool:      &chat.ToolCallRequest{Name: "shell"},
+			pendingTool:      &chat.ToolCallRequest{Name: "bash", Arguments: `{"script":"git status"}`},
 			toolResponseChan: ch,
 		}
 		return m, ch
@@ -66,6 +66,37 @@ func TestApprovalChoiceKeysResolve(t *testing.T) {
 		t.Fatalf("A should send Approved+AllowAllTurn, got %+v", resp)
 	}
 
+	// `1` → approve once (numbered alias for y).
+	m, ch = newModel()
+	nm, _, resp = run(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'1'}}, ch)
+	if nm.awaitingApproval || resp == nil || !resp.Approved || resp.AlwaysAllow || resp.AllowAllTurn {
+		t.Fatalf("1 should send a plain approval, got %+v", resp)
+	}
+
+	// `2` → always allow, scoped to the derived bash prefix.
+	m, ch = newModel()
+	nm, _, resp = run(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}}, ch)
+	if nm.awaitingApproval || resp == nil || !resp.Approved || !resp.AlwaysAllow {
+		t.Fatalf("2 should send Approved+AlwaysAllow, got %+v", resp)
+	}
+	if resp.AlwaysPrefix != "git" {
+		t.Fatalf("2 on a simple git command should grant prefix \"git\", got %q", resp.AlwaysPrefix)
+	}
+
+	// `a` → alias for 2, same scoped grant.
+	m, ch = newModel()
+	_, _, resp = run(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}}, ch)
+	if resp == nil || !resp.AlwaysAllow || resp.AlwaysPrefix != "git" {
+		t.Fatalf("a should match 2's scoped grant, got %+v", resp)
+	}
+
+	// `3` → allow all this turn (numbered alias for A).
+	m, ch = newModel()
+	_, _, resp = run(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'3'}}, ch)
+	if resp == nil || !resp.Approved || !resp.AllowAllTurn {
+		t.Fatalf("3 should send Approved+AllowAllTurn, got %+v", resp)
+	}
+
 	// `e` → enter edit mode; nothing resolved, nothing on the channel.
 	m, ch = newModel()
 	nm, _, resp = run(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}}, ch)
@@ -77,5 +108,44 @@ func TestApprovalChoiceKeysResolve(t *testing.T) {
 	}
 	if resp != nil {
 		t.Fatalf("e should not write to the channel, got %+v", resp)
+	}
+}
+
+// TestApprovalAlwaysWholeTool verifies `2` falls back to a whole-tool grant
+// (empty AlwaysPrefix) when no safe bash prefix can be derived.
+func TestApprovalAlwaysWholeTool(t *testing.T) {
+	ch := make(chan chat.ToolCallResponse, 1)
+	m := Model{
+		textarea:         textarea.New(),
+		viewport:         viewport.New(80, 10),
+		awaitingApproval: true,
+		pendingTool:      &chat.ToolCallRequest{Name: "bash", Arguments: `{"script":"a && b"}`},
+		toolResponseChan: ch,
+	}
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
+	if cmd != nil {
+		cmd()
+	}
+	if next.(Model).awaitingApproval {
+		t.Fatal("2 should clear awaitingApproval")
+	}
+	resp := <-ch
+	if !resp.Approved || !resp.AlwaysAllow || resp.AlwaysPrefix != "" {
+		t.Fatalf("compound command should grant the whole tool, got %+v", resp)
+	}
+}
+
+func TestTruncateLine(t *testing.T) {
+	if got := truncateLine("hello", 10); got != "hello" {
+		t.Fatalf("fits: got %q", got)
+	}
+	if got := truncateLine("hello world", 5); got != "hell…" {
+		t.Fatalf("truncates: got %q", got)
+	}
+	if got := truncateLine("hello", 0); got != "…" {
+		t.Fatalf("non-positive budget must clamp, got %q", got)
+	}
+	if got := truncateLine("héllo wörld", 6); got != "héllo…" {
+		t.Fatalf("rune-aware: got %q", got)
 	}
 }

@@ -12,8 +12,9 @@ import (
 // FormatToolCall renders a tool call's arguments as a compact, human-readable
 // summary for display, replacing raw JSON. argsJSON is the marshaled arguments
 // object. Known tools get a purpose-built one-liner (see toolFormatters); any
-// other tool (MCP servers, plugins) falls back to humanized key: value lines.
-// If argsJSON is not a JSON object the input is returned unchanged.
+// other tool (MCP servers, plugins) falls back to an aligned key/value args
+// card (see ToolArgRows). If argsJSON is not a JSON object the input is
+// returned unchanged.
 func FormatToolCall(name, argsJSON string) string {
 	var args map[string]any
 	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
@@ -24,7 +25,7 @@ func FormatToolCall(name, argsJSON string) string {
 			return out
 		}
 	}
-	return humanizeArgs(args)
+	return joinRows(argRows(args))
 }
 
 // toolFormatters maps a tool name to a formatter over its decoded arguments.
@@ -130,27 +131,132 @@ func argInt(a map[string]any, key string) (int, bool) {
 	return int(f), true
 }
 
-// humanizeArgs renders arbitrary arguments as sorted "key: value" lines. Scalar
-// values render inline; multi-line strings render as an indented block
-// beneath their key.
-func humanizeArgs(args map[string]any) string {
-	keys := make([]string, 0, len(args))
-	for k := range args {
+// ArgRow is one key/value line of the fallback args card. Nested objects are
+// flattened to dotted keys, so a card is always a flat list of rows.
+type ArgRow struct {
+	Key   string
+	Value string // first line of the value
+	// HiddenLines counts the value's truncated lines (0 = single-line value).
+	HiddenLines int
+}
+
+// ValueDisplay renders the value with its hidden-line hint, e.g.
+// "The login flow redirects to… (+12 lines)".
+func (r ArgRow) ValueDisplay() string {
+	if r.HiddenLines == 0 {
+		return r.Value
+	}
+	noun := "lines"
+	if r.HiddenLines == 1 {
+		noun = "line"
+	}
+	return fmt.Sprintf("%s… (+%d %s)", r.Value, r.HiddenLines, noun)
+}
+
+// ToolArgRows returns the args-card rows for a tool call, for callers that
+// style keys and values separately (the TUI approval block). ok is false when
+// the tool has a purpose-built formatter or the arguments are not a JSON
+// object — render FormatToolCall's string instead.
+func ToolArgRows(name, argsJSON string) ([]ArgRow, bool) {
+	var args map[string]any
+	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
+		return nil, false
+	}
+	if f, ok := toolFormatters[name]; ok {
+		if out := f(args); out != "" {
+			return nil, false
+		}
+	}
+	return argRows(args), true
+}
+
+// argRows flattens decoded arguments into sorted card rows.
+func argRows(args map[string]any) []ArgRow {
+	flat := map[string]any{}
+	flattenInto(flat, "", args)
+	keys := make([]string, 0, len(flat))
+	for k := range flat {
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
 
+	rows := make([]ArgRow, 0, len(keys))
+	for _, k := range keys {
+		val := stringifyArg(flat[k])
+		hidden := 0
+		if i := strings.IndexByte(val, '\n'); i >= 0 {
+			hidden = strings.Count(val, "\n")
+			val = val[:i]
+		}
+		rows = append(rows, ArgRow{Key: k, Value: val, HiddenLines: hidden})
+	}
+	return rows
+}
+
+// flattenInto flattens v under prefix into dst: nested objects become dotted
+// keys (server.url), scalar arrays join with ", ", and arrays holding objects
+// flatten with an index (items.0.name).
+func flattenInto(dst map[string]any, prefix string, v any) {
+	switch t := v.(type) {
+	case map[string]any:
+		if len(t) == 0 {
+			if prefix != "" {
+				dst[prefix] = ""
+			}
+			return
+		}
+		for k, child := range t {
+			key := k
+			if prefix != "" {
+				key = prefix + "." + k
+			}
+			flattenInto(dst, key, child)
+		}
+	case []any:
+		if scalarsOnly(t) {
+			parts := make([]string, len(t))
+			for i, e := range t {
+				parts[i] = stringifyArg(e)
+			}
+			dst[prefix] = strings.Join(parts, ", ")
+			return
+		}
+		for i, e := range t {
+			flattenInto(dst, fmt.Sprintf("%s.%d", prefix, i), e)
+		}
+	default:
+		dst[prefix] = v
+	}
+}
+
+// scalarsOnly reports whether items holds no nested objects or arrays.
+func scalarsOnly(items []any) bool {
+	for _, e := range items {
+		switch e.(type) {
+		case map[string]any, []any:
+			return false
+		}
+	}
+	return true
+}
+
+// joinRows renders rows as plain aligned text (CLI and transcript; the TUI
+// renders rows itself to style keys and values separately).
+func joinRows(rows []ArgRow) string {
+	maxKey := 0
+	for _, r := range rows {
+		if len(r.Key) > maxKey {
+			maxKey = len(r.Key)
+		}
+	}
 	var b strings.Builder
-	for i, k := range keys {
+	for i, r := range rows {
 		if i > 0 {
 			b.WriteString("\n")
 		}
-		val := stringifyArg(args[k])
-		if strings.Contains(val, "\n") {
-			b.WriteString(k + ":\n" + indent(val, "  "))
-		} else {
-			b.WriteString(k + ": " + val)
-		}
+		b.WriteString(r.Key)
+		b.WriteString(strings.Repeat(" ", maxKey-len(r.Key)+2))
+		b.WriteString(r.ValueDisplay())
 	}
 	return b.String()
 }
@@ -178,13 +284,4 @@ func stringifyArg(v any) string {
 		}
 		return string(b)
 	}
-}
-
-// indent prefixes every line of s with prefix.
-func indent(s, prefix string) string {
-	lines := strings.Split(s, "\n")
-	for i := range lines {
-		lines[i] = prefix + lines[i]
-	}
-	return strings.Join(lines, "\n")
 }

@@ -54,6 +54,11 @@ type ToolCallResponse struct {
 	Approved    bool
 	Adjustment  string
 	AlwaysAllow bool
+	// AlwaysPrefix narrows an AlwaysAllow grant for the bash tool to scripts
+	// whose first word matches (e.g. "git" → simple `git …` commands run
+	// without prompting). Empty means the grant covers the whole tool.
+	// Ignored unless AlwaysAllow is set.
+	AlwaysPrefix string
 	// AllowAllTurn, when set together with Approved, approves every remaining
 	// tool call for the rest of the current turn (incl. sub-agents) w/o prompting.
 	AllowAllTurn bool
