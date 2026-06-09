@@ -33,6 +33,12 @@ func TestBashGrantPrefix(t *testing.T) {
 		// carriage return: bash treats it as part of a word, Go's
 		// strings.Fields splits on it — reject to stay aligned with bash
 		{"carriage return", "{\"script\":\"git\\rrm -rf /\"}", "", false},
+		// other unicode whitespace shares the same divergence: strings.Fields
+		// splits on it, bash does not — reject outright
+		{"vertical tab", "{\"script\":\"git\\u000bfoo\"}", "", false},
+		{"form feed", "{\"script\":\"git\\u000cfoo\"}", "", false},
+		{"next line U+0085", "{\"script\":\"git\\u0085foo\"}", "", false},
+		{"no-break space U+00A0", "{\"script\":\"git\\u00a0foo\"}", "", false},
 		// chaining commands would grant arbitrary execution
 		{"sudo", `{"script":"sudo rm -rf /"}`, "", false},
 		{"xargs", `{"script":"xargs rm"}`, "", false},

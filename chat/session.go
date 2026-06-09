@@ -326,13 +326,22 @@ func (s *Session) decideToolCall(req ToolCallRequest) cogito.ToolCallDecision {
 		s.allowAllTurn = true
 	}
 	if resp.Approved && resp.AlwaysAllow {
-		if resp.AlwaysPrefix != "" {
-			if s.allowedBashPrefixes == nil {
-				s.allowedBashPrefixes = make(map[string]bool)
-			}
-			s.allowedBashPrefixes[resp.AlwaysPrefix] = true
-		} else {
+		switch {
+		case resp.AlwaysPrefix == "":
 			s.allowedTools[req.Name] = true
+		case req.Name == "bash":
+			// Mint a prefix grant only when the approved request itself
+			// derives that prefix — the response string is presentation-only
+			// and cannot widen the grant. A non-bash request or a mismatched
+			// prefix mints nothing at all: the call stays approved, but we
+			// deliberately do not fall back to a whole-tool grant the user
+			// never saw offered.
+			if p, ok := BashGrantPrefix(req.Arguments); ok && p == resp.AlwaysPrefix {
+				if s.allowedBashPrefixes == nil {
+					s.allowedBashPrefixes = make(map[string]bool)
+				}
+				s.allowedBashPrefixes[p] = true
+			}
 		}
 	}
 	return cogito.ToolCallDecision{Approved: resp.Approved, Adjustment: resp.Adjustment}

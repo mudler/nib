@@ -3,6 +3,7 @@ package chat
 import (
 	"encoding/json"
 	"strings"
+	"unicode"
 )
 
 // Scoped "always allow" grants for the bash tool. A grant covers a command
@@ -65,10 +66,18 @@ func BashGrantPrefix(argsJSON string) (string, bool) {
 			return "", false
 		}
 	}
-	// strings.Fields splits on all unicode whitespace, a superset of bash's
-	// default word separators (space, tab, newline). Splitting on more can
-	// only shorten the first word, never merge two bash words, so the
-	// derived prefix is at most narrower than what bash runs — safe.
+	// bash only splits words on space/tab/newline; any other unicode
+	// whitespace (\v, \f, U+0085, U+00A0, …) is part of a word to bash but a
+	// separator to strings.Fields, so the derived first word would diverge
+	// from what bash runs — reject it outright. Newline/CR are already
+	// rejected as tokens above but are caught here too, which is fine.
+	if strings.ContainsFunc(script, func(r rune) bool {
+		return unicode.IsSpace(r) && r != ' ' && r != '\t'
+	}) {
+		return "", false
+	}
+	// Only space and tab can remain at this point, so strings.Fields splits
+	// exactly where bash would and the first field is bash's first word.
 	first := strings.Fields(script)[0]
 	// Quotes, escapes, expansions, or assignments in the first word mean it
 	// is not a plain command name (e.g. FOO=1 git push, "$CMD" args).
