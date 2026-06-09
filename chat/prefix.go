@@ -19,16 +19,30 @@ import (
 // rejectedShellTokens disqualify a script from prefix grants: they chain,
 // substitute, redirect, or background, so the first word no longer bounds
 // what runs.
+// "(" and ")" cover subshells; "\r" is rejected because Go's strings.Fields
+// splits on it while bash does not, so allowing it would let the derived
+// first word diverge from what bash actually runs.
 var rejectedShellTokens = []string{
-	"&&", "||", ";", "|", "&", "$(", "${", "`", ">", "<", "\n",
+	"&&", "||", ";", "|", "&", "$(", "${", "`", ">", "<", "\n", "\r",
+	"(", ")",
 }
 
 // chainingCommands execute other commands, so granting their first word
-// would grant arbitrary execution.
+// would grant arbitrary execution. This denylist of wrappers is inherently
+// incomplete (any installed binary can exec another); the conservative
+// rejected-token checks above remain the primary boundary.
 var chainingCommands = map[string]bool{
+	// shells and shell builtins that run arbitrary code
 	"sh": true, "bash": true, "zsh": true, "eval": true, "exec": true,
-	"source": true, ".": true, "env": true, "xargs": true, "sudo": true,
-	"nohup": true, "time": true, "command": true,
+	"source": true, ".": true, "command": true, "!": true,
+	// environment / privilege wrappers
+	"env": true, "sudo": true, "doas": true, "su": true, "runuser": true,
+	// process / scheduling wrappers
+	"nohup": true, "time": true, "timeout": true, "nice": true,
+	"ionice": true, "chrt": true, "setsid": true, "stdbuf": true,
+	"flock": true, "watch": true, "setarch": true, "taskset": true,
+	// namespace / multiplexer wrappers
+	"unshare": true, "nsenter": true, "busybox": true, "xargs": true,
 }
 
 // BashGrantPrefix derives the prefix-grant key for a bash tool call: the
@@ -51,6 +65,10 @@ func BashGrantPrefix(argsJSON string) (string, bool) {
 			return "", false
 		}
 	}
+	// strings.Fields splits on all unicode whitespace, a superset of bash's
+	// default word separators (space, tab, newline). Splitting on more can
+	// only shorten the first word, never merge two bash words, so the
+	// derived prefix is at most narrower than what bash runs — safe.
 	first := strings.Fields(script)[0]
 	// Quotes, escapes, expansions, or assignments in the first word mean it
 	// is not a plain command name (e.g. FOO=1 git push, "$CMD" args).

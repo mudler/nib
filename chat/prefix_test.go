@@ -27,13 +27,35 @@ func TestBashGrantPrefix(t *testing.T) {
 		{"semicolon in quotes", `{"script":"echo 'a; b'"}`, "", false},
 		// env-prefixed assignments make the first word an assignment, not a command
 		{"env prefix", `{"script":"FOO=1 git push"}`, "", false},
+		// subshells and pipeline negation run "other commands" too
+		{"subshell parens", `{"script":"(rm -rf /)"}`, "", false},
+		{"pipeline negation", `{"script":"! rm -rf /"}`, "", false},
+		// carriage return: bash treats it as part of a word, Go's
+		// strings.Fields splits on it — reject to stay aligned with bash
+		{"carriage return", "{\"script\":\"git\\rrm -rf /\"}", "", false},
 		// chaining commands would grant arbitrary execution
 		{"sudo", `{"script":"sudo rm -rf /"}`, "", false},
 		{"xargs", `{"script":"xargs rm"}`, "", false},
+		{"sh -c", `{"script":"sh -c ls"}`, "", false},
 		{"bash -c", `{"script":"bash -c ls"}`, "", false},
+		{"zsh -c", `{"script":"zsh -c ls"}`, "", false},
 		{"eval", `{"script":"eval ls"}`, "", false},
+		{"exec", `{"script":"exec rm -rf /"}`, "", false},
+		{"source", `{"script":"source ./setup"}`, "", false},
+		{"command", `{"script":"command rm -rf /"}`, "", false},
+		{"nohup", `{"script":"nohup rm -rf /"}`, "", false},
+		{"time", `{"script":"time rm -rf /"}`, "", false},
 		{"env command", `{"script":"env ls"}`, "", false},
 		{"dot source", `{"script":". ./setup"}`, "", false},
+		// privilege/process wrappers also execute their arguments
+		{"doas", `{"script":"doas rm -rf /"}`, "", false},
+		{"su", `{"script":"su root"}`, "", false},
+		{"nice", `{"script":"nice rm -rf /"}`, "", false},
+		{"timeout", `{"script":"timeout 5 rm -rf /"}`, "", false},
+		{"setsid", `{"script":"setsid rm -rf /"}`, "", false},
+		{"flock", `{"script":"flock /tmp/l rm -rf /"}`, "", false},
+		{"unshare", `{"script":"unshare rm -rf /"}`, "", false},
+		{"busybox", `{"script":"busybox rm -rf /"}`, "", false},
 		// degenerate inputs
 		{"empty script", `{"script":""}`, "", false},
 		{"whitespace only", `{"script":"   "}`, "", false},
