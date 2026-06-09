@@ -1609,7 +1609,7 @@ func (m *Model) updateViewport() {
 				sb.WriteString(gutter + theme.Reasoning.Render(line) + "\n")
 			}
 		}
-		prompt := theme.ApprovePrompt
+		prompt := theme.ApproveOnce
 		if m.approvalEditing {
 			prompt = theme.ApproveEditHint
 		}

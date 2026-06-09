@@ -162,7 +162,7 @@ func RunCLI(ctx context.Context, cfg types.Config, transports ...mcp.Transport) 
 			if req.Reasoning != "" {
 				fmt.Println(g + theme.Reasoning.Render(req.Reasoning))
 			}
-			fmt.Print(g + theme.ApproveKey.Render(theme.CLIApprovePrompt) + " ")
+			fmt.Print(g + theme.ApproveKey.Render(theme.CLIApprovePrompt(req.Name)) + " ")
 
 			text, _ := readStringCancellable(ctx, reader)
 			text = strings.TrimSpace(text)

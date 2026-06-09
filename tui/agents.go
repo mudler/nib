@@ -124,9 +124,9 @@ func shortID(id string) string {
 // toolApprovalLabel builds the tool-approval header, labeling sub-agent calls.
 func toolApprovalLabel(req chat.ToolCallRequest) string {
 	if req.AgentID != "" {
-		return fmt.Sprintf("%s %s · run: %s", theme.SubAgent, shortID(req.AgentID), req.Name)
+		return fmt.Sprintf("%s %s · %s wants to run", theme.SubAgent, shortID(req.AgentID), req.Name)
 	}
-	return fmt.Sprintf("run: %s", req.Name)
+	return req.Name + " wants to run"
 }
 
 // firstRunningJobID returns the id of the first running job, or "".

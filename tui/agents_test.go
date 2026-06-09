@@ -109,11 +109,11 @@ func TestRenderJobsFooterCounts(t *testing.T) {
 
 func TestToolLabelWithAgent(t *testing.T) {
 	got := toolApprovalLabel(chat.ToolCallRequest{Name: "echo", AgentID: "a1"})
-	if !strings.Contains(got, "a1") || !strings.Contains(got, "echo") {
-		t.Fatalf("expected agent-labeled approval, got %q", got)
+	if !strings.Contains(got, "a1") || !strings.Contains(got, "echo wants to run") {
+		t.Fatalf("expected agent-labeled approval header, got %q", got)
 	}
 	root := toolApprovalLabel(chat.ToolCallRequest{Name: "echo"})
-	if strings.Contains(root, "→") {
-		t.Fatalf("root tool should not show an agent arrow, got %q", root)
+	if root != "echo wants to run" {
+		t.Fatalf("expected plain header, got %q", root)
 	}
 }
