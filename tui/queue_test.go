@@ -200,3 +200,68 @@ func TestViewShowsQueue(t *testing.T) {
 		t.Fatalf("View should render the queue, got:\n%s", out)
 	}
 }
+
+func TestRedispatchGoesFirstWithoutEcho(t *testing.T) {
+	s, err := chat.NewSession(context.Background(), types.Config{}, chat.Callbacks{})
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	defer s.Close()
+
+	m := newQueueTestModel()
+	m.session = s
+	m.loading = true
+	// An undelivered follow-up (already echoed when it was released) plus a
+	// normally queued entry: the follow-up must re-dispatch first, without a
+	// second transcript echo.
+	m.redispatch = []string{"whats 2+2?"}
+	m.queue = []string{"and another"}
+	m.messages = []ChatMessage{{Role: "user", Content: "whats 2+2?"}}
+
+	next, cmd := m.Update(responseMsg{content: "done"})
+	nm := next.(Model)
+
+	if cmd == nil {
+		t.Fatal("expected a sendMessage command for the re-dispatched follow-up")
+	}
+	if len(nm.redispatch) != 0 {
+		t.Fatalf("redispatch should be drained, got %v", nm.redispatch)
+	}
+	if len(nm.queue) != 1 || nm.queue[0] != "and another" {
+		t.Fatalf("queue = %v, want [and another] untouched", nm.queue)
+	}
+	// No duplicate "you ·" line: the only user message is the original echo.
+	users := 0
+	for _, msg := range nm.messages {
+		if msg.Role == "user" {
+			users++
+		}
+	}
+	if users != 1 {
+		t.Fatalf("user transcript lines = %d, want 1 (no double echo)", users)
+	}
+	if !nm.loading {
+		t.Fatal("loading should be true: the re-dispatched turn is starting")
+	}
+}
+
+func TestReleaseQueueFrontTracksUndelivered(t *testing.T) {
+	// releaseQueueFront must inject via InjectUser so an unconsumed follow-up
+	// is recoverable. With no live run, injection fails and the entry must
+	// stay queued (and nothing is echoed).
+	s, err := chat.NewSession(context.Background(), types.Config{}, chat.Callbacks{})
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	defer s.Close()
+
+	m := newQueueTestModel()
+	m.session = s
+	m.queue = []string{"hello"}
+	if m.releaseQueueFront() {
+		t.Fatal("releaseQueueFront should fail with no live run")
+	}
+	if len(m.queue) != 1 {
+		t.Fatalf("entry should stay queued, got %v", m.queue)
+	}
+}

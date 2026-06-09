@@ -141,6 +141,12 @@ type Model struct {
 	queue    []string
 	queueSel int
 
+	// redispatch holds follow-ups that were released into a run (and echoed)
+	// but never consumed by it — the run ended first. They re-dispatch as
+	// fresh turns ahead of the queue, without a second echo, and are not
+	// shown in the editable-queue UI (they already read as sent).
+	redispatch []string
+
 	// Markdown renderers cached per wrap width (glamour renderers are
 	// width-bound and expensive to build). At most a couple of distinct
 	// widths exist in practice (one per message-prefix width).
@@ -702,6 +708,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.lastParkedReply = ""
 		if m.session != nil {
 			m.contextTokens = m.session.ContextTokens()
+			// Follow-ups released into the ended run that it never consumed:
+			// the model never saw them, so re-dispatch them ahead of the queue.
+			m.redispatch = append(m.redispatch, m.session.TakeUndelivered()...)
 		}
 		m.updateViewport()
 		// The run ended with messages still queued: dispatch them as fresh turns
@@ -989,6 +998,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // flush so typed-while-idle and queued-while-busy input behave identically.
 func (m *Model) dispatchInput(input string) tea.Cmd {
 	m.messages = append(m.messages, ChatMessage{Role: "user", Content: input})
+	return m.dispatchResolved(input)
+}
+
+// dispatchResolved resolves and starts input WITHOUT echoing it to the
+// transcript — for re-dispatched undelivered follow-ups, whose transcript
+// line was already written when they were released into the previous run.
+func (m *Model) dispatchResolved(input string) tea.Cmd {
 	action := slash.Resolve(input, m.cfg.Commands, m.cfg.Skills, m.cfg.Agents)
 	switch action.Kind {
 	case slash.KindError:

@@ -57,7 +57,9 @@ func (m *Model) releaseQueueFront() bool {
 	if action.Kind != slash.KindSend {
 		return false
 	}
-	if !m.session.Inject(action.Text) {
+	// InjectUser (not Inject) so a follow-up the run never consumes is handed
+	// back at run end (TakeUndelivered) and re-dispatched instead of lost.
+	if !m.session.InjectUser(action.Text) {
 		return false
 	}
 	m.queue = m.queue[1:]
@@ -80,7 +82,18 @@ func (m *Model) releaseQueueFront() bool {
 // that don't start a turn (a skill load or a resolve error) are handled inline
 // and the loop continues to the next entry. Used when a run ends with messages
 // still queued.
+//
+// Undelivered follow-ups (released into the ended run but never consumed by
+// it) go first: they were typed — and echoed — before anything still queued,
+// so they re-dispatch without a second transcript echo.
 func (m *Model) flushQueueAsTurn() tea.Cmd {
+	for len(m.redispatch) > 0 {
+		input := m.redispatch[0]
+		m.redispatch = m.redispatch[1:]
+		if cmd := m.dispatchResolved(input); cmd != nil {
+			return cmd
+		}
+	}
 	for len(m.queue) > 0 {
 		input := m.queue[0]
 		m.queue = m.queue[1:]

@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -64,9 +65,13 @@ type Session struct {
 	// and return), so Inject can tell whether there is a live run to inject into.
 	runMu   sync.Mutex
 	runLive bool
-	// lastReply holds the most recent assistant reasoning/reply text, captured
-	// from the reasoning callback so OnPark can surface the parked reply.
-	lastReply string
+	// userInjected tracks texts delivered via InjectUser during the current
+	// run; undelivered collects the ones still sitting in the injection
+	// channel when the run returned — the model never saw them, so the
+	// end-of-run drain hands them back via TakeUndelivered instead of
+	// discarding them. Both guarded by runMu.
+	userInjected []string
+	undelivered  []string
 
 	// goal is the active session goal (the /goal stop-gate). While non-empty,
 	// SendMessage re-runs the turn until the model calls goal_done. goalDone is
@@ -485,6 +490,39 @@ func (s *Session) SetShellJobs(jobs *wizmcp.ShellJobs) {
 	})
 }
 
+// InjectUser delivers a user-typed follow-up into the live run (see Inject),
+// and additionally tracks it: if the run returns before consuming it (the
+// model never saw it), the text is reported by TakeUndelivered so the caller
+// can re-dispatch it as a fresh turn instead of losing it to the end-of-run
+// drain. System notices (shell-job completions, wake-ups) keep using Inject —
+// re-running a stale notice as a fresh turn would re-trigger finished work.
+func (s *Session) InjectUser(msg string) bool {
+	s.runMu.Lock()
+	s.userInjected = append(s.userInjected, msg)
+	s.runMu.Unlock()
+	if s.Inject(msg) {
+		return true
+	}
+	// Nothing was sent: untrack so the drain can't misreport it later.
+	s.runMu.Lock()
+	if i := slices.Index(s.userInjected, msg); i >= 0 {
+		s.userInjected = slices.Delete(s.userInjected, i, i+1)
+	}
+	s.runMu.Unlock()
+	return false
+}
+
+// TakeUndelivered returns (and clears) user-typed follow-ups that were
+// injected into a run that ended before consuming them. Call after a run
+// returns to re-dispatch them as fresh turns.
+func (s *Session) TakeUndelivered() []string {
+	s.runMu.Lock()
+	defer s.runMu.Unlock()
+	out := s.undelivered
+	s.undelivered = nil
+	return out
+}
+
 // Inject delivers msg into the live run's message-injection channel, waking a
 // parked loop so the assistant continues in the SAME run. Non-blocking: returns
 // false when there is no live run, the channel is full, or msg is empty. Used
@@ -539,20 +577,32 @@ func (s *Session) SendMessage(text string) (string, error) {
 	s.allowAllTurn = false
 	defer s.endTurn()
 
-	// Mark the run live so Inject can target it; clear on return. Drain any stale
-	// injection-channel entries left from a prior parked run that was cancelled.
+	// Mark the run live so Inject can target it; clear on return. Drain the
+	// injection channel so stale entries can't leak into the next run — but
+	// user-typed follow-ups (InjectUser) still sitting there were never seen
+	// by the model: hand those back via TakeUndelivered instead of silently
+	// discarding them with the system notices.
 	s.runMu.Lock()
 	s.runLive = true
-	s.lastReply = ""
 	s.runMu.Unlock()
 	defer func() {
 		s.runMu.Lock()
 		s.runLive = false
+		pendingUser := s.userInjected
+		s.userInjected = nil
 		s.runMu.Unlock()
+		var undelivered []string
 		for {
 			select {
-			case <-s.inject:
+			case msg := <-s.inject:
+				if i := slices.Index(pendingUser, msg.Content); i >= 0 {
+					pendingUser = slices.Delete(pendingUser, i, i+1)
+					undelivered = append(undelivered, msg.Content)
+				}
 			default:
+				s.runMu.Lock()
+				s.undelivered = append(s.undelivered, undelivered...)
+				s.runMu.Unlock()
 				return
 			}
 		}
@@ -578,14 +628,6 @@ func (s *Session) SendMessage(text string) (string, error) {
 			}
 		}),
 		cogito.WithReasoningCallback(func(reasoning string) {
-			// Track the latest reasoning so OnPark can surface the parked reply:
-			// when the LLM replies instead of calling a tool, cogito fires this
-			// with the reply text immediately before parking.
-			if strings.TrimSpace(reasoning) != "" {
-				s.runMu.Lock()
-				s.lastReply = reasoning
-				s.runMu.Unlock()
-			}
 			if s.callbacks.OnReasoning != nil {
 				s.callbacks.OnReasoning(reasoning)
 			}
@@ -640,18 +682,14 @@ func (s *Session) SendMessage(text string) (string, error) {
 		cogito.WithPendingWork(func() bool {
 			return s.agentManager.HasRunning() || s.shellJobs.HasRunning()
 		}),
-		cogito.WithOnPark(func() {
-			s.runMu.Lock()
-			reply := s.lastReply
-			s.runMu.Unlock()
+		cogito.WithOnPark(func(reply string) {
+			// cogito hands us the no-tool reply text recorded in the fragment
+			// right before the loop blocked — the parked reply the UI surfaces.
 			if s.callbacks.OnParked != nil {
 				s.callbacks.OnParked(reply)
 			}
 		}),
 		cogito.WithOnResume(func() {
-			s.runMu.Lock()
-			s.lastReply = ""
-			s.runMu.Unlock()
 			if s.callbacks.OnResumed != nil {
 				s.callbacks.OnResumed()
 			}
