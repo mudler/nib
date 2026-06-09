@@ -134,3 +134,18 @@ func TestApprovalAlwaysWholeTool(t *testing.T) {
 		t.Fatalf("compound command should grant the whole tool, got %+v", resp)
 	}
 }
+
+func TestTruncateLine(t *testing.T) {
+	if got := truncateLine("hello", 10); got != "hello" {
+		t.Fatalf("fits: got %q", got)
+	}
+	if got := truncateLine("hello world", 5); got != "hell…" {
+		t.Fatalf("truncates: got %q", got)
+	}
+	if got := truncateLine("hello", 0); got != "…" {
+		t.Fatalf("non-positive budget must clamp, got %q", got)
+	}
+	if got := truncateLine("héllo wörld", 6); got != "héllo…" {
+		t.Fatalf("rune-aware: got %q", got)
+	}
+}

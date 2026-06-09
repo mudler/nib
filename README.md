@@ -320,7 +320,9 @@ In the **TUI**, approval is a single keypress (no Enter):
 - `2` — always allow, scoped: for a simple shell command this grants just that
   command prefix (`df …`); for anything compound — or any other tool — it grants
   the whole tool. Session-only; sub-agents share the allow list. A command that
-  chains (`&&`, `;`, `|`, `$( )`, …) never rides a prefix grant.
+  chains (`&&`, `;`, `|`, `$( )`, …) never rides a prefix grant. A prefix grant
+  trusts everything that command can do with its arguments — grant prefixes
+  you'd trust with any flags.
 - `3` — allow **all** tool calls for the rest of this turn (handy after delegating
   a multi-step task)
 - `n` / `Esc` — deny

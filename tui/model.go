@@ -1266,14 +1266,15 @@ func (m *Model) updateDimensions() {
 	m.textarea.SetWidth(m.width - 2)
 }
 
-// truncateLine caps a single line at w runes, ending with an ellipsis.
+// truncateLine caps a single line at w runes, ending with an ellipsis. A
+// non-positive budget returns the bare ellipsis rather than an unclamped line.
 func truncateLine(s string, w int) string {
-	if w <= 1 {
-		return s
-	}
 	r := []rune(s)
 	if len(r) <= w {
 		return s
+	}
+	if w <= 1 {
+		return "…"
 	}
 	return string(r[:w-1]) + "…"
 }
