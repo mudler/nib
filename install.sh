@@ -1,19 +1,21 @@
 #!/usr/bin/env bash
-#  ╭─────╮
-#  │ ◠ ◠ │    _      ___
-#  │  ▽  │   | | /| / (_)___
-#  ╰──┬──╯   | |/ |/ / |_ /
-#    /|\     |__/|__/_//__/
-#   / | \
-#          your terminal wizard
+#   ╭─────╮
+#   │  ·  │
+#   ╰┐   ┌╯    _   _ _
+#    │   │    | \ | (_) |__
+#    ╰┐ ┌╯    |  \| | | '_ \
+#     ╲ ╱     | |\  | | |_) |
+#      V      |_| \_|_|_.__/
 #
-# wiz installer
+# nib installer
 #
-# This script installs wiz and sets up shell integration.
+# A tiny, zero-dependency LLM agent harness that lives in your terminal.
+#
+# This script installs nib and sets up shell integration.
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/mudler/wiz/main/install.sh | bash
-#   curl -fsSL https://raw.githubusercontent.com/mudler/wiz/main/install.sh | zsh
+#   curl -fsSL https://raw.githubusercontent.com/mudler/nib/master/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/mudler/nib/master/install.sh | zsh
 #   OR
 #   ./install.sh
 #
@@ -22,9 +24,9 @@
 
 set -e
 
-# Configuration
-INSTALL_DIR="${WIZ_INSTALL_DIR:-$HOME/.local/bin}"
-SHELL_DIR="${WIZ_SHELL_DIR:-$HOME/.config/wiz/shell}"
+# Configuration (WIZ_* env vars accepted for backwards compatibility)
+INSTALL_DIR="${NIB_INSTALL_DIR:-${WIZ_INSTALL_DIR:-$HOME/.local/bin}}"
+SHELL_DIR="${NIB_SHELL_DIR:-${WIZ_SHELL_DIR:-$HOME/.config/nib/shell}}"
 
 # Colors
 RED='\033[0;31m'
@@ -56,7 +58,7 @@ error() {
 # Parse arguments
 SETUP_KEY_BINDINGS=true
 INSTALL_FROM_SOURCE=false
-WIZ_VERSION=latest
+NIB_VERSION=latest
 while [[ $# -gt 0 ]]; do
     case $1 in
         --no-key-bindings)
@@ -68,7 +70,7 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         --version)
-            WIZ_VERSION=$2
+            NIB_VERSION=$2
             shift
             shift
             ;;
@@ -83,7 +85,7 @@ done
 detect_platform() {
     OS=$(uname -s | tr '[:upper:]' '[:lower:]')
     ARCH=$(uname -m)
-    
+
     case $ARCH in
         x86_64)
             ARCH="amd64"
@@ -98,7 +100,7 @@ detect_platform() {
             error "Unsupported architecture: $ARCH"
             ;;
     esac
-    
+
     case $OS in
         linux|darwin)
             ;;
@@ -106,7 +108,7 @@ detect_platform() {
             error "Unsupported OS: $OS"
             ;;
     esac
-    
+
     PLATFORM="${OS}_${ARCH}"
     info "Detected platform: $PLATFORM"
 }
@@ -143,38 +145,38 @@ detect_shell() {
                 ;;
         esac
     fi
-    
+
     info "Detected shell: $CURRENT_SHELL"
 }
 
 install_from_release() {
-    info "Installing wiz from release..."
-    
+    info "Installing nib from release..."
+
     # Get version tag if latest
-    if [ "$WIZ_VERSION" = "latest" ]; then
+    if [ "$NIB_VERSION" = "latest" ]; then
         info "Fetching latest release version..."
-        WIZ_VERSION=$(curl -fsSL https://api.github.com/repos/mudler/wiz/releases/latest | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/' || echo "")
-        if [ -z "$WIZ_VERSION" ]; then
+        NIB_VERSION=$(curl -fsSL https://api.github.com/repos/mudler/nib/releases/latest | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/' || echo "")
+        if [ -z "$NIB_VERSION" ]; then
             error "Failed to fetch latest release version"
         fi
-        info "Latest version: $WIZ_VERSION"
+        info "Latest version: $NIB_VERSION"
     fi
-    
-    # Construct filename: wiz-${VERSION}-${OS}-${ARCH}
-    FILENAME="wiz-${WIZ_VERSION}-${OS}-${ARCH}"
-    DOWNLOAD_URL="https://github.com/mudler/wiz/releases/download/${WIZ_VERSION}/${FILENAME}"
-    
+
+    # Construct filename: nib-${VERSION}-${OS}-${ARCH}
+    FILENAME="nib-${NIB_VERSION}-${OS}-${ARCH}"
+    DOWNLOAD_URL="https://github.com/mudler/nib/releases/download/${NIB_VERSION}/${FILENAME}"
+
     info "Downloading from: $DOWNLOAD_URL"
     mkdir -p "$INSTALL_DIR"
-    curl -fsSL "$DOWNLOAD_URL" -o "$INSTALL_DIR/wiz"
-    chmod +x "$INSTALL_DIR/wiz"
-    success "Installed wiz to $INSTALL_DIR/wiz"
+    curl -fsSL "$DOWNLOAD_URL" -o "$INSTALL_DIR/nib"
+    chmod +x "$INSTALL_DIR/nib"
+    success "Installed nib to $INSTALL_DIR/nib"
 }
 
 # Build from source
 build_from_source() {
-    info "Building wiz from source..."
-    
+    info "Building nib from source..."
+
     # Check for Go
     if ! command -v go &> /dev/null; then
         error "Go is required to build from source. Please install Go first."
@@ -183,23 +185,23 @@ build_from_source() {
     if ! command -v git &> /dev/null; then
         error "Git is required to build from source. Please install Git first."
     fi
-    
+
     # Get the script directory
     SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    
+
     # Build
     cd "$SCRIPT_DIR"
     if [ ! -e main.go ]; then
-        git clone https://github.com/mudler/wiz.git
-        cd wiz
+        git clone https://github.com/mudler/nib.git
+        cd nib
     fi
-    go build -o wiz .
-    
+    go build -o nib .
+
     # Install
     mkdir -p "$INSTALL_DIR"
-    mv wiz "$INSTALL_DIR/"
-    
-    success "Built and installed wiz to $INSTALL_DIR/wiz"
+    mv nib "$INSTALL_DIR/"
+
+    success "Built and installed nib to $INSTALL_DIR/nib"
 }
 
 # Install shell integration
@@ -208,28 +210,28 @@ install_shell_integration() {
         info "Skipping shell key bindings setup"
         return
     fi
-    
+
     if [[ -z "$RC_FILE" ]]; then
         warn "Could not detect shell configuration file. Please manually add:"
         echo ""
-        echo "  eval \"\$(wiz --init <your-shell>)\""
+        echo "  eval \"\$(nib --init <your-shell>)\""
         echo ""
         return
     fi
-    
+
     # Check if already configured
-    if grep -q 'wiz --init' "$RC_FILE" 2>/dev/null; then
+    if grep -q 'nib --init' "$RC_FILE" 2>/dev/null; then
         info "Shell integration already configured in $RC_FILE"
         return
     fi
-    
+
     # Add shell integration
     info "Adding shell integration to $RC_FILE"
-    
+
     echo "" >> "$RC_FILE"
-    echo "# wiz shell integration" >> "$RC_FILE"
-    echo "eval \"\$(wiz --init $CURRENT_SHELL)\"" >> "$RC_FILE"
-    
+    echo "# nib shell integration" >> "$RC_FILE"
+    echo "eval \"\$(nib --init $CURRENT_SHELL)\"" >> "$RC_FILE"
+
     success "Added shell integration to $RC_FILE"
     echo ""
     info "To activate immediately, run:"
@@ -241,7 +243,7 @@ install_shell_integration() {
 # Install shell scripts
 install_shell_scripts() {
     SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    
+
     if [[ -d "$SCRIPT_DIR/shell" ]]; then
         mkdir -p "$SHELL_DIR"
         cp -r "$SCRIPT_DIR/shell/"* "$SHELL_DIR/"
@@ -253,11 +255,11 @@ install_shell_scripts() {
 update_path() {
     if [[ ":$PATH:" != *":$INSTALL_DIR:"* ]]; then
         info "Adding $INSTALL_DIR to PATH in $RC_FILE"
-        
+
         if [[ -n "$RC_FILE" ]]; then
             if ! grep -q "export PATH=.*$INSTALL_DIR" "$RC_FILE" 2>/dev/null; then
                 echo "" >> "$RC_FILE"
-                echo "# wiz binary" >> "$RC_FILE"
+                echo "# nib binary" >> "$RC_FILE"
                 echo "export PATH=\"\$PATH:$INSTALL_DIR\"" >> "$RC_FILE"
             fi
         fi
@@ -268,45 +270,46 @@ update_path() {
 main() {
     echo ""
     echo -e "${PURPLE}        ╭─────╮${NC}"
-    echo -e "${PURPLE}        │${NC} ◠ ◠ ${PURPLE}│${NC}"
-    echo -e "${PURPLE}        │${NC}  ▽  ${PURPLE}│${NC}"
-    echo -e "${PURPLE}        ╰──┬──╯${NC}"
-    echo -e "${PURPLE}          /|\\\\${NC}"
-    echo -e "${PURPLE}         / | \\\\${NC}"
+    echo -e "${PURPLE}        │${NC}  ·  ${PURPLE}│${NC}"
+    echo -e "${PURPLE}        ╰┐   ┌╯${NC}"
+    echo -e "${PURPLE}         │   │${NC}"
+    echo -e "${PURPLE}         ╰┐ ┌╯${NC}"
+    echo -e "${PURPLE}          ╲ ╱${NC}"
+    echo -e "${PURPLE}           V${NC}"
     echo ""
-    echo -e "          ${BLUE}${BOLD}wiz${NC}"
-    echo -e "   ${YELLOW}your terminal wizard${NC}"
+    echo -e "          ${BLUE}${BOLD}nib${NC}"
+    echo -e "   ${YELLOW}your terminal agent${NC}"
     echo ""
-    
+
     detect_platform
     detect_shell
-    
+
     # Build and install
     if [ "$INSTALL_FROM_SOURCE" = "true" ]; then
         build_from_source
     else
         install_from_release
     fi
-    
+
     # Update PATH
     update_path
-    
+
     # Install shell scripts
     install_shell_scripts
-    
+
     # Setup shell integration
     install_shell_integration
-    
+
     echo ""
     success "Installation complete!"
     echo ""
     echo "Usage:"
-    echo "  - Press Ctrl+Space to summon the wizard"
-    echo "  - Run 'wiz' for CLI mode"
-    echo "  - Run 'wiz --height 40%' for TUI mode"
+    echo "  - Press Ctrl+Space to summon nib"
+    echo "  - Run 'nib' for CLI mode"
+    echo "  - Run 'nib --height 40%' for TUI mode"
     echo ""
     echo "Configuration:"
-    echo "  Create a config file at ~/.config/wiz/config.yaml, ~/.wiz.yaml or /etc/wiz/config.yaml"
+    echo "  Create a config file at ~/.config/nib/config.yaml, ~/.nib.yaml or /etc/nib/config.yaml"
     echo ""
     echo "Example config:"
     echo ""
