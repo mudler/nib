@@ -144,7 +144,7 @@ func main() {
 	}
 
 	if mcpMode {
-		if err := cmd.RunMCP(ctx, cfg, mcpArgs, transports...); err != nil {
+		if err := cmd.RunMCP(ctx, cfg, mcpArgs, shellJobs, transports...); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}

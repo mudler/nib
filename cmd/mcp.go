@@ -5,8 +5,9 @@ import (
 	"flag"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
-	"github.com/mudler/nib/types"
 	"github.com/mudler/nib/agentmcp"
+	wizmcp "github.com/mudler/nib/mcp"
+	"github.com/mudler/nib/types"
 )
 
 func parseMCPFlags(args []string) (agentmcp.Options, error) {
@@ -21,11 +22,12 @@ func parseMCPFlags(args []string) (agentmcp.Options, error) {
 }
 
 // RunMCP serves nib's agent as an MCP server. args are the tokens after
-// `nib mcp`; transports are the agent's tool servers.
-func RunMCP(ctx context.Context, cfg types.Config, args []string, transports ...mcp.Transport) error {
+// `nib mcp`; shellJobs is the shared background-shell registry; transports are
+// the agent's tool servers.
+func RunMCP(ctx context.Context, cfg types.Config, args []string, shellJobs *wizmcp.ShellJobs, transports ...mcp.Transport) error {
 	opts, err := parseMCPFlags(args)
 	if err != nil {
 		return err
 	}
-	return agentmcp.Run(ctx, cfg, opts, transports...)
+	return agentmcp.Run(ctx, cfg, opts, shellJobs, transports...)
 }
