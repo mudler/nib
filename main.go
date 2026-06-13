@@ -48,6 +48,16 @@ func main() {
 		os.Exit(cmd.RunSkillCommand(os.Args[2:]))
 	}
 
+	// `nib mcp` needs config + transports (built below), so it cannot early-exit
+	// like plugin/skill. Capture its args and hide them from the global flag
+	// parser; the actual branch is after StartTransports.
+	mcpMode := len(os.Args) >= 2 && os.Args[1] == "mcp"
+	var mcpArgs []string
+	if mcpMode {
+		mcpArgs = os.Args[2:]
+		os.Args = os.Args[:1]
+	}
+
 	// Parse command line arguments
 	heightFlag := flag.String("height", "", "Height of the TUI (e.g., '40%' or '20')")
 	initFlag := flag.String("init", "", "Output shell integration script (zsh, bash, or fish)")
@@ -133,6 +143,14 @@ func main() {
 		os.Exit(1)
 	}
 
+	if mcpMode {
+		if err := cmd.RunMCP(ctx, cfg, mcpArgs, shellJobs, transports...); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	// Determine mode based on flags. Bare invocation -> fullscreen TUI (default);
 	// --cli -> plain CLI; --height/--tmux -> inline/tmux drop-down widget.
 	mode := selectMode(modeInputs{
@@ -145,7 +163,7 @@ func main() {
 
 	switch mode {
 	case modeCLI:
-		if err := cmd.RunCLI(ctx, cfg, transports...); err != nil {
+		if err := cmd.RunCLI(ctx, cfg, shellJobs, transports...); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}

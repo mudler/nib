@@ -231,6 +231,42 @@ Like plugins, skill packs install **disabled**; enable the ones you want with
 `nib skill enable <name>`. Skill packs carry their bundled files, so a skill can `Read` or
 run scripts from its own directory at runtime.
 
+## Agent over MCP (`nib mcp`)
+
+nib can expose its agent as an **MCP server** so an external program can drive it
+headless — a voice client (owning the mic/speaker and speech-to-text/text-to-speech),
+a chat frontend, an IDE extension, an automation script, anything that speaks MCP.
+nib stays a pure-Go static binary; the consumer lives entirely outside it.
+
+```bash
+nib mcp                       # serve over stdio (default; the client launches nib)
+nib mcp --http --addr :8090   # serve over streamable HTTP instead
+```
+
+The server exposes two tools and one notification:
+
+- `converse(utterance)` — send a message to the agent; returns the **first** reply
+  immediately (even while background work continues, `pending: true`), so turns stay
+  responsive instead of blocking until a multi-step task finishes.
+- `interrupt()` — cancel the current turn.
+- `notifications/message` (logger `nib`, payload `kind: "reply" | "error"`) — replies
+  produced *after* the synchronous `converse` (finished sub-agents / shell jobs,
+  resumes) arrive here, carrying the same `turn` id.
+
+After connecting, the client **must** call MCP `logging/setLevel` with level
+`info` (or lower), or it will receive no `nib/reply` / `nib/error` notifications:
+the server emits them at info/error level, and the SDK gates logging
+notifications behind the level the client has set.
+
+In this mode tool calls are auto-approved (there is no terminal to prompt at);
+set `approval_mode: allowlist` + `allowed_tools` in your config to restrict it.
+
+The server adds **no prompt of its own** — the agent uses your configured
+`system_prompt` as usual. To tune behavior for a particular consumer (e.g. a voice
+client that wants short, spoken replies and long work pushed to the background),
+set that in your `system_prompt` (or ship it as a plugin `prompt_fragment`); the
+server stays consumer-agnostic.
+
 ## Configuration
 
 nib looks for config (in order) in `./.nib.yaml`, `$XDG_CONFIG_HOME/nib/config.yaml`,

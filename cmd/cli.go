@@ -11,6 +11,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/mudler/nib/chat"
+	wizmcp "github.com/mudler/nib/mcp"
 	"github.com/mudler/nib/slash"
 	"github.com/mudler/nib/theme"
 	"github.com/mudler/nib/types"
@@ -135,7 +136,7 @@ func formatAgentEventLine(ev chat.AgentEvent) string {
 	}
 }
 
-func RunCLI(ctx context.Context, cfg types.Config, transports ...mcp.Transport) error {
+func RunCLI(ctx context.Context, cfg types.Config, shellJobs *wizmcp.ShellJobs, transports ...mcp.Transport) error {
 	reader := bufio.NewReader(os.Stdin)
 	spin := newSpinner()
 
@@ -241,6 +242,11 @@ func RunCLI(ctx context.Context, cfg types.Config, transports ...mcp.Transport) 
 		return err
 	}
 	defer session.Close()
+	if shellJobs != nil {
+		// Keep a run parked while a background shell job is still running and
+		// inject its completion notice, so bash_background work isn't orphaned.
+		session.SetShellJobs(shellJobs)
+	}
 
 	fmt.Println(theme.Brand.Render(theme.BrandName))
 	fmt.Println(theme.Rule.Render(strings.Repeat("─", 50)))
