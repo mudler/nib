@@ -1,4 +1,4 @@
-package voice
+package agentmcp
 
 import (
 	"context"
@@ -8,7 +8,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-// session is the slice of *chat.Session the voice server needs. An interface so
+// session is the slice of *chat.Session the MCP server needs. An interface so
 // tests can drive converse/interrupt without a live LLM. *chat.Session
 // satisfies it.
 type session interface {
@@ -25,27 +25,27 @@ type converseIn struct {
 type converseOut struct {
 	Reply   string `json:"reply" jsonschema:"the agent's spoken reply"`
 	Pending bool   `json:"pending" jsonschema:"true when background work continues after this reply"`
-	Turn    int    `json:"turn" jsonschema:"turn id; later nib/say notifications carry the same id"`
+	Turn    int    `json:"turn" jsonschema:"turn id; later nib/reply notifications carry the same id"`
 }
 type interruptIn struct{}
 type interruptOut struct{}
 
-// sayPayload is the JSON Data of a nib/say (or nib/error) logging notification.
-type sayPayload struct {
-	Kind    string `json:"kind"` // "say" | "error"
+// replyPayload is the JSON Data of a nib/reply (or nib/error) logging notification.
+type replyPayload struct {
+	Kind    string `json:"kind"` // "reply" | "error"
 	Text    string `json:"text,omitempty"`
 	Message string `json:"message,omitempty"`
 	Pending bool   `json:"pending,omitempty"`
 	Turn    int    `json:"turn"`
 }
 
-// Options selects the transport for the voice MCP server.
+// Options selects the transport for the MCP server.
 type Options struct {
 	HTTP bool   // serve over streamable HTTP instead of stdio
 	Addr string // HTTP listen address (with HTTP=true)
 }
 
-// newServer builds the voice MCP server. runCtx must outlive individual tool
+// newServer builds the MCP server. runCtx must outlive individual tool
 // calls: it backs the proactive notification sink, which fires after converse
 // returns.
 func newServer(runCtx context.Context, sess session, r *router) *mcp.Server {
@@ -60,7 +60,7 @@ func newServer(runCtx context.Context, sess session, r *router) *mcp.Server {
 		Name: "converse",
 		Description: "Send a transcribed user utterance to nib's agent and get the first spoken reply. " +
 			"Returns when the agent first replies (possibly while background work continues, pending=true); " +
-			"later replies arrive as nib/say logging notifications carrying the same turn id.",
+			"later replies arrive as nib/reply logging notifications carrying the same turn id.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in converseIn) (*mcp.CallToolResult, converseOut, error) {
 		bind(req)
 		ch, turn := r.await()
@@ -107,17 +107,17 @@ func newServer(runCtx context.Context, sess session, r *router) *mcp.Server {
 	return srv
 }
 
-// notifier returns a notifyFunc that pushes nib/say (or nib/error) as a logging
+// notifier returns a notifyFunc that pushes nib/reply (or nib/error) as a logging
 // notification on the client session, using the long-lived run context.
 func notifier(ctx context.Context, ss *mcp.ServerSession) notifyFunc {
 	return func(ev replyEvent, turn int) {
 		level := mcp.LoggingLevel("info")
-		var p sayPayload
+		var p replyPayload
 		if ev.Err != nil {
-			p = sayPayload{Kind: "error", Message: ev.Err.Error(), Turn: turn}
+			p = replyPayload{Kind: "error", Message: ev.Err.Error(), Turn: turn}
 			level = "error"
 		} else {
-			p = sayPayload{Kind: "say", Text: ev.Text, Pending: ev.Pending, Turn: turn}
+			p = replyPayload{Kind: "reply", Text: ev.Text, Pending: ev.Pending, Turn: turn}
 		}
 		_ = ss.Log(ctx, &mcp.LoggingMessageParams{Logger: "nib", Level: level, Data: p})
 	}

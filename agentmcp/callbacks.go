@@ -1,8 +1,8 @@
-package voice
+package agentmcp
 
 import "github.com/mudler/nib/chat"
 
-// buildCallbacks wires chat.Session lifecycle events into the voice router and
+// buildCallbacks wires chat.Session lifecycle events into the reply router and
 // approval policy. OnParked -> Pending reply (work continues); OnResponse ->
 // final reply; OnError -> terminal error event.
 func buildCallbacks(r *router, pol policy) chat.Callbacks {

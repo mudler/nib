@@ -1,4 +1,4 @@
-package voice
+package agentmcp
 
 import "testing"
 
@@ -46,7 +46,7 @@ func TestRouterNotifyWithNoWaiter(t *testing.T) {
 
 // A run that parks then completes with the same text fires OnParked(reply) to
 // the waiter and a final OnResponse(reply) with no waiter. The second carries
-// identical text and must NOT be pushed as a duplicate nib/say.
+// identical text and must NOT be pushed as a duplicate nib/reply.
 func TestRouterSuppressesDuplicateParkReply(t *testing.T) {
 	r := newRouter()
 	var got []replyEvent

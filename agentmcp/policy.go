@@ -1,11 +1,11 @@
-package voice
+package agentmcp
 
 import (
 	"github.com/mudler/nib/chat"
 	"github.com/mudler/nib/types"
 )
 
-// policy decides tool-call approval for a hands-free voice session. With no
+// policy decides tool-call approval for a hands-free session. With no
 // human at a terminal it never blocks: it approves, or (allowlist mode) denies
 // without prompting. A denial surfaces to the model as a normal denied-tool
 // result, which it explains in its next (spoken) reply.

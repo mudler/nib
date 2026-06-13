@@ -1,4 +1,4 @@
-package voice
+package agentmcp
 
 import (
 	"context"
@@ -181,7 +181,7 @@ func parkingLLM(t *testing.T, release <-chan struct{}, parkReply, finalReply str
 // TestVoiceE2EParkThenNotify drives a REAL chat.Session (fake LLM) through a
 // turn that parks on a backgrounded sub-agent: converse must return at the park
 // with pending=true, and once the sub-agent finishes the resumed run's final
-// reply must arrive as a nib/say notification (which requires the client to have
+// reply must arrive as a nib/reply notification (which requires the client to have
 // set its logging level to info).
 func TestVoiceE2EParkThenNotify(t *testing.T) {
 	xlog.SetLogger(xlog.NewLogger(xlog.LogLevel("error"), ""))
@@ -196,7 +196,6 @@ func TestVoiceE2EParkThenNotify(t *testing.T) {
 		ApprovalMode: "auto",
 		AgentOptions: types.AgentOptions{Iterations: 10, MaxAttempts: 3, MaxRetries: 3},
 	}
-	cfg = applyProfile(cfg)
 
 	r := newRouter()
 	sess, err := chat.NewSession(context.Background(), cfg, buildCallbacks(r, newPolicy(cfg)))
@@ -209,11 +208,11 @@ func TestVoiceE2EParkThenNotify(t *testing.T) {
 	srv := newServer(context.Background(), sess, r)
 	go func() { _ = srv.Run(context.Background(), srvT) }()
 
-	says := make(chan sayPayload, 8)
+	says := make(chan replyPayload, 8)
 	client := mcp.NewClient(&mcp.Implementation{Name: "t", Version: "v0"}, &mcp.ClientOptions{
 		LoggingMessageHandler: func(_ context.Context, req *mcp.LoggingMessageRequest) {
 			if b, ok := req.Params.Data.(map[string]any); ok {
-				says <- sayPayload{Kind: asString(b["kind"]), Text: asString(b["text"]), Message: asString(b["message"])}
+				says <- replyPayload{Kind: asString(b["kind"]), Text: asString(b["text"]), Message: asString(b["message"])}
 			}
 		},
 	})
@@ -244,17 +243,17 @@ func TestVoiceE2EParkThenNotify(t *testing.T) {
 	}
 
 	// Let the sub-agent finish: its completion resumes the parked run, whose
-	// final reply must arrive as a nib/say notification.
+	// final reply must arrive as a nib/reply notification.
 	close(release)
 	for {
 		select {
 		case s := <-says:
-			if s.Kind == "say" && s.Text == finalReply {
+			if s.Kind == "reply" && s.Text == finalReply {
 				return // success
 			}
 			// Ignore any other say (e.g. an interim reply); keep waiting.
 		case <-time.After(15 * time.Second):
-			t.Fatalf("no nib/say carrying the final reply %q", finalReply)
+			t.Fatalf("no nib/reply carrying the final reply %q", finalReply)
 		}
 	}
 }
@@ -268,7 +267,6 @@ func TestVoiceE2ESingleTurn(t *testing.T) {
 		ApprovalMode: "auto",
 		AgentOptions: types.AgentOptions{Iterations: 10, MaxAttempts: 3, MaxRetries: 3},
 	}
-	cfg = applyProfile(cfg)
 
 	r := newRouter()
 	sess, err := chat.NewSession(context.Background(), cfg, buildCallbacks(r, newPolicy(cfg)))

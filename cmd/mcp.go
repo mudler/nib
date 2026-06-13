@@ -6,18 +6,18 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/mudler/nib/types"
-	"github.com/mudler/nib/voice"
+	"github.com/mudler/nib/agentmcp"
 )
 
-func parseMCPFlags(args []string) (voice.Options, error) {
+func parseMCPFlags(args []string) (agentmcp.Options, error) {
 	fs := flag.NewFlagSet("mcp", flag.ContinueOnError)
 	httpMode := fs.Bool("http", false, "serve MCP over streamable HTTP instead of stdio")
 	_ = fs.Bool("stdio", false, "serve MCP over stdio (default)")
 	addr := fs.String("addr", ":8090", "HTTP listen address (used with --http)")
 	if err := fs.Parse(args); err != nil {
-		return voice.Options{}, err
+		return agentmcp.Options{}, err
 	}
-	return voice.Options{HTTP: *httpMode, Addr: *addr}, nil
+	return agentmcp.Options{HTTP: *httpMode, Addr: *addr}, nil
 }
 
 // RunMCP serves nib's agent as an MCP server. args are the tokens after
@@ -27,5 +27,5 @@ func RunMCP(ctx context.Context, cfg types.Config, args []string, transports ...
 	if err != nil {
 		return err
 	}
-	return voice.Run(ctx, cfg, opts, transports...)
+	return agentmcp.Run(ctx, cfg, opts, transports...)
 }

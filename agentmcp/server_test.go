@@ -1,4 +1,4 @@
-package voice
+package agentmcp
 
 import (
 	"context"
@@ -60,12 +60,12 @@ func dialServer(t *testing.T, sess session, r *router) *mcp.ClientSession {
 	srv := newServer(context.Background(), sess, r)
 	go func() { _ = srv.Run(context.Background(), srvT) }()
 
-	says := make(chan sayPayload, 8)
+	says := make(chan replyPayload, 8)
 	client := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "v0"}, &mcp.ClientOptions{
 		LoggingMessageHandler: func(_ context.Context, req *mcp.LoggingMessageRequest) {
 			b, _ := req.Params.Data.(map[string]any) // Data round-trips as JSON object
 			if b != nil {
-				says <- sayPayload{
+				says <- replyPayload{
 					Kind: asString(b["kind"]), Text: asString(b["text"]),
 					Message: asString(b["message"]),
 				}
@@ -87,7 +87,7 @@ func dialServer(t *testing.T, sess session, r *router) *mcp.ClientSession {
 }
 
 // saysByServer lets a test fetch the notification channel for its router.
-var saysByServer = map[*router]chan sayPayload{}
+var saysByServer = map[*router]chan replyPayload{}
 
 func asString(v any) string { s, _ := v.(string); return s }
 
@@ -112,11 +112,11 @@ func TestConverseReturnsParkReplyThenNotifies(t *testing.T) {
 
 	select {
 	case s := <-saysByServer[r]:
-		if s.Kind != "say" || s.Text != "all done" {
+		if s.Kind != "reply" || s.Text != "all done" {
 			t.Fatalf("notification = %+v, want say 'all done'", s)
 		}
 	case <-time.After(2 * time.Second):
-		t.Fatal("no nib/say notification for the final reply")
+		t.Fatal("no nib/reply notification for the final reply")
 	}
 }
 

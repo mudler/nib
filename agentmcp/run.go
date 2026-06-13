@@ -1,4 +1,4 @@
-package voice
+package agentmcp
 
 import (
 	"context"
@@ -8,11 +8,10 @@ import (
 	"github.com/mudler/nib/types"
 )
 
-// Run builds a headless voice session and serves it as an MCP server over the
+// Run builds a headless agent session and serves it as an MCP server over the
 // transport selected by opts. transports are the agent's tool servers (shell,
 // filesystem, web, plugins) exactly as the TUI/CLI receive them.
 func Run(ctx context.Context, cfg types.Config, opts Options, transports ...mcp.Transport) error {
-	cfg = applyProfile(cfg)
 	r := newRouter()
 	pol := newPolicy(cfg)
 
