@@ -54,8 +54,8 @@ func TestRouterSuppressesDuplicateParkReply(t *testing.T) {
 
 	ch, _ := r.await()
 	r.emit(replyEvent{Text: "X", Pending: true}) // park reply -> waiter
-	<-ch                                          // converse consumes it
-	r.emit(replyEvent{Text: "X"})                 // final reply, no waiter, duplicate
+	<-ch                                         // converse consumes it
+	r.emit(replyEvent{Text: "X"})                // final reply, no waiter, duplicate
 	if len(got) != 0 {
 		t.Fatalf("duplicate park reply was notified: %+v", got)
 	}
