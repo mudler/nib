@@ -64,19 +64,26 @@ func newServer(runCtx context.Context, sess session, r *router) *mcp.Server {
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in converseIn) (*mcp.CallToolResult, converseOut, error) {
 		bind(req)
 		ch, turn := r.await()
-		if sess.RunLive() {
-			sess.InjectUser(in.Utterance)
-		} else {
+		// startTurn drives a fresh turn in the background. The reply flows back
+		// through the callbacks (OnParked/OnResponse/OnError) → router, so the
+		// goroutine does not emit on error itself — that would double-report the
+		// turn error (OnError already routes it to the waiter as nib/error).
+		// Follow-ups the ended run never consumed are re-dispatched so a
+		// quickly-spoken utterance is never silently dropped.
+		startTurn := func() {
 			go func() {
-				if _, err := sess.SendMessage(in.Utterance); err != nil {
-					r.emit(replyEvent{Err: err})
-				}
-				// Re-dispatch follow-ups that the run ended before consuming, so
-				// a quickly-spoken utterance is never silently dropped.
+				_, _ = sess.SendMessage(in.Utterance)
 				for _, u := range sess.TakeUndelivered() {
 					_, _ = sess.SendMessage(u)
 				}
 			}()
+		}
+		// Continue the live run if one is in flight. If InjectUser returns false
+		// (no live run in the race window after RunLive, or the inject channel
+		// was full), fall back to a fresh turn so the utterance still drives a
+		// reply instead of blocking until the client cancels.
+		if !(sess.RunLive() && sess.InjectUser(in.Utterance)) {
+			startTurn()
 		}
 		select {
 		case ev := <-ch:

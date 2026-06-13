@@ -28,11 +28,12 @@ func decodeStructured(t *testing.T, res *mcp.CallToolResult, out any) {
 // fakeSession simulates chat.Session: SendMessage drives the callbacks the way
 // a real run would (optionally parking before the final reply).
 type fakeSession struct {
-	cb        chat.Callbacks
-	parkFirst bool
-	reply     string
-	live      bool
-	interrupt int
+	cb          chat.Callbacks
+	parkFirst   bool
+	reply       string
+	live        bool
+	injectFails bool // InjectUser returns false without driving a reply
+	interrupt   int
 }
 
 func (f *fakeSession) SendMessage(text string) (string, error) {
@@ -42,7 +43,13 @@ func (f *fakeSession) SendMessage(text string) (string, error) {
 	f.cb.OnResponse(f.reply)
 	return f.reply, nil
 }
-func (f *fakeSession) InjectUser(string) bool    { f.cb.OnResponse(f.reply); return true }
+func (f *fakeSession) InjectUser(string) bool {
+	if f.injectFails {
+		return false
+	}
+	f.cb.OnResponse(f.reply)
+	return true
+}
 func (f *fakeSession) RunLive() bool             { return f.live }
 func (f *fakeSession) Interrupt()                { f.interrupt++ }
 func (f *fakeSession) TakeUndelivered() []string { return nil }
@@ -129,6 +136,31 @@ func TestConverseSimpleTurn(t *testing.T) {
 	decodeStructured(t, res, &out)
 	if out.Reply != "hi there" || out.Pending {
 		t.Fatalf("converse out = %+v, want {hi there, not pending}", out)
+	}
+}
+
+// When a run is live but InjectUser finds no live run to inject into (it ended
+// in the race window, or the inject channel was full), converse must fall back
+// to a fresh SendMessage turn rather than hang waiting for a reply that never
+// comes.
+func TestConverseFallsBackWhenInjectFindsNoLiveRun(t *testing.T) {
+	r := newRouter()
+	sess := &fakeSession{reply: "fell back", live: true, injectFails: true}
+	sess.cb = buildCallbacks(r, newPolicy(types.Config{}))
+	cs := dialServer(t, sess, r)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	res, err := cs.CallTool(ctx, &mcp.CallToolParams{
+		Name: "converse", Arguments: map[string]any{"utterance": "hello"},
+	})
+	if err != nil {
+		t.Fatalf("converse: %v", err)
+	}
+	var out converseOut
+	decodeStructured(t, res, &out)
+	if out.Reply != "fell back" {
+		t.Fatalf("converse out = %+v, want reply 'fell back' (fell back to SendMessage)", out)
 	}
 }
 
