@@ -252,6 +252,11 @@ The server exposes two tools and one notification:
 - `notifications/message` (logger `nib`) — later replies from background work
   (finished sub-agents / shell jobs) arrive here for the client to speak.
 
+After connecting, the client **must** call MCP `logging/setLevel` with level
+`info` (or lower), or it will receive no `nib/say` / `nib/error` notifications:
+the server emits them at info/error level, and the SDK gates logging
+notifications behind the level the client has set.
+
 In this mode tool calls are auto-approved (there is no terminal to prompt at);
 set `approval_mode: allowlist` + `allowed_tools` in your config to restrict it.
 
