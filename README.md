@@ -231,6 +231,30 @@ Like plugins, skill packs install **disabled**; enable the ones you want with
 `nib skill enable <name>`. Skill packs carry their bundled files, so a skill can `Read` or
 run scripts from its own directory at runtime.
 
+## Voice / MCP server
+
+nib can expose its agent as an **MCP server** so an external app — for example a
+voice client that owns the microphone, speaker, and speech-to-text/text-to-speech
+— can drive nib hands-free. nib stays a pure-Go static binary; all audio lives in
+the separate client.
+
+```bash
+nib mcp                       # serve over stdio (default; the client launches nib)
+nib mcp --http --addr :8090   # serve over streamable HTTP instead
+```
+
+The server exposes two tools and one notification:
+
+- `converse(utterance)` — send transcribed speech to the agent; returns the first
+  spoken reply immediately (even while background work continues), so turns stay
+  snappy.
+- `interrupt()` — cancel the current turn (barge-in).
+- `notifications/message` (logger `nib`) — later replies from background work
+  (finished sub-agents / shell jobs) arrive here for the client to speak.
+
+In this mode tool calls are auto-approved (there is no terminal to prompt at);
+set `approval_mode: allowlist` + `allowed_tools` in your config to restrict it.
+
 ## Configuration
 
 nib looks for config (in order) in `./.nib.yaml`, `$XDG_CONFIG_HOME/nib/config.yaml`,
