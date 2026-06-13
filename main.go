@@ -163,7 +163,7 @@ func main() {
 
 	switch mode {
 	case modeCLI:
-		if err := cmd.RunCLI(ctx, cfg, transports...); err != nil {
+		if err := cmd.RunCLI(ctx, cfg, shellJobs, transports...); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
