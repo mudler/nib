@@ -43,3 +43,46 @@ func TestRouterNotifyWithNoWaiter(t *testing.T) {
 		t.Fatal("notify not called for reply with no waiter")
 	}
 }
+
+// A run that parks then completes with the same text fires OnParked(reply) to
+// the waiter and a final OnResponse(reply) with no waiter. The second carries
+// identical text and must NOT be pushed as a duplicate nib/say.
+func TestRouterSuppressesDuplicateParkReply(t *testing.T) {
+	r := newRouter()
+	var got []replyEvent
+	r.setNotify(func(ev replyEvent, turn int) { got = append(got, ev) })
+
+	ch, _ := r.await()
+	r.emit(replyEvent{Text: "X", Pending: true}) // park reply -> waiter
+	<-ch                                          // converse consumes it
+	r.emit(replyEvent{Text: "X"})                 // final reply, no waiter, duplicate
+	if len(got) != 0 {
+		t.Fatalf("duplicate park reply was notified: %+v", got)
+	}
+	r.emit(replyEvent{Text: "Y"}) // different text -> notify must fire
+	if len(got) != 1 || got[0].Text != "Y" {
+		t.Fatalf("notify got %+v, want one 'Y'", got)
+	}
+}
+
+// Only one outstanding converse is supported. A second await() must release the
+// first waiter with a terminal error instead of orphaning it.
+func TestRouterSupersedesOutstandingWaiter(t *testing.T) {
+	r := newRouter()
+	ch1, _ := r.await()
+	ch2, _ := r.await()
+
+	select {
+	case ev := <-ch1:
+		if ev.Err == nil {
+			t.Fatalf("first waiter got %+v, want terminal error", ev)
+		}
+	default:
+		t.Fatal("first waiter orphaned: no terminal event delivered")
+	}
+
+	r.emit(replyEvent{Text: "hi"})
+	if ev := <-ch2; ev.Text != "hi" {
+		t.Fatalf("second waiter got %+v, want hi", ev)
+	}
+}
