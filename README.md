@@ -336,6 +336,17 @@ export API_KEY=your-api-key
 export BASE_URL=https://api.openai.com/v1
 ```
 
+To skip every approval prompt for a run ("yolo" mode), pass `--yolo` or set
+`NIB_YOLO=1` — both force `approval_mode: auto` regardless of what the config
+file says:
+
+```bash
+nib --yolo          # or: NIB_YOLO=1 nib
+```
+
+While it's active, nib shows it on screen: a `yolo` badge in the TUI header and
+a one-line notice in the CLI banner.
+
 ## Tool Approval
 
 When nib wants to run a command, you decide:
@@ -368,7 +379,7 @@ In the **TUI**, approval is a single keypress (no Enter):
 
 In the **CLI** (`--cli`) the prompt is line-based: type `y`, `a`, `all`, `n`, or a free-form
 change, then Enter. To skip prompting entirely, set `approval_mode` / `allowed_tools` in
-your config.
+your config, or run with `--yolo` (env: `NIB_YOLO=1`) to auto-approve every tool call.
 
 ## MCP Servers
 

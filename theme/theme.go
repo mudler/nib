@@ -97,6 +97,9 @@ var (
 	ApproveKey = lipgloss.NewStyle().Bold(true).Foreground(Accent)
 	Running    = lipgloss.NewStyle().Foreground(Accent)
 	Done       = lipgloss.NewStyle().Foreground(Sage)
+	// Yolo flags the auto-approve-everything mode — bold brick so it reads as a
+	// standing warning that the approval gate is off.
+	Yolo = lipgloss.NewStyle().Bold(true).Foreground(Danger)
 )
 
 // ReasoningHeader renders the labeled header that tags a block of model

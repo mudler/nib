@@ -39,6 +39,19 @@ func parseHeight(s string) int {
 	return height
 }
 
+// envTrue reports whether an environment variable value is truthy. Empty,
+// "0", "false", "no", and "off" (any case) are false; everything else is true,
+// so `NIB_YOLO=1`, `NIB_YOLO=true`, and a bare `NIB_YOLO=` set in the shell all
+// behave sensibly.
+func envTrue(v string) bool {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "", "0", "false", "no", "off":
+		return false
+	default:
+		return true
+	}
+}
+
 func main() {
 	// Subcommand dispatch (must precede flag parsing).
 	if len(os.Args) >= 2 && os.Args[1] == "plugin" {
@@ -68,6 +81,7 @@ func main() {
 	cliFlag := flag.Bool("cli", false, "Run in plain CLI mode instead of the TUI")
 	setupFlag := flag.Bool("setup", false, "Run the interactive model setup wizard")
 	traceDirFlag := flag.String("trace-dir", "", "Write a session LLM trace (NDJSON) to this directory; also via NIB_TRACE_DIR")
+	yoloFlag := flag.Bool("yolo", false, "Auto-approve every tool call without prompting; also via NIB_YOLO")
 	flag.Parse()
 
 	// Handle version flag
@@ -105,6 +119,12 @@ func main() {
 		cfg.TraceDir = *traceDirFlag
 	} else if env := os.Getenv("NIB_TRACE_DIR"); env != "" {
 		cfg.TraceDir = env
+	}
+
+	// "yolo" mode auto-approves every tool call. The flag or env var force
+	// "auto" approval, overriding whatever the config file set.
+	if *yoloFlag || envTrue(os.Getenv("NIB_YOLO")) {
+		cfg.ApprovalMode = "auto"
 	}
 
 	if cfg.LogLevel == "" {
