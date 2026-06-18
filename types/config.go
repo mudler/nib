@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/user"
+	"path/filepath"
 	"strings"
 	"text/template"
 
@@ -172,7 +173,45 @@ func (c *Config) GetPrompt() string {
 		b.WriteString(f)
 	}
 
+	if found := detectContextFiles(currentDirectory); len(found) > 0 {
+		b.WriteString("\n\nThe following project instruction file(s) were found in the working directory: ")
+		b.WriteString(strings.Join(found, ", "))
+		b.WriteString(".\nRead ")
+		if len(found) == 1 {
+			b.WriteString("it")
+		} else {
+			b.WriteString("them")
+		}
+		b.WriteString(" before acting on this repository and follow the instructions ")
+		if len(found) == 1 {
+			b.WriteString("it contains")
+		} else {
+			b.WriteString("they contain")
+		}
+		b.WriteString(".")
+	}
+
 	return b.String()
+}
+
+// contextFileNames lists the project instruction files nib looks for in the
+// working directory. Their presence is surfaced in the system prompt so the
+// agent reads them before acting on the repository.
+var contextFileNames = []string{"AGENTS.md", "CLAUDE.md", "NIB.md", "GEMINI.md"}
+
+// detectContextFiles returns the names of known project instruction files that
+// exist as regular files in dir, preserving contextFileNames order.
+func detectContextFiles(dir string) []string {
+	if dir == "" {
+		return nil
+	}
+	var found []string
+	for _, name := range contextFileNames {
+		if info, err := os.Stat(filepath.Join(dir, name)); err == nil && !info.IsDir() {
+			found = append(found, name)
+		}
+	}
+	return found
 }
 
 type MCPServer struct {

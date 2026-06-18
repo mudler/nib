@@ -1,6 +1,8 @@
 package types
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -31,7 +33,59 @@ func TestGetPromptAppendsSkillsAndFragments(t *testing.T) {
 	}
 }
 
+func TestDetectContextFiles(t *testing.T) {
+	dir := t.TempDir()
+	// Create files in a deliberately different order than contextFileNames to
+	// confirm the result preserves the canonical order.
+	for _, name := range []string{"GEMINI.md", "AGENTS.md"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// A directory named like a context file must be ignored.
+	if err := os.Mkdir(filepath.Join(dir, "CLAUDE.md"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	got := detectContextFiles(dir)
+	want := []string{"AGENTS.md", "GEMINI.md"}
+	if len(got) != len(want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("got %v, want %v", got, want)
+		}
+	}
+
+	if detectContextFiles("") != nil {
+		t.Fatalf("empty dir should yield no files")
+	}
+	if detectContextFiles(t.TempDir()) != nil {
+		t.Fatalf("dir without context files should yield none")
+	}
+}
+
+func TestGetPromptMentionsContextFiles(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "AGENTS.md"), []byte("rules"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(dir)
+
+	got := (&Config{Prompt: "BASE"}).GetPrompt()
+	if !strings.Contains(got, "AGENTS.md") {
+		t.Fatalf("prompt should mention AGENTS.md:\n%s", got)
+	}
+	if !strings.Contains(got, "before acting") {
+		t.Fatalf("prompt should instruct to read before acting:\n%s", got)
+	}
+}
+
 func TestGetPromptNoSkillsNoIndex(t *testing.T) {
+	// Run from a context-file-free directory so GetPrompt returns just the base.
+	t.Chdir(t.TempDir())
+
 	c := &Config{Prompt: "BASE"}
 	got := c.GetPrompt()
 	if strings.Contains(got, "load_skill") {
