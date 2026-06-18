@@ -252,6 +252,9 @@ func RunCLI(ctx context.Context, cfg types.Config, shellJobs *wizmcp.ShellJobs, 
 	fmt.Println(theme.Rule.Render(strings.Repeat("─", 50)))
 	fmt.Println(theme.Help.Render(theme.CLIWelcome))
 	fmt.Println(theme.Help.Render(theme.CLIExit))
+	if cfg.ApprovalMode == "auto" {
+		fmt.Println(theme.Yolo.Render(theme.YoloNotice))
+	}
 	fmt.Println()
 
 	// Display help immediately

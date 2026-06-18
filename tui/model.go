@@ -1682,14 +1682,18 @@ func (m Model) View() string {
 
 	var sb strings.Builder
 
-	// Header: brand left, cwd right, one dim hairline beneath.
-	brand := theme.Brand.Render(theme.BrandName)
+	// Header: brand (plus a yolo badge when the approval gate is off) left,
+	// cwd right, one dim hairline beneath.
+	left := theme.Brand.Render(theme.BrandName)
+	if m.cfg.ApprovalMode == "auto" {
+		left += "  " + theme.Yolo.Render(theme.YoloBadge)
+	}
 	cwd := theme.Meta.Render(shortenPath(currentDir()))
-	gap := m.width - lipgloss.Width(brand) - lipgloss.Width(cwd)
+	gap := m.width - lipgloss.Width(left) - lipgloss.Width(cwd)
 	if gap < 1 {
 		gap = 1
 	}
-	sb.WriteString(brand + strings.Repeat(" ", gap) + cwd)
+	sb.WriteString(left + strings.Repeat(" ", gap) + cwd)
 	sb.WriteString("\n")
 	sb.WriteString(theme.Rule.Render(strings.Repeat("─", max(1, m.width))))
 	sb.WriteString("\n")

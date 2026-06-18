@@ -25,6 +25,11 @@ const (
 
 	CLIWelcome = "a calm assistant for your terminal."
 	CLIExit    = "ctrl+c or 'exit' to leave · 'help' for commands"
+
+	// Shown when --yolo / NIB_YOLO auto-approves every tool call. The header
+	// carries the compact badge; the CLI prints the fuller notice at startup.
+	YoloBadge  = "yolo"
+	YoloNotice = "yolo — auto-approving every tool call (no prompts)"
 )
 
 // CLIApprovePrompt builds the line-based CLI approval prompt (the TUI uses

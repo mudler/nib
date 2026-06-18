@@ -344,6 +344,9 @@ file says:
 nib --yolo          # or: NIB_YOLO=1 nib
 ```
 
+While it's active, nib shows it on screen: a `yolo` badge in the TUI header and
+a one-line notice in the CLI banner.
+
 ## Tool Approval
 
 When nib wants to run a command, you decide:
