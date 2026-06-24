@@ -47,7 +47,7 @@ func skillInstall(mgr *skill.Manager, args []string) int {
 		return 1
 	}
 
-	name, skills, err := mgr.Install(src, ref)
+	name, skills, err := mgr.Install(src, ref, false)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "install failed: %v\n", err)
 		return 1

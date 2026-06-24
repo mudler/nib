@@ -131,7 +131,7 @@ func TestApplyPrecedenceAndEnabledOnly(t *testing.T) {
 	srcA := t.TempDir()
 	writeSkill(t, srcA, "shared", "---\nname: shared\ndescription: from A\n---\nA body\n", nil)
 	writeSkill(t, srcA, "onlyA", "---\nname: onlyA\ndescription: only in A\n---\nA only\n", nil)
-	nameA, _, err := mgr.Install(srcA, "")
+	nameA, _, err := mgr.Install(srcA, "", false)
 	if err != nil {
 		t.Fatalf("install A: %v", err)
 	}
@@ -142,7 +142,7 @@ func TestApplyPrecedenceAndEnabledOnly(t *testing.T) {
 	// Pack B (left disabled): contributes "onlyB" — must NOT appear.
 	srcB := t.TempDir()
 	writeSkill(t, srcB, "onlyB", "---\nname: onlyB\ndescription: only in B\n---\nB only\n", nil)
-	if _, _, err := mgr.Install(srcB, ""); err != nil {
+	if _, _, err := mgr.Install(srcB, "", false); err != nil {
 		t.Fatalf("install B: %v", err)
 	}
 
