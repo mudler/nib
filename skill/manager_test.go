@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/mudler/nib/internal/vcs"
+	"github.com/mudler/nib/types"
 )
 
 func TestDeriveName(t *testing.T) {
@@ -115,6 +116,38 @@ func TestManagerInstallLink(t *testing.T) {
 	live, _ := HarvestPack(packDir(base, name))
 	if len(live) != 2 {
 		t.Fatalf("expected live edit to surface 2 skills, got %d", len(live))
+	}
+}
+
+func TestManagerInstallLinkEnabledSurfacesViaApply(t *testing.T) {
+	base := t.TempDir()
+	src := t.TempDir()
+	writeSkill(t, src, "brainstorming",
+		"---\nname: brainstorming\ndescription: design first\n---\nask questions\n", nil)
+
+	mgr := NewManager(base)
+	name, _, err := mgr.Install(src, "", true)
+	if err != nil {
+		t.Fatalf("Install link: %v", err)
+	}
+	if err := mgr.SetEnabled(name, true); err != nil {
+		t.Fatalf("SetEnabled: %v", err)
+	}
+
+	cfg := types.Config{}
+	if err := Apply(&cfg, base); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+
+	found := false
+	for _, s := range cfg.Skills {
+		if s.Name == "brainstorming" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("linked pack skill not surfaced via Apply, got %+v", cfg.Skills)
 	}
 }
 

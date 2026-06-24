@@ -84,6 +84,44 @@ func TestHarvestPackFlexible(t *testing.T) {
 	}
 }
 
+func TestHarvestPackSkipsNestedSymlinksAndIsCycleSafe(t *testing.T) {
+	root := t.TempDir()
+	// A real skill dir under root — must be harvested.
+	writeSkillAt(t, root, "real", "---\nname: real\ndescription: d\n---\nbody\n")
+
+	// A cycle: a symlink pointing back at the root itself. If the walk
+	// followed it we'd recurse forever; it must be skipped.
+	if err := os.Symlink(root, filepath.Join(root, "loop")); err != nil {
+		t.Fatal(err)
+	}
+
+	// A symlinked skill dir: a real skill outside the root, surfaced under
+	// root via a symlink. The symlink must NOT be harvested.
+	external := t.TempDir()
+	writeSkillAt(t, external, "ext", "---\nname: linkedskill\ndescription: d\n---\nbody\n")
+	if err := os.Symlink(filepath.Join(external, "ext"), filepath.Join(root, "linked")); err != nil {
+		t.Fatal(err)
+	}
+
+	skills, err := HarvestPack(root)
+	if err != nil {
+		t.Fatalf("HarvestPack: %v", err)
+	}
+	got := map[string]string{}
+	for _, s := range skills {
+		got[s.Name] = s.Dir
+	}
+	if len(got) != 1 {
+		t.Fatalf("expected exactly 1 harvested skill, got %d: %v", len(got), got)
+	}
+	if _, ok := got["real"]; !ok {
+		t.Fatalf("real (non-symlinked) skill missing: %v", got)
+	}
+	if _, ok := got["linkedskill"]; ok {
+		t.Fatalf("symlinked skill dir must not be harvested: %v", got)
+	}
+}
+
 func TestHarvestPack(t *testing.T) {
 	root := t.TempDir()
 	writeSkill(t, root, "brainstorming",
