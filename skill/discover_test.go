@@ -29,6 +29,61 @@ func writeSkill(t *testing.T, root, name, body string, extra map[string]string) 
 	}
 }
 
+// writeSkillAt writes <relDir>/SKILL.md under root, creating parents.
+func writeSkillAt(t *testing.T, root, relDir, body string) {
+	t.Helper()
+	dir := filepath.Join(root, relDir)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestHarvestPackFlexible(t *testing.T) {
+	root := t.TempDir()
+	// Flat: skill dirs directly under root.
+	writeSkillAt(t, root, "git", "---\nname: git\ndescription: vcs\n---\nbody\n")
+	// No name frontmatter → name falls back to the directory basename.
+	writeSkillAt(t, root, "writing", "---\ndescription: prose\n---\nbody\n")
+	// Nested several levels deep.
+	writeSkillAt(t, root, "a/b/deep", "---\nname: deep\ndescription: d\n---\nbody\n")
+	// Legacy skills/<name>/ layout still resolves.
+	writeSkillAt(t, root, "skills/legacy", "---\nname: legacy\ndescription: d\n---\nbody\n")
+	// Prune: a SKILL.md inside a recognized skill's subtree must be ignored.
+	writeSkillAt(t, root, "git/references/example", "---\nname: nope\ndescription: d\n---\nbody\n")
+	// Dotted dirs are skipped entirely.
+	writeSkillAt(t, root, ".git/hooks", "---\nname: hidden\ndescription: d\n---\nbody\n")
+
+	skills, err := HarvestPack(root)
+	if err != nil {
+		t.Fatalf("HarvestPack: %v", err)
+	}
+	got := map[string]string{} // name -> Dir
+	for _, s := range skills {
+		got[s.Name] = s.Dir
+	}
+	want := []string{"git", "writing", "deep", "legacy"}
+	if len(got) != len(want) {
+		t.Fatalf("got %d skills %v, want %v", len(got), got, want)
+	}
+	for _, n := range want {
+		if _, ok := got[n]; !ok {
+			t.Fatalf("missing skill %q (got %v)", n, got)
+		}
+	}
+	if _, ok := got["nope"]; ok {
+		t.Fatalf("prune failed: skill inside a skill subtree was harvested")
+	}
+	if _, ok := got["hidden"]; ok {
+		t.Fatalf("dotted dir was not skipped")
+	}
+	if got["writing"] != filepath.Join(root, "writing") {
+		t.Fatalf("Dir for fallback-named skill = %q", got["writing"])
+	}
+}
+
 func TestHarvestPack(t *testing.T) {
 	root := t.TempDir()
 	writeSkill(t, root, "brainstorming",
