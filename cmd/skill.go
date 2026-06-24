@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"flag"
 	"fmt"
 	"os"
 
@@ -21,7 +22,7 @@ func RunSkillCommand(args []string) int {
 	case "list":
 		return skillList(mgr)
 	case "update":
-		return skillByName(args, "update", mgr.Update)
+		return skillUpdate(mgr, args)
 	case "remove":
 		return skillByName(args, "remove", mgr.Remove)
 	case "enable":
@@ -39,21 +40,52 @@ func skillUsage() {
 	fmt.Fprintln(os.Stderr, "usage: nib skill <install|list|update|enable|disable|remove> ...")
 }
 
+// parseSkillInstallArgs parses `[--ref REF] [--link] [--yes] <git-url|local-path>`
+// for `nib skill install`. It is separate from cmd/plugin.go's parseInstallArgs
+// so --link stays off `nib plugin install`. --link cannot be combined with --ref.
+func parseSkillInstallArgs(args []string) (src, ref string, yes, link bool, err error) {
+	fs := flag.NewFlagSet("skill install", flag.ContinueOnError)
+	refp := fs.String("ref", "", "git ref (tag or branch) to install")
+	yesp := fs.Bool("yes", false, "skip the confirmation prompt")
+	linkp := fs.Bool("link", false, "symlink a local dir instead of copying (live edits)")
+	if e := fs.Parse(args); e != nil {
+		return "", "", false, false, e
+	}
+	rest := fs.Args()
+	if len(rest) < 1 {
+		return "", "", false, false, fmt.Errorf("missing <git-url|local-path>")
+	}
+	src = rest[0]
+	if e := fs.Parse(rest[1:]); e != nil {
+		return "", "", false, false, e
+	}
+	if fs.NArg() > 0 {
+		return "", "", false, false, fmt.Errorf("unexpected extra arguments: %v", fs.Args())
+	}
+	if *linkp && *refp != "" {
+		return "", "", false, false, fmt.Errorf("--ref cannot be combined with --link")
+	}
+	return src, *refp, *yesp, *linkp, nil
+}
+
 func skillInstall(mgr *skill.Manager, args []string) int {
-	// parseInstallArgs is defined in cmd/plugin.go (same package).
-	src, ref, yes, err := parseInstallArgs(args)
+	src, ref, yes, link, err := parseSkillInstallArgs(args)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "usage: nib skill install [--ref REF] [--yes] <git-url|local-path>")
+		fmt.Fprintln(os.Stderr, "usage: nib skill install [--ref REF] [--link] [--yes] <git-url|local-path>")
 		return 1
 	}
 
-	name, skills, err := mgr.Install(src, ref)
+	name, skills, err := mgr.Install(src, ref, link)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "install failed: %v\n", err)
 		return 1
 	}
 
-	fmt.Printf("Installed skill pack %q — %d skill(s):\n", name, len(skills))
+	how := "Installed"
+	if link {
+		how = "Linked"
+	}
+	fmt.Printf("%s skill pack %q — %d skill(s):\n", how, name, len(skills))
 	for _, s := range skills {
 		fmt.Printf("  - %s: %s\n", s.Name, s.Description)
 	}
@@ -85,7 +117,11 @@ func skillList(mgr *skill.Manager) int {
 		if e.Enabled {
 			status = "enabled"
 		}
-		fmt.Printf("%-20s %-9s %s\n", e.Name, status, e.SourceURL)
+		line := fmt.Sprintf("%-20s %-9s %s", e.Name, status, e.SourceURL)
+		if target, linked := mgr.LinkTarget(e.Name); linked {
+			line += fmt.Sprintf("  (linked → %s)", target)
+		}
+		fmt.Println(line)
 		skills, err := mgr.Skills(e.Name)
 		if err != nil {
 			continue
@@ -94,6 +130,24 @@ func skillList(mgr *skill.Manager) int {
 			fmt.Printf("    - %s\n", s.Name)
 		}
 	}
+	return 0
+}
+
+func skillUpdate(mgr *skill.Manager, args []string) int {
+	if len(args) < 2 {
+		fmt.Fprintln(os.Stderr, "usage: nib skill update <name>")
+		return 1
+	}
+	name := args[1]
+	if target, linked := mgr.LinkTarget(name); linked {
+		fmt.Printf("Skill pack %q is linked (→ %s); edits are already live — nothing to fetch.\n", name, target)
+		return 0
+	}
+	if err := mgr.Update(name); err != nil {
+		fmt.Fprintf(os.Stderr, "update failed: %v\n", err)
+		return 1
+	}
+	fmt.Printf("Skill pack %q updated.\n", name)
 	return 0
 }
 

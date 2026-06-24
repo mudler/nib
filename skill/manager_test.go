@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/mudler/nib/internal/vcs"
+	"github.com/mudler/nib/types"
 )
 
 func TestDeriveName(t *testing.T) {
@@ -31,7 +32,7 @@ func TestManagerInstallFromLocalDir(t *testing.T) {
 		"---\nname: brainstorming\ndescription: design first\n---\nask questions\n", nil)
 
 	mgr := NewManager(base)
-	name, skills, err := mgr.Install(src, "")
+	name, skills, err := mgr.Install(src, "", false)
 	if err != nil {
 		t.Fatalf("Install: %v", err)
 	}
@@ -64,7 +65,7 @@ func TestManagerInstallFromLocalDir(t *testing.T) {
 	}
 
 	// Re-installing the same name is rejected.
-	if _, _, err := mgr.Install(src, ""); err == nil {
+	if _, _, err := mgr.Install(src, "", false); err == nil {
 		t.Fatalf("expected collision error on re-install")
 	}
 
@@ -77,11 +78,111 @@ func TestManagerInstallFromLocalDir(t *testing.T) {
 	}
 }
 
+func TestManagerInstallLink(t *testing.T) {
+	base := t.TempDir()
+	src := t.TempDir()
+	writeSkill(t, src, "brainstorming",
+		"---\nname: brainstorming\ndescription: design first\n---\nask questions\n", nil)
+
+	mgr := NewManager(base)
+	name, skills, err := mgr.Install(src, "", true)
+	if err != nil {
+		t.Fatalf("Install link: %v", err)
+	}
+	if len(skills) != 1 || skills[0].Name != "brainstorming" {
+		t.Fatalf("expected 1 harvested skill, got %+v", skills)
+	}
+	// Pack dir is a symlink to abs(src), not a copy.
+	fi, err := os.Lstat(packDir(base, name))
+	if err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("expected pack dir to be a symlink, got %v (err %v)", fi.Mode(), err)
+	}
+	absSrc, _ := filepath.Abs(src)
+	target, _ := os.Readlink(packDir(base, name))
+	if target != absSrc {
+		t.Fatalf("symlink target = %q, want %q", target, absSrc)
+	}
+	// LinkTarget reports it.
+	if got, linked := mgr.LinkTarget(name); !linked || got != absSrc {
+		t.Fatalf("LinkTarget = (%q, %v), want (%q, true)", got, linked, absSrc)
+	}
+	// Registry records it, disabled, with the absolute source.
+	reg, _ := LoadRegistry(base)
+	if e := reg.Find(name); e == nil || e.Enabled || e.SourceURL != absSrc {
+		t.Fatalf("registry entry wrong: %+v", e)
+	}
+	// Live edit: a new skill added to the source surfaces on re-harvest.
+	writeSkill(t, src, "newone", "---\nname: newone\ndescription: fresh\n---\nbody\n", nil)
+	live, _ := HarvestPack(packDir(base, name))
+	if len(live) != 2 {
+		t.Fatalf("expected live edit to surface 2 skills, got %d", len(live))
+	}
+}
+
+func TestManagerInstallLinkEnabledSurfacesViaApply(t *testing.T) {
+	base := t.TempDir()
+	src := t.TempDir()
+	writeSkill(t, src, "brainstorming",
+		"---\nname: brainstorming\ndescription: design first\n---\nask questions\n", nil)
+
+	mgr := NewManager(base)
+	name, _, err := mgr.Install(src, "", true)
+	if err != nil {
+		t.Fatalf("Install link: %v", err)
+	}
+	if err := mgr.SetEnabled(name, true); err != nil {
+		t.Fatalf("SetEnabled: %v", err)
+	}
+
+	cfg := types.Config{}
+	if err := Apply(&cfg, base); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+
+	found := false
+	for _, s := range cfg.Skills {
+		if s.Name == "brainstorming" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("linked pack skill not surfaced via Apply, got %+v", cfg.Skills)
+	}
+}
+
+func TestManagerInstallLinkRejectsNonDir(t *testing.T) {
+	base := t.TempDir()
+	mgr := NewManager(base)
+	// A git URL is not a local directory.
+	if _, _, err := mgr.Install("https://example.com/x.git", "", true); err == nil {
+		t.Fatalf("expected error linking a non-directory source")
+	}
+	// A nonexistent path.
+	if _, _, err := mgr.Install(filepath.Join(base, "nope"), "", true); err == nil {
+		t.Fatalf("expected error linking a nonexistent path")
+	}
+}
+
+func TestLinkTargetFalseForCopy(t *testing.T) {
+	base := t.TempDir()
+	src := t.TempDir()
+	writeSkill(t, src, "s", "---\nname: s\ndescription: d\n---\nb\n", nil)
+	mgr := NewManager(base)
+	name, _, err := mgr.Install(src, "", false)
+	if err != nil {
+		t.Fatalf("Install copy: %v", err)
+	}
+	if got, linked := mgr.LinkTarget(name); linked {
+		t.Fatalf("LinkTarget on a copied pack = (%q, true), want linked=false", got)
+	}
+}
+
 func TestManagerInstallRejectsNoSkills(t *testing.T) {
 	base := t.TempDir()
 	src := t.TempDir() // empty: no skills/ dir
 	mgr := NewManager(base)
-	if _, _, err := mgr.Install(src, ""); err == nil {
+	if _, _, err := mgr.Install(src, "", false); err == nil {
 		t.Fatalf("expected error when no skills found")
 	}
 }
@@ -120,7 +221,7 @@ func TestManagerInstallRejectsUnsafeSourceWithoutDestroyingBase(t *testing.T) {
 	}
 
 	mgr := NewManager(base)
-	if _, _, err := mgr.Install(unsafeSrc, ""); err == nil {
+	if _, _, err := mgr.Install(unsafeSrc, "", false); err == nil {
 		t.Fatalf("expected Install to reject unsafe source")
 	}
 	// The base config (sentinel) must be untouched.
@@ -145,7 +246,7 @@ func TestManagerInstallFromGitClone(t *testing.T) {
 	t.Cleanup(func() { vcs.Clone = orig })
 
 	mgr := NewManager(base)
-	name, skills, err := mgr.Install("https://example.com/demo.git", "v1")
+	name, skills, err := mgr.Install("https://example.com/demo.git", "v1", false)
 	if err != nil {
 		t.Fatalf("Install: %v", err)
 	}
@@ -156,5 +257,49 @@ func TestManagerInstallFromGitClone(t *testing.T) {
 	e := reg.Find("demo")
 	if e == nil || e.Ref != "v1" || e.Enabled {
 		t.Fatalf("registry entry wrong: %+v", e)
+	}
+}
+
+func TestUpdateOnLinkedPackIsNoOp(t *testing.T) {
+	base := t.TempDir()
+	src := t.TempDir()
+	writeSkill(t, src, "s", "---\nname: s\ndescription: d\n---\nb\n", nil)
+	mgr := NewManager(base)
+	name, _, err := mgr.Install(src, "", true)
+	if err != nil {
+		t.Fatalf("Install link: %v", err)
+	}
+	if err := mgr.Update(name); err != nil {
+		t.Fatalf("Update on linked pack should be a no-op, got: %v", err)
+	}
+	if _, linked := mgr.LinkTarget(name); !linked {
+		t.Fatalf("pack should still be linked after Update")
+	}
+}
+
+func TestRemoveLinkedPackLeavesTargetIntact(t *testing.T) {
+	base := t.TempDir()
+	src := t.TempDir()
+	writeSkill(t, src, "s", "---\nname: s\ndescription: d\n---\nb\n", nil)
+	mgr := NewManager(base)
+	name, _, err := mgr.Install(src, "", true)
+	if err != nil {
+		t.Fatalf("Install link: %v", err)
+	}
+	if err := mgr.Remove(name); err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+	// Symlink gone.
+	if _, err := os.Lstat(packDir(base, name)); !os.IsNotExist(err) {
+		t.Fatalf("symlink should be removed")
+	}
+	// Target files untouched.
+	if _, err := os.Stat(filepath.Join(src, "skills", "s", "SKILL.md")); err != nil {
+		t.Fatalf("link target was wiped: %v", err)
+	}
+	// Registry record gone.
+	reg, _ := LoadRegistry(base)
+	if reg.Find(name) != nil {
+		t.Fatalf("registry still has the removed pack")
 	}
 }

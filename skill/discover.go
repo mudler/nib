@@ -4,46 +4,56 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/mudler/nib/plugin"
 	"github.com/mudler/nib/types"
 )
 
-// HarvestPack reads skills/<name>/SKILL.md from a skill-pack root and returns
-// the contributed skills, each with Dir set to its on-disk directory so the
-// load_skill tool can point the agent at bundled scripts and references. A
-// missing skills/ directory yields no skills and no error.
+// HarvestPack walks a skill-pack root and returns every contributed skill.
+// Discovery is recursive: any directory containing a SKILL.md is a skill, its
+// Name taken from the file's frontmatter (falling back to the directory name)
+// and its Dir set to that directory so the load_skill tool can resolve bundled
+// scripts and references. Once a directory is recognized as a skill its subtree
+// is pruned — a skill's own references/examples cannot define further skills.
+// Dotted directories (e.g. .git) and nested symlinks are skipped, and a
+// SKILL.md sitting directly at root is not itself a skill. A missing or
+// unreadable directory yields no skills and no error.
 func HarvestPack(root string) ([]types.Skill, error) {
-	skillsRoot := filepath.Join(root, "skills")
-	entries, err := os.ReadDir(skillsRoot)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, err
-	}
 	var out []types.Skill
-	for _, e := range entries {
-		if !e.IsDir() {
-			continue
-		}
-		dir := filepath.Join(skillsRoot, e.Name())
-		data, err := os.ReadFile(filepath.Join(dir, "SKILL.md"))
+	var walk func(dir string)
+	walk = func(dir string) {
+		entries, err := os.ReadDir(dir)
 		if err != nil {
-			continue // a subdir without SKILL.md is not a skill
+			return // unreadable subtree: skip, don't fail the whole harvest
 		}
-		name, desc, tools, body := plugin.ParseSkillMarkdown(data)
-		if name == "" {
-			name = e.Name()
+		for _, e := range entries {
+			// e.IsDir() is false for symlinks (DirEntry reports the link's own
+			// type), so this also skips nested symlinks — avoiding cycles.
+			if !e.IsDir() || strings.HasPrefix(e.Name(), ".") {
+				continue
+			}
+			child := filepath.Join(dir, e.Name())
+			data, err := os.ReadFile(filepath.Join(child, "SKILL.md"))
+			if err != nil {
+				walk(child) // not a skill dir → descend
+				continue
+			}
+			name, desc, tools, body := plugin.ParseSkillMarkdown(data)
+			if name == "" {
+				name = e.Name()
+			}
+			out = append(out, types.Skill{
+				Name:         name,
+				Description:  desc,
+				Instructions: body,
+				Tools:        tools,
+				Dir:          child,
+			})
+			// prune: do not descend into a recognized skill dir
 		}
-		out = append(out, types.Skill{
-			Name:         name,
-			Description:  desc,
-			Instructions: body,
-			Tools:        tools,
-			Dir:          dir,
-		})
 	}
+	walk(root)
 	return out, nil
 }
 

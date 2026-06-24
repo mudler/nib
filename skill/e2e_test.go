@@ -16,7 +16,7 @@ func TestEndToEndInstallEnableApply(t *testing.T) {
 		map[string]string{"scripts/helper.sh": "echo from helper"})
 
 	mgr := NewManager(base)
-	name, _, err := mgr.Install(src, "")
+	name, _, err := mgr.Install(src, "", false)
 	if err != nil {
 		t.Fatalf("install: %v", err)
 	}
