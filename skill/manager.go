@@ -165,6 +165,9 @@ func (mgr *Manager) Update(name string) error {
 	if reg.Find(name) == nil {
 		return fmt.Errorf("skill pack %q not installed", name)
 	}
+	if _, linked := mgr.LinkTarget(name); linked {
+		return nil // a linked pack reads its source live; nothing to fetch
+	}
 	dir := packDir(mgr.baseDir, name)
 	if _, statErr := os.Stat(filepath.Join(dir, ".git")); os.IsNotExist(statErr) {
 		return fmt.Errorf("skill pack %q was installed from a local path; nothing to update", name)
@@ -196,7 +199,12 @@ func (mgr *Manager) Remove(name string) error {
 	if reg.Find(name) == nil {
 		return fmt.Errorf("skill pack %q not installed", name)
 	}
-	if err := os.RemoveAll(packDir(mgr.baseDir, name)); err != nil {
+	dir := packDir(mgr.baseDir, name)
+	if _, linked := mgr.LinkTarget(name); linked {
+		if err := os.Remove(dir); err != nil { // unlink only; never the target
+			return err
+		}
+	} else if err := os.RemoveAll(dir); err != nil {
 		return err
 	}
 	reg.Remove(name)

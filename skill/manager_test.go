@@ -226,3 +226,47 @@ func TestManagerInstallFromGitClone(t *testing.T) {
 		t.Fatalf("registry entry wrong: %+v", e)
 	}
 }
+
+func TestUpdateOnLinkedPackIsNoOp(t *testing.T) {
+	base := t.TempDir()
+	src := t.TempDir()
+	writeSkill(t, src, "s", "---\nname: s\ndescription: d\n---\nb\n", nil)
+	mgr := NewManager(base)
+	name, _, err := mgr.Install(src, "", true)
+	if err != nil {
+		t.Fatalf("Install link: %v", err)
+	}
+	if err := mgr.Update(name); err != nil {
+		t.Fatalf("Update on linked pack should be a no-op, got: %v", err)
+	}
+	if _, linked := mgr.LinkTarget(name); !linked {
+		t.Fatalf("pack should still be linked after Update")
+	}
+}
+
+func TestRemoveLinkedPackLeavesTargetIntact(t *testing.T) {
+	base := t.TempDir()
+	src := t.TempDir()
+	writeSkill(t, src, "s", "---\nname: s\ndescription: d\n---\nb\n", nil)
+	mgr := NewManager(base)
+	name, _, err := mgr.Install(src, "", true)
+	if err != nil {
+		t.Fatalf("Install link: %v", err)
+	}
+	if err := mgr.Remove(name); err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+	// Symlink gone.
+	if _, err := os.Lstat(packDir(base, name)); !os.IsNotExist(err) {
+		t.Fatalf("symlink should be removed")
+	}
+	// Target files untouched.
+	if _, err := os.Stat(filepath.Join(src, "skills", "s", "SKILL.md")); err != nil {
+		t.Fatalf("link target was wiped: %v", err)
+	}
+	// Registry record gone.
+	reg, _ := LoadRegistry(base)
+	if reg.Find(name) != nil {
+		t.Fatalf("registry still has the removed pack")
+	}
+}
