@@ -3,6 +3,8 @@ package cmd
 import (
 	"reflect"
 	"testing"
+
+	"github.com/mudler/nib/manage"
 )
 
 func TestParseAddArgsStdio(t *testing.T) {
@@ -43,6 +45,17 @@ func TestParseAddArgsErrors(t *testing.T) {
 		if _, _, err := parseAddArgs(args); err == nil {
 			t.Fatalf("case %d %v: expected error", i, args)
 		}
+	}
+}
+
+func TestMCPTestMissingServer(t *testing.T) {
+	dir := t.TempDir()
+	cfgr := manage.New(dir, dir+"/config.yaml")
+	if code := mcpTest(cfgr, []string{"nope"}); code == 0 {
+		t.Fatalf("expected nonzero exit for missing server")
+	}
+	if code := mcpTest(cfgr, nil); code == 0 {
+		t.Fatalf("expected nonzero exit for missing name")
 	}
 }
 
