@@ -191,6 +191,12 @@ func (c *Config) GetPrompt() string {
 		b.WriteString(".")
 	}
 
+	b.WriteString("\n\nYou can register additional MCP servers from the command line: ")
+	b.WriteString("`nib mcp add <name> -- <command> [args...]` for a local server, or ")
+	b.WriteString("`nib mcp add <name> --url <url> [--transport http|sse]` for a remote one; ")
+	b.WriteString("`nib mcp list` and `nib mcp test <name>` show and verify them. ")
+	b.WriteString("Servers added this way become available on the next nib session.")
+
 	return b.String()
 }
 
@@ -215,7 +221,9 @@ func detectContextFiles(dir string) []string {
 }
 
 type MCPServer struct {
-	Command string            `yaml:"command"`
-	Args    []string          `yaml:"args"`
-	Env     map[string]string `yaml:"env"`
+	Command   string            `yaml:"command,omitempty"`
+	Args      []string          `yaml:"args,omitempty"`
+	Env       map[string]string `yaml:"env,omitempty"`
+	URL       string            `yaml:"url,omitempty"`       // remote: presence selects an HTTP/SSE transport
+	Transport string            `yaml:"transport,omitempty"` // remote transport: "http" (default) or "sse"
 }

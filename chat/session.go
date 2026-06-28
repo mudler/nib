@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
-	"os/exec"
 	"reflect"
 	"slices"
 	"strings"
@@ -169,16 +167,6 @@ func toCogitoDefinitions(cfgs []types.AgentTypeConfig) []cogito.AgentDefinition 
 		})
 	}
 	return defs
-}
-
-// CommandTransport creates a new transport for a command
-func CommandTransport(cmd string, args []string, env ...string) mcp.Transport {
-	command := exec.Command(cmd, args...)
-	command.Env = os.Environ()
-	command.Env = append(command.Env, env...)
-
-	transport := &mcp.CommandTransport{Command: command}
-	return transport
 }
 
 // NewSession creates a new chat session
@@ -951,12 +939,10 @@ func (s *Session) ReconcileMCPServers(desired map[string]types.MCPServer) error 
 		if _, ok := s.cfgClients[name]; ok {
 			continue
 		}
-		var env []string
-		for k, v := range srv.Env {
-			env = append(env, fmt.Sprintf("%s=%s", k, v))
-		}
-		transport := CommandTransport(srv.Command, srv.Args, env...)
-		sess, err := s.mcpClient.Connect(s.ctx, transport, nil)
+		transport := wizmcp.TransportForServer(srv)
+		connectCtx, cancel := context.WithTimeout(s.ctx, 30*time.Second)
+		sess, err := s.mcpClient.Connect(connectCtx, transport, nil)
+		cancel()
 		if err != nil {
 			xlog.Warn("self-config: MCP server failed to connect", "name", name, "error", err)
 			continue

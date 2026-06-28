@@ -61,6 +61,12 @@ func main() {
 		os.Exit(cmd.RunSkillCommand(os.Args[2:]))
 	}
 
+	// `nib mcp <add|list|remove|test>` manages configured servers and early-exits
+	// (needs config, not transports). Bare `nib mcp` / --http / --stdio still serve.
+	if len(os.Args) >= 3 && os.Args[1] == "mcp" && cmd.IsMCPManageSubcommand(os.Args[2]) {
+		os.Exit(cmd.RunMCPCommand(os.Args[2:]))
+	}
+
 	// `nib mcp` needs config + transports (built below), so it cannot early-exit
 	// like plugin/skill. Capture its args and hide them from the global flag
 	// parser; the actual branch is after StartTransports.

@@ -82,6 +82,14 @@ func TestGetPromptMentionsContextFiles(t *testing.T) {
 	}
 }
 
+func TestGetPromptMentionsMCPAdd(t *testing.T) {
+	c := Config{Prompt: "base prompt"}
+	got := c.GetPrompt()
+	if !strings.Contains(got, "nib mcp add") {
+		t.Fatalf("system prompt should mention `nib mcp add`:\n%s", got)
+	}
+}
+
 func TestGetPromptNoSkillsNoIndex(t *testing.T) {
 	// Run from a context-file-free directory so GetPrompt returns just the base.
 	t.Chdir(t.TempDir())
@@ -91,7 +99,16 @@ func TestGetPromptNoSkillsNoIndex(t *testing.T) {
 	if strings.Contains(got, "load_skill") {
 		t.Fatalf("should not mention load_skill when no skills:\n%s", got)
 	}
-	if strings.TrimSpace(got) != "BASE" {
-		t.Fatalf("expected just the base prompt, got:\n%q", got)
+	// With no skills, fragments, or context files, GetPrompt appends only the
+	// static MCP fragment to the base prompt — assert the exact output so no
+	// unexpected content sneaks in.
+	want := "BASE" +
+		"\n\nYou can register additional MCP servers from the command line: " +
+		"`nib mcp add <name> -- <command> [args...]` for a local server, or " +
+		"`nib mcp add <name> --url <url> [--transport http|sse]` for a remote one; " +
+		"`nib mcp list` and `nib mcp test <name>` show and verify them. " +
+		"Servers added this way become available on the next nib session."
+	if strings.TrimSpace(got) != strings.TrimSpace(want) {
+		t.Fatalf("expected base + MCP fragment only, got:\n%q", got)
 	}
 }

@@ -13,9 +13,11 @@ import (
 
 // MCPServerInfo is a configured MCP server in tool-facing form.
 type MCPServerInfo struct {
-	Name    string
-	Command string
-	Args    []string
+	Name      string
+	Command   string
+	Args      []string
+	URL       string
+	Transport string
 }
 
 // userConfigServers reads only the user config file's mcp_servers map (not the
@@ -77,23 +79,48 @@ func (c *Configurator) ListMCPServers() ([]MCPServerInfo, error) {
 	}
 	out := make([]MCPServerInfo, 0, len(servers))
 	for name, s := range servers {
-		out = append(out, MCPServerInfo{Name: name, Command: s.Command, Args: s.Args})
+		out = append(out, MCPServerInfo{Name: name, Command: s.Command, Args: s.Args, URL: s.URL, Transport: s.Transport})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out, nil
 }
 
-// AddMCPServer persists an MCP server to the user config file.
-func (c *Configurator) AddMCPServer(name, command string, args []string, env map[string]string) error {
-	if name == "" || command == "" {
-		return fmt.Errorf("name and command are required")
+// AddMCPServer persists an MCP server (stdio or remote) to the user config file.
+// Exactly one of srv.Command (stdio) or srv.URL (remote) must be set.
+func (c *Configurator) AddMCPServer(name string, srv types.MCPServer) error {
+	if name == "" {
+		return fmt.Errorf("name is required")
+	}
+	if (srv.Command == "") == (srv.URL == "") {
+		return fmt.Errorf("exactly one of command or url is required")
+	}
+	if srv.Transport != "" {
+		if srv.Transport != "http" && srv.Transport != "sse" {
+			return fmt.Errorf("transport must be \"http\" or \"sse\", got %q", srv.Transport)
+		}
+		if srv.URL == "" {
+			return fmt.Errorf("transport is only valid for remote servers (url must be set)")
+		}
 	}
 	servers, err := userConfigServers(c.configPath)
 	if err != nil {
 		return err
 	}
-	servers[name] = types.MCPServer{Command: command, Args: args, Env: env}
+	servers[name] = srv
 	return writeUserConfigServers(c.configPath, servers)
+}
+
+// GetMCPServer returns the named server from the user config file.
+func (c *Configurator) GetMCPServer(name string) (types.MCPServer, error) {
+	servers, err := userConfigServers(c.configPath)
+	if err != nil {
+		return types.MCPServer{}, err
+	}
+	srv, ok := servers[name]
+	if !ok {
+		return types.MCPServer{}, fmt.Errorf("mcp server %q not configured in %s", name, c.configPath)
+	}
+	return srv, nil
 }
 
 // RemoveMCPServer deletes an MCP server from the user config file.
