@@ -6,6 +6,7 @@ import (
 
 	"github.com/mudler/cogito"
 	"github.com/mudler/nib/manage"
+	"github.com/mudler/nib/types"
 )
 
 // toolDef pairs a runnable tool with its name so callers can register and test
@@ -87,10 +88,12 @@ type generateSkillArgs struct {
 	Instructions string `json:"instructions" jsonschema:"the full skill instructions the agent will follow"`
 }
 type addMCPServerArgs struct {
-	Name    string            `json:"name" jsonschema:"unique name for the MCP server"`
-	Command string            `json:"command" jsonschema:"executable to launch the MCP server"`
-	Args    []string          `json:"args,omitempty" jsonschema:"command arguments"`
-	Env     []string          `json:"env,omitempty" jsonschema:"environment variables for the server, each as a KEY=VALUE string"`
+	Name      string   `json:"name" jsonschema:"unique name for the MCP server"`
+	Command   string   `json:"command,omitempty" jsonschema:"executable to launch a local (stdio) MCP server"`
+	Args      []string `json:"args,omitempty" jsonschema:"command arguments"`
+	Env       []string `json:"env,omitempty" jsonschema:"environment variables, each as a KEY=VALUE string"`
+	URL       string   `json:"url,omitempty" jsonschema:"base URL for a remote MCP server (use instead of command)"`
+	Transport string   `json:"transport,omitempty" jsonschema:"remote transport: http (default) or sse"`
 }
 
 // selfConfigToolDefs builds the ten self-configuration tools. reload is called
@@ -212,10 +215,17 @@ func selfConfigToolDefs(c *manage.Configurator, reload func()) []toolDef {
 			}),
 
 		makeTool("add_mcp_server",
-			"Add an MCP server to the user config and connect it on the next message.",
+			"Add an MCP server (local command or remote url) to the user config and connect it on the next message.",
 			addMCPServerArgs{}, func(args map[string]any) (string, error) {
 				name := argStr(args, "name")
-				if err := c.AddMCPServer(name, argStr(args, "command"), argStrSlice(args, "args"), argEnvMap(args, "env")); err != nil {
+				srv := types.MCPServer{
+					Command:   argStr(args, "command"),
+					Args:      argStrSlice(args, "args"),
+					Env:       argEnvMap(args, "env"),
+					URL:       argStr(args, "url"),
+					Transport: argStr(args, "transport"),
+				}
+				if err := c.AddMCPServer(name, srv); err != nil {
 					return "", err
 				}
 				reload()
