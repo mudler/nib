@@ -99,9 +99,16 @@ func TestGetPromptNoSkillsNoIndex(t *testing.T) {
 	if strings.Contains(got, "load_skill") {
 		t.Fatalf("should not mention load_skill when no skills:\n%s", got)
 	}
-	// The base prompt is always first; only the static MCP fragment follows it
-	// when there are no skills, fragments, or context files.
-	if !strings.HasPrefix(strings.TrimSpace(got), "BASE") {
-		t.Fatalf("expected the base prompt first, got:\n%q", got)
+	// With no skills, fragments, or context files, GetPrompt appends only the
+	// static MCP fragment to the base prompt — assert the exact output so no
+	// unexpected content sneaks in.
+	want := "BASE" +
+		"\n\nYou can register additional MCP servers from the command line: " +
+		"`nib mcp add <name> -- <command> [args...]` for a local server, or " +
+		"`nib mcp add <name> --url <url> [--transport http|sse]` for a remote one; " +
+		"`nib mcp list` and `nib mcp test <name>` show and verify them. " +
+		"Servers added this way become available on the next nib session."
+	if strings.TrimSpace(got) != strings.TrimSpace(want) {
+		t.Fatalf("expected base + MCP fragment only, got:\n%q", got)
 	}
 }
