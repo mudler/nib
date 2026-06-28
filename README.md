@@ -303,7 +303,7 @@ agent_options:
 
 # Optional: tool-approval policy (default: prompt)
 #   prompt    — ask before each tool call, but auto-approve read-only calls
-#               (read, grep, glob, ls, and safe read-only bash like
+#               (read, grep, glob, and safe read-only shell commands like
 #               `ls`, `cat`, `git status`, `go list`). Mutating calls prompt.
 #   strict    — ask before EVERY tool call, including read-only ones
 #   allowlist — auto-approve the tools in allowed_tools, prompt for the rest

@@ -26,6 +26,19 @@ func TestIsReadOnly(t *testing.T) {
 		{"bash cat", "bash", `{"script":"cat f"}`, true},
 		{"bash rm", "bash", `{"script":"rm f"}`, false},
 		{"bash sed -i", "bash", `{"script":"sed -i s/a/b/ f"}`, false}, // sed excluded
+		// commands dropped from the allowlist: mutating via their own flags/positionals.
+		// These must prompt because the command/subcommand is no longer listed,
+		// NOT because of the shell-syntax gate (find -exec has no rejected token).
+		{"find delete", "bash", `{"script":"find . -delete"}`, false},
+		{"find exec", "bash", `{"script":"find . -type f -exec rm {} +"}`, false},
+		{"sort output", "bash", `{"script":"sort -o out x"}`, false},
+		{"uniq output", "bash", `{"script":"uniq a b"}`, false},
+		{"tree output", "bash", `{"script":"tree -o out"}`, false},
+		{"date set", "bash", `{"script":"date -s 2020-01-01"}`, false},
+		{"git branch delete", "bash", `{"script":"git branch -D x"}`, false},
+		{"git tag create", "bash", `{"script":"git tag t"}`, false},
+		{"git remote add", "bash", `{"script":"git remote add r u"}`, false},
+		{"go env write", "bash", `{"script":"go env -w X=1"}`, false},
 		// bash pairs
 		{"bash git status", "bash", `{"script":"git status"}`, true},
 		{"bash git push", "bash", `{"script":"git push"}`, false},

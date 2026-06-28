@@ -12,19 +12,29 @@ type readOnlyCommands struct {
 }
 
 // builtinWholeReadOnly are commands that only read/inspect, regardless of args.
+//
+// INVARIANT: every entry must be read-only at ALL arguments. No command with an
+// output-file flag (e.g. -o), a positional output, a -delete/-exec form, or a
+// config-write flag belongs here. The shell-syntax gate (safeCommand) does not
+// catch a command's own mutating flags — so this list itself must stay
+// conservative.
 var builtinWholeReadOnly = []string{
-	"ls", "cat", "head", "tail", "grep", "rg", "find", "wc", "tree",
+	"ls", "cat", "head", "tail", "grep", "rg", "wc",
 	"pwd", "stat", "file", "du", "df", "basename", "dirname", "echo",
-	"printf", "date", "whoami", "hostname", "uname", "which", "type",
-	"sort", "uniq", "cut", "column", "nl", "less", "more",
+	"printf", "whoami", "uname", "which", "type",
+	"cut", "column", "nl", "less", "more",
 }
 
 // builtinReadOnlyPairs map a command to its read-only subcommands. Anything not
 // listed (git push, go build, docker run, kubectl apply, npm install,
 // cargo build, …) is excluded by construction and will prompt.
+//
+// The same invariant as builtinWholeReadOnly applies per subcommand: a listed
+// `cmd subcmd` pair must be read-only regardless of any additional flags (e.g.
+// `git branch -D`, `git tag`, `go env -w` mutate, so they are NOT listed).
 var builtinReadOnlyPairs = map[string][]string{
-	"git":     {"status", "log", "diff", "show", "branch", "blame", "remote", "describe", "rev-parse", "ls-files", "tag"},
-	"go":      {"list", "version", "env", "doc", "vet"},
+	"git":     {"status", "log", "diff", "show", "blame", "describe", "rev-parse", "ls-files"},
+	"go":      {"list", "version", "doc", "vet"},
 	"docker":  {"ps", "images", "inspect", "logs", "version", "info"},
 	"kubectl": {"get", "describe", "logs", "version"},
 	"npm":     {"ls", "list", "view", "outdated"},
