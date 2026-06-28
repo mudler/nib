@@ -82,6 +82,14 @@ func TestGetPromptMentionsContextFiles(t *testing.T) {
 	}
 }
 
+func TestGetPromptMentionsMCPAdd(t *testing.T) {
+	c := Config{Prompt: "base prompt"}
+	got := c.GetPrompt()
+	if !strings.Contains(got, "nib mcp add") {
+		t.Fatalf("system prompt should mention `nib mcp add`:\n%s", got)
+	}
+}
+
 func TestGetPromptNoSkillsNoIndex(t *testing.T) {
 	// Run from a context-file-free directory so GetPrompt returns just the base.
 	t.Chdir(t.TempDir())
@@ -91,7 +99,9 @@ func TestGetPromptNoSkillsNoIndex(t *testing.T) {
 	if strings.Contains(got, "load_skill") {
 		t.Fatalf("should not mention load_skill when no skills:\n%s", got)
 	}
-	if strings.TrimSpace(got) != "BASE" {
-		t.Fatalf("expected just the base prompt, got:\n%q", got)
+	// The base prompt is always first; only the static MCP fragment follows it
+	// when there are no skills, fragments, or context files.
+	if !strings.HasPrefix(strings.TrimSpace(got), "BASE") {
+		t.Fatalf("expected the base prompt first, got:\n%q", got)
 	}
 }

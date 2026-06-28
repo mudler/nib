@@ -191,6 +191,12 @@ func (c *Config) GetPrompt() string {
 		b.WriteString(".")
 	}
 
+	b.WriteString("\n\nYou can register additional MCP servers from the command line: ")
+	b.WriteString("`nib mcp add <name> -- <command> [args...]` for a local server, or ")
+	b.WriteString("`nib mcp add <name> --url <url> [--transport http|sse]` for a remote one; ")
+	b.WriteString("`nib mcp list` and `nib mcp test <name>` show and verify them. ")
+	b.WriteString("Servers added this way become available on the next nib session.")
+
 	return b.String()
 }
 

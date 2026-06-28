@@ -69,7 +69,7 @@ func TestReloadSetsAgentsHooksAndPrompt(t *testing.T) {
 	if len(s.agentDefs) != 1 || s.agentDefs[0].Name != "explore" {
 		t.Fatalf("agents not applied: %+v", s.agentDefs)
 	}
-	if s.systemPrompt != "Agents: explore" {
+	if !strings.Contains(s.systemPrompt, "Agents: explore") {
 		t.Fatalf("prompt not applied: %q", s.systemPrompt)
 	}
 	if s.hooks == nil {
