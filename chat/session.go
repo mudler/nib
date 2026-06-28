@@ -940,7 +940,9 @@ func (s *Session) ReconcileMCPServers(desired map[string]types.MCPServer) error 
 			continue
 		}
 		transport := wizmcp.TransportForServer(srv)
-		sess, err := s.mcpClient.Connect(s.ctx, transport, nil)
+		connectCtx, cancel := context.WithTimeout(s.ctx, 30*time.Second)
+		sess, err := s.mcpClient.Connect(connectCtx, transport, nil)
+		cancel()
 		if err != nil {
 			xlog.Warn("self-config: MCP server failed to connect", "name", name, "error", err)
 			continue

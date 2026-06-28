@@ -33,6 +33,41 @@ func TestParseAddArgsRemote(t *testing.T) {
 	}
 }
 
+func TestParseAddArgsInlineEquals(t *testing.T) {
+	name, srv, err := parseAddArgs([]string{"foo", "--url=https://x/mcp", "--transport=http"})
+	if err != nil {
+		t.Fatalf("parseAddArgs: %v", err)
+	}
+	if name != "foo" {
+		t.Fatalf("name: got %q, want %q", name, "foo")
+	}
+	if srv.URL != "https://x/mcp" {
+		t.Fatalf("url: got %q, want %q", srv.URL, "https://x/mcp")
+	}
+	if srv.Transport != "http" {
+		t.Fatalf("transport: got %q, want %q", srv.Transport, "http")
+	}
+}
+
+func TestParseAddArgsRepeatedEnv(t *testing.T) {
+	name, srv, err := parseAddArgs([]string{"bar", "--env=A=1", "--env", "B=2", "--", "cmd"})
+	if err != nil {
+		t.Fatalf("parseAddArgs: %v", err)
+	}
+	if name != "bar" {
+		t.Fatalf("name: got %q, want %q", name, "bar")
+	}
+	if srv.Env["A"] != "1" {
+		t.Fatalf("env A: got %q, want %q (env=%v)", srv.Env["A"], "1", srv.Env)
+	}
+	if srv.Env["B"] != "2" {
+		t.Fatalf("env B: got %q, want %q (env=%v)", srv.Env["B"], "2", srv.Env)
+	}
+	if srv.Command != "cmd" {
+		t.Fatalf("command: got %q, want %q", srv.Command, "cmd")
+	}
+}
+
 func TestParseAddArgsErrors(t *testing.T) {
 	cases := [][]string{
 		{},                                              // missing name

@@ -94,6 +94,14 @@ func (c *Configurator) AddMCPServer(name string, srv types.MCPServer) error {
 	if (srv.Command == "") == (srv.URL == "") {
 		return fmt.Errorf("exactly one of command or url is required")
 	}
+	if srv.Transport != "" {
+		if srv.Transport != "http" && srv.Transport != "sse" {
+			return fmt.Errorf("transport must be \"http\" or \"sse\", got %q", srv.Transport)
+		}
+		if srv.URL == "" {
+			return fmt.Errorf("transport is only valid for remote servers (url must be set)")
+		}
+	}
 	servers, err := userConfigServers(c.configPath)
 	if err != nil {
 		return err

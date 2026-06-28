@@ -209,7 +209,15 @@ func selfConfigToolDefs(c *manage.Configurator, reload func()) []toolDef {
 				}
 				var b strings.Builder
 				for _, s := range servers {
-					fmt.Fprintf(&b, "- %s: %s %s\n", s.Name, s.Command, strings.Join(s.Args, " "))
+					if s.URL != "" {
+						tr := s.Transport
+						if tr == "" {
+							tr = "http"
+						}
+						fmt.Fprintf(&b, "- %s: %s %s\n", s.Name, tr, s.URL)
+					} else {
+						fmt.Fprintf(&b, "- %s: %s %s\n", s.Name, s.Command, strings.Join(s.Args, " "))
+					}
 				}
 				return b.String(), nil
 			}),
