@@ -215,7 +215,9 @@ func detectContextFiles(dir string) []string {
 }
 
 type MCPServer struct {
-	Command string            `yaml:"command"`
-	Args    []string          `yaml:"args"`
-	Env     map[string]string `yaml:"env"`
+	Command   string            `yaml:"command,omitempty"`
+	Args      []string          `yaml:"args,omitempty"`
+	Env       map[string]string `yaml:"env,omitempty"`
+	URL       string            `yaml:"url,omitempty"`       // remote: presence selects an HTTP/SSE transport
+	Transport string            `yaml:"transport,omitempty"` // remote transport: "http" (default) or "sse"
 }
