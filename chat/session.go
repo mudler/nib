@@ -45,10 +45,12 @@ type Session struct {
 	skills              []types.Skill
 	cogitoOptions       types.AgentOptions
 	compaction          types.CompactionConfig
-	allowedTools        map[string]bool // Tools that don't need approval this session
-	allowedBashPrefixes map[string]bool // bash first-word grants ("git" → simple `git …` auto-approved)
-	autoApprove         bool            // approval_mode: auto — approve every tool call
-	allowAllTurn        bool            // user chose "allow all this turn"; reset each top-level turn
+	allowedTools        map[string]bool  // Tools that don't need approval this session
+	allowedBashPrefixes map[string]bool  // bash first-word grants ("git" → simple `git …` auto-approved)
+	autoApprove         bool             // approval_mode: auto — approve every tool call
+	allowAllTurn        bool             // user chose "allow all this turn"; reset each top-level turn
+	approvalMode        string           // raw approval_mode: "" / "prompt" / "strict" / "allowlist" / "auto"
+	readOnlyCommands    readOnlyCommands // bash commands auto-approved in prompt mode
 	hooks               *hooks.Dispatcher
 
 	agentMu    sync.Mutex
@@ -236,6 +238,8 @@ func NewSession(ctx context.Context, cfg types.Config, callbacks Callbacks, tran
 		s.allowedTools[name] = true
 	}
 	s.autoApprove = cfg.ApprovalMode == "auto"
+	s.approvalMode = cfg.ApprovalMode
+	s.readOnlyCommands = newReadOnlyCommands(cfg.ReadOnlyCommands)
 	// Wire reloadable state (skills server, config MCP clients, agents, hooks,
 	// system prompt) through the same path used for live reloads.
 	if err := s.Reload(cfg); err != nil {
@@ -305,6 +309,13 @@ func (s *Session) decideToolCall(req ToolCallRequest) cogito.ToolCallDecision {
 		if p, ok := BashGrantPrefix(req.Arguments); ok && s.allowedBashPrefixes[p] {
 			return cogito.ToolCallDecision{Approved: true}
 		}
+	}
+	// In the default prompt mode, auto-approve calls that only observe state.
+	// Not applied in allowlist (explicitly restrictive), strict (prompt for
+	// everything), or auto (already approved above). Hooks above still win.
+	if (s.approvalMode == "" || s.approvalMode == "prompt") &&
+		IsReadOnly(req.Name, req.Arguments, s.readOnlyCommands) {
+		return cogito.ToolCallDecision{Approved: true}
 	}
 	if s.callbacks.OnToolCall == nil {
 		return cogito.ToolCallDecision{Approved: true}

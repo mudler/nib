@@ -113,9 +113,11 @@ type Config struct {
 
 	Hooks []HookConfig `yaml:"hooks"`
 
-	// ApprovalMode controls tool-call gating: "" / "prompt" (ask the user),
-	// "auto" (approve every tool call), or "allowlist" (auto-approve only the
-	// tools in AllowedTools and prompt for the rest).
+	// ApprovalMode controls tool-call gating:
+	//   "" / "prompt"  ask the user, but auto-approve read-only calls
+	//   "strict"       ask the user for every call (no read-only auto-approval)
+	//   "allowlist"    auto-approve only the tools in AllowedTools, prompt the rest
+	//   "auto"         approve every tool call
 	ApprovalMode string `yaml:"approval_mode"`
 	// AllowedTools are tool names pre-approved without prompting (always honored;
 	// the basis of "allowlist" mode).
