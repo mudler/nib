@@ -43,7 +43,7 @@ Small doesn't mean toy. nib is a real agent harness:
 
 - **Tool use with approval** — it runs shell commands, but every call passes an approval gate you control.
 - **Sub-agents** — delegate self-contained subtasks (`explore`, `plan`, …) that run in the foreground or background.
-- **MCP** — connect any [Model Context Protocol](https://modelcontextprotocol.io/) server for extra tools.
+- **MCP** — connect any [Model Context Protocol](https://modelcontextprotocol.io/) server for extra tools, local or remote, with one command (`nib mcp add`).
 - **Plugins** — installable packages that add MCP servers, sub-agents, prompt fragments, skills, slash commands, and lifecycle hooks. **Claude Code plugins work too.**
 - **Skills** — install skill packs (e.g. [`obra/superpowers`](https://github.com/obra/superpowers)) and let the agent load them on demand.
 
@@ -374,16 +374,45 @@ your config.
 
 nib speaks the [Model Context Protocol](https://modelcontextprotocol.io/). A set of
 tools is built in — `bash`, the filesystem tools (`read`, `write`, `edit`, `glob`,
-`grep`), and the web tools (`web_fetch`, `web_search`); add any external server in
-your config:
+`grep`), and the web tools (`web_fetch`, `web_search`); add any external server with
+the `nib mcp` CLI or directly in your config.
+
+### `nib mcp` CLI
+
+The quickest way to register a server — local (stdio) or remote (HTTP/SSE):
+
+```bash
+# Local stdio server: everything after `--` is the command and its args.
+nib mcp add filesystem --env API_KEY=secret -- npx -y @anthropic/mcp-filesystem /home/user
+
+# Remote server over streamable HTTP (default) or SSE.
+nib mcp add docs --url https://example.com/mcp
+nib mcp add docs --url https://example.com/mcp --transport sse
+
+nib mcp list             # show configured servers
+nib mcp test docs        # connect, list the server's tools, exit nonzero on failure
+nib mcp remove docs      # delete a server
+```
+
+`nib mcp add` writes to your user config; servers become available on the next nib
+session. (The agent itself can also register servers mid-session via its
+`add_mcp_server` tool.) Note `nib mcp` with no subcommand serves nib's *own* agent
+over MCP — see [Agent over MCP](#agent-over-mcp-nib-mcp) above.
+
+### Config
+
+The CLI just edits the `mcp_servers` map; you can also write it by hand:
 
 ```yaml
 mcp_servers:
-  my_server:
+  my_server:                  # local (stdio) server
     command: /path/to/mcp-server
     args: ["--some-flag"]
     env:
       API_KEY: secret
+  remote_docs:                # remote server
+    url: https://example.com/mcp
+    transport: sse            # "http" (default) or "sse"
 ```
 
 ## tmux
