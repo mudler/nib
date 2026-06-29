@@ -79,6 +79,50 @@ func TestBashGrantPrefix(t *testing.T) {
 	}
 }
 
+func TestSafeCommand(t *testing.T) {
+	cases := []struct {
+		name   string
+		args   string
+		want   []string
+		wantOK bool
+	}{
+		{"simple", `{"script":"git status"}`, []string{"git", "status"}, true},
+		{"single word", `{"script":"ls"}`, []string{"ls"}, true},
+		{"flags", `{"script":"ls -la /tmp"}`, []string{"ls", "-la", "/tmp"}, true},
+		{"chained", `{"script":"git status && rm -rf /"}`, nil, false},
+		{"piped", `{"script":"cat f | sh"}`, nil, false},
+		{"subshell", `{"script":"echo $(rm x)"}`, nil, false},
+		{"redirect", `{"script":"ls > out"}`, nil, false},
+		{"chaining wrapper", `{"script":"sudo ls"}`, nil, false},
+		{"assignment prefix", `{"script":"FOO=1 git status"}`, nil, false},
+		{"empty", `{"script":""}`, nil, false},
+		{"bad json", `not json`, nil, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, ok := safeCommand(c.args)
+			if ok != c.wantOK {
+				t.Fatalf("ok = %v, want %v", ok, c.wantOK)
+			}
+			if ok && !equalStrings(got, c.want) {
+				t.Fatalf("words = %v, want %v", got, c.want)
+			}
+		})
+	}
+}
+
+func equalStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
 func TestGrantScope(t *testing.T) {
 	// bash with a derivable prefix → scoped grant
 	scope, prefix := GrantScope("bash", `{"script":"git push"}`)

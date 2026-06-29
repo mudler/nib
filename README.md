@@ -301,13 +301,24 @@ agent_options:
   max_retries: 3
   force_reasoning: false
 
-# Optional: tool-approval policy (default: prompt for every tool)
-#   prompt    — ask before each tool call (default)
+# Optional: tool-approval policy (default: prompt)
+#   prompt    — ask before each tool call, but auto-approve read-only calls
+#               (read, grep, glob, and safe read-only shell commands like
+#               `ls`, `cat`, `git status`, `go list`). Mutating calls prompt.
+#   strict    — ask before EVERY tool call, including read-only ones
 #   allowlist — auto-approve the tools in allowed_tools, prompt for the rest
 #   auto      — approve every tool call without prompting
 approval_mode: prompt
 allowed_tools:
   - bash
+
+# Optional: extend the read-only bash command set (auto-approved in prompt
+# mode). An entry with a space is a command+subcommand pair; otherwise it
+# matches the command at any arguments. Read-only classification is
+# conservative — anything compound or unrecognized still prompts.
+read_only_commands:
+  - terraform plan
+  - kubectl get
 
 # Optional: extra sub-agent types (general, explore, plan are built in)
 agents:
@@ -349,7 +360,11 @@ a one-line notice in the CLI banner.
 
 ## Tool Approval
 
-When nib wants to run a command, you decide:
+By default nib auto-approves read-only tool calls (reads, searches, and safe
+read-only shell commands) and only prompts for calls that can change state; use
+`approval_mode: strict` to be prompted for everything.
+
+When nib wants to run a mutating command, you decide:
 
 ```
 ▏ bash wants to run
@@ -378,8 +393,10 @@ In the **TUI**, approval is a single keypress (no Enter):
 (`y`/`a`/`A` still work as aliases for `1`/`2`/`3`.)
 
 In the **CLI** (`--cli`) the prompt is line-based: type `y`, `a`, `all`, `n`, or a free-form
-change, then Enter. To skip prompting entirely, set `approval_mode` / `allowed_tools` in
-your config, or run with `--yolo` (env: `NIB_YOLO=1`) to auto-approve every tool call.
+change, then Enter. Read-only calls (reads, searches, safe read-only shell) already skip the
+prompt by default; set `approval_mode: strict` to be prompted for those too. To skip prompting
+entirely, set `approval_mode: auto` / `allowed_tools` in your config, or run with `--yolo`
+(env: `NIB_YOLO=1`) to auto-approve every tool call.
 
 ## MCP Servers
 

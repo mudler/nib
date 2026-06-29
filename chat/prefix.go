@@ -51,19 +51,33 @@ var chainingCommands = map[string]bool{
 // false when no safe prefix can be derived (compound or chaining commands,
 // unparseable args) — the UI then offers a whole-tool grant instead.
 func BashGrantPrefix(argsJSON string) (string, bool) {
+	words, ok := safeCommand(argsJSON)
+	if !ok {
+		return "", false
+	}
+	return words[0], true
+}
+
+// safeCommand returns the script's words when the script is a single simple
+// command — no chaining, substitution, redirection, backgrounding, or unusual
+// whitespace, and a plain command name as the first word. ok is false
+// otherwise. It is the shared core of BashGrantPrefix (prefix grants) and the
+// bash branch of IsReadOnly (read-only classification), so both inherit the
+// same anti-smuggling guarantees.
+func safeCommand(argsJSON string) (words []string, ok bool) {
 	var args struct {
 		Script string `json:"script"`
 	}
 	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
-		return "", false
+		return nil, false
 	}
 	script := strings.TrimSpace(args.Script)
 	if script == "" {
-		return "", false
+		return nil, false
 	}
 	for _, tok := range rejectedShellTokens {
 		if strings.Contains(script, tok) {
-			return "", false
+			return nil, false
 		}
 	}
 	// bash only splits words on space/tab/newline; any other unicode
@@ -74,17 +88,18 @@ func BashGrantPrefix(argsJSON string) (string, bool) {
 	if strings.ContainsFunc(script, func(r rune) bool {
 		return unicode.IsSpace(r) && r != ' ' && r != '\t'
 	}) {
-		return "", false
+		return nil, false
 	}
 	// Only space and tab can remain at this point, so strings.Fields splits
 	// exactly where bash would and the first field is bash's first word.
-	first := strings.Fields(script)[0]
+	fields := strings.Fields(script)
+	first := fields[0]
 	// Quotes, escapes, expansions, or assignments in the first word mean it
 	// is not a plain command name (e.g. FOO=1 git push, "$CMD" args).
 	if chainingCommands[first] || strings.ContainsAny(first, `"'\$=`) {
-		return "", false
+		return nil, false
 	}
-	return first, true
+	return fields, true
 }
 
 // GrantScope describes what choosing "always allow" covers for this call:
