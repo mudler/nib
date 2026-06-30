@@ -174,10 +174,14 @@ func toCogitoDefinitions(cfgs []types.AgentTypeConfig) []cogito.AgentDefinition 
 
 // NewSession creates a new chat session
 func NewSession(ctx context.Context, cfg types.Config, callbacks Callbacks, transports ...mcp.Transport) (*Session, error) {
-	var llm cogito.LLM = clients.NewOpenAILLMWithOptions(cfg.Model, cfg.APIKey, cfg.BaseURL, clients.OpenAIOptions{
-		Metadata:        cfg.Metadata,
-		ReasoningEffort: cfg.ReasoningEffort,
-	})
+	// LocalAIClient, not OpenAIClient: LocalAI (and vLLM) put reasoning/thinking
+	// text in a "reasoning" response field, which go-openai's SDK — and so
+	// OpenAIClient — doesn't know about (it only binds the older, now-deprecated
+	// "reasoning_content" key). LocalAIClient parses both.
+	llmClient := clients.NewLocalAILLM(cfg.Model, cfg.APIKey, cfg.BaseURL)
+	llmClient.SetMetadata(cfg.Metadata)
+	llmClient.SetReasoningEffort(cfg.ReasoningEffort)
+	var llm cogito.LLM = llmClient
 
 	// Session tracing: wrap the LLM so every call is appended to the transcript.
 	// A recorder failure must never prevent the session from starting.
@@ -767,11 +771,11 @@ func (s *Session) SendMessage(text string) (string, error) {
 			}
 			// metadata is this agent type's override; overlay it on the global
 			// session metadata (per-key: agent wins, global-only keys inherited).
-			return clients.NewOpenAILLMWithOptions(chosen, s.apiKey, s.baseURL, clients.OpenAIOptions{
-				Temperature:     temperature,
-				Metadata:        mergeMetadata(s.metadata, metadata),
-				ReasoningEffort: s.reasoningEffort,
-			})
+			agentLLM := clients.NewLocalAILLM(chosen, s.apiKey, s.baseURL)
+			agentLLM.SetTemperature(temperature)
+			agentLLM.SetMetadata(mergeMetadata(s.metadata, metadata))
+			agentLLM.SetReasoningEffort(s.reasoningEffort)
+			return agentLLM
 		}),
 		cogito.WithAgentSpawnCallback(func(a *cogito.AgentState) {
 			s.emitAgentEvent(a)

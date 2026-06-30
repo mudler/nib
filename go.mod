@@ -4,6 +4,8 @@ go 1.24.1
 
 toolchain go1.24.11
 
+replace github.com/mudler/cogito => ../cogito-localai-reasoning-fix
+
 require (
 	github.com/Masterminds/semver/v3 v3.5.0
 	github.com/Masterminds/sprig/v3 v3.3.0

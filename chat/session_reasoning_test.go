@@ -106,3 +106,63 @@ func TestSessionSendsConfiguredReasoningEffort(t *testing.T) {
 		t.Fatalf("request reasoning_effort = %q, want none", got)
 	}
 }
+
+// localAIReasoningField replies with LocalAI/vLLM's "reasoning" message field
+// (not go-openai's "reasoning_content") — the field name go-openai's SDK
+// silently drops, which is why OpenAIClient never surfaced model reasoning.
+func localAIReasoningField(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"id": "fake", "object": "chat.completion", "model": "fake",
+		"choices": []any{map[string]any{
+			"index": 0, "message": map[string]any{
+				"role": "assistant", "content": "hi there", "reasoning": "thinking...",
+			},
+			"finish_reason": "stop",
+		}},
+	})
+}
+
+// TestSessionSurfacesLocalAIReasoningField proves the bug fix: a server
+// response carrying reasoning under LocalAI/vLLM's "reasoning" key (rather
+// than go-openai's older "reasoning_content") now reaches Callbacks.OnReasoning.
+func TestSessionSurfacesLocalAIReasoningField(t *testing.T) {
+	xlog.SetLogger(xlog.NewLogger(xlog.LogLevel("error"), ""))
+
+	srv := httptest.NewServer(http.HandlerFunc(localAIReasoningField))
+	defer srv.Close()
+
+	cfg := types.Config{
+		Model:        "fake-model",
+		APIKey:       "fake-key",
+		BaseURL:      srv.URL + "/v1",
+		LogLevel:     "error",
+		ApprovalMode: "auto",
+		AgentOptions: types.AgentOptions{Iterations: 10, MaxAttempts: 3, MaxRetries: 3},
+	}
+
+	var mu sync.Mutex
+	var gotReasoning string
+	session, err := chat.NewSession(context.Background(), cfg, chat.Callbacks{
+		OnReasoning: func(r string) {
+			mu.Lock()
+			gotReasoning += r
+			mu.Unlock()
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	defer session.Close()
+
+	if _, err := session.SendMessage("hi"); err != nil {
+		t.Fatalf("SendMessage: %v", err)
+	}
+
+	mu.Lock()
+	got := gotReasoning
+	mu.Unlock()
+	if got != "thinking..." {
+		t.Fatalf("OnReasoning received %q, want %q", got, "thinking...")
+	}
+}
