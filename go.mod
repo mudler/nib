@@ -4,8 +4,6 @@ go 1.24.1
 
 toolchain go1.24.11
 
-replace github.com/mudler/cogito => ../cogito-localai-reasoning-fix
-
 require (
 	github.com/Masterminds/semver/v3 v3.5.0
 	github.com/Masterminds/sprig/v3 v3.3.0
@@ -14,7 +12,7 @@ require (
 	github.com/charmbracelet/glamour v1.0.0
 	github.com/charmbracelet/lipgloss v1.1.1-0.20250404203927-76690c660834
 	github.com/modelcontextprotocol/go-sdk v1.0.0
-	github.com/mudler/cogito v0.10.1-0.20260609212329-bf4010d31047
+	github.com/mudler/cogito v0.10.1-0.20260630225259-0518bfb8592c
 	github.com/mudler/xlog v0.0.1
 	github.com/sashabaranov/go-openai v1.41.2
 	golang.org/x/net v0.43.0
