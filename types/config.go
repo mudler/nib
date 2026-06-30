@@ -122,6 +122,10 @@ type Config struct {
 	// AllowedTools are tool names pre-approved without prompting (always honored;
 	// the basis of "allowlist" mode).
 	AllowedTools []string `yaml:"allowed_tools"`
+	// Tools, if non-empty, restricts which built-in tools are exposed to the
+	// model (by name) — an allowlist. Empty means all built-ins. Trims the prompt
+	// for small local models; independent of AllowedTools (which gates approval).
+	Tools []string `yaml:"tools,omitempty"`
 	// ReadOnlyCommands extends the built-in set of bash commands treated as
 	// read-only (auto-approved in the default "prompt" mode). An entry with a
 	// space is a command+subcommand pair (e.g. "terraform plan"); otherwise it

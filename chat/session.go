@@ -46,6 +46,7 @@ type Session struct {
 	cogitoOptions       types.AgentOptions
 	compaction          types.CompactionConfig
 	allowedTools        map[string]bool  // Tools that don't need approval this session
+	toolAllow           map[string]bool  // if non-empty, the only built-in tools exposed to the model
 	allowedBashPrefixes map[string]bool  // bash first-word grants ("git" → simple `git …` auto-approved)
 	autoApprove         bool             // approval_mode: auto — approve every tool call
 	allowAllTurn        bool             // user chose "allow all this turn"; reset each top-level turn
@@ -219,6 +220,7 @@ func NewSession(ctx context.Context, cfg types.Config, callbacks Callbacks, tran
 		cogitoOptions:       cfg.AgentOptions,
 		compaction:          cfg.Compaction,
 		allowedTools:        make(map[string]bool),
+		toolAllow:           make(map[string]bool),
 		allowedBashPrefixes: make(map[string]bool),
 		agentStart:          make(map[string]time.Time),
 		agentManager:        agentManager,
@@ -236,6 +238,9 @@ func NewSession(ctx context.Context, cfg types.Config, callbacks Callbacks, tran
 	}
 	for _, name := range cfg.AllowedTools {
 		s.allowedTools[name] = true
+	}
+	for _, name := range cfg.Tools {
+		s.toolAllow[name] = true
 	}
 	s.autoApprove = cfg.ApprovalMode == "auto"
 	s.approvalMode = cfg.ApprovalMode
@@ -590,6 +595,13 @@ func jobTail(s string) string {
 }
 
 // SendMessage sends a message to the assistant and processes the response
+// toolEnabled reports whether a built-in tool is exposed to the model. With an
+// empty Tools allowlist (the default) every tool is exposed; otherwise only the
+// named ones. Approval gating is separate (see allowedTools).
+func (s *Session) toolEnabled(name string) bool {
+	return len(s.toolAllow) == 0 || s.toolAllow[name]
+}
+
 func (s *Session) SendMessage(text string) (string, error) {
 	if s.hooks != nil {
 		s.hooks.Fire(s.ctx, hooks.EventUserPromptSubmit, "", map[string]any{"event": "UserPromptSubmit", "prompt": text})
@@ -739,7 +751,6 @@ func (s *Session) SendMessage(text string) (string, error) {
 		// examples (examples/chat, examples/sub-agents) and avoids a redundant
 		// follow-up Ask that returns empty on many models.
 		cogito.DisableSinkState,
-		cogito.EnableAgentSpawning,
 		cogito.WithAgentManager(s.agentManager),
 		cogito.WithAgentDefinitions(s.agentDefs...),
 		cogito.WithAgentLLMFactory(func(model string, temperature float32, metadata map[string]string) cogito.LLM {
@@ -768,40 +779,60 @@ func (s *Session) SendMessage(text string) (string, error) {
 		cogito.WithAgentCompletionCallback(func(a *cogito.AgentState) {
 			s.emitAgentEvent(a)
 		}),
-		cogito.WithTools(askUserToolDefinition(func(req AskRequest) string {
+	)
+
+	// Built-in tools, each gated by the Tools allowlist (toolEnabled). The
+	// agent-spawning tools (spawn_agent/check_agent/get_agent_result) ride
+	// EnableAgentSpawning; the rest are individual registrations. The agent
+	// manager/factory above stay wired regardless — harmless without the tools.
+	if s.toolEnabled("spawn_agent") {
+		cogitoOpts = append(cogitoOpts, cogito.EnableAgentSpawning)
+	}
+	if s.toolEnabled("ask_user") {
+		cogitoOpts = append(cogitoOpts, cogito.WithTools(askUserToolDefinition(func(req AskRequest) string {
 			if s.callbacks.OnAskUser != nil {
 				return s.callbacks.OnAskUser(req)
 			}
 			return ""
-		})),
-		cogito.WithTools(agentLogsToolDefinition(s.AgentLog)),
-		cogito.WithTools(scheduleWakeupToolDefinition(func(req WakeupRequest) string {
+		})))
+	}
+	if s.toolEnabled("agent_logs") {
+		cogitoOpts = append(cogitoOpts, cogito.WithTools(agentLogsToolDefinition(s.AgentLog)))
+	}
+	if s.toolEnabled("schedule_wakeup") {
+		cogitoOpts = append(cogitoOpts, cogito.WithTools(scheduleWakeupToolDefinition(func(req WakeupRequest) string {
 			if s.callbacks.OnScheduleWakeup != nil {
 				return s.callbacks.OnScheduleWakeup(req)
 			}
 			return "Scheduling is not available in this session."
 		}, func() bool {
 			return s.agentManager.HasRunning() || (s.shellJobs != nil && s.shellJobs.HasRunning())
-		})),
-		cogito.WithTools(cronToolDefinition(func(req CronRequest) string {
+		})))
+	}
+	if s.toolEnabled("cron") {
+		cogitoOpts = append(cogitoOpts, cogito.WithTools(cronToolDefinition(func(req CronRequest) string {
 			if s.callbacks.OnCronCreate != nil {
 				return s.callbacks.OnCronCreate(req)
 			}
 			return "Scheduling is not available in this session."
-		})),
-		cogito.WithTools(cronListToolDefinition(func() string {
+		})))
+	}
+	if s.toolEnabled("cron_list") {
+		cogitoOpts = append(cogitoOpts, cogito.WithTools(cronListToolDefinition(func() string {
 			if s.callbacks.OnCronList != nil {
 				return s.callbacks.OnCronList()
 			}
 			return "No scheduler available."
-		})),
-		cogito.WithTools(cronDeleteToolDefinition(func(id string) string {
+		})))
+	}
+	if s.toolEnabled("cron_delete") {
+		cogitoOpts = append(cogitoOpts, cogito.WithTools(cronDeleteToolDefinition(func(id string) string {
 			if s.callbacks.OnCronDelete != nil {
 				return s.callbacks.OnCronDelete(id)
 			}
 			return "No scheduler available."
-		})),
-	)
+		})))
+	}
 
 	// Register the goal_done tool only while a goal is active, so it never
 	// appears as a no-op tool in ordinary turns. The callback records
@@ -821,7 +852,17 @@ func (s *Session) SendMessage(text string) (string, error) {
 	// own plugins, skills, and MCP servers. requestReload re-wires the live
 	// session on the next turn after any mutating op.
 	for _, d := range selfConfigToolDefs(s.configurator, s.requestReload) {
-		cogitoOpts = append(cogitoOpts, cogito.WithTools(d.def))
+		if s.toolEnabled(d.name) {
+			cogitoOpts = append(cogitoOpts, cogito.WithTools(d.def))
+		}
+	}
+
+	// Restrict the MCP host tools (read/write/edit/bash/glob/grep/web_*) to the
+	// allowlist as well. Installed only when an allowlist is set (empty = all).
+	if len(s.toolAllow) > 0 {
+		cogitoOpts = append(cogitoOpts, cogito.WithMCPToolFilter(func(_ *mcp.ClientSession, name string) bool {
+			return s.toolEnabled(name)
+		}))
 	}
 
 	// Add ForceReasoning only if enabled in config
