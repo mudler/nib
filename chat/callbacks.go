@@ -26,6 +26,18 @@ type AgentEvent struct {
 	Elapsed     time.Duration // wall-clock from spawn to completion
 }
 
+// StreamEvent is a single live delta during generation, forwarded only when a
+// consumer sets Callbacks.OnStream (which opts the session into cogito's
+// streaming path). It lets a UI render reasoning/answer/tool-selection as the
+// model produces them, instead of only at step boundaries. Kind is one of
+// "reasoning", "content", "tool_call", "tool_result", "status", "done", "error".
+type StreamEvent struct {
+	Kind     string // delta kind
+	Content  string // text delta, for reasoning/content
+	ToolName string // tool name, for tool_call (first chunk only)
+	ToolArgs string // streamed argument fragment, for tool_call
+}
+
 // Message represents a chat message.
 type Message struct {
 	Role    string
@@ -85,7 +97,13 @@ type CronRequest struct {
 type Callbacks struct {
 	OnStatus    func(status string)
 	OnReasoning func(reasoning string)
-	OnToolCall  func(req ToolCallRequest) ToolCallResponse
+	// OnStream, when set, receives live token-level deltas during generation
+	// (reasoning/answer/tool-selection) so a UI can render progress as it
+	// happens. Setting it opts the session into cogito's streaming path; the
+	// existing step-boundary callbacks (OnReasoning/OnStatus/OnToolResult) still
+	// fire afterwards. Optional — leave nil for the non-streaming path.
+	OnStream   func(ev StreamEvent)
+	OnToolCall func(req ToolCallRequest) ToolCallResponse
 	OnResponse  func(response string)
 	OnError     func(err error)
 	// OnToolResult is called after a tool finishes, with its output. Optional.

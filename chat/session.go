@@ -718,6 +718,20 @@ func (s *Session) SendMessage(text string) (string, error) {
 		}),
 	}
 
+	// Live token streaming: opt into cogito's streaming decision/answer path only
+	// when a consumer wants per-token deltas. Left unset (e.g. the CLI), the path
+	// is identical to before. The step-boundary callbacks still fire either way.
+	if s.callbacks.OnStream != nil {
+		cogitoOpts = append(cogitoOpts, cogito.WithStreamCallback(func(ev cogito.StreamEvent) {
+			s.callbacks.OnStream(StreamEvent{
+				Kind:     string(ev.Type),
+				Content:  ev.Content,
+				ToolName: ev.ToolName,
+				ToolArgs: ev.ToolArgs,
+			})
+		}))
+	}
+
 	cogitoOpts = append(cogitoOpts,
 		// Disable cogito's sink-state "reply" tool so ExecuteTools is the whole
 		// turn: when the LLM stops calling tools it records its text reply as the
