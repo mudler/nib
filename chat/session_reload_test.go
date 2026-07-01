@@ -2,8 +2,12 @@ package chat
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/mudler/cogito"
@@ -55,6 +59,106 @@ func TestReconcileMCPServersSkipsUnconnectable(t *testing.T) {
 	}
 	if len(s.cfgClients) != 0 {
 		t.Fatalf("expected unconnectable server to be skipped, got %d", len(s.cfgClients))
+	}
+}
+
+// TestReconcileMCPServersKeepsConnectionAliveForToolCalls is a regression test
+// for a live, user-reported bug: MCP tool calls on a working, already-connected
+// remote server intermittently failed with
+// `hanging GET: failed to reconnect ... context canceled`.
+//
+// The cause was ReconcileMCPServers handing mcp.Client.Connect a
+// timeout-scoped context (context.WithTimeout(s.ctx, 30s)) and calling cancel()
+// immediately after Connect returned. The go-sdk keeps the context it is given
+// for the connection's ENTIRE lifetime (StreamableClientTransport.Connect
+// derives a cancellable context from it to drive the background "hanging GET"
+// SSE listener), so cancelling it right after connect tore down that listener
+// and marked the connection failed — breaking any later tool call.
+//
+// This test stands up a real streamable-HTTP MCP server, connects it via
+// ReconcileMCPServers, waits past the point where the old immediate-cancel bug
+// tore the connection down, and asserts a real tool call still succeeds.
+func TestReconcileMCPServersKeepsConnectionAliveForToolCalls(t *testing.T) {
+	server := sdkmcp.NewServer(&sdkmcp.Implementation{Name: "test-mcp", Version: "v0"}, nil)
+	sdkmcp.AddTool(server, &sdkmcp.Tool{Name: "ping", Description: "returns pong"},
+		func(_ context.Context, _ *sdkmcp.CallToolRequest, _ struct{}) (*sdkmcp.CallToolResult, any, error) {
+			return &sdkmcp.CallToolResult{
+				Content: []sdkmcp.Content{&sdkmcp.TextContent{Text: "pong"}},
+			}, nil, nil
+		})
+	handler := sdkmcp.NewStreamableHTTPHandler(func(*http.Request) *sdkmcp.Server { return server }, nil)
+
+	// The go-sdk client opens a long-lived background "hanging GET" SSE request,
+	// whose HTTP request context is derived from the exact context handed to
+	// Client.Connect. That is the connection's lifecycle context. If it is
+	// cancelled (as the old ReconcileMCPServers did, via a 30s-timeout context it
+	// cancel()ed right after connecting), the client aborts this hanging GET and
+	// the server observes the request end. Under the fix the context is the
+	// session's own long-lived context, so the GET stays open.
+	//
+	// Wrap the handler to observe the hanging GET's lifetime: getStarted fires
+	// when it arrives, getEnded fires if/when it returns (i.e. is torn down).
+	var startOnce, endOnce sync.Once
+	getStarted := make(chan struct{})
+	getEnded := make(chan struct{})
+	wrapped := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			startOnce.Do(func() { close(getStarted) })
+			handler.ServeHTTP(w, r) // blocks while the SSE stream hangs open
+			endOnce.Do(func() { close(getEnded) })
+			return
+		}
+		handler.ServeHTTP(w, r)
+	})
+	httpSrv := httptest.NewServer(wrapped)
+	defer httpSrv.Close()
+
+	s := newReloadTestSession(t)
+	if err := s.ReconcileMCPServers(map[string]types.MCPServer{
+		"pinger": {URL: httpSrv.URL},
+	}); err != nil {
+		t.Fatalf("ReconcileMCPServers: %v", err)
+	}
+	sess, ok := s.cfgClients["pinger"]
+	if !ok {
+		t.Fatalf("expected pinger to be connected, cfgClients=%v", s.cfgClients)
+	}
+	defer sess.Close()
+
+	// Wait for the background hanging GET to be established server-side.
+	select {
+	case <-getStarted:
+	case <-time.After(3 * time.Second):
+		t.Fatalf("background SSE hanging GET never reached the server")
+	}
+
+	// The hanging GET must stay open: proving the connection's lifecycle context
+	// was NOT cancelled once ReconcileMCPServers returned. Under the old buggy
+	// code (timeout context + immediate cancel()), it is torn down within
+	// milliseconds of connecting and getEnded fires here — the exact condition
+	// that later surfaces as `hanging GET: failed to reconnect ... context
+	// canceled` on a real tool call.
+	select {
+	case <-getEnded:
+		t.Fatalf("background SSE hanging GET was torn down shortly after connect: " +
+			"the connection's lifecycle context was cancelled (regression)")
+	case <-time.After(750 * time.Millisecond):
+		// Still hanging — the connection is healthy.
+	}
+
+	// And a real tool call succeeds on the live session.
+	callCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	res, err := sess.CallTool(callCtx, &sdkmcp.CallToolParams{Name: "ping"})
+	if err != nil {
+		t.Fatalf("CallTool after reconcile failed: %v", err)
+	}
+	if len(res.Content) == 0 {
+		t.Fatalf("expected tool content, got none")
+	}
+	txt, ok := res.Content[0].(*sdkmcp.TextContent)
+	if !ok || txt.Text != "pong" {
+		t.Fatalf("unexpected tool result: %+v", res.Content)
 	}
 }
 

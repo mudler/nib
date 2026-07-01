@@ -1029,9 +1029,19 @@ func (s *Session) ReconcileMCPServers(desired map[string]types.MCPServer) error 
 			continue
 		}
 		transport := wizmcp.TransportForServer(srv)
-		connectCtx, cancel := context.WithTimeout(s.ctx, 30*time.Second)
-		sess, err := s.mcpClient.Connect(connectCtx, transport, nil)
-		cancel()
+		// Deliberately pass s.ctx (the session's long-lived context) directly,
+		// with no per-connect timeout. The go-sdk's mcp.Client.Connect stores the
+		// context it is given for the connection's ENTIRE lifetime (not just the
+		// initial handshake): it derives a cancellable context from it and uses
+		// that to drive the background "hanging GET" SSE listener and reconnect
+		// machinery. A timeout- (or otherwise short-lived) context here would tear
+		// down that background listener shortly after connecting, so a later tool
+		// call that needs to re-establish its SSE stream fails with the real,
+		// user-reported error chain: `hanging GET: failed to reconnect ...
+		// context canceled` on a server that is otherwise connected and healthy.
+		// This mirrors the built-in host-tool connect path in NewSession, which
+		// also hands Connect the raw session context.
+		sess, err := s.mcpClient.Connect(s.ctx, transport, nil)
 		if err != nil {
 			xlog.Warn("self-config: MCP server failed to connect", "name", name, "error", err)
 			continue
