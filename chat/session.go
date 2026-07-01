@@ -598,9 +598,8 @@ func jobTail(s string) string {
 	return s
 }
 
-// SendMessage sends a message to the assistant and processes the response
 // toolEnabled reports whether a built-in tool is exposed to the model. With an
-// empty Tools allowlist (the default) every tool is exposed; otherwise only the
+// empty BuiltinTools allowlist (the default) every tool is exposed; otherwise only the
 // named ones. Approval gating is separate (see allowedTools).
 func (s *Session) toolEnabled(name string) bool {
 	return len(s.toolAllow) == 0 || s.toolAllow[name]
@@ -610,6 +609,13 @@ func (s *Session) toolEnabled(name string) bool {
 // Tools from a user-configured MCP server (s.cfgClients) always pass — the
 // allowlist restricts nib's own built-in and self-config tools, never a
 // server the user explicitly added. Everything else falls back to toolEnabled.
+//
+// This MUST be rebuilt fresh on every call (it already is — called once per
+// SendMessage). Never cache/memoize the returned closure or the cfgSessions map
+// across turns: ReconcileMCPServers Close()s and replaces session pointers on
+// reconnect/reconfigure, so a cached map would hold stale pointers, fail the
+// identity check for the new sessions, and silently fall back to toolEnabled —
+// reintroducing exactly the bug this method fixes.
 func (s *Session) mcpToolFilter() func(*mcp.ClientSession, string) bool {
 	cfgSessions := make(map[*mcp.ClientSession]bool, len(s.cfgClients))
 	for _, sess := range s.cfgClients {
@@ -799,7 +805,7 @@ func (s *Session) SendMessage(text string) (string, error) {
 		}),
 	)
 
-	// Built-in tools, each gated by the Tools allowlist (toolEnabled). The
+	// Built-in tools, each gated by the BuiltinTools allowlist (toolEnabled). The
 	// agent-spawning tools (spawn_agent/check_agent/get_agent_result) ride
 	// EnableAgentSpawning; the rest are individual registrations. The agent
 	// manager/factory above stay wired regardless — harmless without the tools.
