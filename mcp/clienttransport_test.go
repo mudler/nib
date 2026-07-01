@@ -19,3 +19,36 @@ func TestTransportForServer(t *testing.T) {
 		t.Fatalf("sse: got %T, want *SSEClientTransport", got)
 	}
 }
+
+func TestTransportForServerSetsHTTPClientWhenAuthed(t *testing.T) {
+	got := TransportForServer(types.MCPServer{URL: "http://x", BearerToken: "tok"})
+	st, ok := got.(*sdk.StreamableClientTransport)
+	if !ok {
+		t.Fatalf("got %T, want *StreamableClientTransport", got)
+	}
+	if st.HTTPClient == nil {
+		t.Fatalf("expected non-nil HTTPClient when BearerToken is set")
+	}
+}
+
+func TestTransportForServerSSESetsHTTPClientWhenAuthed(t *testing.T) {
+	got := TransportForServer(types.MCPServer{URL: "http://x", Transport: "sse", Headers: map[string]string{"X-Api-Key": "k"}})
+	st, ok := got.(*sdk.SSEClientTransport)
+	if !ok {
+		t.Fatalf("got %T, want *SSEClientTransport", got)
+	}
+	if st.HTTPClient == nil {
+		t.Fatalf("expected non-nil HTTPClient when Headers is set")
+	}
+}
+
+func TestTransportForServerNoHTTPClientWhenUnauthed(t *testing.T) {
+	got := TransportForServer(types.MCPServer{URL: "http://x"})
+	st, ok := got.(*sdk.StreamableClientTransport)
+	if !ok {
+		t.Fatalf("got %T, want *StreamableClientTransport", got)
+	}
+	if st.HTTPClient != nil {
+		t.Fatalf("expected nil HTTPClient for unauthenticated server, got %+v", st.HTTPClient)
+	}
+}
