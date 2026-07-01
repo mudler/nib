@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/mudler/nib/types"
 
@@ -100,6 +101,16 @@ func (c *Configurator) AddMCPServer(name string, srv types.MCPServer) error {
 		}
 		if srv.URL == "" {
 			return fmt.Errorf("transport is only valid for remote servers (url must be set)")
+		}
+	}
+	if (srv.BearerToken != "" || len(srv.Headers) > 0) && srv.URL == "" {
+		return fmt.Errorf("token/headers are only valid for remote servers (url must be set)")
+	}
+	if srv.BearerToken != "" {
+		for k := range srv.Headers {
+			if strings.EqualFold(k, "Authorization") {
+				return fmt.Errorf("cannot set both token and an Authorization header")
+			}
 		}
 	}
 	servers, err := userConfigServers(c.configPath)
