@@ -154,3 +154,39 @@ func TestReloadDoesNotPopulateToolAllowFromOldField(t *testing.T) {
 		t.Fatalf("expected exactly 2 entries, got %d: %+v", len(s.toolAllow), s.toolAllow)
 	}
 }
+
+func TestMCPToolFilterBypassesAllowlistForConfiguredServers(t *testing.T) {
+	s := newReloadTestSession(t)
+	s.toolAllow = map[string]bool{"read": true}
+
+	cfgSession := &sdkmcp.ClientSession{}
+	s.cfgClients["notary"] = cfgSession
+
+	filter := s.mcpToolFilter()
+
+	// A tool from a configured MCP server passes regardless of its name.
+	if !filter(cfgSession, "knowledge_search") {
+		t.Fatalf("expected a cfgClients-sourced tool to bypass the allowlist")
+	}
+	// A tool NOT from a configured MCP server (e.g. a built-in host session)
+	// still respects the allowlist.
+	builtinSession := &sdkmcp.ClientSession{}
+	if filter(builtinSession, "knowledge_search") {
+		t.Fatalf("expected a non-cfgClients tool not in the allowlist to be blocked")
+	}
+	if !filter(builtinSession, "read") {
+		t.Fatalf("expected a non-cfgClients tool that IS in the allowlist to pass")
+	}
+}
+
+func TestMCPToolFilterAllowsEverythingWhenAllowlistEmpty(t *testing.T) {
+	s := newReloadTestSession(t)
+	// s.toolAllow is empty (zero value from newReloadTestSession's Session{}).
+	s.toolAllow = map[string]bool{}
+
+	filter := s.mcpToolFilter()
+	builtinSession := &sdkmcp.ClientSession{}
+	if !filter(builtinSession, "anything") {
+		t.Fatalf("expected everything to pass when the allowlist is empty")
+	}
+}

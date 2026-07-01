@@ -606,6 +606,20 @@ func (s *Session) toolEnabled(name string) bool {
 	return len(s.toolAllow) == 0 || s.toolAllow[name]
 }
 
+// mcpToolFilter returns the filter cogito uses to gate MCP-sourced tool calls.
+// Tools from a user-configured MCP server (s.cfgClients) always pass — the
+// allowlist restricts nib's own built-in and self-config tools, never a
+// server the user explicitly added. Everything else falls back to toolEnabled.
+func (s *Session) mcpToolFilter() func(*mcp.ClientSession, string) bool {
+	cfgSessions := make(map[*mcp.ClientSession]bool, len(s.cfgClients))
+	for _, sess := range s.cfgClients {
+		cfgSessions[sess] = true
+	}
+	return func(sess *mcp.ClientSession, name string) bool {
+		return cfgSessions[sess] || s.toolEnabled(name)
+	}
+}
+
 func (s *Session) SendMessage(text string) (string, error) {
 	if s.hooks != nil {
 		s.hooks.Fire(s.ctx, hooks.EventUserPromptSubmit, "", map[string]any{"event": "UserPromptSubmit", "prompt": text})
@@ -861,12 +875,11 @@ func (s *Session) SendMessage(text string) (string, error) {
 		}
 	}
 
-	// Restrict the MCP host tools (read/write/edit/bash/glob/grep/web_*) to the
-	// allowlist as well. Installed only when an allowlist is set (empty = all).
+	// Restrict built-in host tools (read/write/edit/bash/glob/grep/web_*) to the
+	// allowlist too, but never MCP servers the user explicitly configured —
+	// see mcpToolFilter. Installed only when an allowlist is set (empty = all).
 	if len(s.toolAllow) > 0 {
-		cogitoOpts = append(cogitoOpts, cogito.WithMCPToolFilter(func(_ *mcp.ClientSession, name string) bool {
-			return s.toolEnabled(name)
-		}))
+		cogitoOpts = append(cogitoOpts, cogito.WithMCPToolFilter(s.mcpToolFilter()))
 	}
 
 	// Add ForceReasoning only if enabled in config
