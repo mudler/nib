@@ -2,7 +2,9 @@ package cmd
 
 import (
 	"context"
+	"flag"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"time"
@@ -49,98 +51,59 @@ func RunMCPCommand(args []string) int {
 	}
 }
 
+// kvFlag is a flag.Value that accumulates repeated KEY=VALUE flags into a
+// shared map. Register the same underlying map twice (once per flag name)
+// to get two independently-repeatable KEY=VALUE flags, e.g. --env and
+// --header.
+type kvFlag map[string]string
+
+func (k kvFlag) String() string { return "" }
+func (k kvFlag) Set(s string) error {
+	key, val, ok := strings.Cut(s, "=")
+	if !ok {
+		return fmt.Errorf("must be KEY=VALUE, got %q", s)
+	}
+	k[key] = val
+	return nil
+}
+
 // parseAddArgs parses `<name> [--env K=V]... [--url U] [--transport http|sse] [-- <command> args...]`.
 // Everything after a standalone "--" is the command and its arguments.
 func parseAddArgs(args []string) (string, types.MCPServer, error) {
-	var srv types.MCPServer
-	var cmdParts []string
-	for i, a := range args {
-		if a == "--" {
-			cmdParts = args[i+1:]
-			args = args[:i]
-			break
-		}
+	if len(args) == 0 {
+		return "", types.MCPServer{}, fmt.Errorf("missing <name>")
 	}
+
+	var srv types.MCPServer
 	env := map[string]string{}
 	headers := map[string]string{}
-	name := ""
-	needValue := func(i int, flag string) (string, error) {
-		if i+1 >= len(args) {
-			return "", fmt.Errorf("%s needs a value", flag)
-		}
-		return args[i+1], nil
+
+	fs := flag.NewFlagSet("mcp add", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	fs.StringVar(&srv.URL, "url", "", "base URL for a remote MCP server")
+	fs.StringVar(&srv.Transport, "transport", "", "remote transport: http (default) or sse")
+	fs.StringVar(&srv.BearerToken, "token", "", "bearer token for a remote MCP server")
+	fs.Var(kvFlag(env), "env", "environment variable, KEY=VALUE (repeatable)")
+	fs.Var(kvFlag(headers), "header", "custom HTTP header, KEY=VALUE (repeatable)")
+
+	// First pass: consume any flags before the name (none expected in
+	// practice — name is documented as the first token — but this mirrors
+	// parseInstallArgs's tolerance for either order).
+	if err := fs.Parse(args); err != nil {
+		return "", srv, err
 	}
-	for i := 0; i < len(args); i++ {
-		a := args[i]
-		switch {
-		case a == "--url":
-			v, err := needValue(i, "--url")
-			if err != nil {
-				return "", srv, err
-			}
-			srv.URL, i = v, i+1
-		case strings.HasPrefix(a, "--url="):
-			srv.URL = strings.TrimPrefix(a, "--url=")
-		case a == "--transport":
-			v, err := needValue(i, "--transport")
-			if err != nil {
-				return "", srv, err
-			}
-			srv.Transport, i = v, i+1
-		case strings.HasPrefix(a, "--transport="):
-			srv.Transport = strings.TrimPrefix(a, "--transport=")
-		case a == "--env":
-			v, err := needValue(i, "--env")
-			if err != nil {
-				return "", srv, err
-			}
-			k, val, ok := strings.Cut(v, "=")
-			if !ok {
-				return "", srv, fmt.Errorf("--env must be KEY=VALUE, got %q", v)
-			}
-			env[k], i = val, i+1
-		case strings.HasPrefix(a, "--env="):
-			k, val, ok := strings.Cut(strings.TrimPrefix(a, "--env="), "=")
-			if !ok {
-				return "", srv, fmt.Errorf("--env must be KEY=VALUE")
-			}
-			env[k] = val
-		case a == "--token":
-			v, err := needValue(i, "--token")
-			if err != nil {
-				return "", srv, err
-			}
-			srv.BearerToken, i = v, i+1
-		case strings.HasPrefix(a, "--token="):
-			srv.BearerToken = strings.TrimPrefix(a, "--token=")
-		case a == "--header":
-			v, err := needValue(i, "--header")
-			if err != nil {
-				return "", srv, err
-			}
-			k, val, ok := strings.Cut(v, "=")
-			if !ok {
-				return "", srv, fmt.Errorf("--header must be KEY=VALUE, got %q", v)
-			}
-			headers[k], i = val, i+1
-		case strings.HasPrefix(a, "--header="):
-			k, val, ok := strings.Cut(strings.TrimPrefix(a, "--header="), "=")
-			if !ok {
-				return "", srv, fmt.Errorf("--header must be KEY=VALUE")
-			}
-			headers[k] = val
-		case strings.HasPrefix(a, "-"):
-			return "", srv, fmt.Errorf("unknown flag: %s", a)
-		default:
-			if name != "" {
-				return "", srv, fmt.Errorf("unexpected argument %q (put the command after '--')", a)
-			}
-			name = a
-		}
-	}
-	if name == "" {
+	rest := fs.Args()
+	if len(rest) == 0 {
 		return "", srv, fmt.Errorf("missing <name>")
 	}
+	name := rest[0]
+
+	// Second pass: parse the flags (and the -- boundary) that follow name.
+	if err := fs.Parse(rest[1:]); err != nil {
+		return "", srv, err
+	}
+	cmdParts := fs.Args()
+
 	if len(cmdParts) > 0 {
 		srv.Command = cmdParts[0]
 		srv.Args = cmdParts[1:]
