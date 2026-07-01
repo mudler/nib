@@ -61,3 +61,33 @@ func TestAuthenticatedHTTPClientSetsCustomHeaders(t *testing.T) {
 		t.Fatalf("headers: X-Api-Key=%q X-Other=%q", gotKey, gotOther)
 	}
 }
+
+func TestAuthenticatedHTTPClientSetsTokenAndCustomHeaders(t *testing.T) {
+	var gotAuth, gotKey string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		gotKey = r.Header.Get("X-Api-Key")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	client := authenticatedHTTPClient(types.MCPServer{
+		URL:         srv.URL,
+		BearerToken: "secret123",
+		Headers:     map[string]string{"X-Api-Key": "k1"},
+	})
+	if client == nil {
+		t.Fatalf("expected non-nil client")
+	}
+	resp, err := client.Get(srv.URL)
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	resp.Body.Close()
+	if gotAuth != "Bearer secret123" {
+		t.Fatalf("Authorization header: got %q, want %q", gotAuth, "Bearer secret123")
+	}
+	if gotKey != "k1" {
+		t.Fatalf("X-Api-Key header: got %q, want %q", gotKey, "k1")
+	}
+}

@@ -125,6 +125,18 @@ func TestParseAddArgsRepeatedHeader(t *testing.T) {
 	}
 }
 
+func TestParseAddArgsHeaderValueWithEquals(t *testing.T) {
+	// A header value may itself contain "=": strings.Cut must split on the
+	// first "=" only, leaving the rest of the value intact.
+	_, srv, err := parseAddArgs([]string{"remote", "--url", "https://x/mcp", "--header", "X-Foo=a=b"})
+	if err != nil {
+		t.Fatalf("parseAddArgs: %v", err)
+	}
+	if srv.Headers["X-Foo"] != "a=b" {
+		t.Fatalf("header X-Foo: got %q, want %q (headers=%v)", srv.Headers["X-Foo"], "a=b", srv.Headers)
+	}
+}
+
 func TestParseAddArgsAuthErrors(t *testing.T) {
 	cases := [][]string{
 		{"foo", "--url", "http://x", "--token"},              // --token needs a value

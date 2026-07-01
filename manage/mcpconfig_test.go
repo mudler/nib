@@ -127,6 +127,9 @@ func TestListMCPServersRedactsAuth(t *testing.T) {
 	if err := c.AddMCPServer("authed", types.MCPServer{URL: "https://b", BearerToken: "tok"}); err != nil {
 		t.Fatalf("AddMCPServer authed: %v", err)
 	}
+	if err := c.AddMCPServer("headed", types.MCPServer{URL: "https://c", Headers: map[string]string{"X-Api-Key": "k"}}); err != nil {
+		t.Fatalf("AddMCPServer headed: %v", err)
+	}
 	servers, err := c.ListMCPServers()
 	if err != nil {
 		t.Fatalf("ListMCPServers: %v", err)
@@ -140,5 +143,9 @@ func TestListMCPServersRedactsAuth(t *testing.T) {
 	}
 	if !byName["authed"].Authenticated {
 		t.Fatalf("authed server should be marked authenticated")
+	}
+	// headers-only exercises the len(s.Headers) > 0 side of the OR
+	if !byName["headed"].Authenticated {
+		t.Fatalf("headers-only server should be marked authenticated")
 	}
 }

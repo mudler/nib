@@ -19,7 +19,11 @@ type MCPServerInfo struct {
 	Args          []string
 	URL           string
 	Transport     string
-	Authenticated bool // true if BearerToken or Headers is set; the values themselves are never exposed here
+	// Authenticated is true if BearerToken or ANY custom header is set; the values
+	// themselves are never exposed here. Note this deliberately does not distinguish
+	// a real auth token from an ordinary custom header — its purpose is "don't
+	// silently print secrets", not "classify which headers are authentication".
+	Authenticated bool
 }
 
 // userConfigServers reads only the user config file's mcp_servers map (not the
