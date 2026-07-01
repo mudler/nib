@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/mudler/nib/types"
 
@@ -13,11 +14,16 @@ import (
 
 // MCPServerInfo is a configured MCP server in tool-facing form.
 type MCPServerInfo struct {
-	Name      string
-	Command   string
-	Args      []string
-	URL       string
-	Transport string
+	Name          string
+	Command       string
+	Args          []string
+	URL           string
+	Transport     string
+	// Authenticated is true if BearerToken or ANY custom header is set; the values
+	// themselves are never exposed here. Note this deliberately does not distinguish
+	// a real auth token from an ordinary custom header — its purpose is "don't
+	// silently print secrets", not "classify which headers are authentication".
+	Authenticated bool
 }
 
 // userConfigServers reads only the user config file's mcp_servers map (not the
@@ -79,7 +85,14 @@ func (c *Configurator) ListMCPServers() ([]MCPServerInfo, error) {
 	}
 	out := make([]MCPServerInfo, 0, len(servers))
 	for name, s := range servers {
-		out = append(out, MCPServerInfo{Name: name, Command: s.Command, Args: s.Args, URL: s.URL, Transport: s.Transport})
+		out = append(out, MCPServerInfo{
+			Name:          name,
+			Command:       s.Command,
+			Args:          s.Args,
+			URL:           s.URL,
+			Transport:     s.Transport,
+			Authenticated: s.BearerToken != "" || len(s.Headers) > 0,
+		})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out, nil
@@ -100,6 +113,16 @@ func (c *Configurator) AddMCPServer(name string, srv types.MCPServer) error {
 		}
 		if srv.URL == "" {
 			return fmt.Errorf("transport is only valid for remote servers (url must be set)")
+		}
+	}
+	if (srv.BearerToken != "" || len(srv.Headers) > 0) && srv.URL == "" {
+		return fmt.Errorf("token/headers are only valid for remote servers (url must be set)")
+	}
+	if srv.BearerToken != "" {
+		for k := range srv.Headers {
+			if strings.EqualFold(k, "Authorization") {
+				return fmt.Errorf("cannot set both token and an Authorization header")
+			}
 		}
 	}
 	servers, err := userConfigServers(c.configPath)

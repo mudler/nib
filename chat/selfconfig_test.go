@@ -81,3 +81,41 @@ func TestAddMCPServerParsesEnv(t *testing.T) {
 		t.Fatalf("add_mcp_server: %q", out)
 	}
 }
+
+func TestAddMCPServerParsesTokenAndHeaders(t *testing.T) {
+	c := newToolConfigurator(t)
+	defs := selfConfigToolDefs(c, func() {})
+	out := runTool(t, defs, "add_mcp_server", map[string]any{
+		"name": "remote", "url": "https://x/mcp",
+		"token":   "secret123",
+		"headers": []any{"X-Api-Key=k1"},
+	})
+	if !strings.Contains(out, "remote") {
+		t.Fatalf("add_mcp_server: %q", out)
+	}
+	srv, err := c.GetMCPServer("remote")
+	if err != nil {
+		t.Fatalf("GetMCPServer: %v", err)
+	}
+	if srv.BearerToken != "secret123" {
+		t.Fatalf("token: got %q, want %q", srv.BearerToken, "secret123")
+	}
+	if srv.Headers["X-Api-Key"] != "k1" {
+		t.Fatalf("headers: %v", srv.Headers)
+	}
+}
+
+func TestListMCPServersMarksAuthenticated(t *testing.T) {
+	c := newToolConfigurator(t)
+	defs := selfConfigToolDefs(c, func() {})
+	runTool(t, defs, "add_mcp_server", map[string]any{
+		"name": "authed", "url": "https://x/mcp", "token": "secret123",
+	})
+	out := runTool(t, defs, "list_mcp_servers", map[string]any{})
+	if !strings.Contains(out, "authed") || !strings.Contains(out, "authenticated") {
+		t.Fatalf("list_mcp_servers: %q", out)
+	}
+	if strings.Contains(out, "secret123") {
+		t.Fatalf("list_mcp_servers leaked the token: %q", out)
+	}
+}

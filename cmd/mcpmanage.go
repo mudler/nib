@@ -62,6 +62,7 @@ func parseAddArgs(args []string) (string, types.MCPServer, error) {
 		}
 	}
 	env := map[string]string{}
+	headers := map[string]string{}
 	name := ""
 	needValue := func(i int, flag string) (string, error) {
 		if i+1 >= len(args) {
@@ -104,6 +105,30 @@ func parseAddArgs(args []string) (string, types.MCPServer, error) {
 				return "", srv, fmt.Errorf("--env must be KEY=VALUE")
 			}
 			env[k] = val
+		case a == "--token":
+			v, err := needValue(i, "--token")
+			if err != nil {
+				return "", srv, err
+			}
+			srv.BearerToken, i = v, i+1
+		case strings.HasPrefix(a, "--token="):
+			srv.BearerToken = strings.TrimPrefix(a, "--token=")
+		case a == "--header":
+			v, err := needValue(i, "--header")
+			if err != nil {
+				return "", srv, err
+			}
+			k, val, ok := strings.Cut(v, "=")
+			if !ok {
+				return "", srv, fmt.Errorf("--header must be KEY=VALUE, got %q", v)
+			}
+			headers[k], i = val, i+1
+		case strings.HasPrefix(a, "--header="):
+			k, val, ok := strings.Cut(strings.TrimPrefix(a, "--header="), "=")
+			if !ok {
+				return "", srv, fmt.Errorf("--header must be KEY=VALUE")
+			}
+			headers[k] = val
 		case strings.HasPrefix(a, "-"):
 			return "", srv, fmt.Errorf("unknown flag: %s", a)
 		default:
@@ -123,6 +148,9 @@ func parseAddArgs(args []string) (string, types.MCPServer, error) {
 	if len(env) > 0 {
 		srv.Env = env
 	}
+	if len(headers) > 0 {
+		srv.Headers = headers
+	}
 	if srv.Transport != "" && srv.Transport != "http" && srv.Transport != "sse" {
 		return "", srv, fmt.Errorf("--transport must be http or sse, got %q", srv.Transport)
 	}
@@ -137,7 +165,7 @@ func mcpAdd(cfgr *manage.Configurator, args []string) int {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "%v\n", err)
 		fmt.Fprintln(os.Stderr, "usage: nib mcp add <name> [--env K=V]... -- <command> [args...]")
-		fmt.Fprintln(os.Stderr, "       nib mcp add <name> --url <url> [--transport http|sse]")
+		fmt.Fprintln(os.Stderr, "       nib mcp add <name> --url <url> [--transport http|sse] [--token T] [--header K=V]...")
 		return 1
 	}
 	if err := cfgr.AddMCPServer(name, srv); err != nil {
@@ -164,7 +192,11 @@ func mcpList(cfgr *manage.Configurator) int {
 			if tr == "" {
 				tr = "http"
 			}
-			fmt.Printf("%-20s %s %s\n", s.Name, tr, s.URL)
+			suffix := ""
+			if s.Authenticated {
+				suffix = " (authenticated)"
+			}
+			fmt.Printf("%-20s %s %s%s\n", s.Name, tr, s.URL, suffix)
 		} else {
 			fmt.Printf("%-20s %s\n", s.Name, strings.TrimSpace(s.Command+" "+strings.Join(s.Args, " ")))
 		}

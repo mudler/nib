@@ -238,4 +238,7 @@ type MCPServer struct {
 	Env       map[string]string `yaml:"env,omitempty"`
 	URL       string            `yaml:"url,omitempty"`       // remote: presence selects an HTTP/SSE transport
 	Transport string            `yaml:"transport,omitempty"` // remote transport: "http" (default) or "sse"
+
+	BearerToken string            `yaml:"token,omitempty"`   // remote only: sent as "Authorization: Bearer <token>"
+	Headers     map[string]string `yaml:"headers,omitempty"` // remote only: custom HTTP headers
 }

@@ -94,6 +94,8 @@ type addMCPServerArgs struct {
 	Env       []string `json:"env,omitempty" jsonschema:"environment variables, each as a KEY=VALUE string"`
 	URL       string   `json:"url,omitempty" jsonschema:"base URL for a remote MCP server (use instead of command)"`
 	Transport string   `json:"transport,omitempty" jsonschema:"remote transport: http (default) or sse"`
+	Token     string   `json:"token,omitempty" jsonschema:"bearer token for a remote MCP server"`
+	Headers   []string `json:"headers,omitempty" jsonschema:"custom HTTP headers for a remote MCP server, each as a KEY=VALUE string"`
 }
 
 // selfConfigToolDefs builds the ten self-configuration tools. reload is called
@@ -214,7 +216,11 @@ func selfConfigToolDefs(c *manage.Configurator, reload func()) []toolDef {
 						if tr == "" {
 							tr = "http"
 						}
-						fmt.Fprintf(&b, "- %s: %s %s\n", s.Name, tr, s.URL)
+						suffix := ""
+						if s.Authenticated {
+							suffix = " (authenticated)"
+						}
+						fmt.Fprintf(&b, "- %s: %s %s%s\n", s.Name, tr, s.URL, suffix)
 					} else {
 						fmt.Fprintf(&b, "- %s: %s %s\n", s.Name, s.Command, strings.Join(s.Args, " "))
 					}
@@ -227,11 +233,13 @@ func selfConfigToolDefs(c *manage.Configurator, reload func()) []toolDef {
 			addMCPServerArgs{}, func(args map[string]any) (string, error) {
 				name := argStr(args, "name")
 				srv := types.MCPServer{
-					Command:   argStr(args, "command"),
-					Args:      argStrSlice(args, "args"),
-					Env:       argEnvMap(args, "env"),
-					URL:       argStr(args, "url"),
-					Transport: argStr(args, "transport"),
+					Command:     argStr(args, "command"),
+					Args:        argStrSlice(args, "args"),
+					Env:         argEnvMap(args, "env"),
+					URL:         argStr(args, "url"),
+					Transport:   argStr(args, "transport"),
+					BearerToken: argStr(args, "token"),
+					Headers:     argEnvMap(args, "headers"),
 				}
 				if err := c.AddMCPServer(name, srv); err != nil {
 					return "", err

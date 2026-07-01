@@ -15,10 +15,11 @@ import (
 // stdio, inheriting the process environment plus the server's Env.
 func TransportForServer(srv types.MCPServer) mcp.Transport {
 	if srv.URL != "" {
+		client := authenticatedHTTPClient(srv)
 		if srv.Transport == "sse" {
-			return &mcp.SSEClientTransport{Endpoint: srv.URL}
+			return &mcp.SSEClientTransport{Endpoint: srv.URL, HTTPClient: client}
 		}
-		return &mcp.StreamableClientTransport{Endpoint: srv.URL}
+		return &mcp.StreamableClientTransport{Endpoint: srv.URL, HTTPClient: client}
 	}
 	command := exec.Command(srv.Command, srv.Args...)
 	command.Env = os.Environ()
