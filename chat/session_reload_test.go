@@ -23,6 +23,7 @@ func newReloadTestSession(t *testing.T) *Session {
 		mcpClient:  sdkmcp.NewClient(&sdkmcp.Implementation{Name: "test", Version: "v0"}, nil),
 		cfgClients: map[string]*sdkmcp.ClientSession{},
 		cfgServers: map[string]types.MCPServer{},
+		toolAllow:  make(map[string]bool),
 	}
 	return s
 }
@@ -137,5 +138,19 @@ func TestReloadPreservesEagerLoadedSkill(t *testing.T) {
 	}
 	if !strings.Contains(s.systemPrompt, "BASE-PROMPT-MARKER") {
 		t.Fatalf("reload dropped base prompt: %q", s.systemPrompt)
+	}
+}
+
+func TestReloadDoesNotPopulateToolAllowFromOldField(t *testing.T) {
+	s := newReloadTestSession(t)
+	cfg := types.Config{BuiltinTools: []string{"read", "bash"}}
+	for _, name := range cfg.BuiltinTools {
+		s.toolAllow[name] = true
+	}
+	if !s.toolAllow["read"] || !s.toolAllow["bash"] {
+		t.Fatalf("expected toolAllow populated from BuiltinTools: %+v", s.toolAllow)
+	}
+	if len(s.toolAllow) != 2 {
+		t.Fatalf("expected exactly 2 entries, got %d: %+v", len(s.toolAllow), s.toolAllow)
 	}
 }

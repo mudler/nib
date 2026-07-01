@@ -243,7 +243,7 @@ func NewSession(ctx context.Context, cfg types.Config, callbacks Callbacks, tran
 	for _, name := range cfg.AllowedTools {
 		s.allowedTools[name] = true
 	}
-	for _, name := range cfg.Tools {
+	for _, name := range cfg.BuiltinTools {
 		s.toolAllow[name] = true
 	}
 	s.autoApprove = cfg.ApprovalMode == "auto"
