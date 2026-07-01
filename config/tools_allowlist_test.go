@@ -9,13 +9,13 @@ import (
 
 // The tool allowlist must load from the config file — Load() unmarshals the same
 // way (loadFromFile -> yaml.Unmarshal into types.Config), so this proves the
-// `tools:` key is wired through to Config.Tools.
+// `builtin_tools:` key is wired through to Config.BuiltinTools.
 func TestToolsAllowlistUnmarshalsFromConfig(t *testing.T) {
 	var c types.Config
-	if err := yaml.Unmarshal([]byte("tools:\n  - read\n  - bash\n  - web_search\n"), &c); err != nil {
+	if err := yaml.Unmarshal([]byte("builtin_tools:\n  - read\n  - bash\n  - web_search\n"), &c); err != nil {
 		t.Fatal(err)
 	}
-	if len(c.Tools) != 3 || c.Tools[0] != "read" || c.Tools[2] != "web_search" {
-		t.Fatalf("config `tools:` did not load into Config.Tools: %+v", c.Tools)
+	if len(c.BuiltinTools) != 3 || c.BuiltinTools[0] != "read" || c.BuiltinTools[2] != "web_search" {
+		t.Fatalf("config `builtin_tools:` did not load into Config.BuiltinTools: %+v", c.BuiltinTools)
 	}
 }

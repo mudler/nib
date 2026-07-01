@@ -23,6 +23,7 @@ func newReloadTestSession(t *testing.T) *Session {
 		mcpClient:  sdkmcp.NewClient(&sdkmcp.Implementation{Name: "test", Version: "v0"}, nil),
 		cfgClients: map[string]*sdkmcp.ClientSession{},
 		cfgServers: map[string]types.MCPServer{},
+		toolAllow:  make(map[string]bool),
 	}
 	return s
 }
@@ -137,5 +138,55 @@ func TestReloadPreservesEagerLoadedSkill(t *testing.T) {
 	}
 	if !strings.Contains(s.systemPrompt, "BASE-PROMPT-MARKER") {
 		t.Fatalf("reload dropped base prompt: %q", s.systemPrompt)
+	}
+}
+
+func TestReloadDoesNotPopulateToolAllowFromOldField(t *testing.T) {
+	s := newReloadTestSession(t)
+	cfg := types.Config{BuiltinTools: []string{"read", "bash"}}
+	for _, name := range cfg.BuiltinTools {
+		s.toolAllow[name] = true
+	}
+	if !s.toolAllow["read"] || !s.toolAllow["bash"] {
+		t.Fatalf("expected toolAllow populated from BuiltinTools: %+v", s.toolAllow)
+	}
+	if len(s.toolAllow) != 2 {
+		t.Fatalf("expected exactly 2 entries, got %d: %+v", len(s.toolAllow), s.toolAllow)
+	}
+}
+
+func TestMCPToolFilterBypassesAllowlistForConfiguredServers(t *testing.T) {
+	s := newReloadTestSession(t)
+	s.toolAllow = map[string]bool{"read": true}
+
+	cfgSession := &sdkmcp.ClientSession{}
+	s.cfgClients["notary"] = cfgSession
+
+	filter := s.mcpToolFilter()
+
+	// A tool from a configured MCP server passes regardless of its name.
+	if !filter(cfgSession, "knowledge_search") {
+		t.Fatalf("expected a cfgClients-sourced tool to bypass the allowlist")
+	}
+	// A tool NOT from a configured MCP server (e.g. a built-in host session)
+	// still respects the allowlist.
+	builtinSession := &sdkmcp.ClientSession{}
+	if filter(builtinSession, "knowledge_search") {
+		t.Fatalf("expected a non-cfgClients tool not in the allowlist to be blocked")
+	}
+	if !filter(builtinSession, "read") {
+		t.Fatalf("expected a non-cfgClients tool that IS in the allowlist to pass")
+	}
+}
+
+func TestMCPToolFilterAllowsEverythingWhenAllowlistEmpty(t *testing.T) {
+	s := newReloadTestSession(t)
+	// s.toolAllow is empty (zero value from newReloadTestSession's Session{}).
+	s.toolAllow = map[string]bool{}
+
+	filter := s.mcpToolFilter()
+	builtinSession := &sdkmcp.ClientSession{}
+	if !filter(builtinSession, "anything") {
+		t.Fatalf("expected everything to pass when the allowlist is empty")
 	}
 }
