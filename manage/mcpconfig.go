@@ -14,11 +14,12 @@ import (
 
 // MCPServerInfo is a configured MCP server in tool-facing form.
 type MCPServerInfo struct {
-	Name      string
-	Command   string
-	Args      []string
-	URL       string
-	Transport string
+	Name          string
+	Command       string
+	Args          []string
+	URL           string
+	Transport     string
+	Authenticated bool // true if BearerToken or Headers is set; the values themselves are never exposed here
 }
 
 // userConfigServers reads only the user config file's mcp_servers map (not the
@@ -80,7 +81,14 @@ func (c *Configurator) ListMCPServers() ([]MCPServerInfo, error) {
 	}
 	out := make([]MCPServerInfo, 0, len(servers))
 	for name, s := range servers {
-		out = append(out, MCPServerInfo{Name: name, Command: s.Command, Args: s.Args, URL: s.URL, Transport: s.Transport})
+		out = append(out, MCPServerInfo{
+			Name:          name,
+			Command:       s.Command,
+			Args:          s.Args,
+			URL:           s.URL,
+			Transport:     s.Transport,
+			Authenticated: s.BearerToken != "" || len(s.Headers) > 0,
+		})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out, nil

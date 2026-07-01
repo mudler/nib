@@ -118,3 +118,27 @@ func TestAddMCPServerAuthValidation(t *testing.T) {
 		t.Fatalf("GetMCPServer ok1: %+v, err=%v", got, err)
 	}
 }
+
+func TestListMCPServersRedactsAuth(t *testing.T) {
+	c, _ := newTestConfigurator(t)
+	if err := c.AddMCPServer("plain", types.MCPServer{URL: "https://a"}); err != nil {
+		t.Fatalf("AddMCPServer plain: %v", err)
+	}
+	if err := c.AddMCPServer("authed", types.MCPServer{URL: "https://b", BearerToken: "tok"}); err != nil {
+		t.Fatalf("AddMCPServer authed: %v", err)
+	}
+	servers, err := c.ListMCPServers()
+	if err != nil {
+		t.Fatalf("ListMCPServers: %v", err)
+	}
+	byName := map[string]MCPServerInfo{}
+	for _, s := range servers {
+		byName[s.Name] = s
+	}
+	if byName["plain"].Authenticated {
+		t.Fatalf("plain server should not be marked authenticated")
+	}
+	if !byName["authed"].Authenticated {
+		t.Fatalf("authed server should be marked authenticated")
+	}
+}
