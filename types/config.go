@@ -10,6 +10,7 @@ import (
 	"text/template"
 
 	"github.com/Masterminds/sprig/v3"
+	openai "github.com/sashabaranov/go-openai"
 )
 
 // AgentOptions holds configuration for the cogito ExecuteTools function
@@ -136,6 +137,14 @@ type Config struct {
 	// request/response is appended to <TraceDir>/trace.ndjson. Set at runtime
 	// from the --trace-dir flag or NIB_TRACE_DIR env, not from the YAML config.
 	TraceDir string `yaml:"-"`
+	// InitialHistory seeds a new session with a prior conversation so the very
+	// next SendMessage continues with full memory of it (resume/rehydration).
+	// Typically these are the messages a previous session returned from
+	// Session.ExportHistory, persisted to disk and reloaded. They MUST NOT
+	// include the system prompt: it is regenerated per-model/locale from Prompt
+	// and re-applied on every turn (see Session.SendMessage), so a seeded system
+	// message would duplicate it. Set at runtime, never from the YAML config.
+	InitialHistory []openai.ChatCompletionMessage `yaml:"-"`
 }
 
 func (c *Config) GetPrompt() string {

@@ -181,12 +181,14 @@ func (s *Session) compactHistory(ctx context.Context) (before, after int, err er
 		Content: fmt.Sprintf("📦 Compacted %d earlier messages", removed),
 	}}, displayTail...)
 
+	s.historyMu.Lock()
 	newFrag := cogito.NewFragment(newFragMsgs...)
 	if s.fragment.Status != nil {
 		newFrag.Status = s.fragment.Status // preserve running token counters
 	}
 	s.fragment = newFrag
 	s.messages = newMessages
+	s.historyMu.Unlock()
 
 	after = estimateTokens(newFrag.Messages)
 	return before, after, nil
