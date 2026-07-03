@@ -107,10 +107,3 @@ func (c *Client) getBytes(ctx context.Context, url string, limit int64) ([]byte,
 
 // bundledIndex is a temporary stub replaced in Task 7 (moves to sources.go).
 var bundledIndex = []byte(`{"skills":[]}`)
-
-// githubCrawl is a temporary stub replaced in Task 4 (moves to crawl.go), which
-// walks the repo tree when no committed index exists. Until then it reports that
-// index-first resolution found nothing.
-func (c *Client) githubCrawl(ctx context.Context, owner, repo string) ([]Meta, error) {
-	return nil, fmt.Errorf("crawl not implemented")
-}
