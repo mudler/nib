@@ -1,0 +1,13 @@
+{
+  "skills": [
+    {
+      "kind": "skill",
+      "name": "brainstorming",
+      "description": "Explore intent and requirements before implementation.",
+      "category": "workflow",
+      "tags": ["planning", "design"],
+      "repo": "obra/superpowers",
+      "path": "skills/brainstorming"
+    }
+  ]
+}

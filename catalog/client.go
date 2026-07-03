@@ -104,6 +104,3 @@ func (c *Client) getBytes(ctx context.Context, url string, limit int64) ([]byte,
 	}
 	return io.ReadAll(io.LimitReader(resp.Body, limit))
 }
-
-// bundledIndex is a temporary stub replaced in Task 7 (moves to sources.go).
-var bundledIndex = []byte(`{"skills":[]}`)
