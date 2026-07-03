@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"archive/zip"
 	"io"
 	"os"
 	"path/filepath"
@@ -9,6 +10,55 @@ import (
 
 	"github.com/mudler/nib/skill"
 )
+
+// writeTestZip builds a zip at path with the given name→body entries.
+// Same body as extsource's writeZip test helper.
+func writeTestZip(t *testing.T, path string, entries map[string]string) {
+	t.Helper()
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	w := zip.NewWriter(f)
+	for name, body := range entries {
+		fw, err := w.Create(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := fw.Write([]byte(body)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSkillLocalImport_Zip(t *testing.T) {
+	base := t.TempDir()
+	// build a zip containing a SKILL.md (reuse extsource test helper pattern)
+	zp := filepath.Join(t.TempDir(), "greeter.zip")
+	writeTestZip(t, zp, map[string]string{
+		"SKILL.md": "---\nname: greet\ndescription: hi\n---\nbody",
+	})
+	mgr := skill.NewManager(base)
+	name, skills, handled, err := skillLocalImport(mgr, zp)
+	if err != nil || !handled {
+		t.Fatalf("zip import: handled=%v err=%v", handled, err)
+	}
+	if name != "greeter" || len(skills) != 1 {
+		t.Fatalf("got name=%q skills=%d", name, len(skills))
+	}
+}
+
+func TestSkillLocalImport_GitPassthrough(t *testing.T) {
+	mgr := skill.NewManager(t.TempDir())
+	_, _, handled, _ := skillLocalImport(mgr, "https://github.com/owner/repo")
+	if handled {
+		t.Fatal("git URL must not be handled by local import")
+	}
+}
 
 func TestParseInstallArgsForSkill(t *testing.T) {
 	// cmd/skill.go reuses parseInstallArgs (defined in cmd/plugin.go) for plugins.
