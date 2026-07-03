@@ -37,6 +37,12 @@ type Session struct {
 	cfgClients          map[string]*mcp.ClientSession // config/plugin MCP servers, by name
 	cfgServers          map[string]types.MCPServer    // desired set, for diffing
 	skillsClient        *mcp.ClientSession            // the load_skill server
+	// historyMu guards the parallel conversation state — fragment (the real
+	// model context handed to cogito) and messages (the {role,content} log
+	// surfaced to the UI). SendMessage mutates both as a turn progresses; the
+	// lock lets ExportHistory take a consistent copy from another goroutine
+	// while a turn is running.
+	historyMu           sync.Mutex
 	fragment            cogito.Fragment
 	messages            []openai.ChatCompletionMessage
 	callbacks           Callbacks
@@ -240,6 +246,26 @@ func NewSession(ctx context.Context, cfg types.Config, callbacks Callbacks, tran
 		configurator:        manage.New(plugin.BaseDir(), config.WritablePath()),
 		tracer:              tracer,
 	}
+	// Resume/rehydration: seed a prior conversation so the very next SendMessage
+	// continues with full memory of it, behaving identically to a session that
+	// organically reached this state. We seed BOTH parallel fields:
+	//   - s.messages: the {role,content} log the UI reads back.
+	//   - s.fragment: the real model context handed to cogito on the next turn.
+	// The seeded history MUST NOT contain the system prompt (ExportHistory never
+	// emits one, and Config documents the contract). SendMessage prepends the
+	// current system prompt at the START of every turn via
+	// s.fragment.AddMessage("system", …) — so we deliberately seed the fragment
+	// WITHOUT a system message and let that per-turn add supply exactly one. That
+	// is what makes a resumed turn structurally identical to a fresh multi-turn
+	// session (whose fragment likewise carries no leading system message before
+	// the turn's own add), and it avoids a duplicated or missing system prompt on
+	// the first resumed turn. Token counters reset to zero and are recomputed from
+	// the first resumed request's usage, which reflects the full seeded context.
+	if len(cfg.InitialHistory) > 0 {
+		seed := slices.Clone(cfg.InitialHistory)
+		s.messages = seed
+		s.fragment = cogito.NewFragment(seed...)
+	}
 	for _, name := range cfg.AllowedTools {
 		s.allowedTools[name] = true
 	}
@@ -438,8 +464,28 @@ func agentUsage(a *cogito.AgentState) (toolCount, tokens int) {
 }
 
 func (s *Session) ClearHistory() {
+	s.historyMu.Lock()
 	s.messages = []openai.ChatCompletionMessage{}
 	s.fragment = cogito.NewEmptyFragment()
+	s.historyMu.Unlock()
+}
+
+// ExportHistory returns a copy of the full conversation messages (the same
+// []openai.ChatCompletionMessage that backs the model context), suitable for
+// JSON serialization and persistence. Feed the result back via
+// types.Config.InitialHistory to resume the conversation losslessly — the model
+// then continues with real memory of it, not a summary.
+//
+// The returned slice is a copy, so mutating it (or its serialization) never
+// touches the live session. It EXCLUDES the system prompt: s.messages only ever
+// records user/assistant turns (the system prompt is regenerated per
+// model/locale and re-applied to the fragment on every turn), so there is no
+// system message to strip. Safe to call from another goroutine while a turn is
+// running; it takes the same lock SendMessage holds while appending.
+func (s *Session) ExportHistory() []openai.ChatCompletionMessage {
+	s.historyMu.Lock()
+	defer s.historyMu.Unlock()
+	return slices.Clone(s.messages)
 }
 
 // SetGoal sets (or replaces) the active session goal. While a goal is set, a
@@ -665,6 +711,7 @@ func (s *Session) SendMessage(text string) (string, error) {
 			}
 		}
 	}()
+	s.historyMu.Lock()
 	if s.systemPrompt != "" {
 		s.fragment = s.fragment.AddMessage("system", s.systemPrompt)
 	}
@@ -673,6 +720,7 @@ func (s *Session) SendMessage(text string) (string, error) {
 		Role:    "user",
 		Content: text,
 	})
+	s.historyMu.Unlock()
 
 	// Build cogito options from config
 	cogitoOpts := []cogito.Option{
@@ -907,7 +955,12 @@ func (s *Session) SendMessage(text string) (string, error) {
 		s.goalDone = false
 		s.runMu.Unlock()
 
-		s.fragment, err = cogito.ExecuteTools(s.llm, s.fragment, cogitoOpts...)
+		// ExecuteTools takes the fragment by value, so it operates on a copy;
+		// only the reassignment of the result needs the lock (below), not the
+		// whole call — holding it across the call would block ExportHistory for
+		// the entire turn.
+		var newFragment cogito.Fragment
+		newFragment, err = cogito.ExecuteTools(s.llm, s.fragment, cogitoOpts...)
 		if err != nil && !errors.Is(err, cogito.ErrNoToolSelected) {
 			// Interrupt (turnCtx cancelled) surfaces here as a context error;
 			// clear the goal so the user's stop sticks and it doesn't re-arm.
@@ -921,11 +974,14 @@ func (s *Session) SendMessage(text string) (string, error) {
 			return "", err
 		}
 
-		response = s.fragment.LastMessage().Content
+		response = newFragment.LastMessage().Content
+		s.historyMu.Lock()
+		s.fragment = newFragment
 		s.messages = append(s.messages, openai.ChatCompletionMessage{
 			Role:    "assistant",
 			Content: response,
 		})
+		s.historyMu.Unlock()
 
 		s.runMu.Lock()
 		done := s.goalDone
@@ -944,11 +1000,13 @@ func (s *Session) SendMessage(text string) (string, error) {
 
 		// Goal still active and unconfirmed: re-feed it and run again.
 		reminder := goalReminder(goal)
+		s.historyMu.Lock()
 		s.fragment = s.fragment.AddMessage("user", reminder)
 		s.messages = append(s.messages, openai.ChatCompletionMessage{
 			Role:    "user",
 			Content: reminder,
 		})
+		s.historyMu.Unlock()
 		if s.callbacks.OnStatus != nil {
 			s.callbacks.OnStatus("Goal not yet met — continuing…")
 		}
@@ -985,6 +1043,8 @@ func (s *Session) SendMessage(text string) (string, error) {
 
 // GetMessages returns all messages in the conversation
 func (s *Session) GetMessages() []Message {
+	s.historyMu.Lock()
+	defer s.historyMu.Unlock()
 	messages := []Message{}
 	for _, msg := range s.messages {
 		messages = append(messages, Message{
