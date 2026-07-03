@@ -17,7 +17,8 @@ func TestPluginInstallDir_LandsDisabled(t *testing.T) {
 		"name: myplug\ndescription: test plugin\n")
 
 	mgr := NewManager(base)
-	m, err := mgr.InstallDir(src, "v0.0.0")
+	const sourceURL = "/downloads/myplug.zip"
+	m, err := mgr.InstallDir(src, "v0.0.0", sourceURL)
 	if err != nil {
 		t.Fatalf("InstallDir: %v", err)
 	}
@@ -28,7 +29,13 @@ func TestPluginInstallDir_LandsDisabled(t *testing.T) {
 		t.Fatalf("plugin not placed: %v", err)
 	}
 	reg, _ := LoadRegistry(base)
-	if e := reg.Find("myplug"); e == nil || e.Enabled {
+	e := reg.Find("myplug")
+	if e == nil || e.Enabled {
 		t.Fatalf("expected registered & disabled, got %+v", e)
+	}
+	// The real source (zip path) must be recorded as provenance, not the
+	// throwaway extraction temp dir.
+	if e.SourceURL != sourceURL {
+		t.Fatalf("SourceURL = %q, want %q", e.SourceURL, sourceURL)
 	}
 }

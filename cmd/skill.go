@@ -142,7 +142,7 @@ func skillLocalImport(mgr *skill.Manager, src string) (string, []types.Skill, bo
 			return "", nil, true, err
 		}
 		name := importName(src, ".zip")
-		n, sk, err := mgr.InstallDir(tmp, name)
+		n, sk, err := mgr.InstallDir(tmp, name, src)
 		return n, sk, true, err
 	case isSkillMdURL(src):
 		tmp, err := os.MkdirTemp("", "nib-url-")
@@ -154,7 +154,7 @@ func skillLocalImport(mgr *skill.Manager, src string) (string, []types.Skill, bo
 			return "", nil, true, err
 		}
 		name := importName(strings.TrimSuffix(src, "/SKILL.md"), "")
-		n, sk, err := mgr.InstallDir(tmp, name)
+		n, sk, err := mgr.InstallDir(tmp, name, src)
 		return n, sk, true, err
 	default:
 		return "", nil, false, nil

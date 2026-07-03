@@ -115,8 +115,10 @@ func (mgr *Manager) place(tmp, name, sourceURL, ref string) (string, []types.Ski
 
 // InstallDir installs an already-prepared local skill directory (e.g. an
 // unzipped archive or a fetched SKILL.md) as pack <name>, DISABLED. Unlike
-// Install it does no git/link handling: dir is copied verbatim.
-func (mgr *Manager) InstallDir(dir, name string) (string, []types.Skill, error) {
+// Install it does no git/link handling: dir is copied verbatim. sourceURL is
+// recorded as the pack's registry provenance (the original .zip path or
+// SKILL.md URL) — not dir, which is a throwaway extraction temp dir.
+func (mgr *Manager) InstallDir(dir, name, sourceURL string) (string, []types.Skill, error) {
 	if !validPackName(name) {
 		return "", nil, fmt.Errorf("invalid pack name %q", name)
 	}
@@ -137,7 +139,7 @@ func (mgr *Manager) InstallDir(dir, name string) (string, []types.Skill, error) 
 	if err := vcs.CopyDir(dir, tmp); err != nil {
 		return "", nil, fmt.Errorf("copy skill dir: %w", err)
 	}
-	name, skills, err := mgr.place(tmp, name, dir, "")
+	name, skills, err := mgr.place(tmp, name, sourceURL, "")
 	if err != nil {
 		return "", nil, err
 	}

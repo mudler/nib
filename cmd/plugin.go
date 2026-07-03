@@ -116,7 +116,7 @@ func pluginLocalImport(mgr *plugin.Manager, src, nibVersion string) (plugin.Mani
 	if err := extsource.ExtractZip(src, tmp); err != nil {
 		return plugin.Manifest{}, true, err
 	}
-	m, err := mgr.InstallDir(tmp, nibVersion)
+	m, err := mgr.InstallDir(tmp, nibVersion, src)
 	return m, true, err
 }
 

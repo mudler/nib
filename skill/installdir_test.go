@@ -14,7 +14,8 @@ func TestInstallDir_LandsDisabled(t *testing.T) {
 		[]byte("---\nname: greet\ndescription: say hi\n---\nSay hello."), 0o644)
 
 	mgr := NewManager(base)
-	name, skills, err := mgr.InstallDir(src, "mypack")
+	const sourceURL = "/downloads/mypack.zip"
+	name, skills, err := mgr.InstallDir(src, "mypack", sourceURL)
 	if err != nil {
 		t.Fatalf("InstallDir: %v", err)
 	}
@@ -29,12 +30,17 @@ func TestInstallDir_LandsDisabled(t *testing.T) {
 	if e == nil || e.Enabled {
 		t.Fatalf("expected registered & disabled, got %+v", e)
 	}
+	// The real source (zip path / URL) must be recorded as provenance, not the
+	// throwaway extraction temp dir.
+	if e.SourceURL != sourceURL {
+		t.Fatalf("SourceURL = %q, want %q", e.SourceURL, sourceURL)
+	}
 }
 
 func TestInstallDir_NoSkillMd(t *testing.T) {
 	mgr := NewManager(t.TempDir())
 	empty := t.TempDir()
-	if _, _, err := mgr.InstallDir(empty, "empty"); err == nil {
+	if _, _, err := mgr.InstallDir(empty, "empty", "/downloads/empty.zip"); err == nil {
 		t.Fatal("expected error when no SKILL.md present")
 	}
 }

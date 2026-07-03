@@ -24,6 +24,12 @@ func TestPluginLocalImport_Zip(t *testing.T) {
 	if m.Name != "myplug" {
 		t.Fatalf("manifest name = %q", m.Name)
 	}
+	// The registry must record the real .zip path as provenance, not the
+	// throwaway extraction temp dir.
+	reg, _ := plugin.LoadRegistry(base)
+	if e := reg.Find("myplug"); e == nil || e.SourceURL != zp {
+		t.Fatalf("SourceURL = %+v, want %q", e, zp)
+	}
 }
 
 func TestPluginLocalImport_GitPassthrough(t *testing.T) {

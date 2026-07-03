@@ -50,6 +50,12 @@ func TestSkillLocalImport_Zip(t *testing.T) {
 	if name != "greeter" || len(skills) != 1 {
 		t.Fatalf("got name=%q skills=%d", name, len(skills))
 	}
+	// The registry must record the real .zip path as provenance, not the
+	// throwaway extraction temp dir.
+	reg, _ := skill.LoadRegistry(base)
+	if e := reg.Find("greeter"); e == nil || e.SourceURL != zp {
+		t.Fatalf("SourceURL = %+v, want %q", e, zp)
+	}
 }
 
 func TestSkillLocalImport_GitPassthrough(t *testing.T) {

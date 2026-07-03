@@ -77,8 +77,10 @@ func (mgr *Manager) place(tmp, sourceURL, ref, nibVersion string) (Manifest, err
 }
 
 // InstallDir installs an already-prepared local plugin directory (e.g. an
-// unzipped archive) DISABLED. The plugin name comes from its manifest.
-func (mgr *Manager) InstallDir(dir, nibVersion string) (Manifest, error) {
+// unzipped archive) DISABLED. The plugin name comes from its manifest. sourceURL
+// is recorded as the plugin's registry provenance (the original .zip path) — not
+// dir, which is a throwaway extraction temp dir.
+func (mgr *Manager) InstallDir(dir, nibVersion, sourceURL string) (Manifest, error) {
 	pluginsDir := PluginsDir(mgr.baseDir)
 	if err := os.MkdirAll(pluginsDir, 0o755); err != nil {
 		return Manifest{}, err
@@ -96,7 +98,7 @@ func (mgr *Manager) InstallDir(dir, nibVersion string) (Manifest, error) {
 	if err := vcs.CopyDir(dir, tmp); err != nil {
 		return Manifest{}, fmt.Errorf("copy plugin dir: %w", err)
 	}
-	m, err := mgr.place(tmp, dir, "", nibVersion)
+	m, err := mgr.place(tmp, sourceURL, "", nibVersion)
 	if err != nil {
 		return Manifest{}, err
 	}
