@@ -151,6 +151,60 @@ func TestHarvestPack(t *testing.T) {
 	}
 }
 
+func TestHarvestPack_RootSkillOnly(t *testing.T) {
+	root := t.TempDir()
+	// Only a root-level SKILL.md, no subdirectory skills.
+	if err := os.WriteFile(filepath.Join(root, "SKILL.md"),
+		[]byte("---\nname: greet\ndescription: say hi\n---\nSay hello.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	skills, err := HarvestPack(root)
+	if err != nil {
+		t.Fatalf("HarvestPack: %v", err)
+	}
+	if len(skills) != 1 {
+		t.Fatalf("expected exactly 1 skill, got %d: %+v", len(skills), skills)
+	}
+	if skills[0].Name != "greet" {
+		t.Fatalf("Name = %q, want greet", skills[0].Name)
+	}
+	if skills[0].Dir != root {
+		t.Fatalf("Dir = %q, want root %q", skills[0].Dir, root)
+	}
+}
+
+func TestHarvestPack_SubdirSkillsWinOverRoot(t *testing.T) {
+	root := t.TempDir()
+	// A root-level SKILL.md (an overview) AND a real skill in a subdir.
+	if err := os.WriteFile(filepath.Join(root, "SKILL.md"),
+		[]byte("---\nname: overview\ndescription: pack overview\n---\nRead me first.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeSkillAt(t, root, "sub", "---\nname: real\ndescription: a real skill\n---\nbody\n")
+
+	skills, err := HarvestPack(root)
+	if err != nil {
+		t.Fatalf("HarvestPack: %v", err)
+	}
+	if len(skills) != 1 {
+		t.Fatalf("expected exactly 1 skill (the subdir), got %d: %+v", len(skills), skills)
+	}
+	s := skills[0]
+	if s.Name != "real" {
+		t.Fatalf("Name = %q, want real (subdir skill, not root overview)", s.Name)
+	}
+	if s.Dir != filepath.Join(root, "sub") {
+		t.Fatalf("Dir = %q, want subdir %q", s.Dir, filepath.Join(root, "sub"))
+	}
+	// The root overview must NOT be harvested.
+	for _, sk := range skills {
+		if sk.Name == "overview" || sk.Dir == root {
+			t.Fatalf("root SKILL.md overview must not be harvested when subdir skills exist: %+v", sk)
+		}
+	}
+}
+
 func TestHarvestPackNoSkillsDir(t *testing.T) {
 	skills, err := HarvestPack(t.TempDir())
 	if err != nil {
