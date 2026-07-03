@@ -4,7 +4,35 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/mudler/nib/plugin"
 )
+
+func TestPluginLocalImport_Zip(t *testing.T) {
+	base := t.TempDir()
+	zp := filepath.Join(t.TempDir(), "myplug.zip")
+	// Native plugin manifest is nib-plugin.yaml (plugin.NativeManifestFile);
+	// Validate only requires name.
+	writeTestZip(t, zp, map[string]string{
+		"nib-plugin.yaml": "name: myplug\ndescription: test plugin\n",
+	})
+	mgr := plugin.NewManager(base)
+	m, handled, err := pluginLocalImport(mgr, zp, "v0.0.0")
+	if err != nil || !handled {
+		t.Fatalf("zip import: handled=%v err=%v", handled, err)
+	}
+	if m.Name != "myplug" {
+		t.Fatalf("manifest name = %q", m.Name)
+	}
+}
+
+func TestPluginLocalImport_GitPassthrough(t *testing.T) {
+	mgr := plugin.NewManager(t.TempDir())
+	_, handled, _ := pluginLocalImport(mgr, "https://github.com/owner/repo", "v0.0.0")
+	if handled {
+		t.Fatal("git URL must not be handled by local import")
+	}
+}
 
 func TestParseInstallArgs(t *testing.T) {
 	cases := []struct {

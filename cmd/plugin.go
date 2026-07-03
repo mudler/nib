@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/mudler/nib/extsource"
 	"github.com/mudler/nib/internal"
 	"github.com/mudler/nib/plugin"
 )
@@ -77,18 +78,53 @@ func parseInstallArgs(args []string) (url, ref string, yes bool, err error) {
 }
 
 func pluginInstall(mgr *plugin.Manager, args []string) int {
-	url, ref, yes, err := parseInstallArgs(args)
+	src, ref, yes, err := parseInstallArgs(args)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "usage: nib plugin install [--ref REF] [--yes] <git-url>")
+		fmt.Fprintln(os.Stderr, "usage: nib plugin install [--ref REF] [--yes] <git-url|local-path|zip>")
 		return 1
 	}
 
-	m, err := mgr.Install(url, ref, internal.Version)
+	// A .zip archive is imported locally; git URLs and local dirs fall through
+	// to mgr.Install. (URL import is skill-only: plugins are multi-file.)
+	if m, handled, ierr := pluginLocalImport(mgr, src, internal.Version); handled {
+		if ierr != nil {
+			fmt.Fprintf(os.Stderr, "install failed: %v\n", ierr)
+			return 1
+		}
+		return reportAndMaybeEnablePlugin(mgr, m, yes)
+	}
+
+	m, err := mgr.Install(src, ref, internal.Version)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "install failed: %v\n", err)
 		return 1
 	}
+	return reportAndMaybeEnablePlugin(mgr, m, yes)
+}
 
+// pluginLocalImport handles a .zip plugin archive; returns handled=false for
+// git URLs and local dirs so the caller falls through to mgr.Install.
+func pluginLocalImport(mgr *plugin.Manager, src, nibVersion string) (plugin.Manifest, bool, error) {
+	if !strings.HasSuffix(strings.ToLower(src), ".zip") {
+		return plugin.Manifest{}, false, nil
+	}
+	tmp, err := os.MkdirTemp("", "nib-plug-zip-")
+	if err != nil {
+		return plugin.Manifest{}, true, err
+	}
+	defer os.RemoveAll(tmp)
+	if err := extsource.ExtractZip(src, tmp); err != nil {
+		return plugin.Manifest{}, true, err
+	}
+	m, err := mgr.InstallDir(tmp, nibVersion)
+	return m, true, err
+}
+
+// reportAndMaybeEnablePlugin prints the install summary, then either enables the
+// plugin (on --yes or an interactive confirm) or leaves it disabled. It returns
+// the process exit code. Imported plugins always land disabled; this is the only
+// enable path.
+func reportAndMaybeEnablePlugin(mgr *plugin.Manager, m plugin.Manifest, yes bool) int {
 	fmt.Printf("Installed %q v%s — %s\n", m.Name, m.Version, m.Description)
 	fmt.Printf("Contributes: %d MCP server(s), %d sub-agent(s)\n", len(m.MCPServers), len(m.Agents))
 
