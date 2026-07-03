@@ -16,10 +16,26 @@ import (
 // and its Dir set to that directory so the load_skill tool can resolve bundled
 // scripts and references. Once a directory is recognized as a skill its subtree
 // is pruned — a skill's own references/examples cannot define further skills.
-// Dotted directories (e.g. .git) and nested symlinks are skipped, and a
-// SKILL.md sitting directly at root is not itself a skill. A missing or
+// A SKILL.md sitting directly at root makes the whole root a single skill (e.g.
+// a bare fetched SKILL.md installed via InstallDir), pruning its subtree.
+// Dotted directories (e.g. .git) and nested symlinks are skipped. A missing or
 // unreadable directory yields no skills and no error.
 func HarvestPack(root string) ([]types.Skill, error) {
+	// A SKILL.md at the pack root is itself the (single) skill: harvest it and
+	// prune, so a directory whose root is one skill installs cleanly.
+	if data, err := os.ReadFile(filepath.Join(root, "SKILL.md")); err == nil {
+		name, desc, tools, body := plugin.ParseSkillMarkdown(data)
+		if name == "" {
+			name = filepath.Base(root)
+		}
+		return []types.Skill{{
+			Name:         name,
+			Description:  desc,
+			Instructions: body,
+			Tools:        tools,
+			Dir:          root,
+		}}, nil
+	}
 	var out []types.Skill
 	var walk func(dir string)
 	walk = func(dir string) {
