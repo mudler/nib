@@ -11,13 +11,22 @@ import (
 )
 
 // HarvestPack walks a skill-pack root and returns every contributed skill.
-// Discovery is recursive: any directory containing a SKILL.md is a skill, its
+// Discovery is recursive: any subdirectory containing a SKILL.md is a skill, its
 // Name taken from the file's frontmatter (falling back to the directory name)
 // and its Dir set to that directory so the load_skill tool can resolve bundled
 // scripts and references. Once a directory is recognized as a skill its subtree
 // is pruned — a skill's own references/examples cannot define further skills.
-// Dotted directories (e.g. .git) and nested symlinks are skipped, and a
-// SKILL.md sitting directly at root is not itself a skill. A missing or
+//
+// Precedence when the root itself holds a SKILL.md: subdirectory skills win. If
+// the recursive walk finds ≥1 skill, those are returned and a root SKILL.md is
+// treated as a pack overview and ignored — so a multi-skill pack that ships an
+// overview SKILL.md at its root still contributes its real subdirectory skills.
+// Only when the walk yields ZERO skills AND a root SKILL.md exists is the root
+// itself the single skill (Name from its frontmatter, falling back to
+// filepath.Base(root), Dir=root) — this supports a bare fetched SKILL.md / the
+// agentskills.io single-file form installed via InstallDir.
+//
+// Dotted directories (e.g. .git) and nested symlinks are skipped. A missing or
 // unreadable directory yields no skills and no error.
 func HarvestPack(root string) ([]types.Skill, error) {
 	var out []types.Skill
@@ -54,6 +63,26 @@ func HarvestPack(root string) ([]types.Skill, error) {
 		}
 	}
 	walk(root)
+	if len(out) > 0 {
+		// Subdirectory skills win: a root SKILL.md is only an overview here.
+		return out, nil
+	}
+
+	// Fallback: no subdirectory skills, so a SKILL.md at the pack root is itself
+	// the single skill — supports a bare fetched SKILL.md installed cleanly.
+	if data, err := os.ReadFile(filepath.Join(root, "SKILL.md")); err == nil {
+		name, desc, tools, body := plugin.ParseSkillMarkdown(data)
+		if name == "" {
+			name = filepath.Base(root)
+		}
+		return []types.Skill{{
+			Name:         name,
+			Description:  desc,
+			Instructions: body,
+			Tools:        tools,
+			Dir:          root,
+		}}, nil
+	}
 	return out, nil
 }
 

@@ -4,9 +4,13 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 
+	"github.com/mudler/nib/extsource"
 	"github.com/mudler/nib/plugin"
 	"github.com/mudler/nib/skill"
+	"github.com/mudler/nib/types"
 )
 
 // RunSkillCommand dispatches `nib skill <sub> ...` and returns an exit code.
@@ -71,8 +75,20 @@ func parseSkillInstallArgs(args []string) (src, ref string, yes, link bool, err 
 func skillInstall(mgr *skill.Manager, args []string) int {
 	src, ref, yes, link, err := parseSkillInstallArgs(args)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "usage: nib skill install [--ref REF] [--link] [--yes] <git-url|local-path>")
+		fmt.Fprintln(os.Stderr, "usage: nib skill install [--ref REF] [--link] [--yes] <git-url|local-path|zip|url>")
 		return 1
+	}
+
+	// A .zip archive or a bare SKILL.md URL is imported locally; git URLs and
+	// local dirs fall through to mgr.Install. --link always uses mgr.Install.
+	if !link {
+		if name, skills, handled, ierr := skillLocalImport(mgr, src); handled {
+			if ierr != nil {
+				fmt.Fprintf(os.Stderr, "install failed: %v\n", ierr)
+				return 1
+			}
+			return reportAndMaybeEnable(mgr, name, skills, "Installed", yes)
+		}
 	}
 
 	name, skills, err := mgr.Install(src, ref, link)
@@ -85,6 +101,14 @@ func skillInstall(mgr *skill.Manager, args []string) int {
 	if link {
 		how = "Linked"
 	}
+	return reportAndMaybeEnable(mgr, name, skills, how, yes)
+}
+
+// reportAndMaybeEnable prints the install summary, then either enables the pack
+// (on --yes or an interactive confirm) or leaves it disabled. It returns the
+// process exit code. Imported packs always land disabled; this is the only
+// enable path.
+func reportAndMaybeEnable(mgr *skill.Manager, name string, skills []types.Skill, how string, yes bool) int {
 	fmt.Printf("%s skill pack %q — %d skill(s):\n", how, name, len(skills))
 	for _, s := range skills {
 		fmt.Printf("  - %s: %s\n", s.Name, s.Description)
@@ -100,6 +124,53 @@ func skillInstall(mgr *skill.Manager, args []string) int {
 	}
 	fmt.Printf("Skill pack %q installed but left disabled. Enable later: nib skill enable %s\n", name, name)
 	return 0
+}
+
+// skillLocalImport handles the non-git install sources: a .zip archive and a
+// bare SKILL.md URL. It returns handled=false for everything else (git URLs,
+// local dirs) so the caller falls through to mgr.Install. The pack name derives
+// from the archive/URL basename.
+func skillLocalImport(mgr *skill.Manager, src string) (string, []types.Skill, bool, error) {
+	switch {
+	case strings.HasSuffix(strings.ToLower(src), ".zip"):
+		tmp, err := os.MkdirTemp("", "nib-zip-")
+		if err != nil {
+			return "", nil, true, err
+		}
+		defer os.RemoveAll(tmp)
+		if err := extsource.ExtractZip(src, tmp); err != nil {
+			return "", nil, true, err
+		}
+		name := importName(src, ".zip")
+		n, sk, err := mgr.InstallDir(tmp, name, src)
+		return n, sk, true, err
+	case isSkillMdURL(src):
+		tmp, err := os.MkdirTemp("", "nib-url-")
+		if err != nil {
+			return "", nil, true, err
+		}
+		defer os.RemoveAll(tmp)
+		if err := extsource.FetchSKILLURL(src, tmp); err != nil {
+			return "", nil, true, err
+		}
+		name := importName(strings.TrimSuffix(src, "/SKILL.md"), "")
+		n, sk, err := mgr.InstallDir(tmp, name, src)
+		return n, sk, true, err
+	default:
+		return "", nil, false, nil
+	}
+}
+
+// isSkillMdURL reports whether src is an http(s) URL pointing at a SKILL.md.
+func isSkillMdURL(src string) bool {
+	return (strings.HasPrefix(src, "http://") || strings.HasPrefix(src, "https://")) &&
+		strings.HasSuffix(src, "/SKILL.md")
+}
+
+// importName derives a pack name from a zip/URL basename minus suffix.
+func importName(src, suffix string) string {
+	base := filepath.Base(strings.TrimSuffix(src, suffix))
+	return strings.TrimSuffix(base, ".zip")
 }
 
 func skillList(mgr *skill.Manager) int {

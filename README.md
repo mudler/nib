@@ -64,8 +64,8 @@ Think of it as the **`fzf` for LLMs**: portable, keyboard-driven, composable, an
 - **Two modes** — a polished TUI, or a plain `--cli` mode for pipes and scripts.
 - **Tool execution with approval** — the AI proposes commands; you approve, deny, edit, or trust for the session.
 - **Sub-agents & background jobs** — delegate to typed sub-agents; background them (`Ctrl+B`) and watch the jobs footer (`Ctrl+J`).
-- **Plugins** — `nib plugin install <git-url>`; six contribution types; Claude-Code-plugin compatible.
-- **Skills** — `nib skill install <git-url>`; progressive-disclosure skill packs loaded on demand.
+- **Plugins** — `nib plugin install <git-url|local-path|zip>`; six contribution types; Claude-Code-plugin compatible.
+- **Skills** — `nib skill install <git-url|local-path|zip|url>`; progressive-disclosure skill packs loaded on demand.
 - **MCP protocol** — bring any external tool server.
 - **tmux-native** — seamless splits and popups.
 - **Multi-shell** — zsh, bash, and fish.
@@ -175,15 +175,16 @@ A **plugin** is a single installable unit — a git repo (or local dir) with a
 | `hooks` | shell commands bound to lifecycle events (e.g. `SessionStart`, `PreToolUse`) |
 
 ```bash
-nib plugin install <git-url|local-path>   # [--ref <tag|branch>] [--yes]
+nib plugin install <git-url|local-path|zip>   # [--ref <tag|branch>] [--yes]
 nib plugin list
 nib plugin enable|disable <name>
 nib plugin update|remove <name>
 ```
 
-Install prints a summary of what the plugin contributes and asks for confirmation
-(`--yes` to skip). Plugins install **disabled** by default; a disabled plugin contributes
-nothing, and every tool call still passes the approval gate at runtime.
+The source can be a git URL, a local directory, or a **`.zip` archive** (extracted with
+zip-slip protection). Install prints a summary of what the plugin contributes and asks for
+confirmation (`--yes` to skip). Plugins install **disabled** by default; a disabled plugin
+contributes nothing, and every tool call still passes the approval gate at runtime.
 
 A minimal `nib-plugin.yaml`:
 
@@ -218,18 +219,21 @@ A **skill pack** is a git repo (or local dir) containing a `skills/<name>/SKILL.
 collection — for example [`obra/superpowers`](https://github.com/obra/superpowers). nib
 harvests every skill, indexes it (name + description) in the system prompt, and the agent
 pulls in a skill's full instructions on demand via the `load_skill` tool — or you inject one
-eagerly for the session with `/skill <name>`.
+eagerly for the session with `/skill <name>`. A single `SKILL.md` at the pack root is treated
+as a one-skill pack (the [agentskills.io](https://agentskills.io) single-file form).
 
 ```bash
-nib skill install <git-url|local-path>    # [--ref <tag|branch>] [--yes]
+nib skill install <git-url|local-path|zip|url>   # [--ref <tag|branch>] [--yes] [--link]
 nib skill list
 nib skill enable|disable <name>
 nib skill update|remove <name>
 ```
 
-Like plugins, skill packs install **disabled**; enable the ones you want with
-`nib skill enable <name>`. Skill packs carry their bundled files, so a skill can `Read` or
-run scripts from its own directory at runtime.
+The source can be a git URL, a local directory, a **`.zip` archive** (extracted with
+zip-slip protection), or a **URL to a bare `SKILL.md`** (the agentskills.io well-known form,
+e.g. `https://host/.well-known/skills/<name>/SKILL.md`). Like plugins, skill packs install
+**disabled**; enable the ones you want with `nib skill enable <name>`. Skill packs carry
+their bundled files, so a skill can `Read` or run scripts from its own directory at runtime.
 
 ## Agent over MCP (`nib mcp`)
 

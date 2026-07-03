@@ -72,14 +72,25 @@ func (mgr *Manager) Install(src, ref string, link bool) (string, []types.Skill, 
 		return "", nil, fmt.Errorf("git clone: %w", err)
 	}
 
+	name, skills, err := mgr.place(tmp, name, src, ref)
+	if err != nil {
+		return "", nil, err
+	}
+	cleanup = false
+	return name, skills, nil
+}
+
+// place finalizes a populated temp dir tmp into skills/<name>: it harvests the
+// pack, refuses an empty pack or a name collision, moves it into place, and
+// records it DISABLED. tmp must already live under SkillsDir(mgr.baseDir).
+func (mgr *Manager) place(tmp, name, sourceURL, ref string) (string, []types.Skill, error) {
 	skills, err := HarvestPack(tmp)
 	if err != nil {
 		return "", nil, err
 	}
 	if len(skills) == 0 {
-		return "", nil, fmt.Errorf("no SKILL.md found under %s (did you mean `nib plugin install`?)", src)
+		return "", nil, fmt.Errorf("no SKILL.md found under %s (did you mean `nib plugin install`?)", sourceURL)
 	}
-
 	reg, err := LoadRegistry(mgr.baseDir)
 	if err != nil {
 		return "", nil, err
@@ -87,27 +98,53 @@ func (mgr *Manager) Install(src, ref string, link bool) (string, []types.Skill, 
 	if reg.Find(name) != nil {
 		return "", nil, fmt.Errorf("skill pack %q already installed (use `nib skill update %s` or `nib skill remove %s`)", name, name, name)
 	}
-
-	dest := filepath.Join(skillsDir, name)
+	dest := filepath.Join(SkillsDir(mgr.baseDir), name)
 	if err := os.RemoveAll(dest); err != nil {
 		return "", nil, err
 	}
 	if err := os.Rename(tmp, dest); err != nil {
 		return "", nil, err
 	}
-	cleanup = false
-
-	reg.Upsert(Entry{Name: name, SourceURL: src, Ref: ref, Enabled: false})
+	reg.Upsert(Entry{Name: name, SourceURL: sourceURL, Ref: ref, Enabled: false})
 	if err := reg.Save(); err != nil {
 		return "", nil, err
 	}
-
-	// Re-harvest from the final location so returned Dir paths are correct.
-	// The discarded error is safe: this same content was harvested successfully
-	// moments earlier from the temp dir; we re-harvest only to get Dir paths
-	// rooted at the final location.
 	final, _ := HarvestPack(dest)
 	return name, final, nil
+}
+
+// InstallDir installs an already-prepared local skill directory (e.g. an
+// unzipped archive or a fetched SKILL.md) as pack <name>, DISABLED. Unlike
+// Install it does no git/link handling: dir is copied verbatim. sourceURL is
+// recorded as the pack's registry provenance (the original .zip path or
+// SKILL.md URL) — not dir, which is a throwaway extraction temp dir.
+func (mgr *Manager) InstallDir(dir, name, sourceURL string) (string, []types.Skill, error) {
+	if !validPackName(name) {
+		return "", nil, fmt.Errorf("invalid pack name %q", name)
+	}
+	skillsDir := SkillsDir(mgr.baseDir)
+	if err := os.MkdirAll(skillsDir, 0o755); err != nil {
+		return "", nil, err
+	}
+	tmp, err := os.MkdirTemp(skillsDir, ".tmp-")
+	if err != nil {
+		return "", nil, err
+	}
+	cleanup := true
+	defer func() {
+		if cleanup {
+			os.RemoveAll(tmp)
+		}
+	}()
+	if err := vcs.CopyDir(dir, tmp); err != nil {
+		return "", nil, fmt.Errorf("copy skill dir: %w", err)
+	}
+	name, skills, err := mgr.place(tmp, name, sourceURL, "")
+	if err != nil {
+		return "", nil, err
+	}
+	cleanup = false
+	return name, skills, nil
 }
 
 // installLink symlinks an existing local directory into the skills dir instead

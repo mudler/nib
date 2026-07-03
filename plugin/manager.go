@@ -42,29 +42,67 @@ func (mgr *Manager) Install(url, ref, nibVersion string) (Manifest, error) {
 	} else if err := vcs.Clone(url, ref, tmp); err != nil {
 		return Manifest{}, fmt.Errorf("git clone: %w", err)
 	}
+	m, err := mgr.place(tmp, url, ref, nibVersion)
+	if err != nil {
+		return Manifest{}, err
+	}
+	cleanup = false
+	return m, nil
+}
+
+// place finalizes a populated temp dir tmp into plugins/<manifest name>: it
+// validates the manifest, moves the dir into place, and records it DISABLED.
+func (mgr *Manager) place(tmp, sourceURL, ref, nibVersion string) (Manifest, error) {
 	m, err := LoadManifest(tmp, nibVersion)
 	if err != nil {
 		return Manifest{}, err
 	}
-
-	dest := filepath.Join(pluginsDir, m.Name)
+	dest := filepath.Join(PluginsDir(mgr.baseDir), m.Name)
 	if err := os.RemoveAll(dest); err != nil {
 		return Manifest{}, err
 	}
 	if err := os.Rename(tmp, dest); err != nil {
 		return Manifest{}, err
 	}
-	cleanup = false
 	m.root = dest
-
 	reg, err := LoadRegistry(mgr.baseDir)
 	if err != nil {
 		return Manifest{}, err
 	}
-	reg.Upsert(Entry{Name: m.Name, SourceURL: url, Ref: ref, Enabled: false})
+	reg.Upsert(Entry{Name: m.Name, SourceURL: sourceURL, Ref: ref, Enabled: false})
 	if err := reg.Save(); err != nil {
 		return Manifest{}, err
 	}
+	return m, nil
+}
+
+// InstallDir installs an already-prepared local plugin directory (e.g. an
+// unzipped archive) DISABLED. The plugin name comes from its manifest. sourceURL
+// is recorded as the plugin's registry provenance (the original .zip path) — not
+// dir, which is a throwaway extraction temp dir.
+func (mgr *Manager) InstallDir(dir, nibVersion, sourceURL string) (Manifest, error) {
+	pluginsDir := PluginsDir(mgr.baseDir)
+	if err := os.MkdirAll(pluginsDir, 0o755); err != nil {
+		return Manifest{}, err
+	}
+	tmp, err := os.MkdirTemp(pluginsDir, ".tmp-")
+	if err != nil {
+		return Manifest{}, err
+	}
+	cleanup := true
+	defer func() {
+		if cleanup {
+			os.RemoveAll(tmp)
+		}
+	}()
+	if err := vcs.CopyDir(dir, tmp); err != nil {
+		return Manifest{}, fmt.Errorf("copy plugin dir: %w", err)
+	}
+	m, err := mgr.place(tmp, sourceURL, "", nibVersion)
+	if err != nil {
+		return Manifest{}, err
+	}
+	cleanup = false
 	return m, nil
 }
 
