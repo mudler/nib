@@ -6,9 +6,11 @@ import (
 	"archive/zip"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // ExtractZip unzips zipPath into the existing directory destDir. It rejects any
@@ -49,6 +51,33 @@ func ExtractZip(zipPath, destDir string) error {
 		if err := writeZipFile(f, target); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// FetchSKILLURL downloads a single SKILL.md from url into destDir/SKILL.md. It
+// is the agentskills.io "bare skill file" form; the caller installs destDir as
+// a one-skill pack.
+func FetchSKILLURL(url, destDir string) error {
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Get(url)
+	if err != nil {
+		return fmt.Errorf("fetch %s: %w", url, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("fetch %s: unexpected status %d", url, resp.StatusCode)
+	}
+	if err := os.MkdirAll(destDir, 0o755); err != nil {
+		return err
+	}
+	out, err := os.Create(filepath.Join(destDir, "SKILL.md"))
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+	if _, err := io.Copy(out, io.LimitReader(resp.Body, 5<<20)); err != nil {
+		return err
 	}
 	return nil
 }
