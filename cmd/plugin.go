@@ -2,11 +2,14 @@ package cmd
 
 import (
 	"bufio"
+	"context"
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
+	"github.com/mudler/nib/catalog"
 	"github.com/mudler/nib/extsource"
 	"github.com/mudler/nib/internal"
 	"github.com/mudler/nib/plugin"
@@ -30,6 +33,16 @@ func RunPluginCommand(args []string) int {
 	switch args[0] {
 	case "install":
 		return pluginInstall(mgr, args[1:])
+	case "browse":
+		return runBrowse(catalogBaseDir(), catalog.KindPlugin)
+	case "search":
+		if len(args) < 2 {
+			fmt.Fprintln(os.Stderr, "usage: nib plugin search <query>")
+			return 1
+		}
+		return runSearch(catalogBaseDir(), catalog.KindPlugin, strings.Join(args[1:], " "))
+	case "source":
+		return runSource(catalogBaseDir(), args[1:])
 	case "list":
 		return pluginList(mgr)
 	case "update":
@@ -48,7 +61,7 @@ func RunPluginCommand(args []string) int {
 }
 
 func pluginUsage() {
-	fmt.Fprintln(os.Stderr, "usage: nib plugin <install|list|update|enable|disable|remove> ...")
+	fmt.Fprintln(os.Stderr, "usage: nib plugin <install|browse|search|source|list|update|enable|disable|remove> ...")
 }
 
 // parseInstallArgs parses `[--ref REF] [--yes] <git-url>` with flags allowed
@@ -80,7 +93,7 @@ func parseInstallArgs(args []string) (url, ref string, yes bool, err error) {
 func pluginInstall(mgr *plugin.Manager, args []string) int {
 	src, ref, yes, err := parseInstallArgs(args)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "usage: nib plugin install [--ref REF] [--yes] <git-url|local-path|zip>")
+		fmt.Fprintln(os.Stderr, "usage: nib plugin install [--ref REF] [--yes] <git-url|local-path|zip|catalog-name>")
 		return 1
 	}
 
@@ -92,6 +105,13 @@ func pluginInstall(mgr *plugin.Manager, args []string) int {
 			return 1
 		}
 		return reportAndMaybeEnablePlugin(mgr, m, yes)
+	}
+
+	// A bare name that is neither a git URL/remote nor an existing local dir
+	// (and not the .zip handled above) is treated as a catalog plugin to
+	// resolve and install DISABLED.
+	if !looksLikeGitSource(src) {
+		return pluginCatalogInstall(mgr, catalogBaseDir(), src, yes)
 	}
 
 	m, err := mgr.Install(src, ref, internal.Version)
@@ -118,6 +138,34 @@ func pluginLocalImport(mgr *plugin.Manager, src, nibVersion string) (plugin.Mani
 	}
 	m, err := mgr.InstallDir(tmp, nibVersion, src)
 	return m, true, err
+}
+
+// pluginCatalogInstall resolves a catalog plugin Meta by name, installs it
+// (DISABLED, like every install), reloads its manifest, and runs the shared
+// plugin report/consent tail. Symmetric to skillCatalogInstall.
+func pluginCatalogInstall(mgr *plugin.Manager, baseDir, name string, yes bool) int {
+	metas, err := mergeCatalog(baseDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "install failed: %v\n", err)
+		return 1
+	}
+	m, err := findCatalogMeta(metas, catalog.KindPlugin, name)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "install failed: %v\n", err)
+		return 1
+	}
+	installed, err := catalog.NewClient().Install(context.Background(), m, baseDir, internal.Version)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "install failed: %v\n", err)
+		return 1
+	}
+	// Install returns only the name; reload the manifest for the summary/consent tail.
+	mani, err := plugin.LoadManifest(filepath.Join(plugin.PluginsDir(baseDir), installed), internal.Version)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "install failed: %v\n", err)
+		return 1
+	}
+	return reportAndMaybeEnablePlugin(mgr, mani, yes)
 }
 
 // reportAndMaybeEnablePlugin prints the install summary, then either enables the
