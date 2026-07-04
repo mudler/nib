@@ -1,12 +1,14 @@
 package cmd
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 
+	"github.com/mudler/nib/catalog"
 	"github.com/mudler/nib/extsource"
 	"github.com/mudler/nib/plugin"
 	"github.com/mudler/nib/skill"
@@ -23,6 +25,16 @@ func RunSkillCommand(args []string) int {
 	switch args[0] {
 	case "install":
 		return skillInstall(mgr, args[1:])
+	case "browse":
+		return runBrowse(catalogBaseDir(), catalog.KindSkill)
+	case "search":
+		if len(args) < 2 {
+			fmt.Fprintln(os.Stderr, "usage: nib skill search <query>")
+			return 1
+		}
+		return runSearch(catalogBaseDir(), catalog.KindSkill, strings.Join(args[1:], " "))
+	case "source":
+		return runSource(catalogBaseDir(), args[1:])
 	case "list":
 		return skillList(mgr)
 	case "update":
@@ -41,7 +53,7 @@ func RunSkillCommand(args []string) int {
 }
 
 func skillUsage() {
-	fmt.Fprintln(os.Stderr, "usage: nib skill <install|list|update|enable|disable|remove> ...")
+	fmt.Fprintln(os.Stderr, "usage: nib skill <install|browse|search|source|list|update|enable|disable|remove> ...")
 }
 
 // parseSkillInstallArgs parses `[--ref REF] [--link] [--yes] <git-url|local-path>`
@@ -75,7 +87,7 @@ func parseSkillInstallArgs(args []string) (src, ref string, yes, link bool, err 
 func skillInstall(mgr *skill.Manager, args []string) int {
 	src, ref, yes, link, err := parseSkillInstallArgs(args)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "usage: nib skill install [--ref REF] [--link] [--yes] <git-url|local-path|zip|url>")
+		fmt.Fprintln(os.Stderr, "usage: nib skill install [--ref REF] [--link] [--yes] <git-url|local-path|zip|url|catalog-name>")
 		return 1
 	}
 
@@ -91,6 +103,12 @@ func skillInstall(mgr *skill.Manager, args []string) int {
 		}
 	}
 
+	// A bare name that is neither a git URL/dir nor a handled local import
+	// (zip/SKILL.md URL) is treated as a catalog entry to resolve and install.
+	if !link && !looksLikeGitSource(src) {
+		return skillCatalogInstall(mgr, catalogBaseDir(), src, yes)
+	}
+
 	name, skills, err := mgr.Install(src, ref, link)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "install failed: %v\n", err)
@@ -102,6 +120,40 @@ func skillInstall(mgr *skill.Manager, args []string) int {
 		how = "Linked"
 	}
 	return reportAndMaybeEnable(mgr, name, skills, how, yes)
+}
+
+// looksLikeGitSource reports whether src is a git URL, an scp-style git remote,
+// or an existing local directory — i.e. a direct install source rather than a
+// bare catalog name. `nib skill install <arg>` treats a non-locator arg as a
+// catalog name to resolve.
+func looksLikeGitSource(src string) bool {
+	if strings.Contains(src, "://") || strings.HasPrefix(src, "git@") {
+		return true
+	}
+	fi, err := os.Stat(src)
+	return err == nil && fi.IsDir()
+}
+
+// skillCatalogInstall resolves a catalog skill Meta by name, installs it
+// (DISABLED, like every install), and runs the shared report/consent tail.
+func skillCatalogInstall(mgr *skill.Manager, baseDir, name string, yes bool) int {
+	metas, err := mergeCatalog(baseDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "install failed: %v\n", err)
+		return 1
+	}
+	m, err := findCatalogMeta(metas, catalog.KindSkill, name)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "install failed: %v\n", err)
+		return 1
+	}
+	installed, err := catalog.NewClient().Install(context.Background(), m, baseDir, "")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "install failed: %v\n", err)
+		return 1
+	}
+	skills, _ := mgr.Skills(installed)
+	return reportAndMaybeEnable(mgr, installed, skills, "Installed", yes)
 }
 
 // reportAndMaybeEnable prints the install summary, then either enables the pack
