@@ -102,7 +102,26 @@ func (c *Configurator) ListSkills() ([]SkillInfo, error) {
 }
 
 // EffectiveConfig recomputes the merged config (same as startup) so callers can
-// re-wire a live session after a change.
+// re-wire a live session after a change. Disabled MCP servers are dropped here
+// so they never start a transport; ListMCPServers still reports them for the UI.
 func (c *Configurator) EffectiveConfig() (types.Config, error) {
-	return config.Load(), nil
+	cfg := config.Load()
+	cfg.MCPServers = enabledMCPServers(cfg.MCPServers)
+	return cfg, nil
+}
+
+// enabledMCPServers returns a copy of servers without entries whose Disabled
+// flag is set. nil/empty input is returned unchanged; the input is never mutated.
+func enabledMCPServers(servers map[string]types.MCPServer) map[string]types.MCPServer {
+	if len(servers) == 0 {
+		return servers
+	}
+	out := make(map[string]types.MCPServer, len(servers))
+	for name, s := range servers {
+		if s.Disabled {
+			continue
+		}
+		out[name] = s
+	}
+	return out
 }
