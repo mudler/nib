@@ -353,7 +353,7 @@ func TestEditRequiresRead(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	fs := newFileSystem()
+	fs := newFileSystem("")
 	ctx := context.Background()
 
 	// Editing before reading must be rejected and must not modify the file.
@@ -403,7 +403,7 @@ func TestEditAfterWrite(t *testing.T) {
 	tmpDir := t.TempDir()
 	tmpFile := filepath.Join(tmpDir, "new.txt")
 
-	fs := newFileSystem()
+	fs := newFileSystem("")
 	ctx := context.Background()
 
 	if _, wout, err := fs.write(ctx, &mcp.CallToolRequest{}, writeFileInput{Path: tmpFile, Content: "foo bar"}); err != nil || !wout.Success {
@@ -427,7 +427,7 @@ func TestEditReadPathNormalization(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	fs := newFileSystem()
+	fs := newFileSystem("")
 	ctx := context.Background()
 
 	// Read via a path containing a redundant "." segment.
@@ -698,7 +698,7 @@ func TestStartFileSystemMCPServer(t *testing.T) {
 
 	serverErrChan := make(chan error, 1)
 	go func() {
-		err := StartFileSystemMCPServer(ctx, serverTransport)
+		err := StartFileSystemMCPServer(ctx, serverTransport, "")
 		serverErrChan <- err
 	}()
 
@@ -747,5 +747,23 @@ func TestStartFileSystemMCPServer(t *testing.T) {
 		// Server stopped, expected
 	case <-time.After(time.Second):
 		t.Error("server did not stop after context cancellation")
+	}
+}
+
+func TestFileSystemResolvesRelativeAgainstRoot(t *testing.T) {
+	root := t.TempDir()
+	fs := newFileSystem(root)
+	got := fs.resolve("notes.txt")
+	want := filepath.Join(root, "notes.txt")
+	if got != want {
+		t.Fatalf("resolve(rel) = %q, want %q", got, want)
+	}
+	abs := filepath.Join(t.TempDir(), "other.txt")
+	if fs.resolve(abs) != abs {
+		t.Fatalf("resolve(abs) must be unchanged, got %q", fs.resolve(abs))
+	}
+	// Empty root preserves the raw path (legacy cwd behavior).
+	if newFileSystem("").resolve("x.txt") != "x.txt" {
+		t.Fatalf("empty root must not rewrite paths")
 	}
 }

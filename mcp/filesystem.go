@@ -20,13 +20,27 @@ import (
 // it or by writing it. This prevents blind edits against files the agent has
 // never inspected.
 type fileSystem struct {
+	// root, when non-empty, is the working directory that relative paths are
+	// rooted at. Empty means paths are used verbatim (legacy process-cwd
+	// behavior).
+	root string
 	mu   sync.Mutex
 	seen map[string]bool
 }
 
-// newFileSystem creates a filesystem handler with an empty seen-file set.
-func newFileSystem() *fileSystem {
-	return &fileSystem{seen: make(map[string]bool)}
+// newFileSystem creates a filesystem handler with an empty seen-file set,
+// rooted at root. An empty root preserves the legacy process-cwd behavior.
+func newFileSystem(root string) *fileSystem {
+	return &fileSystem{root: root, seen: make(map[string]bool)}
+}
+
+// resolve roots a relative path at the configured working dir. Absolute paths
+// and the empty-root case are returned unchanged.
+func (f *fileSystem) resolve(path string) string {
+	if f.root == "" || filepath.IsAbs(path) {
+		return path
+	}
+	return filepath.Join(f.root, path)
 }
 
 // pathKey normalizes a path so the same file is recognized regardless of how
@@ -58,6 +72,7 @@ func (f *fileSystem) read(ctx context.Context, req *mcp.CallToolRequest, input r
 	readFileOutput,
 	error,
 ) {
+	input.Path = f.resolve(input.Path)
 	res, out, err := readFile(ctx, req, input)
 	if out.Success {
 		f.markSeen(input.Path)
@@ -72,6 +87,7 @@ func (f *fileSystem) write(ctx context.Context, req *mcp.CallToolRequest, input 
 	writeFileOutput,
 	error,
 ) {
+	input.Path = f.resolve(input.Path)
 	res, out, err := writeFile(ctx, req, input)
 	if out.Success {
 		f.markSeen(input.Path)
@@ -86,6 +102,7 @@ func (f *fileSystem) edit(ctx context.Context, req *mcp.CallToolRequest, input e
 	editFileOutput,
 	error,
 ) {
+	input.Path = f.resolve(input.Path)
 	if !f.hasSeen(input.Path) {
 		return nil, editFileOutput{
 			Success: false,
@@ -135,6 +152,28 @@ type editFileOutput struct {
 	Replacements int    `json:"replacements" jsonschema:"number of replacements made"`
 	Success      bool   `json:"success" jsonschema:"whether operation was successful"`
 	Error        string `json:"error,omitempty" jsonschema:"error message if failed"`
+}
+
+// glob roots the base path at the working dir before delegating to globFiles.
+// resolve("") returns "" when root is empty (globFiles then defaults to "."),
+// and returns the root itself when a root is configured.
+func (f *fileSystem) glob(ctx context.Context, req *mcp.CallToolRequest, input globFilesInput) (
+	*mcp.CallToolResult,
+	globFilesOutput,
+	error,
+) {
+	input.Path = f.resolve(input.Path)
+	return globFiles(ctx, req, input)
+}
+
+// grep roots the base path at the working dir before delegating to grepFiles.
+func (f *fileSystem) grep(ctx context.Context, req *mcp.CallToolRequest, input grepFilesInput) (
+	*mcp.CallToolResult,
+	grepFilesOutput,
+	error,
+) {
+	input.Path = f.resolve(input.Path)
+	return grepFiles(ctx, req, input)
 }
 
 // Input type for glob operation
@@ -540,8 +579,10 @@ func grepFiles(ctx context.Context, req *mcp.CallToolRequest, input grepFilesInp
 	}, nil
 }
 
-// StartFileSystemMCPServer starts the filesystem MCP server
-func StartFileSystemMCPServer(ctx context.Context, transport mcp.Transport) error {
+// StartFileSystemMCPServer starts the filesystem MCP server. When root is
+// non-empty, relative paths are rooted at it; an empty root preserves the
+// legacy process-cwd behavior.
+func StartFileSystemMCPServer(ctx context.Context, transport mcp.Transport, root string) error {
 	// Create MCP server for filesystem operations
 	server := mcp.NewServer(&mcp.Implementation{
 		Name:    "filesystem",
@@ -549,7 +590,7 @@ func StartFileSystemMCPServer(ctx context.Context, transport mcp.Transport) erro
 	}, nil)
 
 	// Per-server state gating edits behind a prior read or write of the file.
-	fs := newFileSystem()
+	fs := newFileSystem(root)
 
 	// Add tool for reading files
 	mcp.AddTool(server, &mcp.Tool{
@@ -573,13 +614,13 @@ func StartFileSystemMCPServer(ctx context.Context, transport mcp.Transport) erro
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "glob",
 		Description: "Find files by glob pattern, sorted by modification time (newest first)",
-	}, globFiles)
+	}, fs.glob)
 
 	// Add tool for grep file search
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "grep",
 		Description: "Search files for regex pattern, returns up to 50 matches",
-	}, grepFiles)
+	}, fs.grep)
 
 	// Run the server
 	if err := server.Run(ctx, transport); err != nil {
