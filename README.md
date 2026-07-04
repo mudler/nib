@@ -64,8 +64,9 @@ Think of it as the **`fzf` for LLMs**: portable, keyboard-driven, composable, an
 - **Two modes** — a polished TUI, or a plain `--cli` mode for pipes and scripts.
 - **Tool execution with approval** — the AI proposes commands; you approve, deny, edit, or trust for the session.
 - **Sub-agents & background jobs** — delegate to typed sub-agents; background them (`Ctrl+B`) and watch the jobs footer (`Ctrl+J`).
-- **Plugins** — `nib plugin install <git-url|local-path|zip>`; six contribution types; Claude-Code-plugin compatible.
-- **Skills** — `nib skill install <git-url|local-path|zip|url>`; progressive-disclosure skill packs loaded on demand.
+- **Plugins** — `nib plugin install <git-url|local-path|zip|catalog-name>`; six contribution types; Claude-Code-plugin compatible.
+- **Skills** — `nib skill install <git-url|local-path|zip|url|catalog-name>`; progressive-disclosure skill packs loaded on demand.
+- **Catalog** — `nib skill browse` / `nib plugin browse` discover extensions from agentskills.io-compatible index sources; a starter catalog ships built in.
 - **MCP protocol** — bring any external tool server.
 - **tmux-native** — seamless splits and popups.
 - **Multi-shell** — zsh, bash, and fish.
@@ -175,16 +176,21 @@ A **plugin** is a single installable unit — a git repo (or local dir) with a
 | `hooks` | shell commands bound to lifecycle events (e.g. `SessionStart`, `PreToolUse`) |
 
 ```bash
-nib plugin install <git-url|local-path|zip>   # [--ref <tag|branch>] [--yes]
+nib plugin install <git-url|local-path|zip|catalog-name>   # [--ref <tag|branch>] [--yes]
+nib plugin browse                          # discover installable plugins from the catalog
+nib plugin search <query>
+nib plugin source <list|add URL|enable|disable|remove LABEL>
 nib plugin list
 nib plugin enable|disable <name>
 nib plugin update|remove <name>
 ```
 
-The source can be a git URL, a local directory, or a **`.zip` archive** (extracted with
-zip-slip protection). Install prints a summary of what the plugin contributes and asks for
-confirmation (`--yes` to skip). Plugins install **disabled** by default; a disabled plugin
-contributes nothing, and every tool call still passes the approval gate at runtime.
+The source can be a git URL, a local directory, a **`.zip` archive** (extracted with
+zip-slip protection), or a **catalog name** (`nib plugin browse` to discover them). Install
+prints a summary of what the plugin contributes and asks for confirmation (`--yes` to skip).
+Plugins install **disabled** by default; a disabled plugin contributes nothing, and every
+tool call still passes the approval gate at runtime. See **[Catalog](#catalog)** below for
+where `browse`/`search` pull from.
 
 A minimal `nib-plugin.yaml`:
 
@@ -223,17 +229,41 @@ eagerly for the session with `/skill <name>`. A single `SKILL.md` at the pack ro
 as a one-skill pack (the [agentskills.io](https://agentskills.io) single-file form).
 
 ```bash
-nib skill install <git-url|local-path|zip|url>   # [--ref <tag|branch>] [--yes] [--link]
+nib skill install <git-url|local-path|zip|url|catalog-name>  # [--ref REF] [--yes] [--link]
+nib skill browse                          # discover installable skills from the catalog
+nib skill search <query>
+nib skill source <list|add URL|enable|disable|remove LABEL>
 nib skill list
 nib skill enable|disable <name>
 nib skill update|remove <name>
 ```
 
 The source can be a git URL, a local directory, a **`.zip` archive** (extracted with
-zip-slip protection), or a **URL to a bare `SKILL.md`** (the agentskills.io well-known form,
-e.g. `https://host/.well-known/skills/<name>/SKILL.md`). Like plugins, skill packs install
-**disabled**; enable the ones you want with `nib skill enable <name>`. Skill packs carry
-their bundled files, so a skill can `Read` or run scripts from its own directory at runtime.
+zip-slip protection), a **URL to a bare `SKILL.md`** (the agentskills.io well-known form,
+e.g. `https://host/.well-known/skills/<name>/SKILL.md`), or a **catalog name**
+(`nib skill browse` to discover them). Like plugins, skill packs install **disabled**; enable
+the ones you want with `nib skill enable <name>`. Skill packs carry their bundled files, so a
+skill can `Read` or run scripts from its own directory at runtime.
+
+## Catalog
+
+`nib skill browse` / `nib plugin browse` discover installable extensions from a set of
+**catalog sources** — each an [agentskills.io](https://agentskills.io)-compatible
+`index.json` (a direct URL, a bare host probed at `/.well-known/skills/index.json`, or a
+GitHub repo resolved index-first with a tree-crawl fallback). A small starter catalog ships
+built into the binary, so `browse` works offline. Manage sources with `nib skill source`
+(shared with `nib plugin source` — one source list feeds both):
+
+```bash
+nib skill source list
+nib skill source add github.com/openclaw/agent-skills
+nib skill source disable <label>          # built-in sources can be disabled, not removed
+nib skill source remove <label>
+```
+
+Sources are resolved at runtime (nothing is crawled at build time), results are merged and
+deduped across sources, and a source that fails to fetch is skipped without failing the rest.
+Installing from the catalog lands the extension **disabled**, same as every other install.
 
 ## Agent over MCP (`nib mcp`)
 
