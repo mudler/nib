@@ -254,4 +254,9 @@ type MCPServer struct {
 
 	BearerToken string            `yaml:"token,omitempty"`   // remote only: sent as "Authorization: Bearer <token>"
 	Headers     map[string]string `yaml:"headers,omitempty"` // remote only: custom HTTP headers
+
+	// Disabled, when true, keeps the server in config (so the UI can list and
+	// re-enable it) but excludes it from EffectiveConfig, so it starts no
+	// transport. Absent (omitempty) reads as enabled — no migration needed.
+	Disabled bool `yaml:"disabled,omitempty"`
 }

@@ -18,14 +18,14 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-var mcpManageSubcommands = map[string]bool{"add": true, "list": true, "remove": true, "test": true}
+var mcpManageSubcommands = map[string]bool{"add": true, "list": true, "remove": true, "test": true, "enable": true, "disable": true}
 
 // IsMCPManageSubcommand reports whether `nib mcp <s>` is a management command
 // (as opposed to the server-serving forms: bare, --http, --stdio, --addr).
 func IsMCPManageSubcommand(s string) bool { return mcpManageSubcommands[s] }
 
 func mcpUsage() {
-	fmt.Fprintln(os.Stderr, "usage: nib mcp <add|list|remove|test> ...")
+	fmt.Fprintln(os.Stderr, "usage: nib mcp <add|list|remove|test|enable|disable> ...")
 }
 
 // RunMCPCommand dispatches `nib mcp <sub> ...` and returns an exit code.
@@ -44,6 +44,10 @@ func RunMCPCommand(args []string) int {
 		return mcpRemove(cfgr, args[1:])
 	case "test":
 		return mcpTest(cfgr, args[1:])
+	case "enable":
+		return mcpSetEnabled(cfgr, args[1:], true)
+	case "disable":
+		return mcpSetEnabled(cfgr, args[1:], false)
 	default:
 		fmt.Fprintf(os.Stderr, "unknown mcp command: %s\n", args[0])
 		mcpUsage()
@@ -150,6 +154,10 @@ func mcpList(cfgr *manage.Configurator) int {
 		return 0
 	}
 	for _, s := range servers {
+		dis := ""
+		if !s.Enabled {
+			dis = " (disabled)"
+		}
 		if s.URL != "" {
 			tr := s.Transport
 			if tr == "" {
@@ -159,11 +167,28 @@ func mcpList(cfgr *manage.Configurator) int {
 			if s.Authenticated {
 				suffix = " (authenticated)"
 			}
-			fmt.Printf("%-20s %s %s%s\n", s.Name, tr, s.URL, suffix)
+			fmt.Printf("%-20s %s %s%s%s\n", s.Name, tr, s.URL, suffix, dis)
 		} else {
-			fmt.Printf("%-20s %s\n", s.Name, strings.TrimSpace(s.Command+" "+strings.Join(s.Args, " ")))
+			fmt.Printf("%-20s %s%s\n", s.Name, strings.TrimSpace(s.Command+" "+strings.Join(s.Args, " ")), dis)
 		}
 	}
+	return 0
+}
+
+func mcpSetEnabled(cfgr *manage.Configurator, args []string, enabled bool) int {
+	if len(args) < 1 {
+		fmt.Fprintln(os.Stderr, "usage: nib mcp enable|disable <name>")
+		return 1
+	}
+	if err := cfgr.SetMCPServerEnabled(args[0], enabled); err != nil {
+		fmt.Fprintf(os.Stderr, "failed: %v\n", err)
+		return 1
+	}
+	state := "disabled"
+	if enabled {
+		state = "enabled"
+	}
+	fmt.Printf("MCP server %q %s.\n", args[0], state)
 	return 0
 }
 
