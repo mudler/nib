@@ -1,7 +1,10 @@
 package cmd
 
 import (
+	"io"
+	"os"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/mudler/nib/manage"
@@ -177,6 +180,77 @@ func TestMCPListShowsAuthenticatedMarker(t *testing.T) {
 	// (MCPServerInfo.Authenticated) is exercised above. A full stdout-capture
 	// test isn't warranted here — mcpList has no existing stdout tests either,
 	// consistent with the rest of this file.
+}
+
+func TestMCPSetEnabledTogglesAndErrors(t *testing.T) {
+	dir := t.TempDir()
+	cfgr := manage.New(dir, dir+"/config.yaml")
+	if err := cfgr.AddMCPServer("s", types.MCPServer{Command: "cmd"}); err != nil {
+		t.Fatalf("AddMCPServer: %v", err)
+	}
+	if code := mcpSetEnabled(cfgr, []string{"s"}, false); code != 0 {
+		t.Fatalf("disable exit=%d", code)
+	}
+	if got, _ := cfgr.GetMCPServer("s"); !got.Disabled {
+		t.Fatal("expected server disabled after disable")
+	}
+	if code := mcpSetEnabled(cfgr, []string{"s"}, true); code != 0 {
+		t.Fatalf("enable exit=%d", code)
+	}
+	if got, _ := cfgr.GetMCPServer("s"); got.Disabled {
+		t.Fatal("expected server enabled after enable")
+	}
+	if code := mcpSetEnabled(cfgr, nil, true); code == 0 {
+		t.Fatal("expected nonzero exit for missing name")
+	}
+	if code := mcpSetEnabled(cfgr, []string{"nope"}, false); code == 0 {
+		t.Fatal("expected nonzero exit for unknown server")
+	}
+}
+
+func TestMCPListShowsDisabledMarker(t *testing.T) {
+	dir := t.TempDir()
+	cfgr := manage.New(dir, dir+"/config.yaml")
+	if err := cfgr.AddMCPServer("on", types.MCPServer{URL: "https://a"}); err != nil {
+		t.Fatalf("AddMCPServer on: %v", err)
+	}
+	if err := cfgr.AddMCPServer("off", types.MCPServer{URL: "https://b"}); err != nil {
+		t.Fatalf("AddMCPServer off: %v", err)
+	}
+	if err := cfgr.SetMCPServerEnabled("off", false); err != nil {
+		t.Fatalf("SetMCPServerEnabled: %v", err)
+	}
+
+	// Capture mcpList's stdout so we can assert the per-line marker.
+	old := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	os.Stdout = w
+	code := mcpList(cfgr)
+	w.Close()
+	os.Stdout = old
+	if code != 0 {
+		t.Fatalf("mcpList exit=%d", code)
+	}
+	out, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatalf("ReadAll: %v", err)
+	}
+
+	for _, line := range strings.Split(strings.TrimRight(string(out), "\n"), "\n") {
+		switch {
+		case strings.HasPrefix(line, "off"):
+			if !strings.Contains(line, "(disabled)") {
+				t.Errorf("disabled server line missing marker: %q", line)
+			}
+		case strings.HasPrefix(line, "on"):
+			if strings.Contains(line, "(disabled)") {
+				t.Errorf("enabled server line should not have marker: %q", line)
+			}
+		}
+	}
 }
 
 func TestIsMCPManageSubcommand(t *testing.T) {
