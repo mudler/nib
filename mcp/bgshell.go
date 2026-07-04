@@ -115,9 +115,16 @@ type bgJobManager struct {
 	// job's wait goroutine. Used to push a completion notice into the live run's
 	// message-injection channel (cogito has no concept of shell jobs).
 	onDone func(*bgJob)
+
+	// dir, when non-empty, is the working directory launched commands run in
+	// (cmd.Dir). Empty means the process cwd (legacy behavior).
+	dir string
 }
 
-func newBgJobManager() *bgJobManager { return &bgJobManager{jobs: map[string]*bgJob{}} }
+func newBgJobManager() *bgJobManager { return newBgJobManagerInDir("") }
+func newBgJobManagerInDir(dir string) *bgJobManager {
+	return &bgJobManager{jobs: map[string]*bgJob{}, dir: dir}
+}
 
 // launch starts script under a context derived from parent (so the job survives
 // a single turn but is cancelled when the session/app shuts down). When
@@ -137,6 +144,9 @@ func (m *bgJobManager) launch(parent context.Context, script string, foreground 
 
 	shellExec, shellArgs := shellInvocation(script)
 	cmd := exec.CommandContext(ctx, shellExec, shellArgs...)
+	if m.dir != "" {
+		cmd.Dir = m.dir
+	}
 	cmd.Stdout = &j.stdout
 	cmd.Stderr = &j.stderr
 
@@ -296,6 +306,10 @@ type ShellJobs struct {
 
 // NewShellJobs creates an empty shared shell-job registry.
 func NewShellJobs() *ShellJobs { return &ShellJobs{mgr: newBgJobManager()} }
+
+// NewShellJobsInDir creates a shell-job registry whose commands run in dir
+// (cmd.Dir). An empty dir preserves the legacy process-cwd behavior.
+func NewShellJobsInDir(dir string) *ShellJobs { return &ShellJobs{mgr: newBgJobManagerInDir(dir)} }
 
 // ShellJobInfo is a UI-facing snapshot of a shell job.
 type ShellJobInfo struct {

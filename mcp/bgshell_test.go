@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -227,5 +228,26 @@ func TestLockedBufferTruncates(t *testing.T) {
 	}
 	if got := w.String(); !strings.Contains(got, "truncated") {
 		t.Fatal("oversized output should be marked truncated")
+	}
+}
+
+func TestLaunchRunsInConfiguredDir(t *testing.T) {
+	dir := t.TempDir()
+	sj := NewShellJobsInDir(dir)
+	j := sj.mgr.launch(context.Background(), "pwd", false)
+	<-j.doneCh
+	out := strings.TrimSpace(j.stdout.String())
+	// macOS /var symlinks to /private/var; compare resolved paths.
+	want, _ := filepath.EvalSymlinks(dir)
+	got, _ := filepath.EvalSymlinks(out)
+	if got != want {
+		t.Fatalf("pwd = %q, want %q", got, want)
+	}
+}
+
+func TestLaunchEmptyDirUsesProcessCwd(t *testing.T) {
+	sj := NewShellJobs() // no dir → current behavior
+	if sj.mgr.dir != "" {
+		t.Fatalf("default manager dir = %q, want empty", sj.mgr.dir)
 	}
 }

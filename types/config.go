@@ -149,6 +149,9 @@ type Config struct {
 	// and re-applied on every turn (see Session.SendMessage), so a seeded system
 	// message would duplicate it. Set at runtime, never from the YAML config.
 	InitialHistory []openai.ChatCompletionMessage `yaml:"-"`
+	// WorkingDir, when non-empty, is the directory host tools (bash, filesystem)
+	// operate in. Runtime-only; empty means the process cwd (legacy behavior).
+	WorkingDir string `yaml:"-"`
 }
 
 func (c *Config) GetPrompt() string {
