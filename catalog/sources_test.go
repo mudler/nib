@@ -48,6 +48,55 @@ func TestSourcesRoundTripAndDefaults(t *testing.T) {
 	}
 }
 
+func TestBuiltInSourcesCannotBeRemoved(t *testing.T) {
+	// Every built-in default is a fixed member of the set: removing it must
+	// fail, and because LoadSources re-seeds the defaults, the source must
+	// still be present (and untouched) after a failed remove + reload.
+	for _, label := range []string{"agentskills.io", "openclaw/agent-skills"} {
+		base := t.TempDir()
+		if err := RemoveSource(base, label); err == nil {
+			t.Fatalf("built-in source %q must not be removable", label)
+		}
+		// The failed remove must not have rewritten sources.yaml.
+		if _, err := os.Stat(filepath.Join(base, "sources.yaml")); !os.IsNotExist(err) {
+			t.Fatalf("rejected remove of %q must not write sources.yaml (err=%v)", label, err)
+		}
+		got, err := LoadSources(base)
+		if err != nil {
+			t.Fatalf("LoadSources: %v", err)
+		}
+		if s := findSource(got, label); s == nil {
+			t.Fatalf("built-in source %q vanished after rejected remove", label)
+		} else if !s.Enabled {
+			t.Fatalf("built-in source %q must stay enabled after rejected remove: %+v", label, s)
+		}
+	}
+
+	// Disable is the supported way to turn a built-in default off.
+	base := t.TempDir()
+	if err := SetSourceEnabled(base, "agentskills.io", false); err != nil {
+		t.Fatalf("SetSourceEnabled(agentskills.io, false): %v", err)
+	}
+	got, _ := LoadSources(base)
+	if s := findSource(got, "agentskills.io"); s == nil || s.Enabled {
+		t.Fatalf("disable of built-in default did not persist: %+v", s)
+	}
+}
+
+func TestUserAddedSourceCanBeRemoved(t *testing.T) {
+	base := t.TempDir()
+	if _, err := AddSource(base, "https://acme.dev/index.json"); err != nil {
+		t.Fatalf("AddSource: %v", err)
+	}
+	if err := RemoveSource(base, "acme.dev"); err != nil {
+		t.Fatalf("user-added source must be removable: %v", err)
+	}
+	got, _ := LoadSources(base)
+	if findSource(got, "acme.dev") != nil {
+		t.Fatal("user-added source reappeared after remove + reload")
+	}
+}
+
 func TestBundledSourceIsProtected(t *testing.T) {
 	base := t.TempDir()
 	if err := RemoveSource(base, "bundled"); err == nil {

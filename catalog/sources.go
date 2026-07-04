@@ -116,10 +116,16 @@ func AddSource(baseDir, url string) (Source, error) {
 	return s, SaveSources(baseDir, append(sources, s))
 }
 
-// RemoveSource removes a source by label. The bundled source cannot be removed.
+// RemoveSource removes a source by label. Built-in default sources (bundled,
+// agentskills.io, openclaw/agent-skills) are a fixed set and cannot be removed;
+// LoadSources always re-seeds them, so a "removed" default would silently
+// reappear. Use SetSourceEnabled to disable a built-in instead (the bundled
+// source cannot even be disabled).
 func RemoveSource(baseDir, label string) error {
-	if label == bundledLabel {
-		return fmt.Errorf("the bundled source cannot be removed")
+	for _, d := range DefaultSources() {
+		if d.Label == label {
+			return fmt.Errorf("%q is a built-in source and cannot be removed; use `disable` to turn it off", label)
+		}
 	}
 	sources, err := LoadSources(baseDir)
 	if err != nil {
