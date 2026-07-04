@@ -49,12 +49,29 @@ func (c *Client) githubCrawl(ctx context.Context, owner, repo string) ([]Meta, e
 	return nil, lastErr
 }
 
+// marker is a recognized extension marker file found in the tree, before subtree
+// pruning: its containing directory, the blob's full path, and its Kind.
+type marker struct {
+	dir      string
+	blobPath string
+	kind     Kind
+}
+
 // metasFromTree turns a flat tree listing into one Meta per extension directory.
 // A SKILL.md marks a skill; a native plugin manifest marks a plugin. Name and
 // description come from the marker file (best-effort — a fetch failure leaves
 // the name as the directory's basename).
+//
+// Nested markers are pruned: once a directory is recognized as an extension, a
+// marker file in any strictly-nested subdirectory is skipped — mirroring
+// skill.HarvestPack, where a skill's own references/examples cannot define
+// further skills (e.g. skills/foo/references/SKILL.md must not yield a bogus
+// "references" extension alongside the real skills/foo). The prune is
+// order-independent: a directory survives only if no OTHER recognized marker
+// directory is a strict ancestor of it.
 func (c *Client) metasFromTree(ctx context.Context, owner, repo, branch string, tree []treeEntry) []Meta {
-	var out []Meta
+	var markers []marker
+	dirs := map[string]struct{}{}
 	for _, e := range tree {
 		if e.Type != "blob" {
 			continue
@@ -63,16 +80,40 @@ func (c *Client) metasFromTree(ctx context.Context, owner, repo, branch string, 
 		dir = strings.TrimSuffix(dir, "/")
 		switch file {
 		case "SKILL.md":
-			m := Meta{Kind: KindSkill, Repo: owner + "/" + repo, Path: dir, Ref: branch}
-			c.fillFromSkillMd(ctx, owner, repo, branch, e.Path, &m)
-			out = append(out, defaultName(m, dir))
+			markers = append(markers, marker{dir: dir, blobPath: e.Path, kind: KindSkill})
+			dirs[dir] = struct{}{}
 		case plugin.NativeManifestFile:
-			m := Meta{Kind: KindPlugin, Repo: owner + "/" + repo, Path: dir, Ref: branch}
-			c.fillFromPluginManifest(ctx, owner, repo, branch, e.Path, &m)
-			out = append(out, defaultName(m, dir))
+			markers = append(markers, marker{dir: dir, blobPath: e.Path, kind: KindPlugin})
+			dirs[dir] = struct{}{}
 		}
 	}
+
+	var out []Meta
+	for _, mk := range markers {
+		if nestedUnder(mk.dir, dirs) {
+			continue // pruned: an ancestor directory is itself a recognized extension
+		}
+		m := Meta{Kind: mk.kind, Repo: owner + "/" + repo, Path: mk.dir, Ref: branch}
+		switch mk.kind {
+		case KindSkill:
+			c.fillFromSkillMd(ctx, owner, repo, branch, mk.blobPath, &m)
+		case KindPlugin:
+			c.fillFromPluginManifest(ctx, owner, repo, branch, mk.blobPath, &m)
+		}
+		out = append(out, defaultName(m, mk.dir))
+	}
 	return out
+}
+
+// nestedUnder reports whether some OTHER recognized directory in dirs is a
+// strict ancestor of dir (i.e. dir lives inside another extension's subtree).
+func nestedUnder(dir string, dirs map[string]struct{}) bool {
+	for r := range dirs {
+		if r != dir && strings.HasPrefix(dir, r+"/") {
+			return true
+		}
+	}
+	return false
 }
 
 // defaultName sets a Meta's Name to the directory basename when the marker file
