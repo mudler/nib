@@ -12,7 +12,7 @@ import (
 
 func StartTransports(ctx context.Context, cfg types.Config, shellJobs *ShellJobs) ([]mcp.Transport, error) {
 	if shellJobs == nil {
-		shellJobs = NewShellJobs()
+		shellJobs = NewShellJobsInDir(cfg.WorkingDir)
 	}
 	// Set MCP servers
 	bashMCPServerTransport, bashMCPServerClient := mcp.NewInMemoryTransports()
@@ -27,7 +27,7 @@ func StartTransports(ctx context.Context, cfg types.Config, shellJobs *ShellJobs
 	filesystemMCPServerTransport, filesystemMCPServerClient := mcp.NewInMemoryTransports()
 
 	go func() {
-		if err := StartFileSystemMCPServer(ctx, filesystemMCPServerTransport, ""); err != nil {
+		if err := StartFileSystemMCPServer(ctx, filesystemMCPServerTransport, cfg.WorkingDir); err != nil {
 			fmt.Fprintf(os.Stderr, "Filesystem MCP server error: %v\n", err)
 		}
 	}()

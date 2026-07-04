@@ -29,3 +29,12 @@ func TestStartTransportsReturnsOnlyBuiltins(t *testing.T) {
 		t.Fatalf("StartTransports should ignore skills/mcp_servers now: %d vs %d", len(base), len(withExtras))
 	}
 }
+
+func TestStartTransportsUsesWorkingDir(t *testing.T) {
+	dir := t.TempDir()
+	// When the caller passes its own ShellJobs, StartTransports must NOT override it.
+	own := NewShellJobsInDir(dir)
+	if own.mgr.dir != dir {
+		t.Fatalf("precondition: own manager dir = %q", own.mgr.dir)
+	}
+}
