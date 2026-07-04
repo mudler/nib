@@ -149,3 +149,39 @@ func TestListMCPServersRedactsAuth(t *testing.T) {
 		t.Fatalf("headers-only server should be marked authenticated")
 	}
 }
+
+func TestSetMCPServerEnabledTogglesDisabledFlag(t *testing.T) {
+	c, _ := newTestConfigurator(t)
+	if err := c.AddMCPServer("s", types.MCPServer{Command: "cmd"}); err != nil {
+		t.Fatalf("AddMCPServer: %v", err)
+	}
+	// A freshly added server is enabled (Disabled absent == false).
+	servers, _ := c.ListMCPServers()
+	if len(servers) != 1 || !servers[0].Enabled {
+		t.Fatalf("new server should be Enabled: %+v", servers)
+	}
+	// Disable it.
+	if err := c.SetMCPServerEnabled("s", false); err != nil {
+		t.Fatalf("SetMCPServerEnabled(false): %v", err)
+	}
+	got, _ := c.GetMCPServer("s")
+	if !got.Disabled {
+		t.Fatalf("expected Disabled=true, got %+v", got)
+	}
+	servers, _ = c.ListMCPServers()
+	if servers[0].Enabled {
+		t.Fatalf("listing should report Enabled=false after disable")
+	}
+	// Re-enable it.
+	if err := c.SetMCPServerEnabled("s", true); err != nil {
+		t.Fatalf("SetMCPServerEnabled(true): %v", err)
+	}
+	got, _ = c.GetMCPServer("s")
+	if got.Disabled {
+		t.Fatalf("expected Disabled=false after re-enable, got %+v", got)
+	}
+	// Unknown server errors.
+	if err := c.SetMCPServerEnabled("missing", false); err == nil {
+		t.Fatalf("expected error for unknown server")
+	}
+}

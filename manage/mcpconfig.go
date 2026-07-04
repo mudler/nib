@@ -24,6 +24,8 @@ type MCPServerInfo struct {
 	// a real auth token from an ordinary custom header — its purpose is "don't
 	// silently print secrets", not "classify which headers are authentication".
 	Authenticated bool
+	// Enabled is false when the server's Disabled flag is set. Absent == enabled.
+	Enabled bool
 }
 
 // userConfigServers reads only the user config file's mcp_servers map (not the
@@ -92,6 +94,7 @@ func (c *Configurator) ListMCPServers() ([]MCPServerInfo, error) {
 			URL:           s.URL,
 			Transport:     s.Transport,
 			Authenticated: s.BearerToken != "" || len(s.Headers) > 0,
+			Enabled:       !s.Disabled,
 		})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
@@ -156,5 +159,22 @@ func (c *Configurator) RemoveMCPServer(name string) error {
 		return fmt.Errorf("mcp server %q not configured in %s", name, c.configPath)
 	}
 	delete(servers, name)
+	return writeUserConfigServers(c.configPath, servers)
+}
+
+// SetMCPServerEnabled flips a configured server's enabled state by toggling its
+// Disabled flag in the user config file. Unknown names error, matching
+// GetMCPServer/RemoveMCPServer.
+func (c *Configurator) SetMCPServerEnabled(name string, enabled bool) error {
+	servers, err := userConfigServers(c.configPath)
+	if err != nil {
+		return err
+	}
+	srv, ok := servers[name]
+	if !ok {
+		return fmt.Errorf("mcp server %q not configured in %s", name, c.configPath)
+	}
+	srv.Disabled = !enabled
+	servers[name] = srv
 	return writeUserConfigServers(c.configPath, servers)
 }
