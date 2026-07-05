@@ -92,6 +92,7 @@ type Config struct {
 	// by usecase (FLAG_TRANSCRIPT / FLAG_VISION).
 	TranscribeModel string `yaml:"transcribe_model,omitempty" json:"transcribe_model,omitempty"`
 	VisionModel     string `yaml:"vision_model,omitempty" json:"vision_model,omitempty"`
+	VideoModel      string `yaml:"video_model,omitempty" json:"video_model,omitempty"`
 	LogLevel        string `yaml:"log_level"`
 	Prompt          string `yaml:"prompt"`
 	// Metadata is a per-request metadata object attached verbatim to every

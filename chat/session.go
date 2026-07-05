@@ -101,6 +101,8 @@ type Session struct {
 	baseURL         string
 	transcribeModel string
 	visionModel     string
+	videoModel      string
+	workingDir      string
 	metadata        map[string]string // global per-request metadata; merged with per-agent overrides
 	reasoningEffort string            // OpenAI reasoning_effort sent on every request (e.g. "none")
 
@@ -242,6 +244,8 @@ func NewSession(ctx context.Context, cfg types.Config, callbacks Callbacks, tran
 		baseURL:             cfg.BaseURL,
 		transcribeModel:     cfg.TranscribeModel,
 		visionModel:         cfg.VisionModel,
+		videoModel:          cfg.VideoModel,
+		workingDir:          cfg.WorkingDir,
 		metadata:            cfg.Metadata,
 		reasoningEffort:     cfg.ReasoningEffort,
 		mcpClient:           client,
