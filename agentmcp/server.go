@@ -6,13 +6,14 @@ import (
 	"sync"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/mudler/nib/chat"
 )
 
 // session is the slice of *chat.Session the MCP server needs. An interface so
 // tests can drive converse/interrupt without a live LLM. *chat.Session
 // satisfies it.
 type session interface {
-	SendMessage(text string) (string, error)
+	SendMessage(text string, parts ...chat.ContentPart) (string, error)
 	InjectUser(msg string) bool
 	RunLive() bool
 	Interrupt()
