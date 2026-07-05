@@ -16,6 +16,7 @@ import (
 	"github.com/mudler/nib/manage"
 	wizmcp "github.com/mudler/nib/mcp"
 	"github.com/mudler/nib/plugin"
+	"github.com/mudler/nib/specialist"
 	"github.com/mudler/nib/trace"
 	"github.com/mudler/nib/types"
 
@@ -101,6 +102,8 @@ type Session struct {
 	baseURL         string
 	transcribeModel string
 	visionModel     string
+	videoModel      string
+	workingDir      string
 	metadata        map[string]string // global per-request metadata; merged with per-agent overrides
 	reasoningEffort string            // OpenAI reasoning_effort sent on every request (e.g. "none")
 
@@ -242,6 +245,8 @@ func NewSession(ctx context.Context, cfg types.Config, callbacks Callbacks, tran
 		baseURL:             cfg.BaseURL,
 		transcribeModel:     cfg.TranscribeModel,
 		visionModel:         cfg.VisionModel,
+		videoModel:          cfg.VideoModel,
+		workingDir:          cfg.WorkingDir,
 		metadata:            cfg.Metadata,
 		reasoningEffort:     cfg.ReasoningEffort,
 		mcpClient:           client,
@@ -922,6 +927,31 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 			}
 			return "No scheduler available."
 		})))
+	}
+
+	// Media understanding tools, gated by the allowlist. Each delegates to a
+	// specialist client with the tool's dedicated model and scopes the path to
+	// the session working dir, mirroring how host file tools resolve paths.
+	if s.toolEnabled("read_image") {
+		cogitoOpts = append(cogitoOpts, cogito.WithTools(readImageToolDefinition(
+			func(path, question string) (string, error) {
+				return specialist.New(s.baseURL, s.apiKey).Describe(
+					turnCtx, resolveWorkspacePath(s.workingDir, path), s.visionModel, question)
+			})))
+	}
+	if s.toolEnabled("transcribe_audio") {
+		cogitoOpts = append(cogitoOpts, cogito.WithTools(transcribeAudioToolDefinition(
+			func(path string) (string, error) {
+				return specialist.New(s.baseURL, s.apiKey).Transcribe(
+					turnCtx, resolveWorkspacePath(s.workingDir, path), s.transcribeModel)
+			})))
+	}
+	if s.toolEnabled("read_video") {
+		cogitoOpts = append(cogitoOpts, cogito.WithTools(readVideoToolDefinition(
+			func(path, question string) (string, error) {
+				return specialist.New(s.baseURL, s.apiKey).DescribeVideo(
+					turnCtx, resolveWorkspacePath(s.workingDir, path), s.videoModel, question)
+			})))
 	}
 
 	// Register the goal_done tool only while a goal is active, so it never
