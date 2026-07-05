@@ -15,6 +15,9 @@ var readOnlyTools = map[string]bool{
 	"check_agent":      true,
 	"get_agent_result": true,
 	"cron_list":        true,
+	"read_image":       true,
+	"transcribe_audio": true,
+	"read_video":       true,
 }
 
 // IsReadOnly reports whether a tool call only observes state and is therefore
