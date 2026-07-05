@@ -85,11 +85,15 @@ type HookConfig struct {
 
 // Config holds configuration for creating a new session
 type Config struct {
-	Model    string `yaml:"model"`
-	APIKey   string `yaml:"api_key"`
-	BaseURL  string `yaml:"base_url"`
-	LogLevel string `yaml:"log_level"`
-	Prompt   string `yaml:"prompt"`
+	Model   string `yaml:"model"`
+	APIKey  string `yaml:"api_key"`
+	BaseURL string `yaml:"base_url"`
+	// Specialist models for attachment handling. Empty ⇒ LocalAI auto-selects
+	// by usecase (FLAG_TRANSCRIPT / FLAG_VISION).
+	TranscribeModel string `yaml:"transcribe_model,omitempty" json:"transcribe_model,omitempty"`
+	VisionModel     string `yaml:"vision_model,omitempty" json:"vision_model,omitempty"`
+	LogLevel        string `yaml:"log_level"`
+	Prompt          string `yaml:"prompt"`
 	// Metadata is a per-request metadata object attached verbatim to every
 	// chat-completion request (the OpenAI "metadata" field). Backends such as
 	// LocalAI use it for per-request flags, e.g. {"enable_thinking": "false"}

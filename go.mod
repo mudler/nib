@@ -13,7 +13,7 @@ require (
 	github.com/charmbracelet/lipgloss v1.1.1-0.20250404203927-76690c660834
 	github.com/klippa-app/go-pdfium v1.12.2
 	github.com/modelcontextprotocol/go-sdk v1.0.0
-	github.com/mudler/cogito v0.11.0
+	github.com/mudler/cogito v0.11.1-0.20260705102758-a15985a850c6
 	github.com/mudler/xlog v0.0.1
 	github.com/sashabaranov/go-openai v1.41.2
 	golang.org/x/net v0.43.0
