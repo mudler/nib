@@ -19,6 +19,8 @@ import (
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/mudler/nib/attachments"
+	"github.com/mudler/nib/attachstage"
 	"github.com/mudler/nib/chat"
 	"github.com/mudler/nib/loop"
 	wizmcp "github.com/mudler/nib/mcp"
@@ -141,6 +143,11 @@ type Model struct {
 	queue    []string
 	queueSel int
 
+	// pending holds files staged via /attach, awaiting the next message. They
+	// combine with inline @path files (via attachstage.BuildSend) on send and
+	// clear only after a successful send (mirrors the CLI REPL).
+	pending []attachstage.StagedFile
+
 	// redispatch holds follow-ups that were released into a run (and echoed)
 	// but never consumed by it — the run ended first. They re-dispatch as
 	// fresh turns ahead of the queue, without a second echo, and are not
@@ -164,6 +171,7 @@ type Model struct {
 type responseMsg struct {
 	content string
 	err     error
+	blocked []attachments.Blocked
 }
 
 // compactResultMsg is the outcome of a manual /compact run.
@@ -698,6 +706,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.interruptArmed = false
 		m.status = ""
 		m.reasoning = ""
+		// Surface any attachments that couldn't be sent (blocked by model caps
+		// or resolution), mirroring the CLI's per-file error lines.
+		for _, b := range msg.blocked {
+			m.messages = append(m.messages, ChatMessage{Role: "error", Content: filepath.Base(b.Path) + " — " + b.Reason})
+		}
+		// Clear staged attachments only on a successful send (retain on error),
+		// matching the CLI REPL.
+		if msg.err == nil {
+			m.pending = nil
+		}
 		if msg.err != nil {
 			if errors.Is(msg.err, context.Canceled) {
 				m.messages = append(m.messages, ChatMessage{Role: "agent", Content: "interrupted."})
@@ -1055,11 +1073,43 @@ func (m *Model) dispatchResolved(input string) tea.Cmd {
 			m.messages = append(m.messages, ChatMessage{Role: "agent", Content: "No goal to clear."})
 		}
 		return nil
+	case slash.KindAttach:
+		switch action.AttachOp {
+		case slash.AttachStage:
+			m.pending = append(m.pending, attachstage.StagedFile{Path: action.AttachPath, Transcribe: action.Transcribe})
+			mode := "default"
+			if action.Transcribe {
+				mode = "transcribe"
+			}
+			m.messages = append(m.messages, ChatMessage{Role: "agent", Content: "attached: " + filepath.Base(action.AttachPath) + " (" + mode + ") — sends with your next message"})
+		case slash.AttachList:
+			if len(m.pending) == 0 {
+				m.messages = append(m.messages, ChatMessage{Role: "agent", Content: "nothing staged"})
+			} else {
+				var b strings.Builder
+				for i, s := range m.pending {
+					if i > 0 {
+						b.WriteString("\n")
+					}
+					b.WriteString(filepath.Base(s.Path))
+				}
+				m.messages = append(m.messages, ChatMessage{Role: "agent", Content: b.String()})
+			}
+		case slash.AttachClear:
+			n := len(m.pending)
+			m.pending = nil
+			m.messages = append(m.messages, ChatMessage{Role: "agent", Content: fmt.Sprintf("cleared %d staged attachment(s)", n)})
+		}
+		return nil
 	default: // slash.KindSend
+		files, overrides := attachstage.BuildSend(m.pending, action)
 		m.loading = true
 		m.interruptArmed = false
 		m.status = ""
-		return m.sendMessage(action.Text)
+		if len(files) == 0 {
+			return m.sendMessage(action.Text)
+		}
+		return m.sendWithAttachmentsCmd(action.Text, files, overrides)
 	}
 }
 
@@ -1068,6 +1118,15 @@ func (m Model) sendMessage(text string) tea.Cmd {
 	return func() tea.Msg {
 		response, err := m.session.SendMessage(text)
 		return responseMsg{content: response, err: err}
+	}
+}
+
+// sendWithAttachmentsCmd sends a message with staged + inline @path attachments.
+// Blocked entries and clear-on-success are handled in the responseMsg handler.
+func (m Model) sendWithAttachmentsCmd(text string, files []string, overrides map[string]attachments.Override) tea.Cmd {
+	return func() tea.Msg {
+		reply, blocked, err := m.session.SendWithAttachments(m.ctx, text, files, overrides)
+		return responseMsg{content: reply, err: err, blocked: blocked}
 	}
 }
 

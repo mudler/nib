@@ -5,11 +5,14 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/mudler/nib/attachments"
+	"github.com/mudler/nib/attachstage"
 	"github.com/mudler/nib/chat"
 	wizmcp "github.com/mudler/nib/mcp"
 	"github.com/mudler/nib/slash"
@@ -260,6 +263,10 @@ func RunCLI(ctx context.Context, cfg types.Config, shellJobs *wizmcp.ShellJobs, 
 	// Display help immediately
 	help()
 
+	// Files staged via /attach, sent with the next message and cleared on
+	// successful send only.
+	var pending []attachstage.StagedFile
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -312,11 +319,47 @@ func RunCLI(ctx context.Context, cfg types.Config, shellJobs *wizmcp.ShellJobs, 
 					fmt.Println(theme.Subtle.Render(compactNotice(before, after)))
 				}
 				continue
+			case slash.KindAttach:
+				switch action.AttachOp {
+				case slash.AttachStage:
+					pending = append(pending, attachstage.StagedFile{Path: action.AttachPath, Transcribe: action.Transcribe})
+					mode := "default"
+					if action.Transcribe {
+						mode = "transcribe"
+					}
+					fmt.Println(theme.Subtle.Render("attached: " + filepath.Base(action.AttachPath) + " (" + mode + ") — sends with your next message"))
+				case slash.AttachList:
+					if len(pending) == 0 {
+						fmt.Println(theme.Subtle.Render("nothing staged"))
+					} else {
+						for _, s := range pending {
+							fmt.Println(theme.Subtle.Render("  " + filepath.Base(s.Path)))
+						}
+					}
+				case slash.AttachClear:
+					n := len(pending)
+					pending = nil
+					fmt.Println(theme.Subtle.Render(fmt.Sprintf("cleared %d staged attachment(s)", n)))
+				}
+				continue
 			default: // slash.KindSend
 				fmt.Println()
 				spin.start(theme.Status(theme.VerbThinking, 0))
-				_, err = session.SendMessage(action.Text)
-				spin.stop()
+				files, overrides := attachstage.BuildSend(pending, action)
+				if len(files) == 0 {
+					_, err = session.SendMessage(action.Text)
+					spin.stop()
+				} else {
+					var blocked []attachments.Blocked
+					_, blocked, err = session.SendWithAttachments(ctx, action.Text, files, overrides)
+					spin.stop()
+					for _, b := range blocked {
+						fmt.Fprintln(os.Stderr, theme.Error.Render(theme.Cross+" "+filepath.Base(b.Path)+" — "+b.Reason))
+					}
+					if err == nil {
+						pending = nil // clear on success only
+					}
+				}
 				if err != nil {
 					fmt.Fprintln(os.Stderr, theme.Error.Render(theme.Cross+" "+err.Error()))
 				}

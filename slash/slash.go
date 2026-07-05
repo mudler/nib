@@ -28,6 +28,16 @@ const (
 	KindGoalSet               // set/replace the session goal (Text)
 	KindGoalShow              // show the current goal
 	KindGoalClear             // clear the current goal
+	KindAttach                // stage/list/clear file attachments
+)
+
+// AttachOp enumerates the /attach sub-operations.
+type AttachOp int
+
+const (
+	AttachStage AttachOp = iota // stage AttachPath (optionally Transcribe)
+	AttachList                  // list staged attachments
+	AttachClear                 // clear staged attachments
 )
 
 // Action is the resolved result of a submitted input line.
@@ -41,6 +51,12 @@ type Action struct {
 	Interval time.Duration // KindLoopStart: 0 = self-paced
 	Payload  string        // KindLoopStart: the prompt/slash-command to repeat
 	LoopID   string        // KindLoopStop: empty = stop all
+
+	// Attachment actions:
+	Files      []string // KindSend: resolved @path attachments
+	AttachOp   AttachOp // KindAttach: which op
+	AttachPath string   // KindAttach+AttachStage: file to stage
+	Transcribe bool     // KindAttach+AttachStage: --transcribe/-t override
 }
 
 // Expand renders a command's prompt template with the given args.
@@ -64,7 +80,8 @@ func Expand(c types.CommandConfig, args string) (string, error) {
 func Resolve(input string, cmds []types.CommandConfig, skills []types.Skill, agents []types.AgentTypeConfig) Action {
 	trimmed := strings.TrimSpace(input)
 	if !strings.HasPrefix(trimmed, "/") {
-		return Action{Kind: KindSend, Text: input}
+		text, files := parseAtPaths(input)
+		return Action{Kind: KindSend, Text: text, Files: files}
 	}
 
 	verb, rest := splitVerb(trimmed[1:])
@@ -94,6 +111,25 @@ func Resolve(input string, cmds []types.CommandConfig, skills []types.Skill, age
 		return resolveLoop(rest)
 	case "goal":
 		return resolveGoal(rest)
+	case "attach":
+		rest = strings.TrimSpace(rest)
+		switch {
+		case rest == "":
+			return Action{Kind: KindAttach, AttachOp: AttachList}
+		case rest == "clear":
+			return Action{Kind: KindAttach, AttachOp: AttachClear}
+		default:
+			transcribe := false
+			if f, ok := strings.CutPrefix(rest, "--transcribe "); ok {
+				transcribe, rest = true, strings.TrimSpace(f)
+			} else if f, ok := strings.CutPrefix(rest, "-t "); ok {
+				transcribe, rest = true, strings.TrimSpace(f)
+			}
+			if _, err := os.Stat(rest); err != nil {
+				return Action{Kind: KindError, Err: "no such file: " + rest}
+			}
+			return Action{Kind: KindAttach, AttachOp: AttachStage, AttachPath: rest, Transcribe: transcribe}
+		}
 	default:
 		c, ok := findCommand(cmds, verb)
 		if !ok {
@@ -152,6 +188,49 @@ func resolveGoal(rest string) Action {
 		return Action{Kind: KindGoalClear}
 	}
 	return Action{Kind: KindGoalSet, Text: rest}
+}
+
+// parseAtPaths splits a send line into literal text and @path attachments. A
+// @token is attached only if it resolves to an existing file (cwd-relative or
+// absolute); @"quoted paths" are supported; unmatched @tokens stay literal.
+func parseAtPaths(input string) (string, []string) {
+	var files []string
+	var out strings.Builder
+	i := 0
+	for i < len(input) {
+		atBoundary := i == 0 || input[i-1] == ' ' || input[i-1] == '\t' || input[i-1] == '\n'
+		if input[i] == '@' && atBoundary && i+1 < len(input) {
+			tok, next := readToken(input, i+1)
+			if tok != "" {
+				if _, err := os.Stat(tok); err == nil {
+					files = append(files, tok)
+					i = next
+					continue // drop the token from the text
+				}
+			}
+		}
+		out.WriteByte(input[i])
+		i++
+	}
+	return strings.TrimSpace(out.String()), files
+}
+
+// readToken reads a path token starting at j: a "quoted string" (up to the
+// closing quote) or an unquoted run up to whitespace. Returns the token and the
+// index just past it.
+func readToken(s string, j int) (string, int) {
+	if j < len(s) && s[j] == '"' {
+		k := strings.IndexByte(s[j+1:], '"')
+		if k >= 0 {
+			return s[j+1 : j+1+k], j + 1 + k + 1
+		}
+		return "", j
+	}
+	k := j
+	for k < len(s) && s[k] != ' ' && s[k] != '\t' && s[k] != '\n' {
+		k++
+	}
+	return s[j:k], k
 }
 
 // delegation builds a directive instructing the agent to delegate to a named

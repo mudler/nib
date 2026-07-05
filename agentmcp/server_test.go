@@ -36,7 +36,7 @@ type fakeSession struct {
 	interrupt   int
 }
 
-func (f *fakeSession) SendMessage(text string) (string, error) {
+func (f *fakeSession) SendMessage(text string, parts ...chat.ContentPart) (string, error) {
 	if f.parkFirst {
 		f.cb.OnParked("working on it")
 	}

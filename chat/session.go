@@ -99,6 +99,8 @@ type Session struct {
 	llmModel        string
 	apiKey          string
 	baseURL         string
+	transcribeModel string
+	visionModel     string
 	metadata        map[string]string // global per-request metadata; merged with per-agent overrides
 	reasoningEffort string            // OpenAI reasoning_effort sent on every request (e.g. "none")
 
@@ -238,6 +240,8 @@ func NewSession(ctx context.Context, cfg types.Config, callbacks Callbacks, tran
 		llmModel:            cfg.Model,
 		apiKey:              cfg.APIKey,
 		baseURL:             cfg.BaseURL,
+		transcribeModel:     cfg.TranscribeModel,
+		visionModel:         cfg.VisionModel,
 		metadata:            cfg.Metadata,
 		reasoningEffort:     cfg.ReasoningEffort,
 		mcpClient:           client,
@@ -672,7 +676,21 @@ func (s *Session) mcpToolFilter() func(*mcp.ClientSession, string) bool {
 	}
 }
 
-func (s *Session) SendMessage(text string) (string, error) {
+// buildUserFragment appends the user turn to the fragment, attaching multimodal
+// parts. cogito's AddMessage routes image parts into image_url MultiContent and
+// audio/video into the fragment's transient PendingNativeParts (send-once).
+func buildUserFragment(f cogito.Fragment, text string, parts []ContentPart) cogito.Fragment {
+	if len(parts) == 0 {
+		return f.AddMessage("user", text)
+	}
+	mm := make([]cogito.Multimedia, 0, len(parts))
+	for _, p := range parts {
+		mm = append(mm, p) // ContentPart implements cogito.TypedMultimedia
+	}
+	return f.AddMessage("user", text, mm...)
+}
+
+func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error) {
 	if s.hooks != nil {
 		s.hooks.Fire(s.ctx, hooks.EventUserPromptSubmit, "", map[string]any{"event": "UserPromptSubmit", "prompt": text})
 	}
@@ -715,7 +733,7 @@ func (s *Session) SendMessage(text string) (string, error) {
 	if s.systemPrompt != "" {
 		s.fragment = s.fragment.AddMessage("system", s.systemPrompt)
 	}
-	s.fragment = s.fragment.AddMessage("user", text)
+	s.fragment = buildUserFragment(s.fragment, text, parts)
 	s.messages = append(s.messages, openai.ChatCompletionMessage{
 		Role:    "user",
 		Content: text,
