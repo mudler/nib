@@ -27,6 +27,17 @@ func DataURI(path string) (string, error) {
 	return "data:" + ct + ";base64," + base64.StdEncoding.EncodeToString(b), nil
 }
 
+// Describe turns an image into text by sending it to a vision model and
+// returning the model's textual description.
+//
+// It is the building block for the future Phase 2 `read_image` tool, which will
+// let any agent (including a text-only one) pull an image into the conversation
+// as model-generated text on demand. It is deliberately NOT wired into the
+// attachment routing path: that path Blocks images on text-only models and nudges
+// the user to switch to a vision model, rather than silently substituting a lossy
+// AI-generated description for the actual image. (Audio, by contrast, auto-falls
+// back to faithful transcription — see attachments.Route.) So Describe is
+// intentionally ahead of its consumer in this branch.
 func (c *Client) Describe(ctx context.Context, path, model, prompt string) (string, error) {
 	if prompt == "" {
 		prompt = "Describe this image in detail."

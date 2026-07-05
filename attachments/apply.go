@@ -33,6 +33,13 @@ func label(path, treatment, text string) string {
 // Apply resolves each file to its treatment and executes it, producing the native
 // parts + text preamble SendMessage needs, plus any blocked files for the caller
 // to surface. overrides maps a file path to an audio override (may be nil).
+//
+// Apply is all-or-nothing on hard failures: the first extractor, transcriber, or
+// DataURI error aborts the whole batch and is returned as-is (the caller is
+// expected to resolve or remove the offending file and retry). Only capability
+// Block outcomes are non-fatal — they are collected into Result.Blocked rather
+// than erroring, so a batch containing a lone unsupported file still returns a
+// nil error with that file recorded in Blocked.
 func Apply(ctx context.Context, files []string, caps ModelCapabilities, overrides map[string]Override,
 	extract Extractor, transcribe Transcriber) (Result, error) {
 	var res Result
