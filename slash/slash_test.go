@@ -1,6 +1,7 @@
 package slash
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -121,7 +122,7 @@ func TestResolveGoal(t *testing.T) {
 	}
 	for _, c := range cases {
 		got := Resolve(c.in, nil, nil, nil)
-		if got != c.want {
+		if !reflect.DeepEqual(got, c.want) {
 			t.Errorf("Resolve(%q) = %+v, want %+v", c.in, got, c.want)
 		}
 	}
