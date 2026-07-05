@@ -26,7 +26,10 @@ func TestContentPartImplementsTypedMultimedia(t *testing.T) {
 		t.Fatalf("image → cogito.MediaImage, got %v", i.MediaKind())
 	}
 	// audio carries base64 via Data(); image/video via URL()
-	if a.Data() != "" && i.Data() != "" {
-		t.Log("Data() is audio-only; image uses URL()")
+	if a.Data() != "AA" {
+		t.Fatalf("audio Data() must be the base64 payload %q, got %q", "AA", a.Data())
+	}
+	if i.Data() != "" {
+		t.Fatalf("image Data() must be empty (image travels via URL()), got %q", i.Data())
 	}
 }

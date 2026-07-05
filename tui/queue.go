@@ -57,6 +57,12 @@ func (m *Model) releaseQueueFront() bool {
 	if action.Kind != slash.KindSend {
 		return false
 	}
+	// InjectUser only carries text; it can't convey @path attachments. Leaving an
+	// attachment-bearing entry queued lets flushQueueAsTurn → dispatchInput handle
+	// it at end-of-run, where attachments are honored — so the files aren't dropped.
+	if len(action.Files) > 0 {
+		return false
+	}
 	// InjectUser (not Inject) so a follow-up the run never consumes is handed
 	// back at run end (TakeUndelivered) and re-dispatched instead of lost.
 	if !m.session.InjectUser(action.Text) {

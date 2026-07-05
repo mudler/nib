@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"strings"
 
 	"github.com/mudler/nib/specialist"
 )
@@ -14,6 +15,10 @@ type Transcriber func(ctx context.Context, path string) (string, error)
 type Part struct {
 	Kind    Kind
 	DataURI string
+	// Format is the container/codec derived from the file extension (e.g. "wav",
+	// "mp3", "m4a"). Only populated for natively-sent audio (SendAsAudio), where
+	// it feeds cogito's input_audio.format wire field; empty for image/video.
+	Format string
 }
 type Blocked struct {
 	Path   string
@@ -61,7 +66,8 @@ func Apply(ctx context.Context, files []string, caps ModelCapabilities, override
 			if err != nil {
 				return res, err
 			}
-			res.Parts = append(res.Parts, Part{Kind: KindAudio, DataURI: uri})
+			format := strings.TrimPrefix(strings.ToLower(filepath.Ext(path)), ".")
+			res.Parts = append(res.Parts, Part{Kind: KindAudio, DataURI: uri, Format: format})
 		case SendAsVideo:
 			uri, err := specialist.DataURI(path)
 			if err != nil {

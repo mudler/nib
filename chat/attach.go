@@ -15,13 +15,15 @@ func composeAttachments(userText string, res attachments.Result) (string, []Cont
 	var parts []ContentPart
 	for _, p := range res.Parts {
 		k := PartImage
+		audioFormat := ""
 		switch p.Kind {
 		case attachments.KindAudio:
 			k = PartAudio
+			audioFormat = p.Format // feeds input_audio.format; empty for image/video
 		case attachments.KindVideo:
 			k = PartVideo
 		}
-		parts = append(parts, ContentPart{Kind: k, DataURI: p.DataURI})
+		parts = append(parts, ContentPart{Kind: k, DataURI: p.DataURI, AudioFormat: audioFormat})
 	}
 	return text, parts
 }
