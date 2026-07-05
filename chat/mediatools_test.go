@@ -1,7 +1,9 @@
 package chat
 
 import (
+	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -35,21 +37,72 @@ func TestReadImageToolRun(t *testing.T) {
 	if res == "a red square" || res == "" {
 		t.Fatalf("empty path should return an error result, got %q", res)
 	}
+	// gotPath must still hold the prior value: the empty-path guard skips the
+	// delegate rather than invoking it with an empty path.
+	if gotPath != "x.png" {
+		t.Fatalf("empty-path guard should skip the delegate, but gotPath=%q", gotPath)
+	}
 }
 
 func TestTranscribeAudioToolRun(t *testing.T) {
-	tool := &transcribeAudioTool{transcribe: func(path string) (string, error) { return "hello world", nil }}
+	var gotPath string
+	tool := &transcribeAudioTool{transcribe: func(path string) (string, error) {
+		gotPath = path
+		return "hello world", nil
+	}}
 	res, _, err := tool.Run(map[string]any{"path": "a.wav"})
 	if err != nil || res != "hello world" {
 		t.Fatalf("run: res=%q err=%v", res, err)
 	}
+	if gotPath != "a.wav" {
+		t.Fatalf("path not threaded: %q", gotPath)
+	}
+	// empty path → error result, delegate not called
+	res, _, _ = tool.Run(map[string]any{})
+	if !strings.Contains(res, "required") {
+		t.Fatalf("empty path should return a 'required' error result, got %q", res)
+	}
+	if gotPath != "a.wav" {
+		t.Fatalf("empty-path guard should skip the delegate, but gotPath=%q", gotPath)
+	}
+	// delegate error → failed result
+	errTool := &transcribeAudioTool{transcribe: func(path string) (string, error) {
+		return "", errors.New("boom")
+	}}
+	res, _, _ = errTool.Run(map[string]any{"path": "a.wav"})
+	if !strings.Contains(res, "failed") {
+		t.Fatalf("delegate error should return a 'failed' result, got %q", res)
+	}
 }
 
 func TestReadVideoToolRun(t *testing.T) {
-	tool := &readVideoTool{describe: func(path, question string) (string, error) { return "a person waving", nil }}
-	res, _, _ := tool.Run(map[string]any{"path": "c.mp4"})
+	var gotPath, gotQ string
+	tool := &readVideoTool{describe: func(path, question string) (string, error) {
+		gotPath, gotQ = path, question
+		return "a person waving", nil
+	}}
+	res, _, _ := tool.Run(map[string]any{"path": "c.mp4", "question": "what happens?"})
 	if res != "a person waving" {
 		t.Fatalf("run: %q", res)
+	}
+	if gotPath != "c.mp4" || gotQ != "what happens?" {
+		t.Fatalf("args not threaded: %q %q", gotPath, gotQ)
+	}
+	// empty path → error result, delegate not called
+	res, _, _ = tool.Run(map[string]any{})
+	if !strings.Contains(res, "required") {
+		t.Fatalf("empty path should return a 'required' error result, got %q", res)
+	}
+	if gotPath != "c.mp4" {
+		t.Fatalf("empty-path guard should skip the delegate, but gotPath=%q", gotPath)
+	}
+	// delegate error → failed result
+	errTool := &readVideoTool{describe: func(path, question string) (string, error) {
+		return "", errors.New("boom")
+	}}
+	res, _, _ = errTool.Run(map[string]any{"path": "c.mp4"})
+	if !strings.Contains(res, "failed") {
+		t.Fatalf("delegate error should return a 'failed' result, got %q", res)
 	}
 }
 

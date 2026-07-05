@@ -936,21 +936,21 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 		cogitoOpts = append(cogitoOpts, cogito.WithTools(readImageToolDefinition(
 			func(path, question string) (string, error) {
 				return specialist.New(s.baseURL, s.apiKey).Describe(
-					s.ctx, resolveWorkspacePath(s.workingDir, path), s.visionModel, question)
+					turnCtx, resolveWorkspacePath(s.workingDir, path), s.visionModel, question)
 			})))
 	}
 	if s.toolEnabled("transcribe_audio") {
 		cogitoOpts = append(cogitoOpts, cogito.WithTools(transcribeAudioToolDefinition(
 			func(path string) (string, error) {
 				return specialist.New(s.baseURL, s.apiKey).Transcribe(
-					s.ctx, resolveWorkspacePath(s.workingDir, path), s.transcribeModel)
+					turnCtx, resolveWorkspacePath(s.workingDir, path), s.transcribeModel)
 			})))
 	}
 	if s.toolEnabled("read_video") {
 		cogitoOpts = append(cogitoOpts, cogito.WithTools(readVideoToolDefinition(
 			func(path, question string) (string, error) {
 				return specialist.New(s.baseURL, s.apiKey).DescribeVideo(
-					s.ctx, resolveWorkspacePath(s.workingDir, path), s.videoModel, question)
+					turnCtx, resolveWorkspacePath(s.workingDir, path), s.videoModel, question)
 			})))
 	}
 

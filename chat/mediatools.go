@@ -6,9 +6,10 @@ import (
 	"github.com/mudler/cogito"
 )
 
-// resolveWorkspacePath joins a relative path onto workingDir (absolute paths are
-// used as-is, and an empty workingDir leaves the path unchanged), matching how
-// host file tools scope reads.
+// resolveWorkspacePath roots relative paths at workingDir (absolute paths are
+// used as-is, and an empty workingDir leaves the path unchanged). It does not
+// confine paths to the workspace — absolute paths and ".." traversal are not
+// restricted, matching how the host file tools resolve paths.
 func resolveWorkspacePath(workingDir, p string) string {
 	if workingDir == "" || filepath.IsAbs(p) {
 		return p
