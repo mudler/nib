@@ -18,6 +18,7 @@ import (
 	"github.com/mudler/nib/slash"
 	"github.com/mudler/nib/theme"
 	"github.com/mudler/nib/types"
+	"golang.org/x/term"
 )
 
 // resolveCLIInput maps a CLI input line to a slash Action, mirroring the TUI.
@@ -28,23 +29,53 @@ func resolveCLIInput(input string, cfg types.Config) slash.Action {
 // Spinner frames for animated display
 var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 
-// spinner manages an animated spinner for CLI output
+// spinner manages an animated spinner for CLI output.
+//
+// The animation uses a carriage return to redraw a single line in place, which
+// only makes sense on an interactive terminal. When stdout is not a TTY (piped
+// output, CI logs like GitHub Actions), the redraw is meaningless: every frame
+// lands on its own line and the log fills with hundreds of "⠋ thinking"
+// entries. In that case we fall back to a static, line-based status log that
+// prints each distinct message once.
 type spinner struct {
 	mu       sync.Mutex
 	active   bool
 	message  string
 	stopChan chan struct{}
 	doneChan chan struct{}
+	tty      bool
+	lastLine string // last message printed in non-TTY mode, for de-duplication
 }
 
 func newSpinner() *spinner {
 	return &spinner{
 		stopChan: make(chan struct{}),
 		doneChan: make(chan struct{}),
+		tty:      term.IsTerminal(int(os.Stdout.Fd())),
 	}
 }
 
+// printStatic emits a status line once in non-TTY mode, skipping consecutive
+// duplicates so a steady "thinking" state produces a single line, not a flood.
+// Caller must hold s.mu.
+func (s *spinner) printStatic(message string) {
+	if message == "" || message == s.lastLine {
+		return
+	}
+	s.lastLine = message
+	fmt.Println(theme.Help.Render(message))
+}
+
 func (s *spinner) start(message string) {
+	if !s.tty {
+		s.mu.Lock()
+		s.active = true
+		s.message = message
+		s.printStatic(message)
+		s.mu.Unlock()
+		return
+	}
+
 	s.mu.Lock()
 	if s.active {
 		s.mu.Unlock()
@@ -83,9 +114,22 @@ func (s *spinner) update(message string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.message = message
+	if !s.tty {
+		s.printStatic(message)
+	}
 }
 
 func (s *spinner) stop() {
+	if !s.tty {
+		s.mu.Lock()
+		s.active = false
+		// Reset so the next start() reprints the status even if it repeats a
+		// prior message, keeping the log readable across tool-call boundaries.
+		s.lastLine = ""
+		s.mu.Unlock()
+		return
+	}
+
 	s.mu.Lock()
 	if !s.active {
 		s.mu.Unlock()
