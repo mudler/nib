@@ -1016,6 +1016,7 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 			if turnCtx.Err() != nil {
 				s.ClearGoal()
 			}
+			err = humanizeError(err)
 			if s.callbacks.OnError != nil {
 				s.callbacks.OnError(err)
 			}
