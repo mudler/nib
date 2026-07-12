@@ -742,7 +742,12 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 		}
 	}()
 	s.historyMu.Lock()
-	if s.systemPrompt != "" {
+	// Add the system prompt to the persistent fragment only if it is not already
+	// there. s.fragment persists across turns, so re-adding it every turn would
+	// accumulate N identical system messages; cogito merges those into a
+	// position-0 block that grows each turn and defeats the server's prompt-prefix
+	// KV cache (full re-prefill every message). Add it once.
+	if s.systemPrompt != "" && !fragmentHasSystemContent(s.fragment, s.systemPrompt) {
 		s.fragment = s.fragment.AddMessage("system", s.systemPrompt)
 	}
 	s.fragment = buildUserFragment(s.fragment, text, parts)
@@ -1275,4 +1280,18 @@ func (s *Session) Close() error {
 		firstErr = err
 	}
 	return firstErr
+}
+
+
+// fragmentHasSystemContent reports whether the fragment already carries a system
+// message with exactly this content, so SendMessage can add the system prompt
+// once instead of duplicating it every turn (which would defeat the model
+// server's prompt-prefix cache).
+func fragmentHasSystemContent(f cogito.Fragment, content string) bool {
+	for _, m := range f.Messages {
+		if m.Role == "system" && m.Content == content {
+			return true
+		}
+	}
+	return false
 }

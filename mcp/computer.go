@@ -214,9 +214,12 @@ func StartComputerMCPServer(ctx context.Context, transport mcp.Transport, cfg ty
 	server := mcp.NewServer(&mcp.Implementation{Name: "computer", Version: "v1.0.0"}, nil)
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "computer_use",
-		Description: "Drive the desktop in the background via cua-driver — screenshots, mouse, keyboard, " +
-			"scroll, drag — without stealing the user's cursor or focus. Preferred: action='capture' " +
-			"(mode='som' numbers elements) then click by `element` index. Requires an armed session.",
+		Description: "See and control the screen: take a SCREENSHOT of the desktop, then click, type, " +
+			"scroll, and drag. Use this whenever the user wants to look at, see, screenshot, read, or " +
+			"interact with the screen, a window, or any running app — do NOT use shell commands (e.g. " +
+			"`screenshot`, `scrot`, `screencapture`) for this. To see the screen, call action='capture' " +
+			"(mode='som' numbers the clickable elements so you can click by `element` index). Runs in the " +
+			"background without moving the user's real cursor. Requires an armed session.",
 	}, cs.computerUse)
 	xlog.Info("computer_use MCP server ready", "driver", cmdPath)
 	return server.Run(ctx, transport)
