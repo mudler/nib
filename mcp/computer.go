@@ -65,23 +65,66 @@ func (c *computerServer) capture(ctx context.Context, in ComputerUseInput) (*mcp
 	c.sticky.PID, c.sticky.WindowID = pid, windowID
 	c.mu.Unlock()
 
+	// Vision mode, or no focusable window: use a full-display screenshot. It is
+	// captured at native size with NO downscale, which sidesteps get_window_state's
+	// resize step — that resize fails on some displays ("unsupported color type for
+	// resize: L8").
+	if in.Mode == "vision" || pid == 0 {
+		return c.captureDesktop(ctx, in)
+	}
+
+	// SOM/ax: the window's AT-SPI tree plus a window screenshot.
 	stateRes, err := c.call(ctx, "get_window_state", map[string]any{"pid": pid, "window_id": windowID, "session": c.cfg.SessionID})
-	if err != nil {
-		return nil, ComputerUseOutput{}, err
+	if err != nil || (stateRes != nil && stateRes.IsError) {
+		// The window capture failed (e.g. the L8 resize error). Fall back to a
+		// full-desktop screenshot so the model still SEES the screen.
+		return c.captureDesktop(ctx, in)
 	}
 	out := ComputerUseOutput{Summary: "captured window"}
 	out.Elements = parseElements(structuredMap(stateRes), in.MaxElements)
+	hasImage := false
 	for _, ct := range stateRes.Content {
 		if img, ok := ct.(*mcp.ImageContent); ok {
 			out.ImageMIME = img.MIMEType
+			hasImage = true
 		}
 	}
 	if in.Mode == "ax" {
 		// strip the image so text-only models aren't handed pixels
 		stateRes.Content = filterOutImages(stateRes.Content)
 		out.ImageMIME = ""
+		return stateRes, out, nil
+	}
+	if !hasImage {
+		// No usable window screenshot — fall back to the desktop capture but keep
+		// the AX elements we already parsed.
+		if deskRes, dout, derr := c.captureDesktop(ctx, in); derr == nil {
+			dout.Elements = out.Elements
+			return deskRes, dout, nil
+		}
 	}
 	return stateRes, out, nil
+}
+
+// captureDesktop returns a full-display screenshot via cua-driver's
+// get_desktop_state, which captures at native size with no downscale/resize. It
+// is the robust fallback for displays where get_window_state's resize fails.
+func (c *computerServer) captureDesktop(ctx context.Context, in ComputerUseInput) (*mcp.CallToolResult, ComputerUseOutput, error) {
+	res, err := c.call(ctx, "get_desktop_state", map[string]any{"session": c.cfg.SessionID})
+	if err != nil {
+		return nil, ComputerUseOutput{}, err
+	}
+	out := ComputerUseOutput{Summary: "captured screen"}
+	if in.Mode == "ax" {
+		res.Content = filterOutImages(res.Content)
+		return res, out, nil
+	}
+	for _, ct := range res.Content {
+		if img, ok := ct.(*mcp.ImageContent); ok {
+			out.ImageMIME = img.MIMEType
+		}
+	}
+	return res, out, nil
 }
 
 func filterOutImages(cs []mcp.Content) []mcp.Content {
