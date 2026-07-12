@@ -27,6 +27,9 @@ func startFakeDriver(t *testing.T, ctx context.Context) *mcp.ClientSession {
 			Content: []mcp.Content{&mcp.ImageContent{MIMEType: "image/png", Data: []byte("\x89PNGfake")}},
 		}, map[string]any{"elements": []any{map[string]any{"element_index": 1, "role": "AXButton", "label": "OK"}}}, nil
 	})
+	mcp.AddTool(srv, &mcp.Tool{Name: "get_desktop_state"}, func(_ context.Context, _ *mcp.CallToolRequest, _ map[string]any) (*mcp.CallToolResult, map[string]any, error) {
+		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.ImageContent{MIMEType: "image/png", Data: []byte("\x89PNGdesktop")}}}, map[string]any{}, nil
+	})
 	mcp.AddTool(srv, &mcp.Tool{Name: "click"}, func(_ context.Context, _ *mcp.CallToolRequest, _ map[string]any) (*mcp.CallToolResult, map[string]any, error) {
 		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "clicked"}}}, map[string]any{}, nil
 	})
