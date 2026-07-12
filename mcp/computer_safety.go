@@ -89,8 +89,9 @@ func BlockedComputerReason(in ComputerUseInput) string {
 				}
 			}
 			if all {
-				sort.Strings(blocked)
-				return fmt.Sprintf("blocked key combo: %s", strings.Join(blocked, "+"))
+				b := append([]string(nil), blocked...)
+				sort.Strings(b)
+				return fmt.Sprintf("blocked key combo: %s", strings.Join(b, "+"))
 			}
 		}
 	}
