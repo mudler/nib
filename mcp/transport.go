@@ -42,5 +42,18 @@ func StartTransports(ctx context.Context, cfg types.Config, shellJobs *ShellJobs
 	}()
 
 	transports := []mcp.Transport{bashMCPServerClient, filesystemMCPServerClient, webMCPServerClient}
+
+	// Start the computer_use MCP server only when desktop control is armed
+	// (opt-in). It proxies to the cua-driver over stdio.
+	if cfg.Computer.Enabled {
+		computerServerTransport, computerClient := mcp.NewInMemoryTransports()
+		go func() {
+			if err := StartComputerMCPServer(ctx, computerServerTransport, cfg); err != nil {
+				fmt.Fprintf(os.Stderr, "computer MCP server error: %v\n", err)
+			}
+		}()
+		transports = append(transports, computerClient)
+	}
+
 	return transports, nil
 }

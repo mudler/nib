@@ -111,6 +111,12 @@ type Session struct {
 	reloadMu      sync.Mutex
 	pendingReload bool
 
+	// computerEnabled records whether desktop control (computer_use) was armed
+	// for this session. It gates cogito's Phase-A tool-image forwarding so
+	// screenshots are only fed back to the model when a computer transport is
+	// actually registered. Fixed at construction (Computer config is runtime-only).
+	computerEnabled bool
+
 	tracer *trace.Recorder // non-nil when session tracing is enabled
 }
 
@@ -250,6 +256,7 @@ func NewSession(ctx context.Context, cfg types.Config, callbacks Callbacks, tran
 		metadata:            cfg.Metadata,
 		reasoningEffort:     cfg.ReasoningEffort,
 		mcpClient:           client,
+		computerEnabled:     cfg.Computer.Enabled,
 		cfgClients:          map[string]*mcp.ClientSession{},
 		cfgServers:          map[string]types.MCPServer{},
 		configurator:        manage.New(plugin.BaseDir(), config.WritablePath()),
@@ -762,6 +769,9 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 			}
 		}),
 		cogito.WithMCPs(s.allClients()...),
+		// Feed tool-returned images (e.g. computer_use screenshots) back to the
+		// model only when desktop control is armed for this session.
+		cogito.WithToolImageForwarding(s.computerEnabled),
 		cogito.WithToolCallBack(func(tool *cogito.ToolChoice, state *cogito.SessionState) cogito.ToolCallDecision {
 			// Capture sub-agent activity so the agent_logs tool can surface what
 			// a backgrounded sub-agent is doing.
