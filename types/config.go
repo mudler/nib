@@ -157,6 +157,19 @@ type Config struct {
 	// WorkingDir, when non-empty, is the directory host tools (bash, filesystem)
 	// operate in. Runtime-only; empty means the process cwd (legacy behavior).
 	WorkingDir string `yaml:"-"`
+	// Computer is the opt-in desktop-control capability (cua-driver). Runtime-only.
+	Computer ComputerConfig `yaml:"-"`
+}
+
+// ComputerConfig configures the built-in computer_use MCP server. When Enabled,
+// nib spawns Command (the cua-driver binary) as a stdio MCP child. nib never
+// bundles the binary; Command is resolved by the consumer (or NIB_CUA_DRIVER_CMD).
+type ComputerConfig struct {
+	Enabled   bool
+	Command   string
+	Args      []string
+	Env       map[string]string
+	SessionID string
 }
 
 func (c *Config) GetPrompt() string {
