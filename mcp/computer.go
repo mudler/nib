@@ -65,44 +65,66 @@ func (c *computerServer) capture(ctx context.Context, in ComputerUseInput) (*mcp
 	c.sticky.PID, c.sticky.WindowID = pid, windowID
 	c.mu.Unlock()
 
-	// Fetch the window's AT-SPI element tree WITHOUT a screenshot
-	// (include_screenshot=false). That skips get_window_state's screenshot resize
-	// step — which fails on some displays with "unsupported color type for resize:
-	// L8" — while still registering the element snapshot so the model can click by
-	// `element` index. Best-effort; skipped for vision mode or when no window is
-	// focused. The actual screenshot comes from get_desktop_state below.
+	// ax mode: the AT-SPI tree only, no screenshot. include_screenshot=false skips
+	// get_window_state's screenshot resize entirely, so it is inherently safe from
+	// the "unsupported color type for resize: L8" failure some displays hit.
+	if in.Mode == "ax" && pid != 0 {
+		if st, e := c.call(ctx, "get_window_state", map[string]any{
+			"pid": pid, "window_id": windowID, "include_screenshot": false, "session": c.cfg.SessionID,
+		}); e == nil && st != nil && !st.IsError {
+			st.Content = filterOutImages(st.Content)
+			return st, ComputerUseOutput{Summary: "captured window (ax)", Elements: parseElements(structuredMap(st), in.MaxElements)}, nil
+		}
+	}
+
+	// Primary path (som/vision): the standard cua-driver capture. get_window_state
+	// returns the window screenshot (with SOM numbered overlays in som mode) AND the
+	// AX element tree in one call — the reference (Hermes) behaviour and the
+	// best-quality path on normal displays.
+	if pid != 0 {
+		if st, e := c.call(ctx, "get_window_state", map[string]any{"pid": pid, "window_id": windowID, "session": c.cfg.SessionID}); e == nil && st != nil && !st.IsError {
+			mime := ""
+			for _, ct := range st.Content {
+				if img, ok := ct.(*mcp.ImageContent); ok {
+					mime = img.MIMEType
+				}
+			}
+			if mime != "" {
+				out := ComputerUseOutput{Summary: "captured window", ImageMIME: mime}
+				if in.Mode == "vision" {
+					out.Summary = "captured screen" // pixels only; drop AX-tree noise
+				} else {
+					out.Elements = parseElements(structuredMap(st), in.MaxElements)
+				}
+				return st, out, nil
+			}
+		}
+	}
+
+	// Fallback: the primary window capture failed (e.g. the L8 resize error) or no
+	// window is focusable. Take the screenshot from get_desktop_state (full display,
+	// native size, NO resize → L8-proof) and, for som, the element tree from a
+	// screenshot-less get_window_state (also skips the resize) so clicking by
+	// element index still works.
 	var elements []ComputerElement
-	var treeRes *mcp.CallToolResult
 	if in.Mode != "vision" && pid != 0 {
 		if st, e := c.call(ctx, "get_window_state", map[string]any{
 			"pid": pid, "window_id": windowID, "include_screenshot": false, "session": c.cfg.SessionID,
 		}); e == nil && st != nil && !st.IsError {
-			treeRes = st
 			elements = parseElements(structuredMap(st), in.MaxElements)
 		}
 	}
-
-	// ax mode wants the AT-SPI text tree only (no screenshot). Hand back the tree
-	// result when we have it; otherwise fall through to a plain screenshot.
-	if in.Mode == "ax" && treeRes != nil {
-		return treeRes, ComputerUseOutput{Summary: "captured window (ax)", Elements: elements}, nil
-	}
-
-	// The screenshot always comes from get_desktop_state: full display at native
-	// size with NO downscale/resize, so it never hits the L8 resize failure. It is
-	// combined with the element tree parsed above so the model both SEES the screen
-	// and can click elements by index.
-	res, err := c.call(ctx, "get_desktop_state", map[string]any{"session": c.cfg.SessionID})
+	desk, err := c.call(ctx, "get_desktop_state", map[string]any{"session": c.cfg.SessionID})
 	if err != nil {
 		return nil, ComputerUseOutput{}, err
 	}
 	out := ComputerUseOutput{Summary: "captured screen", Elements: elements}
-	for _, ct := range res.Content {
+	for _, ct := range desk.Content {
 		if img, ok := ct.(*mcp.ImageContent); ok {
 			out.ImageMIME = img.MIMEType
 		}
 	}
-	return res, out, nil
+	return desk, out, nil
 }
 
 func filterOutImages(cs []mcp.Content) []mcp.Content {
