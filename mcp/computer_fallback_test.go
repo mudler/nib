@@ -176,3 +176,39 @@ func TestCaptureSurfacesWindowErrorWithoutDesktopFallback(t *testing.T) {
 		t.Fatal("capture must stay window-scoped and never fall back to get_desktop_state")
 	}
 }
+
+func TestScrubbedDriverEnvDropsDisplayOnWayland(t *testing.T) {
+	t.Setenv("WAYLAND_DISPLAY", "wayland-1")
+	t.Setenv("DISPLAY", ":0")
+	t.Setenv("XAUTHORITY", "/run/user/1000/.mutter-Xwaylandauth")
+	env := scrubbedDriverEnv(nil)
+	for _, kv := range env {
+		if strings.HasPrefix(kv, "DISPLAY=") || strings.HasPrefix(kv, "XAUTHORITY=") {
+			t.Fatalf("Wayland session must not leak %q to the driver (forces the broken X11 capture path)", kv)
+		}
+	}
+	var enabledWayland bool
+	for _, kv := range env {
+		if kv == "CUA_DRIVER_RS_ENABLE_WAYLAND=1" {
+			enabledWayland = true
+		}
+	}
+	if !enabledWayland {
+		t.Fatal("must enable the native Wayland backend")
+	}
+}
+
+func TestScrubbedDriverEnvKeepsDisplayOnX11(t *testing.T) {
+	t.Setenv("WAYLAND_DISPLAY", "")
+	t.Setenv("DISPLAY", ":0")
+	env := scrubbedDriverEnv(nil)
+	var keptDisplay bool
+	for _, kv := range env {
+		if kv == "DISPLAY=:0" {
+			keptDisplay = true
+		}
+	}
+	if !keptDisplay {
+		t.Fatal("a pure X11 session must keep DISPLAY for full X11 support")
+	}
+}

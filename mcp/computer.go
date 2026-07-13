@@ -393,6 +393,21 @@ func StartComputerMCPServer(ctx context.Context, transport mcp.Transport, cfg ty
 // the third-party binary never inherits them.
 func scrubbedDriverEnv(extra map[string]string) []string {
 	drop := map[string]bool{"OPENAI_API_KEY": true, "ANTHROPIC_API_KEY": true, "LOCALAI_API_KEY": true}
+	// On a Wayland session, force the driver down its native Wayland path. With
+	// DISPLAY set, cua-driver prefers X11/XWayland for BOTH input and capture —
+	// but XWayland only exposes the driver's own overlay window, and its
+	// root-window screenshot fails ("X11 error ... GetImage") on many
+	// compositors. Dropping DISPLAY/XAUTHORITY makes it capture via
+	// zwlr_screencopy / xdg-desktop-portal and inject via zwlr_virtual_pointer,
+	// which is what actually works on wlroots. A pure-X11 session (no
+	// WAYLAND_DISPLAY) keeps DISPLAY and full X11 support. Override via
+	// cfg.Computer.Env (appended last) if you must pin a transport.
+	wayland := os.Getenv("WAYLAND_DISPLAY") != ""
+	if wayland {
+		drop["DISPLAY"] = true
+		drop["XAUTHORITY"] = true
+		xlog.Info("cua-driver: Wayland session detected — using native Wayland capture/input (DISPLAY dropped so it won't fall back to the broken XWayland X11 path)")
+	}
 	var env []string
 	for _, kv := range os.Environ() {
 		key := kv
