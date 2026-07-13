@@ -128,15 +128,32 @@ func (c *computerServer) capture(ctx context.Context, in ComputerUseInput) (*mcp
 		return ""
 	}
 
+	// Graceful degradation: when no AT-SPI accessibility tree is available (common
+	// on wlroots Wayland with no a11y bus, or any locked-down surface), the capture
+	// still carries a screenshot but zero elements. Rather than fail, tell the
+	// model to act by pixel (x,y) off the screenshot — the driver's "element px
+	// action" — so som degrades to functional vision automatically.
+	const noAXHint = " (no accessibility elements available — act by pixel: pass x,y off this screenshot instead of an element index)"
+
 	switch in.Mode {
 	case "ax":
 		st.Content = filterOutImages(st.Content)
-		return st, ComputerUseOutput{Summary: "captured window (ax)", Elements: parseElements(structuredMap(st), in.MaxElements)}, nil
+		els := parseElements(structuredMap(st), in.MaxElements)
+		summary := "captured window (ax)"
+		if len(els) == 0 {
+			summary = "captured window (ax)" + noAXHint
+		}
+		return st, ComputerUseOutput{Summary: summary, Elements: els}, nil
 	case "vision":
 		// Pixels only — drop the AX-tree noise, keep just the screenshot.
 		return st, ComputerUseOutput{Summary: "captured screen", ImageMIME: imageMIME()}, nil
 	default: // som
-		return st, ComputerUseOutput{Summary: "captured window", ImageMIME: imageMIME(), Elements: parseElements(structuredMap(st), in.MaxElements)}, nil
+		els := parseElements(structuredMap(st), in.MaxElements)
+		summary := "captured window"
+		if len(els) == 0 {
+			summary = "captured screen" + noAXHint
+		}
+		return st, ComputerUseOutput{Summary: summary, ImageMIME: imageMIME(), Elements: els}, nil
 	}
 }
 
@@ -285,6 +302,17 @@ func StartComputerMCPServer(ctx context.Context, transport mcp.Transport, cfg ty
 		"capture_scope": "window", "max_image_dimension": 0,
 	}}); e != nil {
 		xlog.Warn("cua-driver set_config (disable screenshot resize) failed; captures may hit the L8 resize bug", "err", e)
+	}
+
+	// Probe the driver's capabilities once and log them. This tells us — and the
+	// user's exported logs — exactly what the display server supports on this
+	// machine (ax_capability, screen_capture_capability, wayland_backend, input),
+	// which is the difference between "full control", "read-only" (GNOME/KDE
+	// Wayland input is gated off — cua #1982), and "unsupported". Best-effort.
+	if hr, e := driverSess.CallTool(ctx, &mcp.CallToolParams{Name: "health_report"}); e != nil {
+		xlog.Warn("cua-driver health_report failed", "err", e)
+	} else if hr != nil {
+		xlog.Info("cua-driver capabilities", "health", structuredMap(hr), "text", firstText(hr.Content))
 	}
 
 	cs := newComputerServer(driverSess, cfg.Computer)
