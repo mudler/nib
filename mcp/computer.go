@@ -55,18 +55,47 @@ func structuredMap(res *mcp.CallToolResult) map[string]any {
 	return nil
 }
 
+// listFrontmost enumerates windows and returns the frontmost pid/window_id.
+// list_windows over the MCP stdio bridge intermittently comes back empty on a
+// busy session (hermes hits the same flakiness and re-fetches), and some window
+// managers under-report with on_screen_only, so we retry and then relax the
+// filter before giving up. On failure the error carries the driver's own
+// message / last payload so the model — and our logs — see why, instead of a
+// bare "no window". Note: list_windows' schema takes no session param.
+func (c *computerServer) listFrontmost(ctx context.Context) (int, int, error) {
+	var lastText string
+	var sawErr bool
+	for _, onScreen := range []bool{true, false} {
+		for attempt := 0; attempt < 2; attempt++ {
+			res, err := c.call(ctx, "list_windows", map[string]any{"on_screen_only": onScreen})
+			if err != nil {
+				return 0, 0, fmt.Errorf("list_windows: %w", err)
+			}
+			if res != nil && res.IsError {
+				sawErr = true
+				lastText = firstText(res.Content)
+				continue
+			}
+			if pid, windowID := frontmostWindow(structuredMap(res)); pid != 0 {
+				return pid, windowID, nil
+			}
+			lastText = firstText(res.Content)
+		}
+	}
+	if sawErr && lastText != "" {
+		return 0, 0, fmt.Errorf("list_windows failed: %s", lastText)
+	}
+	return 0, 0, fmt.Errorf("no on-screen window to capture (list_windows returned no windows; last payload: %q)", lastText)
+}
+
 func (c *computerServer) capture(ctx context.Context, in ComputerUseInput) (*mcp.CallToolResult, ComputerUseOutput, error) {
-	winRes, err := c.call(ctx, "list_windows", map[string]any{"on_screen_only": true, "session": c.cfg.SessionID})
+	pid, windowID, err := c.listFrontmost(ctx)
 	if err != nil {
 		return nil, ComputerUseOutput{}, err
 	}
-	pid, windowID := frontmostWindow(structuredMap(winRes))
 	c.mu.Lock()
 	c.sticky.PID, c.sticky.WindowID = pid, windowID
 	c.mu.Unlock()
-	if pid == 0 {
-		return nil, ComputerUseOutput{}, fmt.Errorf("no on-screen window to capture")
-	}
 
 	// The standard cua-driver capture, matching the reference (hermes-agent):
 	// one window-scoped get_window_state returns the window screenshot (with SOM
@@ -109,6 +138,15 @@ func (c *computerServer) capture(ctx context.Context, in ComputerUseInput) (*mcp
 	default: // som
 		return st, ComputerUseOutput{Summary: "captured window", ImageMIME: imageMIME(), Elements: parseElements(structuredMap(st), in.MaxElements)}, nil
 	}
+}
+
+func firstText(cs []mcp.Content) string {
+	for _, c := range cs {
+		if t, ok := c.(*mcp.TextContent); ok && t.Text != "" {
+			return t.Text
+		}
+	}
+	return ""
 }
 
 func filterOutImages(cs []mcp.Content) []mcp.Content {
@@ -185,11 +223,10 @@ func (c *computerServer) computerUse(ctx context.Context, _ *mcp.CallToolRequest
 		// pure local wait, clamped 0..30; no driver call.
 		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "waited"}}}, ComputerUseOutput{Summary: "waited"}, nil
 	case "focus_app":
-		winRes, err := c.call(ctx, "list_windows", map[string]any{"on_screen_only": true, "session": c.cfg.SessionID})
+		pid, windowID, err := c.listFrontmost(ctx) // simplistic v1: front window; app-name filtering is a follow-up
 		if err != nil {
 			return nil, ComputerUseOutput{}, err
 		}
-		pid, windowID := frontmostWindow(structuredMap(winRes)) // simplistic v1: front window; app-name filtering is a follow-up
 		c.mu.Lock()
 		c.sticky.PID, c.sticky.WindowID = pid, windowID
 		c.mu.Unlock()
@@ -281,6 +318,14 @@ func scrubbedDriverEnv(extra map[string]string) []string {
 		env = append(env, kv)
 	}
 	env = append(env, "CUA_DRIVER_RS_TELEMETRY_ENABLED=0")
+	// Opt into cua-driver's native Wayland backend. Off by default, it runs
+	// X11-only, so on a Wayland session list_windows (which reads the X11
+	// _NET_CLIENT_LIST) sees nothing and every capture fails with "no on-screen
+	// window". Enabled, wlroots compositors (sway/labwc/hyprland) work; on
+	// GNOME/KDE Wayland the driver surfaces its own actionable error (this build
+	// lacks libei/portal input — cua issue #1982) instead of a silent empty list.
+	// Harmless on X11. Callers can still override via cfg.Computer.Env below.
+	env = append(env, "CUA_DRIVER_RS_ENABLE_WAYLAND=1")
 	for k, v := range extra {
 		env = append(env, k+"="+v)
 	}
