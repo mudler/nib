@@ -90,6 +90,77 @@ func TestCaptureDegradesToPixelWhenNoAX(t *testing.T) {
 	}
 }
 
+// Native-Wayland case: list_windows (X11 _NET_CLIENT_LIST) sees only the
+// driver's own agent-cursor overlay (pid=None), so there is no addressable
+// window. capture must switch to desktop scope, screenshot the whole display,
+// and enable screen-absolute pixel clicks.
+func startWaylandDesktopFakeDriver(t *testing.T, ctx context.Context, scope *string) *mcp.ClientSession {
+	t.Helper()
+	srvT, cliT := mcp.NewInMemoryTransports()
+	srv := mcp.NewServer(&mcp.Implementation{Name: "fake-wl", Version: "v0"}, nil)
+	// Only the overlay window shows up, with pid=None (0) — not addressable.
+	mcp.AddTool(srv, &mcp.Tool{Name: "list_windows"}, func(_ context.Context, _ *mcp.CallToolRequest, _ map[string]any) (*mcp.CallToolResult, map[string]any, error) {
+		return &mcp.CallToolResult{}, map[string]any{"windows": []any{map[string]any{"window_id": 4194305, "app_name": "Cua.AgentCursorOverlay.default", "z_index": 0}}}, nil
+	})
+	mcp.AddTool(srv, &mcp.Tool{Name: "set_config"}, func(_ context.Context, _ *mcp.CallToolRequest, in map[string]any) (*mcp.CallToolResult, map[string]any, error) {
+		if s, ok := in["capture_scope"].(string); ok {
+			*scope = s
+		}
+		return &mcp.CallToolResult{}, nil, nil
+	})
+	mcp.AddTool(srv, &mcp.Tool{Name: "get_desktop_state"}, func(_ context.Context, _ *mcp.CallToolRequest, _ map[string]any) (*mcp.CallToolResult, map[string]any, error) {
+		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.ImageContent{MIMEType: "image/png", Data: []byte("\x89PNGfullscreen")}}}, nil, nil
+	})
+	// click must be reachable (not blocked by the "no active window" guard).
+	mcp.AddTool(srv, &mcp.Tool{Name: "click"}, func(_ context.Context, _ *mcp.CallToolRequest, _ map[string]any) (*mcp.CallToolResult, map[string]any, error) {
+		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "clicked"}}}, nil, nil
+	})
+	go func() { _ = srv.Run(ctx, srvT) }()
+	client := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "v0"}, nil)
+	sess, err := client.Connect(ctx, cliT, nil)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	return sess
+}
+
+func TestCaptureFallsBackToDesktopScopeOnNativeWayland(t *testing.T) {
+	ctx := context.Background()
+	var scope string
+	cs := newComputerServer(startWaylandDesktopFakeDriver(t, ctx, &scope), types.ComputerConfig{SessionID: "x"})
+	res, out, err := cs.computerUse(ctx, nil, ComputerUseInput{Action: "capture", Mode: "som"})
+	if err != nil {
+		t.Fatalf("capture must fall back to a desktop screenshot, not fail: %v", err)
+	}
+	if res == nil || res.IsError {
+		t.Fatal("desktop fallback must return a screenshot result")
+	}
+	if scope != "desktop" {
+		t.Fatalf("capture must switch the driver to desktop scope, got %q", scope)
+	}
+	var gotImage bool
+	for _, c := range res.Content {
+		if _, ok := c.(*mcp.ImageContent); ok {
+			gotImage = true
+		}
+	}
+	if !gotImage {
+		t.Fatal("desktop fallback must carry a full-screen image")
+	}
+	if !strings.Contains(out.Summary, "by pixel") {
+		t.Fatalf("summary must tell the model to act by pixel; got %q", out.Summary)
+	}
+	// A pixel click after a desktop capture must be allowed (not blocked by the
+	// "no active window" guard) and reach the driver.
+	clickRes, _, err := cs.computerUse(ctx, nil, ComputerUseInput{Action: "click", Coordinate: []int{100, 200}})
+	if err != nil {
+		t.Fatalf("screen-absolute pixel click after desktop capture must be allowed: %v", err)
+	}
+	if clickRes == nil || clickRes.IsError {
+		t.Fatal("pixel click should reach the driver in desktop mode")
+	}
+}
+
 func TestCaptureSurfacesWindowErrorWithoutDesktopFallback(t *testing.T) {
 	ctx := context.Background()
 	var desktopCalled bool

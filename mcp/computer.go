@@ -34,10 +34,33 @@ type computerServer struct {
 	cfg    types.ComputerConfig
 	mu     sync.Mutex
 	sticky StickyContext
+	scope  string // current cua-driver capture_scope ("window" | "desktop")
 }
 
 func newComputerServer(driver *mcp.ClientSession, cfg types.ComputerConfig) *computerServer {
-	return &computerServer{driver: driver, cfg: cfg, sticky: StickyContext{SessionID: cfg.SessionID}}
+	// Startup sets capture_scope=window (see StartComputerMCPServer), so mirror it.
+	return &computerServer{driver: driver, cfg: cfg, sticky: StickyContext{SessionID: cfg.SessionID}, scope: "window"}
+}
+
+// setScope flips the driver's capture_scope, but only when it actually changes.
+// window scope drives a specific window (get_window_state, window-local coords);
+// desktop scope captures the whole display (get_desktop_state) and enables
+// window-less screen-absolute clicks — the only path that works on native
+// Wayland, where list_windows (X11 _NET_CLIENT_LIST) can't see Wayland toplevels.
+func (c *computerServer) setScope(ctx context.Context, scope string) error {
+	c.mu.Lock()
+	cur := c.scope
+	c.mu.Unlock()
+	if cur == scope {
+		return nil
+	}
+	if _, err := c.call(ctx, "set_config", map[string]any{"capture_scope": scope}); err != nil {
+		return err
+	}
+	c.mu.Lock()
+	c.scope = scope
+	c.mu.Unlock()
+	return nil
 }
 
 func (c *computerServer) call(ctx context.Context, tool string, args map[string]any) (*mcp.CallToolResult, error) {
@@ -55,16 +78,15 @@ func structuredMap(res *mcp.CallToolResult) map[string]any {
 	return nil
 }
 
-// listFrontmost enumerates windows and returns the frontmost pid/window_id.
-// list_windows over the MCP stdio bridge intermittently comes back empty on a
-// busy session (hermes hits the same flakiness and re-fetches), and some window
-// managers under-report with on_screen_only, so we retry and then relax the
-// filter before giving up. On failure the error carries the driver's own
-// message / last payload so the model — and our logs — see why, instead of a
-// bare "no window". Note: list_windows' schema takes no session param.
+// listFrontmost enumerates windows and returns the frontmost addressable
+// pid/window_id, or (0, 0) when there is none. list_windows over the MCP stdio
+// bridge intermittently comes back empty on a busy session (hermes hits the same
+// flakiness and re-fetches), and some window managers under-report with
+// on_screen_only, so we retry and relax the filter. A (0, 0) result is not an
+// error — it means "no addressable window", and the caller captures the whole
+// screen in desktop scope instead (the native-Wayland path). list_windows' schema
+// takes no session param.
 func (c *computerServer) listFrontmost(ctx context.Context) (int, int, error) {
-	var lastText string
-	var sawErr bool
 	for _, onScreen := range []bool{true, false} {
 		for attempt := 0; attempt < 2; attempt++ {
 			res, err := c.call(ctx, "list_windows", map[string]any{"on_screen_only": onScreen})
@@ -72,20 +94,43 @@ func (c *computerServer) listFrontmost(ctx context.Context) (int, int, error) {
 				return 0, 0, fmt.Errorf("list_windows: %w", err)
 			}
 			if res != nil && res.IsError {
-				sawErr = true
-				lastText = firstText(res.Content)
 				continue
 			}
 			if pid, windowID := frontmostWindow(structuredMap(res)); pid != 0 {
 				return pid, windowID, nil
 			}
-			lastText = firstText(res.Content)
 		}
 	}
-	if sawErr && lastText != "" {
-		return 0, 0, fmt.Errorf("list_windows failed: %s", lastText)
+	return 0, 0, nil // no addressable window — caller falls back to a desktop-scope capture
+}
+
+// captureDesktop grabs the whole display in desktop scope. This is the fallback
+// when list_windows finds no addressable top-level window — the normal case on
+// native Wayland, where list_windows (X11 _NET_CLIENT_LIST) can't enumerate
+// Wayland toplevels and only the driver's own overlay appears. get_desktop_state
+// captures via the portal/grim/native screenshot path (no window, no AT-SPI, no
+// L8 resize), and the model acts by screen-absolute pixel (x,y).
+func (c *computerServer) captureDesktop(ctx context.Context, in ComputerUseInput) (*mcp.CallToolResult, ComputerUseOutput, error) {
+	if err := c.setScope(ctx, "desktop"); err != nil {
+		return nil, ComputerUseOutput{}, fmt.Errorf("switch to desktop capture scope: %w", err)
 	}
-	return 0, 0, fmt.Errorf("no on-screen window to capture (list_windows returned no windows; last payload: %q)", lastText)
+	c.mu.Lock()
+	c.sticky.PID, c.sticky.WindowID, c.sticky.Desktop = 0, 0, true
+	c.mu.Unlock()
+	st, err := c.call(ctx, "get_desktop_state", map[string]any{"session": c.cfg.SessionID})
+	if err != nil {
+		return nil, ComputerUseOutput{}, err
+	}
+	if st != nil && st.IsError {
+		return st, ComputerUseOutput{}, nil
+	}
+	mime := ""
+	for _, ct := range st.Content {
+		if img, ok := ct.(*mcp.ImageContent); ok {
+			mime = img.MIMEType
+		}
+	}
+	return st, ComputerUseOutput{Summary: "captured full screen (no addressable window — act by pixel: pass screen-absolute x,y off this screenshot)", ImageMIME: mime}, nil
 }
 
 func (c *computerServer) capture(ctx context.Context, in ComputerUseInput) (*mcp.CallToolResult, ComputerUseOutput, error) {
@@ -93,8 +138,14 @@ func (c *computerServer) capture(ctx context.Context, in ComputerUseInput) (*mcp
 	if err != nil {
 		return nil, ComputerUseOutput{}, err
 	}
+	if pid == 0 {
+		return c.captureDesktop(ctx, in)
+	}
+	if e := c.setScope(ctx, "window"); e != nil {
+		xlog.Warn("cua-driver set_config capture_scope=window failed", "err", e)
+	}
 	c.mu.Lock()
-	c.sticky.PID, c.sticky.WindowID = pid, windowID
+	c.sticky.PID, c.sticky.WindowID, c.sticky.Desktop = pid, windowID, false
 	c.mu.Unlock()
 
 	// The standard cua-driver capture, matching the reference (hermes-agent):
@@ -183,7 +234,15 @@ func frontmostWindow(m map[string]any) (int, int) {
 	var wins []win
 	for _, raw := range ws {
 		wm, _ := raw.(map[string]any)
-		wins = append(wins, win{pid: toInt(wm["pid"]), id: toInt(wm["window_id"]), z: toInt(wm["z_index"])})
+		pid := toInt(wm["pid"])
+		if pid <= 0 {
+			continue // unowned windows report pid=None — e.g. cua-driver's own agent-cursor overlay
+		}
+		name := strings.ToLower(str(wm["app_name"]) + " " + str(wm["title"]))
+		if strings.Contains(name, "agentcursoroverlay") || strings.Contains(name, "cua.") {
+			continue // never target the driver's own overlay window
+		}
+		wins = append(wins, win{pid: pid, id: toInt(wm["window_id"]), z: toInt(wm["z_index"])})
 	}
 	if len(wins) == 0 {
 		return 0, 0

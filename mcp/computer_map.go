@@ -11,6 +11,7 @@ type StickyContext struct {
 	PID       int
 	WindowID  int
 	SessionID string
+	Desktop   bool // true after a desktop-scope capture: act by screen-absolute pixel, no window
 }
 
 var modifierKeys = map[string]bool{
@@ -36,7 +37,10 @@ func buildCuaCall(in ComputerUseInput, ctx StickyContext) (string, map[string]an
 		base["session"] = ctx.SessionID
 	}
 	mutating := IsDestructiveComputerAction(in.Action)
-	if mutating && in.Action != "focus_app" && ctx.PID == 0 {
+	// In desktop scope there is deliberately no window (screen-absolute pixel
+	// actions), so PID==0 is expected — only require a window when we are NOT in
+	// desktop mode.
+	if mutating && in.Action != "focus_app" && ctx.PID == 0 && !ctx.Desktop {
 		return "", nil, fmt.Errorf("no active window — call capture() first")
 	}
 	withCtx := func(m map[string]any) map[string]any {
