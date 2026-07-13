@@ -8,26 +8,26 @@ import (
 	"github.com/mudler/nib/types"
 )
 
-// When get_window_state fails (e.g. the cua-driver "unsupported color type for
-// resize: L8" error), capture must fall back to get_desktop_state so the model
-// still receives a screenshot.
-func startL8FakeDriver(t *testing.T, ctx context.Context) *mcp.ClientSession {
+// The capture path is window-scoped only (matching hermes-agent): server-side
+// screenshot resize is disabled at startup (max_image_dimension=0) so the
+// "unsupported color type for resize: L8" failure no longer occurs, and there is
+// NO get_desktop_state fallback — get_desktop_state requires the desktop capture
+// scope, and switching scope mid-session would break window-relative element
+// clicks. If get_window_state still returns an error, capture surfaces it
+// honestly instead of silently changing scope.
+func startWindowErrorFakeDriver(t *testing.T, ctx context.Context, desktopCalled *bool) *mcp.ClientSession {
 	t.Helper()
 	srvT, cliT := mcp.NewInMemoryTransports()
-	srv := mcp.NewServer(&mcp.Implementation{Name: "fake-l8", Version: "v0"}, nil)
+	srv := mcp.NewServer(&mcp.Implementation{Name: "fake-winerr", Version: "v0"}, nil)
 	mcp.AddTool(srv, &mcp.Tool{Name: "list_windows"}, func(_ context.Context, _ *mcp.CallToolRequest, _ map[string]any) (*mcp.CallToolResult, map[string]any, error) {
 		return &mcp.CallToolResult{}, map[string]any{"windows": []any{map[string]any{"pid": 42, "window_id": 7, "z_index": 0}}}, nil
 	})
-	// get_window_state fails with the L8 resize error WHEN it grabs a screenshot,
-	// but the screenshot-less (include_screenshot=false) call succeeds with the tree.
-	mcp.AddTool(srv, &mcp.Tool{Name: "get_window_state"}, func(_ context.Context, _ *mcp.CallToolRequest, in map[string]any) (*mcp.CallToolResult, map[string]any, error) {
-		if v, ok := in["include_screenshot"].(bool); ok && !v {
-			return &mcp.CallToolResult{}, map[string]any{"elements": []any{map[string]any{"element_index": 1, "role": "AXButton", "label": "OK"}}}, nil
-		}
+	mcp.AddTool(srv, &mcp.Tool{Name: "get_window_state"}, func(_ context.Context, _ *mcp.CallToolRequest, _ map[string]any) (*mcp.CallToolResult, map[string]any, error) {
 		return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: "Capture error: unsupported color type for resize: L8"}}}, nil, nil
 	})
-	// get_desktop_state returns a full-screen screenshot (the robust fallback).
+	// get_desktop_state must never be reached; record it if it is.
 	mcp.AddTool(srv, &mcp.Tool{Name: "get_desktop_state"}, func(_ context.Context, _ *mcp.CallToolRequest, _ map[string]any) (*mcp.CallToolResult, map[string]any, error) {
+		*desktopCalled = true
 		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.ImageContent{MIMEType: "image/png", Data: []byte("\x89PNGdesktop")}}}, nil, nil
 	})
 	go func() { _ = srv.Run(ctx, srvT) }()
@@ -39,26 +39,18 @@ func startL8FakeDriver(t *testing.T, ctx context.Context) *mcp.ClientSession {
 	return sess
 }
 
-func TestCaptureFallsBackToDesktopOnWindowError(t *testing.T) {
+func TestCaptureSurfacesWindowErrorWithoutDesktopFallback(t *testing.T) {
 	ctx := context.Background()
-	cs := newComputerServer(startL8FakeDriver(t, ctx), types.ComputerConfig{SessionID: "x"})
-	res, out, err := cs.computerUse(ctx, nil, ComputerUseInput{Action: "capture", Mode: "som"})
+	var desktopCalled bool
+	cs := newComputerServer(startWindowErrorFakeDriver(t, ctx, &desktopCalled), types.ComputerConfig{SessionID: "x"})
+	res, _, err := cs.computerUse(ctx, nil, ComputerUseInput{Action: "capture", Mode: "som"})
 	if err != nil {
-		t.Fatalf("capture should not surface the window error; expected desktop fallback: %v", err)
+		t.Fatalf("a driver tool-error must be surfaced as an error result, not a Go error: %v", err)
 	}
-	if res.IsError {
-		t.Fatal("capture result must not be an error after fallback")
+	if res == nil || !res.IsError {
+		t.Fatal("capture must surface the driver's get_window_state error result")
 	}
-	var gotImage bool
-	for _, c := range res.Content {
-		if _, ok := c.(*mcp.ImageContent); ok {
-			gotImage = true
-		}
-	}
-	if !gotImage {
-		t.Fatal("fallback must return a desktop screenshot image")
-	}
-	if len(out.Elements) != 1 || out.Elements[0].Label != "OK" {
-		t.Fatalf("hybrid fallback must keep clickable elements via include_screenshot=false, got %+v", out.Elements)
+	if desktopCalled {
+		t.Fatal("capture must stay window-scoped and never fall back to get_desktop_state")
 	}
 }

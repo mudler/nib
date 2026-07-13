@@ -64,67 +64,51 @@ func (c *computerServer) capture(ctx context.Context, in ComputerUseInput) (*mcp
 	c.mu.Lock()
 	c.sticky.PID, c.sticky.WindowID = pid, windowID
 	c.mu.Unlock()
-
-	// ax mode: the AT-SPI tree only, no screenshot. include_screenshot=false skips
-	// get_window_state's screenshot resize entirely, so it is inherently safe from
-	// the "unsupported color type for resize: L8" failure some displays hit.
-	if in.Mode == "ax" && pid != 0 {
-		if st, e := c.call(ctx, "get_window_state", map[string]any{
-			"pid": pid, "window_id": windowID, "include_screenshot": false, "session": c.cfg.SessionID,
-		}); e == nil && st != nil && !st.IsError {
-			st.Content = filterOutImages(st.Content)
-			return st, ComputerUseOutput{Summary: "captured window (ax)", Elements: parseElements(structuredMap(st), in.MaxElements)}, nil
-		}
+	if pid == 0 {
+		return nil, ComputerUseOutput{}, fmt.Errorf("no on-screen window to capture")
 	}
 
-	// Primary path (som/vision): the standard cua-driver capture. get_window_state
-	// returns the window screenshot (with SOM numbered overlays in som mode) AND the
-	// AX element tree in one call — the reference (Hermes) behaviour and the
-	// best-quality path on normal displays.
-	if pid != 0 {
-		if st, e := c.call(ctx, "get_window_state", map[string]any{"pid": pid, "window_id": windowID, "session": c.cfg.SessionID}); e == nil && st != nil && !st.IsError {
-			mime := ""
-			for _, ct := range st.Content {
-				if img, ok := ct.(*mcp.ImageContent); ok {
-					mime = img.MIMEType
-				}
-			}
-			if mime != "" {
-				out := ComputerUseOutput{Summary: "captured window", ImageMIME: mime}
-				if in.Mode == "vision" {
-					out.Summary = "captured screen" // pixels only; drop AX-tree noise
-				} else {
-					out.Elements = parseElements(structuredMap(st), in.MaxElements)
-				}
-				return st, out, nil
-			}
-		}
+	// The standard cua-driver capture, matching the reference (hermes-agent):
+	// one window-scoped get_window_state returns the window screenshot (with SOM
+	// numbered overlays) AND the AT-SPI element tree. Everything is window-scoped
+	// so element clicks resolve against this same frame — we never switch to the
+	// desktop scope that get_desktop_state would require. Server-side resize is
+	// disabled at startup (max_image_dimension=0), so this no longer hits the L8
+	// resize failure that previously forced a fallback.
+	args := map[string]any{"pid": pid, "window_id": windowID, "session": c.cfg.SessionID}
+	if in.Mode == "ax" {
+		args["include_screenshot"] = false // tree only — the cheap re-index path
 	}
-
-	// Fallback: the primary window capture failed (e.g. the L8 resize error) or no
-	// window is focusable. Take the screenshot from get_desktop_state (full display,
-	// native size, NO resize → L8-proof) and, for som, the element tree from a
-	// screenshot-less get_window_state (also skips the resize) so clicking by
-	// element index still works.
-	var elements []ComputerElement
-	if in.Mode != "vision" && pid != 0 {
-		if st, e := c.call(ctx, "get_window_state", map[string]any{
-			"pid": pid, "window_id": windowID, "include_screenshot": false, "session": c.cfg.SessionID,
-		}); e == nil && st != nil && !st.IsError {
-			elements = parseElements(structuredMap(st), in.MaxElements)
-		}
+	if in.MaxElements > 0 {
+		args["max_elements"] = in.MaxElements
 	}
-	desk, err := c.call(ctx, "get_desktop_state", map[string]any{"session": c.cfg.SessionID})
+	st, err := c.call(ctx, "get_window_state", args)
 	if err != nil {
 		return nil, ComputerUseOutput{}, err
 	}
-	out := ComputerUseOutput{Summary: "captured screen", Elements: elements}
-	for _, ct := range desk.Content {
-		if img, ok := ct.(*mcp.ImageContent); ok {
-			out.ImageMIME = img.MIMEType
-		}
+	if st != nil && st.IsError {
+		return st, ComputerUseOutput{}, nil // surface the driver's own error, honestly
 	}
-	return desk, out, nil
+
+	imageMIME := func() string {
+		for _, ct := range st.Content {
+			if img, ok := ct.(*mcp.ImageContent); ok {
+				return img.MIMEType
+			}
+		}
+		return ""
+	}
+
+	switch in.Mode {
+	case "ax":
+		st.Content = filterOutImages(st.Content)
+		return st, ComputerUseOutput{Summary: "captured window (ax)", Elements: parseElements(structuredMap(st), in.MaxElements)}, nil
+	case "vision":
+		// Pixels only — drop the AX-tree noise, keep just the screenshot.
+		return st, ComputerUseOutput{Summary: "captured screen", ImageMIME: imageMIME()}, nil
+	default: // som
+		return st, ComputerUseOutput{Summary: "captured window", ImageMIME: imageMIME(), Elements: parseElements(structuredMap(st), in.MaxElements)}, nil
+	}
 }
 
 func filterOutImages(cs []mcp.Content) []mcp.Content {
@@ -252,6 +236,19 @@ func StartComputerMCPServer(ctx context.Context, transport mcp.Transport, cfg ty
 		return fmt.Errorf("connect cua-driver (%s): %w", cmdPath, err)
 	}
 	defer driverSess.Close()
+
+	// Disable the driver's server-side screenshot downscaling. cua-driver's
+	// resize path fails with "unsupported color type for resize: L8" on the
+	// grayscale (L8) frames some displays produce, which took out every
+	// get_window_state capture. max_image_dimension=0 returns the native-size
+	// window screenshot (PNG encodes L8 fine), so the window-scoped capture
+	// works everywhere. capture_scope stays window so get_window_state — not the
+	// desktop-scope-only get_desktop_state — is the capture path.
+	if _, e := driverSess.CallTool(ctx, &mcp.CallToolParams{Name: "set_config", Arguments: map[string]any{
+		"capture_scope": "window", "max_image_dimension": 0,
+	}}); e != nil {
+		xlog.Warn("cua-driver set_config (disable screenshot resize) failed; captures may hit the L8 resize bug", "err", e)
+	}
 
 	cs := newComputerServer(driverSess, cfg.Computer)
 	server := mcp.NewServer(&mcp.Implementation{Name: "computer", Version: "v1.0.0"}, nil)
