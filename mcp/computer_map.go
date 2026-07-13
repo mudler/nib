@@ -92,10 +92,14 @@ func buildCuaCall(in ComputerUseInput, ctx StickyContext) (string, map[string]an
 			}
 		}
 		m := map[string]any{"button": button}
-		if in.Element != 0 {
+		switch {
+		case in.Element != 0 && ctx.PID != 0:
+			// element_index only resolves against an active window's som capture.
 			m["element_index"] = in.Element
-		} else if len(in.Coordinate) == 2 {
+		case len(in.Coordinate) == 2:
 			m["x"], m["y"] = in.Coordinate[0], in.Coordinate[1]
+		default:
+			return "", nil, fmt.Errorf("click needs a target: pass x,y pixel coordinates read off the latest screenshot (screen-absolute when there is no active window), or an element index from a som capture of a focused window")
 		}
 		if len(in.Modifiers) > 0 {
 			m["modifier"] = in.Modifiers
@@ -116,7 +120,7 @@ func buildCuaCall(in ComputerUseInput, ctx StickyContext) (string, map[string]an
 			amount = 3
 		}
 		m := map[string]any{"direction": in.Direction, "amount": clampInt(amount, 1, 50)}
-		if in.Element != 0 {
+		if in.Element != 0 && ctx.PID != 0 {
 			m["element_index"] = in.Element
 		} else if len(in.Coordinate) == 2 {
 			m["x"], m["y"] = in.Coordinate[0], in.Coordinate[1]
