@@ -86,22 +86,28 @@ func structuredMap(res *mcp.CallToolResult) map[string]any {
 // error — it means "no addressable window", and the caller captures the whole
 // screen in desktop scope instead (the native-Wayland path). list_windows' schema
 // takes no session param.
-func (c *computerServer) listFrontmost(ctx context.Context) (int, int, error) {
+func (c *computerServer) listFrontmost(ctx context.Context) (int, int) {
 	for _, onScreen := range []bool{true, false} {
 		for attempt := 0; attempt < 2; attempt++ {
 			res, err := c.call(ctx, "list_windows", map[string]any{"on_screen_only": onScreen})
 			if err != nil {
-				return 0, 0, fmt.Errorf("list_windows: %w", err)
+				// list_windows is X11-only (_NET_CLIENT_LIST); on a Wayland session
+				// (DISPLAY dropped) it can't connect and errors. That is NOT fatal —
+				// it just means "no addressable window", so the caller captures the
+				// whole screen in desktop scope. A truly dead driver resurfaces on
+				// the get_desktop_state call.
+				xlog.Debug("cua-driver list_windows failed; falling back to desktop-scope capture", "err", err)
+				continue
 			}
 			if res != nil && res.IsError {
 				continue
 			}
 			if pid, windowID := frontmostWindow(structuredMap(res)); pid != 0 {
-				return pid, windowID, nil
+				return pid, windowID
 			}
 		}
 	}
-	return 0, 0, nil // no addressable window — caller falls back to a desktop-scope capture
+	return 0, 0 // no addressable window — caller falls back to a desktop-scope capture
 }
 
 // captureDesktop grabs the whole display in desktop scope. This is the fallback
@@ -134,10 +140,7 @@ func (c *computerServer) captureDesktop(ctx context.Context, in ComputerUseInput
 }
 
 func (c *computerServer) capture(ctx context.Context, in ComputerUseInput) (*mcp.CallToolResult, ComputerUseOutput, error) {
-	pid, windowID, err := c.listFrontmost(ctx)
-	if err != nil {
-		return nil, ComputerUseOutput{}, err
-	}
+	pid, windowID := c.listFrontmost(ctx)
 	if pid == 0 {
 		return c.captureDesktop(ctx, in)
 	}
@@ -299,10 +302,7 @@ func (c *computerServer) computerUse(ctx context.Context, _ *mcp.CallToolRequest
 		// pure local wait, clamped 0..30; no driver call.
 		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "waited"}}}, ComputerUseOutput{Summary: "waited"}, nil
 	case "focus_app":
-		pid, windowID, err := c.listFrontmost(ctx) // simplistic v1: front window; app-name filtering is a follow-up
-		if err != nil {
-			return nil, ComputerUseOutput{}, err
-		}
+		pid, windowID := c.listFrontmost(ctx) // simplistic v1: front window; app-name filtering is a follow-up
 		c.mu.Lock()
 		c.sticky.PID, c.sticky.WindowID = pid, windowID
 		c.mu.Unlock()
@@ -312,6 +312,27 @@ func (c *computerServer) computerUse(ctx context.Context, _ *mcp.CallToolRequest
 	c.mu.Lock()
 	sticky := c.sticky
 	c.mu.Unlock()
+
+	// Auto-capture first: a small model often issues a click/type before ever
+	// calling capture(). Rather than dead-end on "no active window", capture the
+	// screen now to establish window/desktop context. If the action didn't say
+	// where to act, hand the screenshot back so the model can pick a target
+	// instead of failing.
+	if IsDestructiveComputerAction(in.Action) && sticky.PID == 0 && !sticky.Desktop {
+		capRes, capOut, capErr := c.capture(ctx, ComputerUseInput{Action: "capture", Mode: in.Mode, MaxElements: in.MaxElements})
+		if capErr != nil {
+			return nil, ComputerUseOutput{}, capErr
+		}
+		c.mu.Lock()
+		sticky = c.sticky
+		c.mu.Unlock()
+		if !actionHasTarget(in) {
+			capOut.Summary = "No screenshot yet — captured the screen first. " + capOut.Summary +
+				" Now call computer_use again to " + in.Action + " at a specific target (an element index, or x,y read off this screenshot)."
+			return capRes, capOut, nil
+		}
+	}
+
 	tool, args, err := buildCuaCall(in, sticky)
 	if err != nil {
 		return nil, ComputerUseOutput{}, err

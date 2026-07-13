@@ -124,6 +124,32 @@ func startWaylandDesktopFakeDriver(t *testing.T, ctx context.Context, scope *str
 	return sess
 }
 
+// A small model often clicks before ever capturing. Instead of dead-ending on
+// "no active window", a targetless action must auto-capture and return the
+// screenshot so the model can then aim.
+func TestActionAutoCapturesWhenNoContext(t *testing.T) {
+	ctx := context.Background()
+	var scope string
+	cs := newComputerServer(startWaylandDesktopFakeDriver(t, ctx, &scope), types.ComputerConfig{SessionID: "x"})
+	// Bare click, no coordinate, no prior capture.
+	res, out, err := cs.computerUse(ctx, nil, ComputerUseInput{Action: "click"})
+	if err != nil {
+		t.Fatalf("a targetless click with no context must auto-capture, not error: %v", err)
+	}
+	var gotImage bool
+	for _, c := range res.Content {
+		if _, ok := c.(*mcp.ImageContent); ok {
+			gotImage = true
+		}
+	}
+	if !gotImage {
+		t.Fatal("auto-capture must return a screenshot for the model to aim with")
+	}
+	if !strings.Contains(out.Summary, "captured the screen first") {
+		t.Fatalf("summary must explain it captured first and ask for a target; got %q", out.Summary)
+	}
+}
+
 func TestCaptureFallsBackToDesktopScopeOnNativeWayland(t *testing.T) {
 	ctx := context.Background()
 	var scope string

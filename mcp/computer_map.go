@@ -31,6 +31,24 @@ func clampInt(v, lo, hi int) int {
 
 // buildCuaCall translates one wrapper action into a cua-driver tool name + args.
 // Mutating actions require a prior capture/focus_app to have set pid.
+// actionHasTarget reports whether a mutating action already names where to act.
+// Pointer actions (click/scroll/drag/set_value) need an element index or pixel
+// coordinate; keyboard actions (type/key) act on the focused surface and need
+// none. Used to decide whether an auto-capture should return the screenshot for
+// the model to aim with, or proceed straight to the action.
+func actionHasTarget(in ComputerUseInput) bool {
+	switch in.Action {
+	case "click", "double_click", "right_click", "middle_click", "scroll":
+		return in.Element != 0 || len(in.Coordinate) == 2
+	case "drag":
+		return (in.FromElement != 0 && in.ToElement != 0) || (len(in.FromCoordinate) == 2 && len(in.ToCoordinate) == 2)
+	case "set_value":
+		return in.Element != 0
+	default:
+		return true
+	}
+}
+
 func buildCuaCall(in ComputerUseInput, ctx StickyContext) (string, map[string]any, error) {
 	base := map[string]any{}
 	if ctx.SessionID != "" {
