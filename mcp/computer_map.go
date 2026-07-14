@@ -2,6 +2,7 @@
 package mcp
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 )
@@ -17,6 +18,75 @@ type StickyContext struct {
 var modifierKeys = map[string]bool{
 	"cmd": true, "shift": true, "option": true, "alt": true, "ctrl": true,
 	"fn": true, "win": true, "windows": true, "super": true, "meta": true,
+}
+
+// keyNameAliases maps the key names small models commonly emit to the exact names
+// cua-driver's press_key accepts (return, tab, escape, up/down/left/right,
+// space, delete, home, end, pageup, pagedown, f1-f12, letters, digits). Without
+// this, e.g. "enter" is rejected as "Unknown key name" — the model then loops
+// pressing it forever, so the whole task stalls after a text field is filled.
+var keyNameAliases = map[string]string{
+	"enter":      "return",
+	"esc":        "escape",
+	"del":        "delete",
+	"pgup":       "pageup",
+	"pgdn":       "pagedown",
+	"spacebar":   "space",
+	"arrowup":    "up",
+	"arrowdown":  "down",
+	"arrowleft":  "left",
+	"arrowright": "right",
+}
+
+// normalizeKeys turns the several shapes small models emit for a key spec into
+// the individual key tokens. The schema asks for a "+"-joined combo ("ctrl+c",
+// "return"), but models also emit a JSON array — sometimes as an actual array,
+// often as a *string* like `["return"]` — which must be unwrapped or its
+// brackets/quotes reach cua-driver verbatim ("Unknown key name: [\"return\"]").
+func normalizeKeys(raw string) []string {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return nil
+	}
+	// JSON-array form: `["ctrl","c"]` or `["return"]`. Parse it; on any failure
+	// fall through to the "+"-split path so a stray "[" never breaks a real combo.
+	if strings.HasPrefix(s, "[") {
+		var arr []string
+		if err := json.Unmarshal([]byte(s), &arr); err == nil {
+			// A well-formed array is authoritative — return its tokens even when
+			// empty (an empty array means "no keys", which the caller rejects),
+			// so "[]" never falls through to being read as the literal key "[]".
+			out := make([]string, 0, len(arr))
+			for _, k := range arr {
+				if k = strings.TrimSpace(k); k != "" {
+					out = append(out, k)
+				}
+			}
+			return out
+		}
+	}
+	// "+"-joined combo, or a bare key.
+	out := make([]string, 0, 3)
+	for _, p := range strings.Split(s, "+") {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// canonicalKey lower-cases a named key (driver names are lower-case) and applies
+// keyNameAliases; single characters (letters/digits) pass through untouched so
+// case still carries through for typed characters.
+func canonicalKey(k string) string {
+	lower := strings.ToLower(k)
+	if a, ok := keyNameAliases[lower]; ok {
+		return a
+	}
+	if len(k) == 1 {
+		return k
+	}
+	return lower
 }
 
 func clampInt(v, lo, hi int) int {
@@ -129,19 +199,24 @@ func buildCuaCall(in ComputerUseInput, ctx StickyContext) (string, map[string]an
 	case "type":
 		return "type_text", withCtx(map[string]any{"text": in.Text}), nil
 	case "key":
-		parts := strings.Split(in.Keys, "+")
 		var mods []string
 		key := ""
-		for _, p := range parts {
-			p = strings.TrimSpace(p)
+		for _, p := range normalizeKeys(in.Keys) {
 			if modifierKeys[strings.ToLower(p)] {
-				mods = append(mods, p)
-			} else if p != "" {
-				key = p
+				mods = append(mods, strings.ToLower(p))
+			} else {
+				key = canonicalKey(p)
 			}
 		}
+		if key == "" && len(mods) == 0 {
+			return "", nil, fmt.Errorf("key needs a key name (e.g. return, or a combo like ctrl+c)")
+		}
 		if len(mods) > 0 {
-			return "hotkey", withCtx(map[string]any{"keys": append(mods, key)}), nil
+			combo := mods
+			if key != "" {
+				combo = append(mods, key)
+			}
+			return "hotkey", withCtx(map[string]any{"keys": combo}), nil
 		}
 		return "press_key", withCtx(map[string]any{"key": key}), nil
 	case "set_value":

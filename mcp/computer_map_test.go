@@ -30,6 +30,49 @@ func TestMapKeySplitsHotkeyVsPress(t *testing.T) {
 	}
 }
 
+// Regression: qwen emitted `keys` as a JSON-array *string* (["return"]) and used
+// "enter" (not a driver key name). Both must be normalized, or press_key fails
+// with "Unknown key name" and the model loops forever pressing it.
+func TestMapKeyNormalizesArrayAndAliases(t *testing.T) {
+	cases := []struct {
+		keys     string
+		wantTool string
+		wantKey  string // press_key key, or the last element for hotkey
+	}{
+		{`["return"]`, "press_key", "return"},   // JSON-array string, single key
+		{`["enter"]`, "press_key", "return"},    // array string + alias
+		{"enter", "press_key", "return"},        // bare alias
+		{"ESC", "press_key", "escape"},          // upper-case alias
+		{`["ctrl","c"]`, "hotkey", "c"},         // JSON-array combo
+		{"cmd+return", "hotkey", "return"},      // combo with an aliasable name
+	}
+	for _, c := range cases {
+		tool, args, err := buildCuaCall(ComputerUseInput{Action: "key", Keys: c.keys}, StickyContext{PID: 1})
+		if err != nil {
+			t.Fatalf("keys=%q: %v", c.keys, err)
+		}
+		if tool != c.wantTool {
+			t.Fatalf("keys=%q: tool=%q want %q", c.keys, tool, c.wantTool)
+		}
+		if tool == "press_key" {
+			if args["key"] != c.wantKey {
+				t.Fatalf("keys=%q: press_key key=%v want %q", c.keys, args["key"], c.wantKey)
+			}
+		} else {
+			combo := args["keys"].([]string)
+			if combo[len(combo)-1] != c.wantKey {
+				t.Fatalf("keys=%q: hotkey combo=%v want last %q", c.keys, combo, c.wantKey)
+			}
+		}
+	}
+}
+
+func TestMapKeyEmptyErrors(t *testing.T) {
+	if _, _, err := buildCuaCall(ComputerUseInput{Action: "key", Keys: "[]"}, StickyContext{PID: 1}); err == nil {
+		t.Fatalf("empty key spec must error, not send an empty press_key")
+	}
+}
+
 func TestMapMutatingRequiresContext(t *testing.T) {
 	if _, _, err := buildCuaCall(ComputerUseInput{Action: "click", Element: 1}, StickyContext{}); err == nil {
 		t.Fatalf("click without prior capture (no pid) must error")
