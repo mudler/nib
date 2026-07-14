@@ -202,8 +202,14 @@ func (c *computerServer) capture(ctx context.Context, in ComputerUseInput) (*mcp
 		xlog.Debug("computer capture", "mode", "ax", "elements", len(els))
 		return st, ComputerUseOutput{Summary: summary, Elements: els}, nil
 	case "vision":
-		// Pixels only — drop the AX-tree noise, keep just the screenshot.
-		return st, ComputerUseOutput{Summary: "captured screen", ImageMIME: imageMIME()}, nil
+		// Still surface the clickable element list — the model chooses the mode,
+		// and it must never be left with an image it can't act on (that just makes
+		// it re-capture forever). The image is the grounding; the list is how it
+		// clicks.
+		els := parseElements(structuredMap(st), in.MaxElements)
+		st.Content = withElementText(st.Content, els)
+		xlog.Debug("computer capture", "mode", "vision", "elements", len(els))
+		return st, ComputerUseOutput{Summary: "captured screen", ImageMIME: imageMIME(), Elements: els}, nil
 	default: // som
 		els := parseElements(structuredMap(st), in.MaxElements)
 		// Surface the clickable elements as TEXT alongside the screenshot. The
