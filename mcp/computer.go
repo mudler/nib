@@ -194,22 +194,50 @@ func (c *computerServer) capture(ctx context.Context, in ComputerUseInput) (*mcp
 	case "ax":
 		st.Content = filterOutImages(st.Content)
 		els := parseElements(structuredMap(st), in.MaxElements)
+		st.Content = withElementText(st.Content, els)
 		summary := "captured window (ax)"
 		if len(els) == 0 {
 			summary = "captured window (ax)" + noAXHint
 		}
+		xlog.Debug("computer capture", "mode", "ax", "elements", len(els))
 		return st, ComputerUseOutput{Summary: summary, Elements: els}, nil
 	case "vision":
 		// Pixels only — drop the AX-tree noise, keep just the screenshot.
 		return st, ComputerUseOutput{Summary: "captured screen", ImageMIME: imageMIME()}, nil
 	default: // som
 		els := parseElements(structuredMap(st), in.MaxElements)
+		// Surface the clickable elements as TEXT alongside the screenshot. The
+		// driver returns them only as structured data, and the model's tool
+		// message otherwise collapses to a bare "[image content …]" placeholder —
+		// so without this the model sees a picture with no numbers to reference
+		// and can never issue a click. This is the model-facing Set-of-Marks list.
+		st.Content = withElementText(st.Content, els)
 		summary := "captured window"
 		if len(els) == 0 {
 			summary = "captured screen" + noAXHint
 		}
+		xlog.Debug("computer capture", "mode", "som", "elements", len(els))
 		return st, ComputerUseOutput{Summary: summary, ImageMIME: imageMIME(), Elements: els}, nil
 	}
+}
+
+// withElementText prepends a numbered, model-readable list of the clickable
+// elements to the tool result, so a model can pick an element index to act on
+// (click/type/scroll with `element: N`). No-op when there are no elements.
+func withElementText(cs []mcp.Content, els []ComputerElement) []mcp.Content {
+	if len(els) == 0 {
+		return cs
+	}
+	var b strings.Builder
+	b.WriteString("Clickable elements (act with computer_use action=\"click\"/\"type\"/\"scroll\" and element=N):\n")
+	for _, e := range els {
+		label := e.Label
+		if label == "" {
+			label = "(no label)"
+		}
+		fmt.Fprintf(&b, "  %d: %s %q\n", e.Index, e.Role, label)
+	}
+	return append([]mcp.Content{&mcp.TextContent{Text: b.String()}}, cs...)
 }
 
 func firstText(cs []mcp.Content) string {
