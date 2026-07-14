@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -371,17 +372,22 @@ func StartComputerMCPServer(ctx context.Context, transport mcp.Transport, cfg ty
 	}
 	defer driverSess.Close()
 
-	// Disable the driver's server-side screenshot downscaling. cua-driver's
-	// resize path fails with "unsupported color type for resize: L8" on the
-	// grayscale (L8) frames some displays produce, which took out every
-	// get_window_state capture. max_image_dimension=0 returns the native-size
-	// window screenshot (PNG encodes L8 fine), so the window-scoped capture
-	// works everywhere. capture_scope stays window so get_window_state — not the
-	// desktop-scope-only get_desktop_state — is the capture path.
+	// Cap the screenshot's longest side. A full-resolution (retina) capture is
+	// huge as vision tokens — a native screen can be ~25k tokens and blow a small
+	// model's context window ("request exceeds the available context size"). 1568
+	// keeps it to ~2k tokens while staying legible for SOM. EXCEPT on Linux: the
+	// driver's resize path fails with "unsupported color type for resize: L8" on
+	// the grayscale frames some Wayland captures produce, so we keep 0 (no resize,
+	// native-size PNG) there; macOS/Windows screenshots are RGB, so the resize is
+	// safe. capture_scope stays window so get_window_state is the capture path.
+	maxImageDim := 1568
+	if runtime.GOOS == "linux" {
+		maxImageDim = 0
+	}
 	if _, e := driverSess.CallTool(ctx, &mcp.CallToolParams{Name: "set_config", Arguments: map[string]any{
-		"capture_scope": "window", "max_image_dimension": 0,
+		"capture_scope": "window", "max_image_dimension": maxImageDim,
 	}}); e != nil {
-		xlog.Warn("cua-driver set_config (disable screenshot resize) failed; captures may hit the L8 resize bug", "err", e)
+		xlog.Warn("cua-driver set_config (screenshot dimension cap) failed; captures may overflow the model context", "err", e)
 	}
 
 	// Probe the driver's capabilities once and log them. This tells us — and the
