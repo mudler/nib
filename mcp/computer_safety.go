@@ -10,9 +10,9 @@ import (
 
 // ComputerUseInput is the single wrapper tool's argument set.
 type ComputerUseInput struct {
-	Action         string   `json:"action" jsonschema:"the action: capture,click,double_click,right_click,middle_click,drag,scroll,type,key,set_value,wait,list_apps,focus_app"`
+	Action         string   `json:"action" jsonschema:"the action: capture,click,double_click,right_click,middle_click,drag,scroll,type,key,set_value,wait,list_apps,open_app,focus_app"`
 	Mode           string   `json:"mode,omitempty" jsonschema:"capture mode: som (default),vision,ax"`
-	App            string   `json:"app,omitempty" jsonschema:"limit to an app by name or bundle id; 'screen' for the desktop"`
+	App            string   `json:"app,omitempty" jsonschema:"app name (e.g. 'Google Chrome') or bundle id — required for open_app (which launches it); also limits capture/action to that app; 'screen' for the desktop"`
 	MaxElements    int      `json:"max_elements,omitempty" jsonschema:"cap on returned AX elements (default 100, max 1000)"`
 	Element        int      `json:"element,omitempty" jsonschema:"1-based SOM index from the last capture (preferred over coordinates)"`
 	Coordinate     []int    `json:"coordinate,omitempty" jsonschema:"pixel [x,y]; use only when no element index is available"`

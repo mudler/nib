@@ -342,6 +342,8 @@ func (c *computerServer) computerUse(ctx context.Context, _ *mcp.CallToolRequest
 		c.sticky.PID, c.sticky.WindowID = pid, windowID
 		c.mu.Unlock()
 		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "focused"}}}, ComputerUseOutput{Summary: "focused app"}, nil
+	case "open_app":
+		return c.openApp(ctx, in)
 	}
 
 	c.mu.Lock()
@@ -381,6 +383,70 @@ func (c *computerServer) computerUse(ctx context.Context, _ *mcp.CallToolRequest
 		return c.capture(ctx, ComputerUseInput{Action: "capture", Mode: "som"})
 	}
 	return res, out, nil
+}
+
+// openApp launches an app by name (or bundle id) via the driver's launch_app —
+// idempotent: it launches the app if it isn't running and no-ops (still
+// returning the pid) if it already is — then brings it to the front and pins
+// its pid as the sticky target so the next click/type lands on it. This is the
+// reliable "open X" primitive; without it small models fumble "open Chrome" by
+// clicking desktop elements that don't launch anything.
+func (c *computerServer) openApp(ctx context.Context, in ComputerUseInput) (*mcp.CallToolResult, ComputerUseOutput, error) {
+	app := strings.TrimSpace(in.App)
+	if app == "" {
+		return nil, ComputerUseOutput{}, fmt.Errorf(`open_app needs an app in "app", e.g. app="Google Chrome"`)
+	}
+	args := map[string]any{}
+	if c.sticky.SessionID != "" {
+		args["session"] = c.sticky.SessionID
+	}
+	// launch_app takes bundle_id OR name; route by shape (com.google.Chrome vs
+	// "Google Chrome"). A wrong guess just surfaces the driver's error honestly.
+	if looksLikeBundleID(app) {
+		args["bundle_id"] = app
+	} else {
+		args["name"] = app
+	}
+	res, err := c.call(ctx, "launch_app", args)
+	if err != nil {
+		return nil, ComputerUseOutput{}, err
+	}
+	if res.IsError {
+		return res, ComputerUseOutput{}, nil // surface the driver's own error, honestly
+	}
+	m := structuredMap(res)
+	pid := toInt(m["pid"])
+	windowID := 0
+	if ws, ok := m["windows"].([]any); ok && len(ws) > 0 {
+		if w0, ok := ws[0].(map[string]any); ok {
+			windowID = toInt(w0["window_id"])
+		}
+	}
+	summary := fmt.Sprintf("launched %q", app)
+	if pid != 0 {
+		// Bring it forward so the user sees it and foreground input can land;
+		// launch_app opens in the background. Best-effort — never fail the open on
+		// a bring_to_front hiccup (e.g. a platform without it).
+		bf := map[string]any{"pid": pid}
+		if c.sticky.SessionID != "" {
+			bf["session"] = c.sticky.SessionID
+		}
+		_, _ = c.call(ctx, "bring_to_front", bf)
+		c.mu.Lock()
+		c.sticky.PID, c.sticky.WindowID, c.sticky.Desktop = pid, windowID, false
+		c.mu.Unlock()
+		summary += fmt.Sprintf(" (pid %d), now frontmost. Call computer_use action=capture to see it, then click/type.", pid)
+	} else {
+		summary += ". Call computer_use action=capture to see it."
+	}
+	return res, ComputerUseOutput{Summary: summary}, nil
+}
+
+// looksLikeBundleID reports whether s is a reverse-DNS bundle identifier
+// (com.google.Chrome) rather than a display name ("Google Chrome"): dotted with
+// at least two separators and no spaces or slashes.
+func looksLikeBundleID(s string) bool {
+	return !strings.ContainsAny(s, " /") && strings.Count(s, ".") >= 2
 }
 
 // StartComputerMCPServer spawns cua-driver as a stdio MCP child and serves the
@@ -442,9 +508,11 @@ func StartComputerMCPServer(ctx context.Context, transport mcp.Transport, cfg ty
 		Description: "See and control the screen: take a SCREENSHOT of the desktop, then click, type, " +
 			"scroll, and drag. Use this whenever the user wants to look at, see, screenshot, read, or " +
 			"interact with the screen, a window, or any running app — do NOT use shell commands (e.g. " +
-			"`screenshot`, `scrot`, `screencapture`) for this. To see the screen, call action='capture' " +
-			"(mode='som' numbers the clickable elements so you can click by `element` index). Runs in the " +
-			"background without moving the user's real cursor. Requires an armed session.",
+			"`screenshot`, `scrot`, `screencapture`) for this. To OPEN or launch an app, call " +
+			"action='open_app' with app='<App Name>' (e.g. app='Google Chrome') — do NOT try to click it " +
+			"open. To see the screen, call action='capture' (mode='som' numbers the clickable elements so " +
+			"you can click by `element` index). Runs in the background without moving the user's real " +
+			"cursor. Requires an armed session.",
 	}, cs.computerUse)
 	xlog.Info("computer_use MCP server ready", "driver", cmdPath)
 	return server.Run(ctx, transport)

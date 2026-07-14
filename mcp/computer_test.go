@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -32,6 +33,13 @@ func startFakeDriver(t *testing.T, ctx context.Context) *mcp.ClientSession {
 	})
 	mcp.AddTool(srv, &mcp.Tool{Name: "click"}, func(_ context.Context, _ *mcp.CallToolRequest, _ map[string]any) (*mcp.CallToolResult, map[string]any, error) {
 		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "clicked"}}}, map[string]any{}, nil
+	})
+	mcp.AddTool(srv, &mcp.Tool{Name: "launch_app"}, func(_ context.Context, _ *mcp.CallToolRequest, _ map[string]any) (*mcp.CallToolResult, map[string]any, error) {
+		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "launched"}}},
+			map[string]any{"pid": 99, "windows": []any{map[string]any{"window_id": 12}}}, nil
+	})
+	mcp.AddTool(srv, &mcp.Tool{Name: "bring_to_front"}, func(_ context.Context, _ *mcp.CallToolRequest, _ map[string]any) (*mcp.CallToolResult, map[string]any, error) {
+		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "fronted"}}}, map[string]any{}, nil
 	})
 	go func() { _ = srv.Run(ctx, srvT) }()
 	client := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "v0"}, nil)
@@ -71,6 +79,34 @@ func TestComputerClickAfterCapture(t *testing.T) {
 	}
 	if _, _, err := cs.computerUse(ctx, nil, ComputerUseInput{Action: "click", Element: 1}); err != nil {
 		t.Fatalf("click after capture should succeed: %v", err)
+	}
+}
+
+func TestOpenAppLaunchesAndPinsPid(t *testing.T) {
+	ctx := context.Background()
+	cs := newComputerServer(startFakeDriver(t, ctx), types.ComputerConfig{SessionID: "dante-x"})
+	_, out, err := cs.computerUse(ctx, nil, ComputerUseInput{Action: "open_app", App: "Google Chrome"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The launched pid/window must become the sticky target so the next
+	// click/type lands on the app we just opened — no capture needed first.
+	if cs.sticky.PID != 99 || cs.sticky.WindowID != 12 {
+		t.Fatalf("open_app must pin the launched pid/window, got pid=%d win=%d", cs.sticky.PID, cs.sticky.WindowID)
+	}
+	if !strings.Contains(out.Summary, "launched") {
+		t.Fatalf("summary should confirm the launch, got %q", out.Summary)
+	}
+	if _, _, err := cs.computerUse(ctx, nil, ComputerUseInput{Action: "click", Element: 1}); err != nil {
+		t.Fatalf("click right after open_app should target the launched app: %v", err)
+	}
+}
+
+func TestOpenAppRequiresAppName(t *testing.T) {
+	ctx := context.Background()
+	cs := newComputerServer(startFakeDriver(t, ctx), types.ComputerConfig{SessionID: "dante-x"})
+	if _, _, err := cs.computerUse(ctx, nil, ComputerUseInput{Action: "open_app"}); err == nil {
+		t.Fatalf("open_app without an app name must error, not launch nothing")
 	}
 }
 
