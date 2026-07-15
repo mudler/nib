@@ -159,12 +159,17 @@ func (c *computerServer) capture(ctx context.Context, in ComputerUseInput) (*mcp
 	// desktop scope that get_desktop_state would require. Server-side resize is
 	// disabled at startup (max_image_dimension=0), so this no longer hits the L8
 	// resize failure that previously forced a fallback.
-	args := map[string]any{"pid": pid, "window_id": windowID, "session": c.cfg.SessionID}
+	// Always bound the element count. An app whose window content isn't
+	// AX-exposed (Chrome, Electron) can return its entire menu bar with every
+	// menu expanded — hundreds of AXMenuItem nodes — which, unbounded, blows the
+	// model's context in a couple of captures.
+	maxEls := in.MaxElements
+	if maxEls <= 0 {
+		maxEls = defaultMaxElements
+	}
+	args := map[string]any{"pid": pid, "window_id": windowID, "session": c.cfg.SessionID, "max_elements": maxEls}
 	if in.Mode == "ax" {
 		args["include_screenshot"] = false // tree only — the cheap re-index path
-	}
-	if in.MaxElements > 0 {
-		args["max_elements"] = in.MaxElements
 	}
 	st, err := c.call(ctx, "get_window_state", args)
 	if err != nil {
@@ -189,15 +194,23 @@ func (c *computerServer) capture(ctx context.Context, in ComputerUseInput) (*mcp
 	// model to act by pixel (x,y) off the screenshot — the driver's "element px
 	// action" — so som degrades to functional vision automatically.
 	const noAXHint = " (no accessibility elements available — act by pixel: pass x,y off this screenshot instead of an element index)"
+	// menuOnlyHint fires when a window exposes only its menu bar and no real
+	// content — the signature of a browser (Chrome) or Electron app that gates
+	// accessibility. Element clicks are useless there; steer to pixels / URLs.
+	const menuOnlyHint = " (this window exposes only its menu bar — its content is not accessible, typical of a browser like Chrome. To open a web page, prefer open_app with a URL; otherwise act by pixel: pass x,y off this screenshot.)"
 
 	switch in.Mode {
 	case "ax":
-		st.Content = filterOutImages(st.Content)
-		els := parseElements(structuredMap(st), in.MaxElements)
-		st.Content = withElementText(st.Content, els)
+		els := parseElements(structuredMap(st), maxEls)
+		// Drop the driver's verbose Markdown tree; nib's numbered list is the
+		// model-facing surface. Keeping both duplicated hundreds of menu nodes and
+		// overflowed context.
+		st.Content = withElementText(nil, els)
 		summary := "captured window (ax)"
 		if len(els) == 0 {
-			summary = "captured window (ax)" + noAXHint
+			summary += noAXHint
+		} else if allMenuElements(els) {
+			summary += menuOnlyHint
 		}
 		xlog.Debug("computer capture", "mode", "ax", "elements", len(els))
 		return st, ComputerUseOutput{Summary: summary, Elements: els}, nil
@@ -205,22 +218,30 @@ func (c *computerServer) capture(ctx context.Context, in ComputerUseInput) (*mcp
 		// Still surface the clickable element list — the model chooses the mode,
 		// and it must never be left with an image it can't act on (that just makes
 		// it re-capture forever). The image is the grounding; the list is how it
-		// clicks.
-		els := parseElements(structuredMap(st), in.MaxElements)
-		st.Content = withElementText(st.Content, els)
+		// clicks. Keep only the image; drop the driver's Markdown tree (context).
+		els := parseElements(structuredMap(st), maxEls)
+		st.Content = withElementText(imagesOnly(st.Content), els)
+		summary := "captured screen"
+		if allMenuElements(els) {
+			summary += menuOnlyHint
+		}
 		xlog.Debug("computer capture", "mode", "vision", "elements", len(els))
-		return st, ComputerUseOutput{Summary: "captured screen", ImageMIME: imageMIME(), Elements: els}, nil
+		return st, ComputerUseOutput{Summary: summary, ImageMIME: imageMIME(), Elements: els}, nil
 	default: // som
-		els := parseElements(structuredMap(st), in.MaxElements)
+		els := parseElements(structuredMap(st), maxEls)
 		// Surface the clickable elements as TEXT alongside the screenshot. The
 		// driver returns them only as structured data, and the model's tool
 		// message otherwise collapses to a bare "[image content …]" placeholder —
 		// so without this the model sees a picture with no numbers to reference
 		// and can never issue a click. This is the model-facing Set-of-Marks list.
-		st.Content = withElementText(st.Content, els)
+		// Keep only the image; drop the driver's Markdown tree (huge on menu-only
+		// windows) so it doesn't overflow the model's context.
+		st.Content = withElementText(imagesOnly(st.Content), els)
 		summary := "captured window"
 		if len(els) == 0 {
 			summary = "captured screen" + noAXHint
+		} else if allMenuElements(els) {
+			summary += menuOnlyHint
 		}
 		xlog.Debug("computer capture", "mode", "som", "elements", len(els))
 		return st, ComputerUseOutput{Summary: summary, ImageMIME: imageMIME(), Elements: els}, nil
@@ -255,15 +276,36 @@ func firstText(cs []mcp.Content) string {
 	return ""
 }
 
-func filterOutImages(cs []mcp.Content) []mcp.Content {
-	out := cs[:0]
+// defaultMaxElements bounds how many AX elements a capture surfaces. Menu-only
+// windows (Chrome/Electron) can otherwise return hundreds of nodes and overflow
+// the model's context in a couple of captures.
+const defaultMaxElements = 80
+
+// imagesOnly keeps only the image content, dropping the driver's verbose text
+// (its Markdown AX-tree rendering) — nib's own numbered element list replaces it.
+func imagesOnly(cs []mcp.Content) []mcp.Content {
+	var out []mcp.Content
 	for _, c := range cs {
 		if _, ok := c.(*mcp.ImageContent); ok {
-			continue
+			out = append(out, c)
 		}
-		out = append(out, c)
 	}
 	return out
+}
+
+// allMenuElements reports whether every element is a menu-bar node (AXMenuBar /
+// AXMenu / AXMenuItem) — i.e. the window exposed no real content, the tell-tale
+// of a browser/Electron app that gates accessibility.
+func allMenuElements(els []ComputerElement) bool {
+	if len(els) == 0 {
+		return false
+	}
+	for _, e := range els {
+		if !strings.HasPrefix(strings.ToLower(e.Role), "axmenu") {
+			return false
+		}
+	}
+	return true
 }
 
 func frontmostWindow(m map[string]any) (int, int) { return windowMatching(m, "") }

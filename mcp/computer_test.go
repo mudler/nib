@@ -24,8 +24,13 @@ func startFakeDriver(t *testing.T, ctx context.Context) *mcp.ClientSession {
 		return &mcp.CallToolResult{}, map[string]any{"windows": []any{map[string]any{"pid": 42, "window_id": 7, "z_index": 0, "app_name": "Finder"}}}, nil
 	})
 	mcp.AddTool(srv, &mcp.Tool{Name: "get_window_state"}, func(_ context.Context, _ *mcp.CallToolRequest, _ map[string]any) (*mcp.CallToolResult, map[string]any, error) {
+		// The real driver returns BOTH a verbose Markdown tree (text) AND the image;
+		// nib must drop the Markdown and keep only its own element list + the image.
 		return &mcp.CallToolResult{
-			Content: []mcp.Content{&mcp.ImageContent{MIMEType: "image/png", Data: []byte("\x89PNGfake")}},
+			Content: []mcp.Content{
+				&mcp.TextContent{Text: "DRIVER_MARKDOWN_TREE: - AXWindow\n  - AXButton OK\n  (…hundreds of nodes…)"},
+				&mcp.ImageContent{MIMEType: "image/png", Data: []byte("\x89PNGfake")},
+			},
 		}, map[string]any{"elements": []any{map[string]any{"element_index": 1, "role": "AXButton", "label": "OK"}}}, nil
 	})
 	mcp.AddTool(srv, &mcp.Tool{Name: "get_desktop_state"}, func(_ context.Context, _ *mcp.CallToolRequest, _ map[string]any) (*mcp.CallToolResult, map[string]any, error) {
@@ -144,6 +149,46 @@ func TestFocusAppResolvesByNameAndErrorsWhenAbsent(t *testing.T) {
 	// An app with no on-screen window must error, not silently grab the frontmost.
 	if _, _, err := cs.computerUse(ctx, nil, ComputerUseInput{Action: "focus_app", App: "Safari"}); err == nil {
 		t.Fatalf("focus_app on an app with no window must error")
+	}
+}
+
+func TestCaptureDropsDriverMarkdownKeepsListAndImage(t *testing.T) {
+	ctx := context.Background()
+	cs := newComputerServer(startFakeDriver(t, ctx), types.ComputerConfig{SessionID: "dante-x"})
+	res, _, err := cs.computerUse(ctx, nil, ComputerUseInput{Action: "capture", Mode: "som"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var text string
+	var hasImage bool
+	for _, c := range res.Content {
+		switch v := c.(type) {
+		case *mcp.TextContent:
+			text += v.Text
+		case *mcp.ImageContent:
+			hasImage = true
+		}
+	}
+	if strings.Contains(text, "DRIVER_MARKDOWN_TREE") {
+		t.Fatalf("capture must drop the driver's verbose Markdown tree (context bomb); got:\n%s", text)
+	}
+	if !strings.Contains(text, "Clickable elements") {
+		t.Fatalf("capture must keep nib's numbered element list; got:\n%s", text)
+	}
+	if !hasImage {
+		t.Fatalf("capture must keep the screenshot image")
+	}
+}
+
+func TestAllMenuElementsSignalsInaccessibleWindow(t *testing.T) {
+	if !allMenuElements([]ComputerElement{{Role: "AXMenuBar"}, {Role: "AXMenuItem"}, {Role: "AXMenu"}}) {
+		t.Fatal("a menu-bar-only capture (Chrome) must be flagged")
+	}
+	if allMenuElements([]ComputerElement{{Role: "AXMenuItem"}, {Role: "AXButton"}}) {
+		t.Fatal("a window with real controls must not be flagged menu-only")
+	}
+	if allMenuElements(nil) {
+		t.Fatal("empty (no elements) is the no-AX case, not menu-only")
 	}
 }
 
