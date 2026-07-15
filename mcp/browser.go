@@ -216,6 +216,35 @@ func (b *browserServer) browserSnapshot(ctx context.Context, _ *mcp.CallToolRequ
 	return textResult(text), BrowserOutput{Snapshot: text, ElementCount: n}, nil
 }
 
+// browserClick resolves in.Ref against the last snapshot's ref map, clicks
+// the corresponding DOM node, and returns a fresh snapshot (which also
+// refreshes the ref map, since refs are only valid for one snapshot).
+func (b *browserServer) browserClick(ctx context.Context, _ *mcp.CallToolRequest, in BrowserInput) (*mcp.CallToolResult, BrowserOutput, error) {
+	live, backendID, err := b.liveRef(in.Ref)
+	if err != nil {
+		return nil, BrowserOutput{}, err
+	}
+	if err := b.clickBackendNode(live, backendID); err != nil {
+		return nil, BrowserOutput{}, err
+	}
+	// Re-snapshot so the model sees the result (and gets fresh refs).
+	text, n, _ := b.snapshotNow(live, true)
+	return textResult("clicked " + in.Ref + "\n" + text), BrowserOutput{Snapshot: text, ElementCount: n}, nil
+}
+
+// liveRef returns the live browser ctx + the ref's backend id, erroring if no
+// page is open or the ref is stale.
+func (b *browserServer) liveRef(ref string) (context.Context, int64, error) {
+	b.mu.Lock()
+	live := b.bctx
+	b.mu.Unlock()
+	if live == nil {
+		return nil, 0, fmt.Errorf("no page open — call browser_navigate first")
+	}
+	id, err := b.resolveRef(ref)
+	return live, id, err
+}
+
 // textResult wraps a plain-text tool response in the MCP content shape.
 func textResult(s string) *mcp.CallToolResult {
 	return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: s}}}
