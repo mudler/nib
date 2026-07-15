@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/mudler/nib/types"
 	"github.com/mudler/xlog"
@@ -742,7 +743,7 @@ func StartComputerMCPServer(ctx context.Context, transport mcp.Transport, cfg ty
 
 	cs := newComputerServer(driverSess, cfg.Computer)
 	server := mcp.NewServer(&mcp.Implementation{Name: "computer", Version: "v1.0.0"}, nil)
-	mcp.AddTool(server, &mcp.Tool{
+	tool := &mcp.Tool{
 		Name: "computer_use",
 		Description: "See and control the screen: take a SCREENSHOT of the desktop, then click, type, " +
 			"scroll, and drag. Use this whenever the user wants to look at, see, screenshot, read, or " +
@@ -755,9 +756,51 @@ func StartComputerMCPServer(ctx context.Context, transport mcp.Transport, cfg ty
 			"To see the screen, call action='capture' (mode='som' numbers the clickable elements so you can " +
 			"click by `element` index). action='close_app' quits an app. Runs in the background without " +
 			"moving the user's real cursor. Requires an armed session.",
-	}, cs.computerUse)
+	}
+	// Give the enum-valued fields REAL JSON Schema enums (not just a prose list in
+	// the description). The go-sdk's `jsonschema:"…"` struct tag only sets a
+	// description, so we infer the schema from the struct — which preserves those
+	// descriptions — then stamp the enums on. cogito's MCP bridge carries the enum
+	// through to the engine, which constrains the model to valid values (hard when
+	// grammar-constrained decoding is on; a strong signal even when it isn't),
+	// instead of the model inventing an action like "click_element".
+	if schema, err := computerInputSchema(); err != nil {
+		xlog.Warn("computer_use: could not build enum schema, falling back to inferred", "err", err)
+	} else {
+		tool.InputSchema = schema
+	}
+	mcp.AddTool(server, tool, cs.computerUse)
 	xlog.Info("computer_use MCP server ready", "driver", cmdPath)
 	return server.Run(ctx, transport)
+}
+
+// computerInputSchema builds the computer_use input schema from ComputerUseInput
+// (keeping the per-field descriptions from the jsonschema tags) and stamps real
+// enums onto the constrained fields.
+func computerInputSchema() (*jsonschema.Schema, error) {
+	s, err := jsonschema.For[ComputerUseInput](nil)
+	if err != nil {
+		return nil, err
+	}
+	setEnum := func(prop string, vals ...string) {
+		p := s.Properties[prop]
+		if p == nil {
+			return
+		}
+		p.Enum = make([]any, len(vals))
+		for i, v := range vals {
+			p.Enum[i] = v
+		}
+	}
+	setEnum("action", "capture", "click", "double_click", "right_click", "middle_click",
+		"drag", "scroll", "type", "key", "set_value", "wait", "list_apps", "open_app",
+		"close_app", "focus_app", "page")
+	setEnum("mode", "som", "vision", "ax")
+	setEnum("button", "left", "right", "middle")
+	setEnum("direction", "up", "down", "left", "right")
+	setEnum("page_action", "get_text", "query_dom", "click_element", "insert_text",
+		"type_keystrokes", "execute_javascript")
+	return s, nil
 }
 
 // scrubbedDriverEnv disables cua-driver telemetry and drops provider API keys so

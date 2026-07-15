@@ -268,6 +268,45 @@ func TestActionAliasClickElement(t *testing.T) {
 	}
 }
 
+func TestComputerInputSchemaHasRealEnums(t *testing.T) {
+	s, err := computerInputSchema()
+	if err != nil {
+		t.Fatal(err)
+	}
+	has := func(prop, val string) bool {
+		p := s.Properties[prop]
+		if p == nil {
+			return false
+		}
+		for _, e := range p.Enum {
+			if e == val {
+				return true
+			}
+		}
+		return false
+	}
+	// The schema must constrain action to real values so the engine (and cogito's
+	// MCP bridge) can enforce it — not leave it a free string the model invents.
+	if s.Properties["action"] == nil || len(s.Properties["action"].Enum) == 0 {
+		t.Fatal("action must carry a real JSON Schema enum, not just a description")
+	}
+	for _, a := range []string{"capture", "click", "open_app", "page", "close_app"} {
+		if !has("action", a) {
+			t.Fatalf("action enum missing %q", a)
+		}
+	}
+	if has("action", "click_element") {
+		t.Fatal("click_element is a page_action, not a top-level action — must not be in the action enum")
+	}
+	if !has("page_action", "click_element") || !has("mode", "som") || !has("button", "left") {
+		t.Fatal("page_action/mode/button enums not stamped")
+	}
+	// Descriptions from the struct tags must survive the enum stamping.
+	if s.Properties["action"].Description == "" {
+		t.Fatal("action lost its description")
+	}
+}
+
 func TestComputerBlockedActionErrors(t *testing.T) {
 	ctx := context.Background()
 	cs := newComputerServer(startFakeDriver(t, ctx), types.ComputerConfig{SessionID: "dante-x"})
