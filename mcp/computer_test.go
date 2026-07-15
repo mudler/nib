@@ -47,6 +47,12 @@ func startFakeDriver(t *testing.T, ctx context.Context) *mcp.ClientSession {
 		if p, ok := args["cdp_debugging_port"]; ok {
 			out["got_cdp_port"] = p // let a test assert CDP is enabled for browsers
 		}
+		if v, ok := args["creates_new_application_instance"]; ok {
+			out["got_new_instance"] = v
+		}
+		if _, ok := args["additional_arguments"]; ok {
+			out["got_profile_arg"] = true
+		}
 		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "launched"}}}, out, nil
 	})
 	mcp.AddTool(srv, &mcp.Tool{Name: "bring_to_front"}, func(_ context.Context, _ *mcp.CallToolRequest, _ map[string]any) (*mcp.CallToolResult, map[string]any, error) {
@@ -224,8 +230,14 @@ func TestOpenAppEnablesCDPForBrowsers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if structuredMap(res)["got_cdp_port"] == nil {
+	m := structuredMap(res)
+	if m["got_cdp_port"] == nil {
 		t.Fatal("open_app on a Chromium browser must pass cdp_debugging_port to launch_app")
+	}
+	// Must force a fresh isolated instance (on a dedicated profile) so CDP works
+	// even when the user's own Chrome is already running.
+	if m["got_new_instance"] != true || m["got_profile_arg"] != true {
+		t.Fatalf("browser open must force a new instance + dedicated profile, got %+v", m)
 	}
 	// A non-browser app must NOT get the CDP flag.
 	res2, _, err := cs.computerUse(ctx, nil, ComputerUseInput{Action: "open_app", App: "Calculator"})

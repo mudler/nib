@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"sort"
 	"strconv"
@@ -554,12 +555,20 @@ func (c *computerServer) openApp(ctx context.Context, in ComputerUseInput) (*mcp
 		args["urls"] = []string{url}
 	}
 	// For a Chromium browser, open a CDP server so the `page` tool can actually
-	// drive the web content. Without it, page can't attach and falls back to the
-	// accessibility tree, which on Chrome is just the menu bar (its web content is
-	// not AX-exposed). Only takes effect when the browser is launched by us — a
-	// browser already running without the flag won't expose the port.
+	// drive the web content. Without it, page can't attach and falls back to
+	// AppleScript (fails to match the window) and then the accessibility tree,
+	// which on Chrome is just the menu bar (its web content is not AX-exposed).
+	//
+	// The catch: --remote-debugging-port only takes effect when *we* launch the
+	// process. If the user's own Chrome is already running, launch_app just hands
+	// back that pid with no debug port. So force a SEPARATE instance on a
+	// dedicated profile dir — that gives an isolated Chrome with the CDP port even
+	// when the user's Chrome is open, at the cost of a fresh profile (no existing
+	// logins/bookmarks), which is the right trade for automation.
 	if isChromiumBrowser(app) {
 		args["cdp_debugging_port"] = cdpDebuggingPort
+		args["creates_new_application_instance"] = true
+		args["additional_arguments"] = []string{"--user-data-dir=" + automationBrowserProfileDir()}
 	}
 	res, err := c.call(ctx, "launch_app", args)
 	if err != nil {
@@ -612,6 +621,19 @@ func looksLikeBundleID(s string) bool {
 // cdpDebuggingPort is the fixed Chrome DevTools Protocol port we launch Chromium
 // browsers with so the page tool can attach.
 const cdpDebuggingPort = 9222
+
+// automationBrowserProfileDir is the dedicated Chrome user-data-dir the desktop
+// automation launches into — separate from the user's real profile so we can get
+// an isolated instance with the CDP port even when their Chrome is already
+// running. Stable across sessions (UserCacheDir) so it keeps cookies/logins; a
+// temp dir is the fallback.
+func automationBrowserProfileDir() string {
+	base, err := os.UserCacheDir()
+	if err != nil || base == "" {
+		base = os.TempDir()
+	}
+	return filepath.Join(base, "dante-cua-browser")
+}
 
 // isChromiumBrowser reports whether app names a Chromium-family browser, which
 // speaks the DevTools protocol (Safari does not — it uses Apple Events, a
