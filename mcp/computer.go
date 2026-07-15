@@ -457,6 +457,10 @@ func (c *computerServer) computerUse(ctx context.Context, _ *mcp.CallToolRequest
 		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: summary}}}, ComputerUseOutput{Summary: summary}, nil
 	case "open_app":
 		return c.openApp(ctx, in)
+	case "close_app":
+		return c.closeApp(ctx, in)
+	case "page":
+		return c.pageOp(ctx, in)
 	}
 
 	c.mu.Lock()
@@ -520,6 +524,11 @@ func (c *computerServer) openApp(ctx context.Context, in ComputerUseInput) (*mcp
 	} else {
 		args["name"] = app
 	}
+	// A URL opens the app straight at that page (a browser lands on it) — the
+	// reliable way to navigate, since a browser's address bar isn't accessible.
+	if url := strings.TrimSpace(in.URL); url != "" {
+		args["urls"] = []string{url}
+	}
 	res, err := c.call(ctx, "launch_app", args)
 	if err != nil {
 		return nil, ComputerUseOutput{}, err
@@ -566,6 +575,90 @@ func (c *computerServer) openApp(ctx context.Context, in ComputerUseInput) (*mcp
 // at least two separators and no spaces or slashes.
 func looksLikeBundleID(s string) bool {
 	return !strings.ContainsAny(s, " /") && strings.Count(s, ".") >= 2
+}
+
+// closeApp quits an app by resolving its on-screen window to a pid and calling
+// the driver's kill_app. The natural complement to open_app.
+func (c *computerServer) closeApp(ctx context.Context, in ComputerUseInput) (*mcp.CallToolResult, ComputerUseOutput, error) {
+	app := strings.TrimSpace(in.App)
+	if app == "" {
+		return nil, ComputerUseOutput{}, fmt.Errorf(`close_app needs an app in "app", e.g. app="Google Chrome"`)
+	}
+	pid, _ := c.windowForApp(ctx, app)
+	if pid == 0 {
+		return nil, ComputerUseOutput{}, fmt.Errorf("no running app found for %q to close", app)
+	}
+	res, err := c.call(ctx, "kill_app", c.withSession(map[string]any{"pid": pid}))
+	if err != nil {
+		return nil, ComputerUseOutput{}, err
+	}
+	if res.IsError {
+		return res, ComputerUseOutput{}, nil
+	}
+	// If we just closed the app we were targeting, drop the sticky pin.
+	c.mu.Lock()
+	if c.sticky.PID == pid {
+		c.sticky.PID, c.sticky.WindowID, c.sticky.Explicit = 0, 0, false
+	}
+	c.mu.Unlock()
+	summary := fmt.Sprintf("closed %q (pid %d)", app, pid)
+	res.Content = []mcp.Content{&mcp.TextContent{Text: summary}}
+	return res, ComputerUseOutput{Summary: summary}, nil
+}
+
+// pageOp drives the web page loaded in a running browser via the driver's page
+// tool (CDP/Apple Events) — the ONLY reliable way to read/interact with web
+// content, since a browser's page is not exposed to the accessibility API. It
+// targets the sticky pid (open the browser with open_app first).
+func (c *computerServer) pageOp(ctx context.Context, in ComputerUseInput) (*mcp.CallToolResult, ComputerUseOutput, error) {
+	sub := strings.TrimSpace(in.PageAction)
+	if sub == "" {
+		return nil, ComputerUseOutput{}, fmt.Errorf("page needs page_action: get_text, query_dom, click_element, insert_text, type_keystrokes, or execute_javascript")
+	}
+	c.mu.Lock()
+	pid := c.sticky.PID
+	c.mu.Unlock()
+	if pid == 0 {
+		return nil, ComputerUseOutput{}, fmt.Errorf("no browser targeted — open it first with action=open_app (app=\"Google Chrome\", optionally url=...)")
+	}
+	args := c.withSession(map[string]any{"pid": pid, "action": sub})
+	switch sub {
+	case "query_dom", "click_element":
+		if strings.TrimSpace(in.Selector) == "" {
+			return nil, ComputerUseOutput{}, fmt.Errorf("page %s needs a css `selector`, e.g. selector=\"input[name=q]\"", sub)
+		}
+		args["selector"] = in.Selector
+	case "insert_text", "type_keystrokes":
+		if in.Text == "" {
+			return nil, ComputerUseOutput{}, fmt.Errorf("page %s needs `text` (click/focus the target field first)", sub)
+		}
+		args["text"] = in.Text
+	case "execute_javascript":
+		if strings.TrimSpace(in.JS) == "" {
+			return nil, ComputerUseOutput{}, fmt.Errorf("page execute_javascript needs `js`")
+		}
+		args["javascript"] = in.JS
+	case "get_text":
+		// no extra args
+	default:
+		return nil, ComputerUseOutput{}, fmt.Errorf("unknown page_action %q", sub)
+	}
+	res, err := c.call(ctx, "page", args)
+	if err != nil {
+		return nil, ComputerUseOutput{}, err
+	}
+	if res.IsError {
+		return res, ComputerUseOutput{}, nil // surface the driver's error honestly
+	}
+	return res, ComputerUseOutput{Summary: fmt.Sprintf("page %s ok", sub)}, nil
+}
+
+// withSession adds the session id to a driver-call arg map when set.
+func (c *computerServer) withSession(m map[string]any) map[string]any {
+	if c.sticky.SessionID != "" {
+		m["session"] = c.sticky.SessionID
+	}
+	return m
 }
 
 // StartComputerMCPServer spawns cua-driver as a stdio MCP child and serves the
@@ -629,9 +722,12 @@ func StartComputerMCPServer(ctx context.Context, transport mcp.Transport, cfg ty
 			"interact with the screen, a window, or any running app — do NOT use shell commands (e.g. " +
 			"`screenshot`, `scrot`, `screencapture`) for this. To OPEN or launch an app, call " +
 			"action='open_app' with app='<App Name>' (e.g. app='Google Chrome') — do NOT try to click it " +
-			"open. To see the screen, call action='capture' (mode='som' numbers the clickable elements so " +
-			"you can click by `element` index). Runs in the background without moving the user's real " +
-			"cursor. Requires an armed session.",
+			"open; to open a web page, add url='https://…' so the browser lands right on it. For anything " +
+			"INSIDE a web page (a browser's page content is NOT clickable via elements), use action='page' " +
+			"with page_action=get_text/query_dom/click_element/insert_text/execute_javascript (selector/text/js). " +
+			"To see the screen, call action='capture' (mode='som' numbers the clickable elements so you can " +
+			"click by `element` index). action='close_app' quits an app. Runs in the background without " +
+			"moving the user's real cursor. Requires an armed session.",
 	}, cs.computerUse)
 	xlog.Info("computer_use MCP server ready", "driver", cmdPath)
 	return server.Run(ctx, transport)

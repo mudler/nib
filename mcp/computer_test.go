@@ -39,12 +39,21 @@ func startFakeDriver(t *testing.T, ctx context.Context) *mcp.ClientSession {
 	mcp.AddTool(srv, &mcp.Tool{Name: "click"}, func(_ context.Context, _ *mcp.CallToolRequest, _ map[string]any) (*mcp.CallToolResult, map[string]any, error) {
 		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "clicked"}}}, map[string]any{}, nil
 	})
-	mcp.AddTool(srv, &mcp.Tool{Name: "launch_app"}, func(_ context.Context, _ *mcp.CallToolRequest, _ map[string]any) (*mcp.CallToolResult, map[string]any, error) {
-		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "launched"}}},
-			map[string]any{"pid": 99, "windows": []any{map[string]any{"window_id": 12}}}, nil
+	mcp.AddTool(srv, &mcp.Tool{Name: "launch_app"}, func(_ context.Context, _ *mcp.CallToolRequest, args map[string]any) (*mcp.CallToolResult, map[string]any, error) {
+		out := map[string]any{"pid": 99, "windows": []any{map[string]any{"window_id": 12}}}
+		if _, ok := args["urls"]; ok {
+			out["got_urls"] = true // let a test assert the URL was plumbed through
+		}
+		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "launched"}}}, out, nil
 	})
 	mcp.AddTool(srv, &mcp.Tool{Name: "bring_to_front"}, func(_ context.Context, _ *mcp.CallToolRequest, _ map[string]any) (*mcp.CallToolResult, map[string]any, error) {
 		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "fronted"}}}, map[string]any{}, nil
+	})
+	mcp.AddTool(srv, &mcp.Tool{Name: "kill_app"}, func(_ context.Context, _ *mcp.CallToolRequest, _ map[string]any) (*mcp.CallToolResult, map[string]any, error) {
+		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "killed"}}}, map[string]any{}, nil
+	})
+	mcp.AddTool(srv, &mcp.Tool{Name: "page"}, func(_ context.Context, _ *mcp.CallToolRequest, args map[string]any) (*mcp.CallToolResult, map[string]any, error) {
+		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "page:" + str(args["action"])}}}, map[string]any{}, nil
 	})
 	go func() { _ = srv.Run(ctx, srvT) }()
 	client := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "v0"}, nil)
@@ -189,6 +198,55 @@ func TestAllMenuElementsSignalsInaccessibleWindow(t *testing.T) {
 	}
 	if allMenuElements(nil) {
 		t.Fatal("empty (no elements) is the no-AX case, not menu-only")
+	}
+}
+
+func TestOpenAppWithURLPlumbsThrough(t *testing.T) {
+	ctx := context.Background()
+	cs := newComputerServer(startFakeDriver(t, ctx), types.ComputerConfig{SessionID: "dante-x"})
+	res, _, err := cs.computerUse(ctx, nil, ComputerUseInput{Action: "open_app", App: "Google Chrome", URL: "https://imdb.com"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !structuredMap(res)["got_urls"].(bool) {
+		t.Fatalf("open_app with a url must pass urls to launch_app")
+	}
+}
+
+func TestPageRequiresOpenBrowserAndArgs(t *testing.T) {
+	ctx := context.Background()
+	cs := newComputerServer(startFakeDriver(t, ctx), types.ComputerConfig{SessionID: "dante-x"})
+	// No browser targeted yet -> error, not a silent no-op.
+	if _, _, err := cs.computerUse(ctx, nil, ComputerUseInput{Action: "page", PageAction: "get_text"}); err == nil {
+		t.Fatalf("page before opening a browser must error")
+	}
+	if _, _, err := cs.computerUse(ctx, nil, ComputerUseInput{Action: "open_app", App: "Google Chrome"}); err != nil {
+		t.Fatal(err)
+	}
+	// query_dom without a selector must error.
+	if _, _, err := cs.computerUse(ctx, nil, ComputerUseInput{Action: "page", PageAction: "query_dom"}); err == nil {
+		t.Fatalf("page query_dom without a selector must error")
+	}
+	// A full page call now targets the open browser.
+	res, out, err := cs.computerUse(ctx, nil, ComputerUseInput{Action: "page", PageAction: "click_element", Selector: "input[name=q]"})
+	if err != nil {
+		t.Fatalf("page click_element after open_app should work: %v", err)
+	}
+	if out.Summary != "page click_element ok" {
+		t.Fatalf("summary=%q", out.Summary)
+	}
+	_ = res
+}
+
+func TestCloseAppKillsResolvedApp(t *testing.T) {
+	ctx := context.Background()
+	cs := newComputerServer(startFakeDriver(t, ctx), types.ComputerConfig{SessionID: "dante-x"})
+	// The fake reports a "Finder" window (pid 42); close_app resolves + kills it.
+	if _, _, err := cs.computerUse(ctx, nil, ComputerUseInput{Action: "close_app", App: "Finder"}); err != nil {
+		t.Fatalf("close_app on a running app should succeed: %v", err)
+	}
+	if _, _, err := cs.computerUse(ctx, nil, ComputerUseInput{Action: "close_app", App: "Safari"}); err == nil {
+		t.Fatalf("close_app on an app with no window must error")
 	}
 }
 
