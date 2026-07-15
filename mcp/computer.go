@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"runtime"
 	"sort"
 	"strconv"
@@ -199,7 +198,7 @@ func (c *computerServer) capture(ctx context.Context, in ComputerUseInput) (*mcp
 	// menuOnlyHint fires when a window exposes only its menu bar and no real
 	// content — the signature of a browser (Chrome) or Electron app that gates
 	// accessibility. Element clicks are useless there; steer to pixels / URLs.
-	const menuOnlyHint = " (this window exposes only its menu bar — its content is not accessible, typical of a browser like Chrome. To open a web page, prefer open_app with a URL; otherwise act by pixel: pass x,y off this screenshot.)"
+	const menuOnlyHint = " (this window exposes only its menu bar — its content is not accessible, typical of a browser like Chrome, whose web page can't be driven here. Act by pixel: pass x,y off this screenshot; for web tasks use the web tools instead.)"
 
 	switch in.Mode {
 	case "ax":
@@ -361,34 +360,6 @@ func (c *computerServer) windowForApp(ctx context.Context, app string) (int, int
 	return 0, 0
 }
 
-// windowIDForPID returns the frontmost on-screen window id owned by pid, or 0.
-// Used by page when open_app pinned a pid but no window id yet.
-func (c *computerServer) windowIDForPID(ctx context.Context, pid int) int {
-	for _, onScreen := range []bool{true, false} {
-		res, err := c.call(ctx, "list_windows", map[string]any{"on_screen_only": onScreen})
-		if err != nil || (res != nil && res.IsError) {
-			continue
-		}
-		ws, _ := structuredMap(res)["windows"].([]any)
-		type win struct{ id, z int }
-		var best *win
-		for _, raw := range ws {
-			wm, _ := raw.(map[string]any)
-			if toInt(wm["pid"]) != pid {
-				continue
-			}
-			w := win{id: toInt(wm["window_id"]), z: toInt(wm["z_index"])}
-			if best == nil || w.z < best.z {
-				best = &w
-			}
-		}
-		if best != nil && best.id != 0 {
-			return best.id
-		}
-	}
-	return 0
-}
-
 // resolveCaptureTarget decides which window capture() targets, in order:
 //  1. in.App names an app -> that app's window (explicit). app="screen"/"desktop"
 //     -> (0,0) so the caller does a whole-screen desktop capture.
@@ -423,19 +394,16 @@ func isDesktopApp(app string) bool {
 	return a == "screen" || a == "desktop"
 }
 
-// actionAliases maps the raw cua-driver / page tool names a model reaches for to
-// the real computer_use action. Observed: after we added the page tool, models
-// call action="click_element" (a page_action) as a top-level action, or reach
-// for the driver's press_key/type_text/launch_app names directly.
+// actionAliases maps the raw cua-driver tool names a model reaches for to the
+// real computer_use action, so a near-miss doesn't dead-end.
 var actionAliases = map[string]string{
-	"click_element": "click",
-	"type_text":     "type",
-	"press_key":     "key",
-	"launch_app":    "open_app",
-	"kill_app":      "close_app",
-	"screenshot":    "capture",
-	"launch":        "open_app",
-	"open":          "open_app",
+	"type_text":  "type",
+	"press_key":  "key",
+	"launch_app": "open_app",
+	"kill_app":   "close_app",
+	"screenshot": "capture",
+	"launch":     "open_app",
+	"open":       "open_app",
 }
 
 func normalizeAction(a string) string {
@@ -515,8 +483,6 @@ func (c *computerServer) computerUse(ctx context.Context, _ *mcp.CallToolRequest
 		return c.openApp(ctx, in)
 	case "close_app":
 		return c.closeApp(ctx, in)
-	case "page":
-		return c.pageOp(ctx, in)
 	}
 
 	c.mu.Lock()
@@ -587,31 +553,6 @@ func (c *computerServer) openApp(ctx context.Context, in ComputerUseInput) (*mcp
 	} else {
 		args["name"] = app
 	}
-	// A URL opens the app straight at that page (a browser lands on it) — the
-	// reliable way to navigate, since a browser's address bar isn't accessible.
-	if url := strings.TrimSpace(in.URL); url != "" {
-		args["urls"] = []string{url}
-	}
-	// For a Chromium browser, open a CDP server so the `page` tool can actually
-	// drive the web content. Without it, page can't attach and falls back to
-	// AppleScript (fails to match the window) and then the accessibility tree,
-	// which on Chrome is just the menu bar (its web content is not AX-exposed).
-	//
-	// The catch: --remote-debugging-port only takes effect when *we* launch the
-	// process. If the user's own Chrome is already running, launch_app just hands
-	// back that pid with no debug port. So force a SEPARATE instance on a
-	// dedicated profile dir — that gives an isolated Chrome with the CDP port even
-	// when the user's Chrome is open, at the cost of a fresh profile (no existing
-	// logins/bookmarks), which is the right trade for automation.
-	if isChromiumBrowser(app) {
-		args["cdp_debugging_port"] = cdpDebuggingPort
-		args["creates_new_application_instance"] = true
-		args["additional_arguments"] = []string{
-			"--user-data-dir=" + automationBrowserProfileDir(),
-			"--no-first-run",            // skip the "Sign in to Chrome" / welcome window
-			"--no-default-browser-check", // don't nag about being the default browser
-		}
-	}
 	res, err := c.call(ctx, "launch_app", args)
 	if err != nil {
 		return nil, ComputerUseOutput{}, err
@@ -655,36 +596,6 @@ func looksLikeBundleID(s string) bool {
 	return !strings.ContainsAny(s, " /") && strings.Count(s, ".") >= 2
 }
 
-// cdpDebuggingPort is the fixed Chrome DevTools Protocol port we launch Chromium
-// browsers with so the page tool can attach.
-const cdpDebuggingPort = 9222
-
-// automationBrowserProfileDir is the dedicated Chrome user-data-dir the desktop
-// automation launches into — separate from the user's real profile so we can get
-// an isolated instance with the CDP port even when their Chrome is already
-// running. Stable across sessions (UserCacheDir) so it keeps cookies/logins; a
-// temp dir is the fallback.
-func automationBrowserProfileDir() string {
-	base, err := os.UserCacheDir()
-	if err != nil || base == "" {
-		base = os.TempDir()
-	}
-	return filepath.Join(base, "dante-cua-browser")
-}
-
-// isChromiumBrowser reports whether app names a Chromium-family browser, which
-// speaks the DevTools protocol (Safari does not — it uses Apple Events, a
-// separate path, so it's excluded here).
-func isChromiumBrowser(app string) bool {
-	a := strings.ToLower(app)
-	for _, b := range []string{"chrome", "chromium", "brave", "edge", "vivaldi", "opera"} {
-		if strings.Contains(a, b) {
-			return true
-		}
-	}
-	return false
-}
-
 // closeApp quits an app by resolving its on-screen window to a pid and calling
 // the driver's kill_app. The natural complement to open_app.
 func (c *computerServer) closeApp(ctx context.Context, in ComputerUseInput) (*mcp.CallToolResult, ComputerUseOutput, error) {
@@ -712,67 +623,6 @@ func (c *computerServer) closeApp(ctx context.Context, in ComputerUseInput) (*mc
 	summary := fmt.Sprintf("closed %q (pid %d)", app, pid)
 	res.Content = []mcp.Content{&mcp.TextContent{Text: summary}}
 	return res, ComputerUseOutput{Summary: summary}, nil
-}
-
-// pageOp drives the web page loaded in a running browser via the driver's page
-// tool (CDP/Apple Events) — the ONLY reliable way to read/interact with web
-// content, since a browser's page is not exposed to the accessibility API. It
-// targets the sticky pid (open the browser with open_app first).
-func (c *computerServer) pageOp(ctx context.Context, in ComputerUseInput) (*mcp.CallToolResult, ComputerUseOutput, error) {
-	sub := strings.TrimSpace(in.PageAction)
-	if sub == "" {
-		return nil, ComputerUseOutput{}, fmt.Errorf("page needs page_action: get_text, query_dom, click_element, insert_text, type_keystrokes, or execute_javascript")
-	}
-	c.mu.Lock()
-	pid, windowID := c.sticky.PID, c.sticky.WindowID
-	c.mu.Unlock()
-	if pid == 0 {
-		return nil, ComputerUseOutput{}, fmt.Errorf("no browser targeted — open it first with action=open_app (app=\"Google Chrome\", optionally url=...)")
-	}
-	if windowID == 0 {
-		// open_app may have pinned the pid but no window id yet (e.g. the browser
-		// was still spawning its first window). Resolve the pid's current on-screen
-		// window rather than dead-ending the model on "capture first".
-		if wid := c.windowIDForPID(ctx, pid); wid != 0 {
-			windowID = wid
-			c.mu.Lock()
-			c.sticky.WindowID = wid
-			c.mu.Unlock()
-		} else {
-			return nil, ComputerUseOutput{}, fmt.Errorf("no browser window pinned yet — capture it first (action=capture app=\"Google Chrome\") so the page can be targeted")
-		}
-	}
-	// The driver's page tool requires BOTH pid and window_id to locate the CDP tab.
-	args := c.withSession(map[string]any{"pid": pid, "window_id": windowID, "action": sub})
-	switch sub {
-	case "query_dom", "click_element":
-		if strings.TrimSpace(in.Selector) == "" {
-			return nil, ComputerUseOutput{}, fmt.Errorf("page %s needs a css `selector`, e.g. selector=\"input[name=q]\"", sub)
-		}
-		args["selector"] = in.Selector
-	case "insert_text", "type_keystrokes":
-		if in.Text == "" {
-			return nil, ComputerUseOutput{}, fmt.Errorf("page %s needs `text` (click/focus the target field first)", sub)
-		}
-		args["text"] = in.Text
-	case "execute_javascript":
-		if strings.TrimSpace(in.JS) == "" {
-			return nil, ComputerUseOutput{}, fmt.Errorf("page execute_javascript needs `js`")
-		}
-		args["javascript"] = in.JS
-	case "get_text":
-		// no extra args
-	default:
-		return nil, ComputerUseOutput{}, fmt.Errorf("unknown page_action %q", sub)
-	}
-	res, err := c.call(ctx, "page", args)
-	if err != nil {
-		return nil, ComputerUseOutput{}, err
-	}
-	if res.IsError {
-		return res, ComputerUseOutput{}, nil // surface the driver's error honestly
-	}
-	return res, ComputerUseOutput{Summary: fmt.Sprintf("page %s ok", sub)}, nil
 }
 
 // withSession adds the session id to a driver-call arg map when set.
@@ -853,20 +703,16 @@ func StartComputerMCPServer(ctx context.Context, transport mcp.Transport, cfg ty
 	server := mcp.NewServer(&mcp.Implementation{Name: "computer", Version: "v1.0.0"}, nil)
 	tool := &mcp.Tool{
 		Name: "computer_use",
-		Description: "See and control the screen: take a SCREENSHOT of the desktop, then click, type, " +
-			"scroll, and drag. Use this whenever the user wants to look at, see, screenshot, read, or " +
-			"interact with the screen, a window, or any running app — do NOT use shell commands (e.g. " +
-			"`screenshot`, `scrot`, `screencapture`) for this. To OPEN or launch an app, call " +
-			"action='open_app' with app='<App Name>' (e.g. app='Google Chrome') — do NOT try to click it " +
-			"open; to open a web page, add url='https://…' so the browser lands right on it. For EVERYTHING " +
-			"inside a web page — reading it, clicking links/buttons, typing in a search box or form — you MUST " +
-			"use action='page' (page_action=get_text to read, query_dom with a css selector to find elements, " +
-			"click_element to click one, insert_text to type into the focused field). The plain click/type " +
-			"actions act on the OS layer and do NOT reach a web page's content, so never use them on a browser " +
-			"tab. To see the screen, call action='capture' (mode='som' numbers the clickable elements so you " +
-			"can click by `element` index — for native apps). For a keyboard SHORTCUT (cmd+a, ctrl+c, cmd+s) " +
-			"use action='key' with keys='cmd+a' — never type the shortcut as text. action='close_app' quits " +
-			"an app. The target app is brought to the front so actions land. Requires an armed session.",
+		Description: "See and control a native desktop app: take a SCREENSHOT, then click, type, scroll, " +
+			"and drag. Use this whenever the user wants to look at, see, screenshot, read, or interact with " +
+			"the screen, a window, or a running app — do NOT use shell commands (e.g. `screenshot`, `scrot`, " +
+			"`screencapture`) for this. Preferred workflow: call action='capture' (mode='som' numbers the " +
+			"clickable elements) then click by `element` index for reliability; pixel x,y is the fallback. " +
+			"To OPEN or launch an app, call action='open_app' with app='<App Name>' (e.g. app='TextEdit') — " +
+			"do NOT try to click it open; action='close_app' quits one. For a keyboard SHORTCUT (cmd+a, " +
+			"ctrl+c, cmd+s) use action='key' with keys='cmd+a' — never type the shortcut as text. The target " +
+			"app is brought to the front so actions land. This drives native app UI; it is NOT for browsing " +
+			"the web (use the web tools for that). Requires an armed session.",
 	}
 	// Give the enum-valued fields REAL JSON Schema enums (not just a prose list in
 	// the description). The go-sdk's `jsonschema:"…"` struct tag only sets a
@@ -905,12 +751,10 @@ func computerInputSchema() (*jsonschema.Schema, error) {
 	}
 	setEnum("action", "capture", "click", "double_click", "right_click", "middle_click",
 		"drag", "scroll", "type", "key", "set_value", "wait", "list_apps", "open_app",
-		"close_app", "focus_app", "page")
+		"close_app", "focus_app")
 	setEnum("mode", "som", "vision", "ax")
 	setEnum("button", "left", "right", "middle")
 	setEnum("direction", "up", "down", "left", "right")
-	setEnum("page_action", "get_text", "query_dom", "click_element", "insert_text",
-		"type_keystrokes", "execute_javascript")
 	return s, nil
 }
 

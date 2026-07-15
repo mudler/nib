@@ -40,29 +40,14 @@ func startFakeDriver(t *testing.T, ctx context.Context) *mcp.ClientSession {
 		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "clicked"}}}, map[string]any{}, nil
 	})
 	mcp.AddTool(srv, &mcp.Tool{Name: "launch_app"}, func(_ context.Context, _ *mcp.CallToolRequest, args map[string]any) (*mcp.CallToolResult, map[string]any, error) {
-		out := map[string]any{"pid": 99, "windows": []any{map[string]any{"window_id": 12}}}
-		if _, ok := args["urls"]; ok {
-			out["got_urls"] = true // let a test assert the URL was plumbed through
-		}
-		if p, ok := args["cdp_debugging_port"]; ok {
-			out["got_cdp_port"] = p // let a test assert CDP is enabled for browsers
-		}
-		if v, ok := args["creates_new_application_instance"]; ok {
-			out["got_new_instance"] = v
-		}
-		if _, ok := args["additional_arguments"]; ok {
-			out["got_profile_arg"] = true
-		}
-		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "launched"}}}, out, nil
+		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "launched"}}},
+			map[string]any{"pid": 99, "windows": []any{map[string]any{"window_id": 12}}}, nil
 	})
 	mcp.AddTool(srv, &mcp.Tool{Name: "bring_to_front"}, func(_ context.Context, _ *mcp.CallToolRequest, _ map[string]any) (*mcp.CallToolResult, map[string]any, error) {
 		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "fronted"}}}, map[string]any{}, nil
 	})
 	mcp.AddTool(srv, &mcp.Tool{Name: "kill_app"}, func(_ context.Context, _ *mcp.CallToolRequest, _ map[string]any) (*mcp.CallToolResult, map[string]any, error) {
 		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "killed"}}}, map[string]any{}, nil
-	})
-	mcp.AddTool(srv, &mcp.Tool{Name: "page"}, func(_ context.Context, _ *mcp.CallToolRequest, args map[string]any) (*mcp.CallToolResult, map[string]any, error) {
-		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "page:" + str(args["action"])}}}, map[string]any{}, nil
 	})
 	go func() { _ = srv.Run(ctx, srvT) }()
 	client := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "v0"}, nil)
@@ -210,73 +195,6 @@ func TestAllMenuElementsSignalsInaccessibleWindow(t *testing.T) {
 	}
 }
 
-func TestOpenAppWithURLPlumbsThrough(t *testing.T) {
-	ctx := context.Background()
-	cs := newComputerServer(startFakeDriver(t, ctx), types.ComputerConfig{SessionID: "dante-x"})
-	res, _, err := cs.computerUse(ctx, nil, ComputerUseInput{Action: "open_app", App: "Google Chrome", URL: "https://imdb.com"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !structuredMap(res)["got_urls"].(bool) {
-		t.Fatalf("open_app with a url must pass urls to launch_app")
-	}
-}
-
-func TestOpenAppEnablesCDPForBrowsers(t *testing.T) {
-	ctx := context.Background()
-	cs := newComputerServer(startFakeDriver(t, ctx), types.ComputerConfig{SessionID: "dante-x"})
-	// A Chromium browser must launch with a CDP port so the page tool can attach.
-	res, _, err := cs.computerUse(ctx, nil, ComputerUseInput{Action: "open_app", App: "Google Chrome"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	m := structuredMap(res)
-	if m["got_cdp_port"] == nil {
-		t.Fatal("open_app on a Chromium browser must pass cdp_debugging_port to launch_app")
-	}
-	// Must force a fresh isolated instance (on a dedicated profile) so CDP works
-	// even when the user's own Chrome is already running.
-	if m["got_new_instance"] != true || m["got_profile_arg"] != true {
-		t.Fatalf("browser open must force a new instance + dedicated profile, got %+v", m)
-	}
-	// A non-browser app must NOT get the CDP flag.
-	res2, _, err := cs.computerUse(ctx, nil, ComputerUseInput{Action: "open_app", App: "Calculator"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if structuredMap(res2)["got_cdp_port"] != nil {
-		t.Fatal("open_app on a non-browser must not pass cdp_debugging_port")
-	}
-	if !isChromiumBrowser("Brave Browser") || !isChromiumBrowser("Microsoft Edge") || isChromiumBrowser("Safari") {
-		t.Fatal("isChromiumBrowser detection wrong")
-	}
-}
-
-func TestPageRequiresOpenBrowserAndArgs(t *testing.T) {
-	ctx := context.Background()
-	cs := newComputerServer(startFakeDriver(t, ctx), types.ComputerConfig{SessionID: "dante-x"})
-	// No browser targeted yet -> error, not a silent no-op.
-	if _, _, err := cs.computerUse(ctx, nil, ComputerUseInput{Action: "page", PageAction: "get_text"}); err == nil {
-		t.Fatalf("page before opening a browser must error")
-	}
-	if _, _, err := cs.computerUse(ctx, nil, ComputerUseInput{Action: "open_app", App: "Google Chrome"}); err != nil {
-		t.Fatal(err)
-	}
-	// query_dom without a selector must error.
-	if _, _, err := cs.computerUse(ctx, nil, ComputerUseInput{Action: "page", PageAction: "query_dom"}); err == nil {
-		t.Fatalf("page query_dom without a selector must error")
-	}
-	// A full page call now targets the open browser.
-	res, out, err := cs.computerUse(ctx, nil, ComputerUseInput{Action: "page", PageAction: "click_element", Selector: "input[name=q]"})
-	if err != nil {
-		t.Fatalf("page click_element after open_app should work: %v", err)
-	}
-	if out.Summary != "page click_element ok" {
-		t.Fatalf("summary=%q", out.Summary)
-	}
-	_ = res
-}
-
 func TestCloseAppKillsResolvedApp(t *testing.T) {
 	ctx := context.Background()
 	cs := newComputerServer(startFakeDriver(t, ctx), types.ComputerConfig{SessionID: "dante-x"})
@@ -289,20 +207,12 @@ func TestCloseAppKillsResolvedApp(t *testing.T) {
 	}
 }
 
-// Regression: after adding the page tool, models called action="click_element"
-// (a page sub-action) as a top-level action and looped on "not a direct
-// cua-driver call". It must alias to the numbered-element click.
-func TestActionAliasClickElement(t *testing.T) {
-	ctx := context.Background()
-	cs := newComputerServer(startFakeDriver(t, ctx), types.ComputerConfig{SessionID: "dante-x"})
-	if _, _, err := cs.computerUse(ctx, nil, ComputerUseInput{Action: "open_app", App: "Google Chrome"}); err != nil {
-		t.Fatal(err)
-	}
-	// "click_element" as a top-level action -> click element 1 (not an error).
-	if _, _, err := cs.computerUse(ctx, nil, ComputerUseInput{Action: "click_element", Element: 1}); err != nil {
-		t.Fatalf("action=click_element must alias to click, got: %v", err)
-	}
-	if normalizeAction("press_key") != "key" || normalizeAction("type_text") != "type" || normalizeAction("launch_app") != "open_app" {
+// Models sometimes reach for the raw cua-driver tool names; those must alias to
+// the real computer_use action instead of dead-ending.
+func TestActionAliasesDriverNames(t *testing.T) {
+	if normalizeAction("press_key") != "key" || normalizeAction("type_text") != "type" ||
+		normalizeAction("launch_app") != "open_app" || normalizeAction("kill_app") != "close_app" ||
+		normalizeAction("screenshot") != "capture" {
 		t.Fatal("driver-name aliases must normalize")
 	}
 }
@@ -329,16 +239,16 @@ func TestComputerInputSchemaHasRealEnums(t *testing.T) {
 	if s.Properties["action"] == nil || len(s.Properties["action"].Enum) == 0 {
 		t.Fatal("action must carry a real JSON Schema enum, not just a description")
 	}
-	for _, a := range []string{"capture", "click", "open_app", "page", "close_app"} {
+	for _, a := range []string{"capture", "click", "open_app", "close_app", "focus_app"} {
 		if !has("action", a) {
 			t.Fatalf("action enum missing %q", a)
 		}
 	}
-	if has("action", "click_element") {
-		t.Fatal("click_element is a page_action, not a top-level action — must not be in the action enum")
+	if has("action", "page") {
+		t.Fatal("page is a web action, not a computer_use (native desktop) action")
 	}
-	if !has("page_action", "click_element") || !has("mode", "som") || !has("button", "left") {
-		t.Fatal("page_action/mode/button enums not stamped")
+	if !has("mode", "som") || !has("button", "left") {
+		t.Fatal("mode/button enums not stamped")
 	}
 	// Descriptions from the struct tags must survive the enum stamping.
 	if s.Properties["action"].Description == "" {

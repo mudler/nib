@@ -10,13 +10,9 @@ import (
 
 // ComputerUseInput is the single wrapper tool's argument set.
 type ComputerUseInput struct {
-	Action         string   `json:"action" jsonschema:"the action: capture,click,double_click,right_click,middle_click,drag,scroll,type,key,set_value,wait,list_apps,open_app,close_app,focus_app,page"`
+	Action         string   `json:"action" jsonschema:"the action: capture,click,double_click,right_click,middle_click,drag,scroll,type,key,set_value,wait,list_apps,open_app,close_app,focus_app"`
 	Mode           string   `json:"mode,omitempty" jsonschema:"capture mode: som (default),vision,ax"`
-	App            string   `json:"app,omitempty" jsonschema:"app name (e.g. 'Google Chrome') or bundle id — required for open_app/close_app (launch/quit it); also limits capture/action to that app; 'screen' for the desktop"`
-	URL            string   `json:"url,omitempty" jsonschema:"for open_app: a web page URL to open the app at (e.g. open Chrome straight at https://imdb.com)"`
-	PageAction     string   `json:"page_action,omitempty" jsonschema:"for action=page (drive the web page in a browser): get_text (read the page), query_dom (find elements by css selector), click_element (click a selector), insert_text (type into the focused field), type_keystrokes (type real keys), execute_javascript"`
-	Selector       string   `json:"selector,omitempty" jsonschema:"CSS selector for page query_dom/click_element (e.g. 'input[name=q]', 'button.submit')"`
-	JS             string   `json:"js,omitempty" jsonschema:"JavaScript for page execute_javascript"`
+	App            string   `json:"app,omitempty" jsonschema:"app name (e.g. 'TextEdit') or bundle id — required for open_app/close_app (launch/quit it); also limits capture/action to that app; 'screen' for the desktop"`
 	MaxElements    int      `json:"max_elements,omitempty" jsonschema:"cap on returned AX elements (default 100, max 1000)"`
 	Element        int      `json:"element,omitempty" jsonschema:"1-based SOM index from the last capture (preferred over coordinates)"`
 	Coordinate     []int    `json:"coordinate,omitempty" jsonschema:"pixel [x,y]; use only when no element index is available"`
