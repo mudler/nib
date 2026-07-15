@@ -7,6 +7,7 @@ import (
 
 	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/dom"
+	"github.com/chromedp/cdproto/input"
 	"github.com/chromedp/cdproto/runtime"
 	"github.com/chromedp/chromedp"
 )
@@ -48,5 +49,29 @@ func (b *browserServer) clickBackendNode(ctx context.Context, backendID int64) e
 			return fmt.Errorf("click JS error: %s", exc.Text)
 		}
 		return nil
+	}))
+}
+
+// typeIntoBackendNode resolves a backend DOM node, focuses it and clears any
+// existing value, then inserts text via a real CDP input event
+// (input.InsertText) so the DOM/renderer actually observes the keystrokes —
+// unlike the accessibility path, which never reaches the DOM.
+func (b *browserServer) typeIntoBackendNode(ctx context.Context, backendID int64, text string) error {
+	return chromedp.Run(ctx, chromedp.ActionFunc(func(ctx context.Context) error {
+		obj, err := dom.ResolveNode().WithBackendNodeID(cdpBackend(backendID)).Do(ctx)
+		if err != nil {
+			return err
+		}
+		// Focus + clear existing value via the element handle.
+		if _, exc, err := runtime.CallFunctionOn(
+			`function(){ this.focus(); if('value' in this){ this.value=''; } this.dispatchEvent(new Event('input',{bubbles:true})); return true; }`).
+			WithObjectID(obj.ObjectID).WithReturnByValue(true).Do(ctx); err != nil {
+			return err
+		} else if exc != nil {
+			return fmt.Errorf("focus JS error: %s", exc.Text)
+		}
+		// Insert text as a real CDP input event so the DOM/renderer observes it
+		// (unlike the AX path that never reaches the DOM).
+		return input.InsertText(text).Do(ctx)
 	}))
 }

@@ -78,6 +78,47 @@ func TestClickAgainstRealChrome(t *testing.T) {
 	}
 }
 
+// TestTypeAgainstRealChrome drives a real headed Chrome, grabs the ref for an
+// <input> from the snapshot, types into it via browserType, and asserts the
+// input's value in the DOM actually changed — the check the AX path (which
+// never reaches the DOM) cannot pass.
+//
+// Opt-in only (needs a real Chrome/Chromium on the machine):
+//
+//	go test -tags browserintegration ./mcp/ -run Type
+func TestTypeAgainstRealChrome(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `<html><body><input aria-label="Search box"></body></html>`)
+	}))
+	defer srv.Close()
+
+	b := newBrowserServer(types.BrowserConfig{AllowPrivateURLs: true, ProfileDir: t.TempDir() + "/p"})
+	defer b.close()
+
+	_, out, err := b.browserNavigate(context.Background(), nil, BrowserInput{URL: srv.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ref := refForText(out.Snapshot, "Search box")
+	if ref == "" {
+		t.Fatalf("no ref found for the input in snapshot:\n%s", out.Snapshot)
+	}
+
+	const want = "hello from CDP"
+	if _, _, err := b.browserType(context.Background(), nil, BrowserInput{Ref: ref, Text: want}); err != nil {
+		t.Fatal(err)
+	}
+
+	var got string
+	if err := chromedp.Run(b.bctx, chromedp.Value("input", &got)); err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		t.Fatalf("input value = %q, want %q", got, want)
+	}
+}
+
 // refForText scans a rendered snapshot for the line containing text and
 // returns its leading "@eN" ref, or "" if not found.
 func refForText(snapshot, text string) string {

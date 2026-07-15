@@ -1,6 +1,8 @@
 package mcp
 
 import (
+	"context"
+	"strings"
 	"testing"
 
 	"github.com/mudler/nib/types"
@@ -18,5 +20,16 @@ func TestProfileDirIsDedicatedAndStable(t *testing.T) {
 	b := newBrowserServer(types.BrowserConfig{ProfileDir: "/tmp/x/browser-profile"})
 	if b.profileDir() != "/tmp/x/browser-profile" {
 		t.Fatalf("profileDir=%q", b.profileDir())
+	}
+}
+
+func TestBrowserTypeRejectsEmptyText(t *testing.T) {
+	b := newBrowserServer(types.BrowserConfig{})
+	_, _, err := b.browserType(context.Background(), nil, BrowserInput{Ref: "@e5", Text: ""})
+	if err == nil {
+		t.Fatal("expected error for empty text, got nil")
+	}
+	if !strings.Contains(err.Error(), "browser_type") {
+		t.Fatalf("error should name browser_type, got: %v", err)
 	}
 }

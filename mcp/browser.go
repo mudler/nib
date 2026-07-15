@@ -232,6 +232,26 @@ func (b *browserServer) browserClick(ctx context.Context, _ *mcp.CallToolRequest
 	return textResult("clicked " + in.Ref + "\n" + text), BrowserOutput{Snapshot: text, ElementCount: n}, nil
 }
 
+// browserType resolves in.Ref against the last snapshot's ref map, focuses +
+// clears the corresponding DOM node and types in.Text via a real CDP input
+// event, then returns a fresh snapshot (which also refreshes the ref map,
+// since refs are only valid for one snapshot).
+func (b *browserServer) browserType(ctx context.Context, _ *mcp.CallToolRequest, in BrowserInput) (*mcp.CallToolResult, BrowserOutput, error) {
+	if in.Text == "" {
+		return nil, BrowserOutput{}, fmt.Errorf("browser_type needs text")
+	}
+	live, backendID, err := b.liveRef(in.Ref)
+	if err != nil {
+		return nil, BrowserOutput{}, err
+	}
+	if err := b.typeIntoBackendNode(live, backendID, in.Text); err != nil {
+		return nil, BrowserOutput{}, err
+	}
+	// Re-snapshot so the model sees the result (and gets fresh refs).
+	text, n, _ := b.snapshotNow(live, true)
+	return textResult("typed into " + in.Ref + "\n" + text), BrowserOutput{Snapshot: text, ElementCount: n}, nil
+}
+
 // liveRef returns the live browser ctx + the ref's backend id, erroring if no
 // page is open or the ref is stale.
 func (b *browserServer) liveRef(ref string) (context.Context, int64, error) {
