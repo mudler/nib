@@ -361,6 +361,34 @@ func (c *computerServer) windowForApp(ctx context.Context, app string) (int, int
 	return 0, 0
 }
 
+// windowIDForPID returns the frontmost on-screen window id owned by pid, or 0.
+// Used by page when open_app pinned a pid but no window id yet.
+func (c *computerServer) windowIDForPID(ctx context.Context, pid int) int {
+	for _, onScreen := range []bool{true, false} {
+		res, err := c.call(ctx, "list_windows", map[string]any{"on_screen_only": onScreen})
+		if err != nil || (res != nil && res.IsError) {
+			continue
+		}
+		ws, _ := structuredMap(res)["windows"].([]any)
+		type win struct{ id, z int }
+		var best *win
+		for _, raw := range ws {
+			wm, _ := raw.(map[string]any)
+			if toInt(wm["pid"]) != pid {
+				continue
+			}
+			w := win{id: toInt(wm["window_id"]), z: toInt(wm["z_index"])}
+			if best == nil || w.z < best.z {
+				best = &w
+			}
+		}
+		if best != nil && best.id != 0 {
+			return best.id
+		}
+	}
+	return 0
+}
+
 // resolveCaptureTarget decides which window capture() targets, in order:
 //  1. in.App names an app -> that app's window (explicit). app="screen"/"desktop"
 //     -> (0,0) so the caller does a whole-screen desktop capture.
@@ -466,8 +494,10 @@ func (c *computerServer) computerUse(ctx context.Context, _ *mcp.CallToolRequest
 		// pure local wait, clamped 0..30; no driver call.
 		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "waited"}}}, ComputerUseOutput{Summary: "waited"}, nil
 	case "focus_app":
-		// Select the named app's on-screen window (empty app => frontmost) and pin
-		// it as an explicit target so the next capture/click stays on it.
+		// Select the named app's on-screen window (empty app => frontmost), bring it
+		// to the FRONT (so clicks/keystrokes actually land and the user can see the
+		// agent work — a background app receives neither), and pin it as the sticky
+		// target so the next capture/click stays on it.
 		pid, windowID := c.windowForApp(ctx, in.App)
 		if pid == 0 {
 			if strings.TrimSpace(in.App) == "" {
@@ -475,10 +505,11 @@ func (c *computerServer) computerUse(ctx context.Context, _ *mcp.CallToolRequest
 			}
 			return nil, ComputerUseOutput{}, fmt.Errorf("no on-screen window found for app %q — open it first with action=open_app", in.App)
 		}
+		c.bringToFront(ctx, pid, windowID)
 		c.mu.Lock()
 		c.sticky.PID, c.sticky.WindowID, c.sticky.Desktop, c.sticky.Explicit = pid, windowID, false, true
 		c.mu.Unlock()
-		summary := fmt.Sprintf("focused %q (pid %d) — call action=capture to see it", strings.TrimSpace(in.App), pid)
+		summary := fmt.Sprintf("focused %q (pid %d) and brought it to the front — call action=capture to see it", strings.TrimSpace(in.App), pid)
 		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: summary}}}, ComputerUseOutput{Summary: summary}, nil
 	case "open_app":
 		return c.openApp(ctx, in)
@@ -515,6 +546,13 @@ func (c *computerServer) computerUse(ctx context.Context, _ *mcp.CallToolRequest
 	tool, args, err := buildCuaCall(in, sticky)
 	if err != nil {
 		return nil, ComputerUseOutput{}, err
+	}
+	// Front the target window before a state-changing action so it actually holds
+	// focus — a background app receives neither clicks nor keystrokes (the driver
+	// reports them "unverified" and nothing lands). bring_to_front is persistent,
+	// so the app stays up and visible for the whole task rather than flashing back.
+	if IsDestructiveComputerAction(in.Action) && sticky.PID != 0 {
+		c.bringToFront(ctx, sticky.PID, sticky.WindowID)
 	}
 	res, err := c.call(ctx, tool, args)
 	if err != nil {
@@ -568,7 +606,11 @@ func (c *computerServer) openApp(ctx context.Context, in ComputerUseInput) (*mcp
 	if isChromiumBrowser(app) {
 		args["cdp_debugging_port"] = cdpDebuggingPort
 		args["creates_new_application_instance"] = true
-		args["additional_arguments"] = []string{"--user-data-dir=" + automationBrowserProfileDir()}
+		args["additional_arguments"] = []string{
+			"--user-data-dir=" + automationBrowserProfileDir(),
+			"--no-first-run",            // skip the "Sign in to Chrome" / welcome window
+			"--no-default-browser-check", // don't nag about being the default browser
+		}
 	}
 	res, err := c.call(ctx, "launch_app", args)
 	if err != nil {
@@ -587,14 +629,9 @@ func (c *computerServer) openApp(ctx context.Context, in ComputerUseInput) (*mcp
 	}
 	summary := fmt.Sprintf("launched %q", app)
 	if pid != 0 {
-		// Bring it forward so the user sees it and foreground input can land;
-		// launch_app opens in the background. Best-effort — never fail the open on
-		// a bring_to_front hiccup (e.g. a platform without it).
-		bf := map[string]any{"pid": pid}
-		if c.sticky.SessionID != "" {
-			bf["session"] = c.sticky.SessionID
-		}
-		_, _ = c.call(ctx, "bring_to_front", bf)
+		// Bring it forward and keep it there so the user sees it and input lands;
+		// launch_app opens in the background.
+		c.bringToFront(ctx, pid, windowID)
 		c.mu.Lock()
 		// Explicit: a plain capture next must target THIS app, not re-detect the
 		// frontmost window (which may be a mounted DMG / Finder window).
@@ -693,7 +730,17 @@ func (c *computerServer) pageOp(ctx context.Context, in ComputerUseInput) (*mcp.
 		return nil, ComputerUseOutput{}, fmt.Errorf("no browser targeted — open it first with action=open_app (app=\"Google Chrome\", optionally url=...)")
 	}
 	if windowID == 0 {
-		return nil, ComputerUseOutput{}, fmt.Errorf("no browser window pinned — capture it first (action=capture app=\"Google Chrome\") so the page can be targeted")
+		// open_app may have pinned the pid but no window id yet (e.g. the browser
+		// was still spawning its first window). Resolve the pid's current on-screen
+		// window rather than dead-ending the model on "capture first".
+		if wid := c.windowIDForPID(ctx, pid); wid != 0 {
+			windowID = wid
+			c.mu.Lock()
+			c.sticky.WindowID = wid
+			c.mu.Unlock()
+		} else {
+			return nil, ComputerUseOutput{}, fmt.Errorf("no browser window pinned yet — capture it first (action=capture app=\"Google Chrome\") so the page can be targeted")
+		}
 	}
 	// The driver's page tool requires BOTH pid and window_id to locate the CDP tab.
 	args := c.withSession(map[string]any{"pid": pid, "window_id": windowID, "action": sub})
@@ -734,6 +781,20 @@ func (c *computerServer) withSession(m map[string]any) map[string]any {
 		m["session"] = c.sticky.SessionID
 	}
 	return m
+}
+
+// bringToFront persistently activates the target window so it holds macOS
+// foreground (and stays there) — the cheap path vs per-action foreground flashes.
+// Best-effort: a hiccup here must never fail the caller's action.
+func (c *computerServer) bringToFront(ctx context.Context, pid, windowID int) {
+	if pid == 0 {
+		return
+	}
+	m := map[string]any{"pid": pid}
+	if windowID != 0 {
+		m["window_id"] = windowID
+	}
+	_, _ = c.call(ctx, "bring_to_front", c.withSession(m))
 }
 
 // StartComputerMCPServer spawns cua-driver as a stdio MCP child and serves the
@@ -797,12 +858,15 @@ func StartComputerMCPServer(ctx context.Context, transport mcp.Transport, cfg ty
 			"interact with the screen, a window, or any running app — do NOT use shell commands (e.g. " +
 			"`screenshot`, `scrot`, `screencapture`) for this. To OPEN or launch an app, call " +
 			"action='open_app' with app='<App Name>' (e.g. app='Google Chrome') — do NOT try to click it " +
-			"open; to open a web page, add url='https://…' so the browser lands right on it. For anything " +
-			"INSIDE a web page (a browser's page content is NOT clickable via elements), use action='page' " +
-			"with page_action=get_text/query_dom/click_element/insert_text/execute_javascript (selector/text/js). " +
-			"To see the screen, call action='capture' (mode='som' numbers the clickable elements so you can " +
-			"click by `element` index). action='close_app' quits an app. Runs in the background without " +
-			"moving the user's real cursor. Requires an armed session.",
+			"open; to open a web page, add url='https://…' so the browser lands right on it. For EVERYTHING " +
+			"inside a web page — reading it, clicking links/buttons, typing in a search box or form — you MUST " +
+			"use action='page' (page_action=get_text to read, query_dom with a css selector to find elements, " +
+			"click_element to click one, insert_text to type into the focused field). The plain click/type " +
+			"actions act on the OS layer and do NOT reach a web page's content, so never use them on a browser " +
+			"tab. To see the screen, call action='capture' (mode='som' numbers the clickable elements so you " +
+			"can click by `element` index — for native apps). For a keyboard SHORTCUT (cmd+a, ctrl+c, cmd+s) " +
+			"use action='key' with keys='cmd+a' — never type the shortcut as text. action='close_app' quits " +
+			"an app. The target app is brought to the front so actions land. Requires an armed session.",
 	}
 	// Give the enum-valued fields REAL JSON Schema enums (not just a prose list in
 	// the description). The go-sdk's `jsonschema:"…"` struct tag only sets a
