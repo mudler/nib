@@ -31,6 +31,14 @@ var contextRoles = map[string]bool{
 	"paragraph": true, "list": true, "listitem": true, "article": true, "main": true,
 }
 
+// maxSnapshotChars caps the rendered outline so a dense page can't blow a
+// small local model's context. Refs are assigned to every interactive node
+// during the tree walk itself (see buildSnapshot), before the text is ever
+// truncated, so an element whose line falls past the cut point still has a
+// valid, resolvable ref in the returned map — only the printed listing is
+// shortened.
+const maxSnapshotChars = 8000
+
 // buildSnapshot walks the AX tree depth-first, emits a compact indented outline,
 // assigns @eN refs to interactive nodes, and returns the ref→backendDOMNodeID map
 // (refs are per-snapshot; the caller replaces its map each snapshot).
@@ -80,7 +88,31 @@ func buildSnapshot(nodes []axNode, compact bool) (string, map[string]int64) {
 			walk(n.NodeID, 0)
 		}
 	}
-	return b.String(), refs
+	text := b.String()
+	if len(text) > maxSnapshotChars {
+		text = truncateSnapshot(text)
+	}
+	return text, refs
+}
+
+// truncateSnapshot cuts an over-long rendered outline down to
+// maxSnapshotChars at a line boundary (so no element line is chopped
+// mid-line) and appends a marker noting how many of the total element lines
+// made it into the cut version.
+func truncateSnapshot(text string) string {
+	total := strings.Count(text, "\n")
+	limit := maxSnapshotChars
+	if limit > len(text) {
+		limit = len(text)
+	}
+	kept := text[:limit]
+	if idx := strings.LastIndexByte(kept, '\n'); idx >= 0 {
+		kept = kept[:idx+1]
+	} else if !strings.HasSuffix(kept, "\n") {
+		kept += "\n"
+	}
+	n := strings.Count(kept, "\n")
+	return fmt.Sprintf("%s… [snapshot truncated — %d of %d elements shown; scroll or narrow the page]\n", kept, n, total)
 }
 
 var refRe = regexp.MustCompile(`@e\d+`)

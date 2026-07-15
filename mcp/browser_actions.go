@@ -148,9 +148,12 @@ func (b *browserServer) typeIntoBackendNode(ctx context.Context, backendID int64
 		if err != nil {
 			return err
 		}
-		// Focus + clear existing value via the element handle.
+		// Focus + clear existing value via the element handle. Form controls
+		// (input/textarea) hold their text in .value; a contenteditable
+		// element (AX role "textbox" but no .value) needs its textContent
+		// cleared instead, or InsertText below just appends to what's there.
 		if _, exc, err := runtime.CallFunctionOn(
-			`function(){ this.focus(); if('value' in this){ this.value=''; } this.dispatchEvent(new Event('input',{bubbles:true})); return true; }`).
+			`function(){ this.focus(); if('value' in this){ this.value=''; } else if(this.isContentEditable){ this.textContent=''; } this.dispatchEvent(new Event('input',{bubbles:true})); return true; }`).
 			WithObjectID(obj.ObjectID).WithReturnByValue(true).Do(ctx); err != nil {
 			return err
 		} else if exc != nil {

@@ -20,3 +20,26 @@ func TestCheckURLAllowedBlocksPrivate(t *testing.T) {
 		t.Fatal("non-http scheme must be rejected")
 	}
 }
+
+// TestCheckURLAllowedBlocksAlternateEncodings covers the SSRF-guard bypasses
+// from the whole-branch review: alternate numeric IP encodings (decimal,
+// 0x-hex, octal-dotted) and trailing-dot hostnames all still resolve to
+// 127.0.0.1 in a real browser even though net.ParseIP rejects them, so they
+// must be blocked the same as the canonical forms.
+func TestCheckURLAllowedBlocksAlternateEncodings(t *testing.T) {
+	for _, u := range []string{
+		"http://2130706433/", // decimal packed 127.0.0.1
+		"http://0x7f000001/", // hex packed 127.0.0.1
+		"http://0177.0.0.1/", // octal-dotted 127.0.0.1
+		"http://0/",          // decimal packed 0.0.0.0
+		"http://localhost./", // trailing-dot localhost
+		"http://127.0.0.1./", // trailing-dot loopback literal
+	} {
+		if err := checkURLAllowed(u, false); err == nil {
+			t.Errorf("%s must be blocked when allowPrivate=false", u)
+		}
+		if err := checkURLAllowed(u, true); err != nil {
+			t.Errorf("%s must be allowed when allowPrivate=true: %v", u, err)
+		}
+	}
+}

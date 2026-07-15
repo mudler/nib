@@ -98,19 +98,33 @@ func TestBrowserInputSchemaHasRealEnum(t *testing.T) {
 	if dir == nil || len(dir.Enum) == 0 {
 		t.Fatal("direction must carry a real JSON Schema enum, not just a description")
 	}
-	has := func(val string) bool {
-		for _, e := range dir.Enum {
+	has := func(enum []any, val string) bool {
+		for _, e := range enum {
 			if e == val {
 				return true
 			}
 		}
 		return false
 	}
-	if !has("up") || !has("down") {
+	if !has(dir.Enum, "up") || !has(dir.Enum, "down") {
 		t.Fatalf("direction enum should be {up, down}, got: %v", dir.Enum)
 	}
 	if len(dir.Enum) != 2 {
 		t.Fatalf("direction enum should only be {up, down}, got: %v", dir.Enum)
+	}
+	// key has a fixed allowlist too (pressAllowedKeys) — it must carry the
+	// same kind of real enum, not just prose in the description.
+	key := s.Properties["key"]
+	if key == nil || len(key.Enum) == 0 {
+		t.Fatal("key must carry a real JSON Schema enum, not just a description")
+	}
+	if len(key.Enum) != len(pressAllowedKeys) {
+		t.Fatalf("key enum should have %d entries (one per pressAllowedKeys), got %d: %v", len(pressAllowedKeys), len(key.Enum), key.Enum)
+	}
+	for name := range pressAllowedKeys {
+		if !has(key.Enum, name) {
+			t.Fatalf("key enum missing allowed key %q, got: %v", name, key.Enum)
+		}
 	}
 	// Descriptions from the struct tags must survive the enum stamping.
 	for _, prop := range []string{"url", "ref", "text", "key", "direction", "full", "question"} {

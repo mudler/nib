@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -47,5 +48,46 @@ func TestBuildSnapshotSkipsChromeAndEmptyGenerics(t *testing.T) {
 	_, refs := buildSnapshot(nodes, true)
 	if len(refs) != 0 {
 		t.Fatalf("non-interactive text/generic must not get refs, got %v", refs)
+	}
+}
+
+// TestBuildSnapshotTruncatesDensePages covers the review finding that a
+// dense page emits an unbounded outline that can blow a small local model's
+// context: a synthetic node set well past maxSnapshotChars must come back
+// truncated at a line boundary with a marker, while every ref assigned
+// during the (untruncated) tree walk still resolves.
+func TestBuildSnapshotTruncatesDensePages(t *testing.T) {
+	root := axNode{NodeID: "root", Role: "WebArea", Name: "Dense Page", BackendID: 0}
+	nodes := []axNode{root}
+	const n = 500
+	for i := 0; i < n; i++ {
+		id := fmt.Sprintf("n%d", i)
+		root.ChildIDs = append(root.ChildIDs, id)
+		nodes = append(nodes, axNode{
+			NodeID:    id,
+			Role:      "link",
+			Name:      fmt.Sprintf("A reasonably long link label number %d to pad the outline past the cap", i),
+			BackendID: int64(1000 + i),
+		})
+	}
+	nodes[0] = root // root's ChildIDs were only populated after it was appended
+
+	text, refs := buildSnapshot(nodes, true)
+
+	if len(text) > maxSnapshotChars+300 { // slack for the marker line itself
+		t.Fatalf("truncated snapshot is still too long: %d chars", len(text))
+	}
+	if !strings.Contains(text, "truncated") {
+		t.Fatalf("expected a truncation marker in output, got tail: %q", text[max(0, len(text)-200):])
+	}
+	// Every interactive node got a ref during the walk, truncation or not.
+	if len(refs) != n {
+		t.Fatalf("expected all %d refs to be assigned despite truncation, got %d", n, len(refs))
+	}
+	// Every @ref actually printed in the (truncated) text must resolve.
+	for _, tok := range refTokens(text) {
+		if _, ok := refs[tok]; !ok {
+			t.Fatalf("ref %s in text but not in map", tok)
+		}
 	}
 }
