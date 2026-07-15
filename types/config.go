@@ -159,6 +159,8 @@ type Config struct {
 	WorkingDir string `yaml:"-"`
 	// Computer is the opt-in desktop-control capability (cua-driver). Runtime-only.
 	Computer ComputerConfig `yaml:"-"`
+	// Browser is the opt-in browser-automation capability (chromedp-driven).
+	Browser BrowserConfig `yaml:"browser,omitempty"`
 }
 
 // ComputerConfig configures the built-in computer_use MCP server. When Enabled,
@@ -170,6 +172,17 @@ type ComputerConfig struct {
 	Args      []string
 	Env       map[string]string
 	SessionID string
+}
+
+// BrowserConfig configures the built-in browser MCP server. When Enabled, nib
+// starts a headed Chromium (reusing ChromePath, or auto-discovered) on the
+// dedicated persistent profile ProfileDir and exposes the browser_* tools.
+type BrowserConfig struct {
+	Enabled          bool   `yaml:"enabled,omitempty"`
+	ChromePath       string `yaml:"chrome_path,omitempty"`        // installed Chrome binary; "" = auto-discover
+	ProfileDir       string `yaml:"profile_dir,omitempty"`        // persistent user-data-dir (login-once)
+	AllowPrivateURLs bool   `yaml:"allow_private_urls,omitempty"` // default false = block localhost/RFC1918
+	SessionID        string `yaml:"-"`                            // runtime only
 }
 
 func (c *Config) GetPrompt() string {
