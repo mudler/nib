@@ -69,3 +69,43 @@ func TestBrowserScrollRejectsUnknownDirection(t *testing.T) {
 		t.Fatalf("error should list valid directions (up, down), got: %v", err)
 	}
 }
+
+// TestBrowserInputSchemaHasRealEnum mirrors
+// TestComputerInputSchemaHasRealEnums: direction must carry a real JSON
+// Schema enum {up, down} (not just prose in the description) so the engine
+// can constrain it, and the per-field descriptions from the jsonschema
+// struct tags must survive the stamping.
+func TestBrowserInputSchemaHasRealEnum(t *testing.T) {
+	s, err := browserInputSchema()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := s.Properties["direction"]
+	if dir == nil || len(dir.Enum) == 0 {
+		t.Fatal("direction must carry a real JSON Schema enum, not just a description")
+	}
+	has := func(val string) bool {
+		for _, e := range dir.Enum {
+			if e == val {
+				return true
+			}
+		}
+		return false
+	}
+	if !has("up") || !has("down") {
+		t.Fatalf("direction enum should be {up, down}, got: %v", dir.Enum)
+	}
+	if len(dir.Enum) != 2 {
+		t.Fatalf("direction enum should only be {up, down}, got: %v", dir.Enum)
+	}
+	// Descriptions from the struct tags must survive the enum stamping.
+	for _, prop := range []string{"url", "ref", "text", "key", "direction", "full", "question"} {
+		p := s.Properties[prop]
+		if p == nil {
+			t.Fatalf("schema missing property %q", prop)
+		}
+		if p.Description == "" {
+			t.Fatalf("property %q lost its description", prop)
+		}
+	}
+}

@@ -11,8 +11,10 @@ import (
 
 	"github.com/chromedp/cdproto/accessibility"
 	"github.com/chromedp/chromedp"
+	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/mudler/nib/types"
+	"github.com/mudler/xlog"
 )
 
 type browserServer struct {
@@ -319,4 +321,76 @@ func (b *browserServer) liveRef(ref string) (context.Context, int64, error) {
 // textResult wraps a plain-text tool response in the MCP content shape.
 func textResult(s string) *mcp.CallToolResult {
 	return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: s}}}
+}
+
+// browserInputSchema builds the shared browser_* input schema from
+// BrowserInput (keeping the per-field descriptions from the jsonschema tags)
+// and stamps a real enum onto the one closed-value field, direction — mirrors
+// computerInputSchema.
+func browserInputSchema() (*jsonschema.Schema, error) {
+	s, err := jsonschema.For[BrowserInput](nil)
+	if err != nil {
+		return nil, err
+	}
+	if p := s.Properties["direction"]; p != nil {
+		p.Enum = []any{"up", "down"}
+	}
+	return s, nil
+}
+
+// StartBrowserMCPServer starts a headed-Chrome-backed MCP server exposing the
+// browser_* tools (navigate, snapshot, click, type, press, scroll). Blocks
+// until ctx is done, at which point the browser is torn down.
+func StartBrowserMCPServer(ctx context.Context, transport mcp.Transport, cfg types.Config) error {
+	bs := newBrowserServer(cfg.Browser)
+	go func() {
+		<-ctx.Done()
+		bs.close()
+	}()
+
+	server := mcp.NewServer(&mcp.Implementation{Name: "browser", Version: "v1.0.0"}, nil)
+
+	schema, err := browserInputSchema()
+	if err != nil {
+		xlog.Warn("browser: could not build enum schema, falling back to inferred", "err", err)
+	}
+
+	addBrowserTool := func(name, description string, handler mcp.ToolHandlerFor[BrowserInput, BrowserOutput]) {
+		tool := &mcp.Tool{Name: name, Description: description}
+		if schema != nil {
+			tool.InputSchema = schema
+		}
+		mcp.AddTool(server, tool, handler)
+	}
+
+	addBrowserTool("browser_navigate",
+		"Open a URL in a real, headed Chrome browser. ALWAYS call this first for any web task — it loads "+
+			"the page and returns a snapshot of its interactive elements, each tagged with a ref like @e3. "+
+			"For read-only lookups (answering a question, fetching a page's text) prefer web_search/web_fetch "+
+			"instead — this tool is for tasks that require actually driving a page (clicking, typing, logging in).",
+		bs.browserNavigate)
+	addBrowserTool("browser_snapshot",
+		"Re-read the accessibility tree of the currently open page without navigating, returning fresh @eN "+
+			"refs for browser_click/browser_type. Use after an action whose result isn't otherwise clear, or "+
+			"when refs may be stale. Set full=true for the whole-page outline instead of just interactive elements.",
+		bs.browserSnapshot)
+	addBrowserTool("browser_click",
+		"Click the element identified by ref (an @eN id from the last browser_navigate/browser_snapshot/"+
+			"browser_click/browser_type/browser_press/browser_scroll result). Returns a fresh snapshot.",
+		bs.browserClick)
+	addBrowserTool("browser_type",
+		"Focus the element identified by ref (an @eN id from the last snapshot), clear it, and type text into "+
+			"it. Returns a fresh snapshot. Use browser_press with key=Enter afterward to submit, if needed.",
+		bs.browserType)
+	addBrowserTool("browser_press",
+		"Send a single named key (Enter, Tab, Escape, ArrowDown, PageUp, etc.) to whatever currently has focus "+
+			"on the page — there is no ref. Returns a fresh snapshot. Useful to submit a form after browser_type.",
+		bs.browserPress)
+	addBrowserTool("browser_scroll",
+		"Scroll the page viewport up or down by about 90% of its height. direction must be \"up\" or \"down\". "+
+			"Returns a fresh snapshot revealing the newly visible content.",
+		bs.browserScroll)
+
+	xlog.Info("browser MCP server ready")
+	return server.Run(ctx, transport)
 }
