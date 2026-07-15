@@ -553,6 +553,14 @@ func (c *computerServer) openApp(ctx context.Context, in ComputerUseInput) (*mcp
 	if url := strings.TrimSpace(in.URL); url != "" {
 		args["urls"] = []string{url}
 	}
+	// For a Chromium browser, open a CDP server so the `page` tool can actually
+	// drive the web content. Without it, page can't attach and falls back to the
+	// accessibility tree, which on Chrome is just the menu bar (its web content is
+	// not AX-exposed). Only takes effect when the browser is launched by us — a
+	// browser already running without the flag won't expose the port.
+	if isChromiumBrowser(app) {
+		args["cdp_debugging_port"] = cdpDebuggingPort
+	}
 	res, err := c.call(ctx, "launch_app", args)
 	if err != nil {
 		return nil, ComputerUseOutput{}, err
@@ -599,6 +607,23 @@ func (c *computerServer) openApp(ctx context.Context, in ComputerUseInput) (*mcp
 // at least two separators and no spaces or slashes.
 func looksLikeBundleID(s string) bool {
 	return !strings.ContainsAny(s, " /") && strings.Count(s, ".") >= 2
+}
+
+// cdpDebuggingPort is the fixed Chrome DevTools Protocol port we launch Chromium
+// browsers with so the page tool can attach.
+const cdpDebuggingPort = 9222
+
+// isChromiumBrowser reports whether app names a Chromium-family browser, which
+// speaks the DevTools protocol (Safari does not — it uses Apple Events, a
+// separate path, so it's excluded here).
+func isChromiumBrowser(app string) bool {
+	a := strings.ToLower(app)
+	for _, b := range []string{"chrome", "chromium", "brave", "edge", "vivaldi", "opera"} {
+		if strings.Contains(a, b) {
+			return true
+		}
+	}
+	return false
 }
 
 // closeApp quits an app by resolving its on-screen window to a pid and calling

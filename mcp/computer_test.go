@@ -44,6 +44,9 @@ func startFakeDriver(t *testing.T, ctx context.Context) *mcp.ClientSession {
 		if _, ok := args["urls"]; ok {
 			out["got_urls"] = true // let a test assert the URL was plumbed through
 		}
+		if p, ok := args["cdp_debugging_port"]; ok {
+			out["got_cdp_port"] = p // let a test assert CDP is enabled for browsers
+		}
 		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "launched"}}}, out, nil
 	})
 	mcp.AddTool(srv, &mcp.Tool{Name: "bring_to_front"}, func(_ context.Context, _ *mcp.CallToolRequest, _ map[string]any) (*mcp.CallToolResult, map[string]any, error) {
@@ -210,6 +213,30 @@ func TestOpenAppWithURLPlumbsThrough(t *testing.T) {
 	}
 	if !structuredMap(res)["got_urls"].(bool) {
 		t.Fatalf("open_app with a url must pass urls to launch_app")
+	}
+}
+
+func TestOpenAppEnablesCDPForBrowsers(t *testing.T) {
+	ctx := context.Background()
+	cs := newComputerServer(startFakeDriver(t, ctx), types.ComputerConfig{SessionID: "dante-x"})
+	// A Chromium browser must launch with a CDP port so the page tool can attach.
+	res, _, err := cs.computerUse(ctx, nil, ComputerUseInput{Action: "open_app", App: "Google Chrome"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if structuredMap(res)["got_cdp_port"] == nil {
+		t.Fatal("open_app on a Chromium browser must pass cdp_debugging_port to launch_app")
+	}
+	// A non-browser app must NOT get the CDP flag.
+	res2, _, err := cs.computerUse(ctx, nil, ComputerUseInput{Action: "open_app", App: "Calculator"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if structuredMap(res2)["got_cdp_port"] != nil {
+		t.Fatal("open_app on a non-browser must not pass cdp_debugging_port")
+	}
+	if !isChromiumBrowser("Brave Browser") || !isChromiumBrowser("Microsoft Edge") || isChromiumBrowser("Safari") {
+		t.Fatal("isChromiumBrowser detection wrong")
 	}
 }
 
