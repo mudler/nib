@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/chromedp/chromedp"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/mudler/nib/types"
 )
 
@@ -197,6 +198,57 @@ func TestPressEnterSubmitsFormAgainstRealChrome(t *testing.T) {
 	}
 	if title != "submitted" {
 		t.Fatalf("title = %q, want %q (form should have submitted on Enter)", title, "submitted")
+	}
+}
+
+// TestVisionAgainstRealChrome drives a real headed Chrome, calls
+// browserVision, and asserts the result carries an *mcp.ImageContent with
+// non-empty PNG data alongside the "screenshot for: <question>" text.
+//
+// Opt-in only (needs a real Chrome/Chromium on the machine):
+//
+//	go test -tags browserintegration ./mcp/ -run Vision
+func TestVisionAgainstRealChrome(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `<html><body><h1>hello</h1></body></html>`)
+	}))
+	defer srv.Close()
+
+	b := newBrowserServer(types.BrowserConfig{AllowPrivateURLs: true, ProfileDir: t.TempDir() + "/p"})
+	defer b.close()
+
+	if _, _, err := b.browserNavigate(context.Background(), nil, BrowserInput{URL: srv.URL}); err != nil {
+		t.Fatal(err)
+	}
+
+	res, _, err := b.browserVision(context.Background(), nil, BrowserInput{Question: "what is on the page?"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var img *mcp.ImageContent
+	var gotText bool
+	for _, c := range res.Content {
+		switch ct := c.(type) {
+		case *mcp.ImageContent:
+			img = ct
+		case *mcp.TextContent:
+			if strings.Contains(ct.Text, "screenshot for: what is on the page?") {
+				gotText = true
+			}
+		}
+	}
+	if img == nil {
+		t.Fatal("expected an *mcp.ImageContent in the result, got none")
+	}
+	if len(img.Data) == 0 {
+		t.Fatal("screenshot data is empty")
+	}
+	if img.MIMEType != "image/png" {
+		t.Fatalf("MIMEType = %q, want image/png", img.MIMEType)
+	}
+	if !gotText {
+		t.Fatal("expected a text content naming the question, got none")
 	}
 }
 

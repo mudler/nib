@@ -293,6 +293,28 @@ func (b *browserServer) browserScroll(ctx context.Context, _ *mcp.CallToolReques
 	return textResult("scrolled " + in.Direction + "\n" + text), BrowserOutput{Snapshot: text, ElementCount: n}, nil
 }
 
+// browserVision captures a screenshot of the current page's viewport and
+// returns it to the model as image content, alongside a short text label
+// naming what the model was asked to look for. Unlike the other browser_*
+// tools it does not refresh/return a snapshot — it's meant for the cases a
+// text accessibility snapshot can't cover (CAPTCHAs, visual verification,
+// complex layouts).
+func (b *browserServer) browserVision(ctx context.Context, _ *mcp.CallToolRequest, in BrowserInput) (*mcp.CallToolResult, BrowserOutput, error) {
+	live, err := b.liveCtx()
+	if err != nil {
+		return nil, BrowserOutput{}, err
+	}
+	var buf []byte
+	if err := chromedp.Run(live, chromedp.CaptureScreenshot(&buf)); err != nil {
+		return nil, BrowserOutput{}, err
+	}
+	result := &mcp.CallToolResult{Content: []mcp.Content{
+		&mcp.TextContent{Text: "screenshot for: " + in.Question},
+		&mcp.ImageContent{MIMEType: "image/png", Data: buf},
+	}}
+	return result, BrowserOutput{}, nil
+}
+
 // liveCtx returns the live browser ctx for actions that don't target a
 // specific ref (browser_press, browser_scroll), erroring if no page is open.
 func (b *browserServer) liveCtx() (context.Context, error) {
@@ -390,6 +412,10 @@ func StartBrowserMCPServer(ctx context.Context, transport mcp.Transport, cfg typ
 		"Scroll the page viewport up or down by about 90% of its height. direction must be \"up\" or \"down\". "+
 			"Returns a fresh snapshot revealing the newly visible content.",
 		bs.browserScroll)
+	addBrowserTool("browser_vision",
+		"Take a screenshot of the current page for visual inspection — use when the accessibility snapshot "+
+			"isn't enough (CAPTCHAs, visual verification, complex layouts). question says what to look for.",
+		bs.browserVision)
 
 	xlog.Info("browser MCP server ready")
 	return server.Run(ctx, transport)

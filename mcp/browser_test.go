@@ -70,6 +70,20 @@ func TestBrowserScrollRejectsUnknownDirection(t *testing.T) {
 	}
 }
 
+// TestBrowserVisionRejectsNoPageOpen checks the no-page-open guard is
+// enforced before any browser is touched, mirroring the other browser_*
+// handlers' liveCtx/liveRef checks — so this needs no live Chrome.
+func TestBrowserVisionRejectsNoPageOpen(t *testing.T) {
+	b := newBrowserServer(types.BrowserConfig{})
+	_, _, err := b.browserVision(context.Background(), nil, BrowserInput{Question: "what's on screen?"})
+	if err == nil {
+		t.Fatal("expected error when no page is open, got nil")
+	}
+	if !strings.Contains(err.Error(), "no page open") {
+		t.Fatalf("error should say no page is open, got: %v", err)
+	}
+}
+
 // TestBrowserInputSchemaHasRealEnum mirrors
 // TestComputerInputSchemaHasRealEnums: direction must carry a real JSON
 // Schema enum {up, down} (not just prose in the description) so the engine
