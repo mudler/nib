@@ -122,7 +122,7 @@ func (c *computerServer) captureDesktop(ctx context.Context, in ComputerUseInput
 		return nil, ComputerUseOutput{}, fmt.Errorf("switch to desktop capture scope: %w", err)
 	}
 	c.mu.Lock()
-	c.sticky.PID, c.sticky.WindowID, c.sticky.Desktop = 0, 0, true
+	c.sticky.PID, c.sticky.WindowID, c.sticky.Desktop, c.sticky.Explicit = 0, 0, true, false
 	c.mu.Unlock()
 	st, err := c.call(ctx, "get_desktop_state", map[string]any{"session": c.cfg.SessionID})
 	if err != nil {
@@ -141,7 +141,7 @@ func (c *computerServer) captureDesktop(ctx context.Context, in ComputerUseInput
 }
 
 func (c *computerServer) capture(ctx context.Context, in ComputerUseInput) (*mcp.CallToolResult, ComputerUseOutput, error) {
-	pid, windowID := c.listFrontmost(ctx)
+	pid, windowID, explicit := c.resolveCaptureTarget(ctx, in)
 	if pid == 0 {
 		return c.captureDesktop(ctx, in)
 	}
@@ -149,7 +149,7 @@ func (c *computerServer) capture(ctx context.Context, in ComputerUseInput) (*mcp
 		xlog.Warn("cua-driver set_config capture_scope=window failed", "err", e)
 	}
 	c.mu.Lock()
-	c.sticky.PID, c.sticky.WindowID, c.sticky.Desktop = pid, windowID, false
+	c.sticky.PID, c.sticky.WindowID, c.sticky.Desktop, c.sticky.Explicit = pid, windowID, false, explicit
 	c.mu.Unlock()
 
 	// The standard cua-driver capture, matching the reference (hermes-agent):
@@ -266,7 +266,13 @@ func filterOutImages(cs []mcp.Content) []mcp.Content {
 	return out
 }
 
-func frontmostWindow(m map[string]any) (int, int) {
+func frontmostWindow(m map[string]any) (int, int) { return windowMatching(m, "") }
+
+// windowMatching returns the frontmost (lowest z_index) addressable window whose
+// app_name/title contains match (case-insensitive). match=="" accepts any window
+// — that is the plain "frontmost" case. The driver's own agent-cursor overlay and
+// pid<=0 (unowned) windows are always skipped.
+func windowMatching(m map[string]any, match string) (int, int) {
 	ws, _ := m["windows"].([]any)
 	type win struct{ pid, id, z int }
 	var wins []win
@@ -280,6 +286,9 @@ func frontmostWindow(m map[string]any) (int, int) {
 		if strings.Contains(name, "agentcursoroverlay") || strings.Contains(name, "cua.") {
 			continue // never target the driver's own overlay window
 		}
+		if match != "" && !strings.Contains(name, match) {
+			continue // caller asked for a specific app and this window isn't it
+		}
 		wins = append(wins, win{pid: pid, id: toInt(wm["window_id"]), z: toInt(wm["z_index"])})
 	}
 	if len(wins) == 0 {
@@ -287,6 +296,59 @@ func frontmostWindow(m map[string]any) (int, int) {
 	}
 	sort.Slice(wins, func(i, j int) bool { return wins[i].z < wins[j].z })
 	return wins[0].pid, wins[0].id
+}
+
+// windowForApp finds the frontmost on-screen window belonging to app (matched by
+// name, case-insensitive substring), or (0,0) if none is open. Same retry/relax
+// dance as listFrontmost since list_windows is flaky over the stdio bridge.
+func (c *computerServer) windowForApp(ctx context.Context, app string) (int, int) {
+	match := strings.ToLower(strings.TrimSpace(app))
+	for _, onScreen := range []bool{true, false} {
+		for attempt := 0; attempt < 2; attempt++ {
+			res, err := c.call(ctx, "list_windows", map[string]any{"on_screen_only": onScreen})
+			if err != nil || (res != nil && res.IsError) {
+				continue
+			}
+			if pid, windowID := windowMatching(structuredMap(res), match); pid != 0 {
+				return pid, windowID
+			}
+		}
+	}
+	return 0, 0
+}
+
+// resolveCaptureTarget decides which window capture() targets, in order:
+//  1. in.App names an app -> that app's window (explicit). app="screen"/"desktop"
+//     -> (0,0) so the caller does a whole-screen desktop capture.
+//  2. a still-pinned explicit target (open_app / focus_app / capture(app=)) ->
+//     reuse it, so a plain capture right after open_app sees the app just opened
+//     rather than whatever stole the front (e.g. a mounted DMG's Finder window).
+//  3. otherwise the frontmost window.
+func (c *computerServer) resolveCaptureTarget(ctx context.Context, in ComputerUseInput) (pid, windowID int, explicit bool) {
+	if app := strings.TrimSpace(in.App); app != "" {
+		if isDesktopApp(app) {
+			return 0, 0, false // -> captureDesktop
+		}
+		if p, w := c.windowForApp(ctx, app); p != 0 {
+			return p, w, true
+		}
+		// Named app not found among on-screen windows: fall through to frontmost so
+		// the model still gets a screenshot (and can open_app / retry) rather than a
+		// dead-end.
+	}
+	c.mu.Lock()
+	spid, swid, sexp := c.sticky.PID, c.sticky.WindowID, c.sticky.Explicit
+	c.mu.Unlock()
+	if sexp && spid != 0 {
+		return spid, swid, true
+	}
+	p, w := c.listFrontmost(ctx)
+	return p, w, false
+}
+
+func isDesktopApp(app string) bool {
+	a := strings.ToLower(strings.TrimSpace(app))
+	return a == "screen" || a == "desktop"
 }
 
 func parseElements(m map[string]any, max int) []ComputerElement {
@@ -337,11 +399,20 @@ func (c *computerServer) computerUse(ctx context.Context, _ *mcp.CallToolRequest
 		// pure local wait, clamped 0..30; no driver call.
 		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "waited"}}}, ComputerUseOutput{Summary: "waited"}, nil
 	case "focus_app":
-		pid, windowID := c.listFrontmost(ctx) // simplistic v1: front window; app-name filtering is a follow-up
+		// Select the named app's on-screen window (empty app => frontmost) and pin
+		// it as an explicit target so the next capture/click stays on it.
+		pid, windowID := c.windowForApp(ctx, in.App)
+		if pid == 0 {
+			if strings.TrimSpace(in.App) == "" {
+				return nil, ComputerUseOutput{}, fmt.Errorf("focus_app needs an app name, e.g. app=\"Google Chrome\"")
+			}
+			return nil, ComputerUseOutput{}, fmt.Errorf("no on-screen window found for app %q — open it first with action=open_app", in.App)
+		}
 		c.mu.Lock()
-		c.sticky.PID, c.sticky.WindowID = pid, windowID
+		c.sticky.PID, c.sticky.WindowID, c.sticky.Desktop, c.sticky.Explicit = pid, windowID, false, true
 		c.mu.Unlock()
-		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "focused"}}}, ComputerUseOutput{Summary: "focused app"}, nil
+		summary := fmt.Sprintf("focused %q (pid %d) — call action=capture to see it", strings.TrimSpace(in.App), pid)
+		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: summary}}}, ComputerUseOutput{Summary: summary}, nil
 	case "open_app":
 		return c.openApp(ctx, in)
 	}
@@ -433,12 +504,18 @@ func (c *computerServer) openApp(ctx context.Context, in ComputerUseInput) (*mcp
 		}
 		_, _ = c.call(ctx, "bring_to_front", bf)
 		c.mu.Lock()
-		c.sticky.PID, c.sticky.WindowID, c.sticky.Desktop = pid, windowID, false
+		// Explicit: a plain capture next must target THIS app, not re-detect the
+		// frontmost window (which may be a mounted DMG / Finder window).
+		c.sticky.PID, c.sticky.WindowID, c.sticky.Desktop, c.sticky.Explicit = pid, windowID, false, true
 		c.mu.Unlock()
 		summary += fmt.Sprintf(" (pid %d), now frontmost. Call computer_use action=capture to see it, then click/type.", pid)
 	} else {
 		summary += ". Call computer_use action=capture to see it."
 	}
+	// Replace the driver's own launch text (which tells the model to call
+	// get_window_state — a tool the model does NOT have; it only has computer_use)
+	// with our capture-next guidance.
+	res.Content = []mcp.Content{&mcp.TextContent{Text: summary}}
 	return res, ComputerUseOutput{Summary: summary}, nil
 }
 

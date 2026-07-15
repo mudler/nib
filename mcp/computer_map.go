@@ -13,6 +13,12 @@ type StickyContext struct {
 	WindowID  int
 	SessionID string
 	Desktop   bool // true after a desktop-scope capture: act by screen-absolute pixel, no window
+	// Explicit marks a target the model deliberately chose — open_app, focus_app,
+	// or capture(app=...) — as opposed to whatever happened to be frontmost. A
+	// plain capture reuses an explicit target instead of re-detecting frontmost,
+	// so "open_app then capture" sees the app just opened, not e.g. a mounted
+	// DMG's Finder window that stole the front.
+	Explicit bool
 }
 
 var modifierKeys = map[string]bool{

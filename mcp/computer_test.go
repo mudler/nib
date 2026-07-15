@@ -21,7 +21,7 @@ func startFakeDriver(t *testing.T, ctx context.Context) *mcp.ClientSession {
 	srvT, cliT := mcp.NewInMemoryTransports()
 	srv := mcp.NewServer(&mcp.Implementation{Name: "fake-cua", Version: "v0"}, nil)
 	mcp.AddTool(srv, &mcp.Tool{Name: "list_windows"}, func(_ context.Context, _ *mcp.CallToolRequest, _ map[string]any) (*mcp.CallToolResult, map[string]any, error) {
-		return &mcp.CallToolResult{}, map[string]any{"windows": []any{map[string]any{"pid": 42, "window_id": 7, "z_index": 0}}}, nil
+		return &mcp.CallToolResult{}, map[string]any{"windows": []any{map[string]any{"pid": 42, "window_id": 7, "z_index": 0, "app_name": "Finder"}}}, nil
 	})
 	mcp.AddTool(srv, &mcp.Tool{Name: "get_window_state"}, func(_ context.Context, _ *mcp.CallToolRequest, _ map[string]any) (*mcp.CallToolResult, map[string]any, error) {
 		return &mcp.CallToolResult{
@@ -107,6 +107,43 @@ func TestOpenAppRequiresAppName(t *testing.T) {
 	cs := newComputerServer(startFakeDriver(t, ctx), types.ComputerConfig{SessionID: "dante-x"})
 	if _, _, err := cs.computerUse(ctx, nil, ComputerUseInput{Action: "open_app"}); err == nil {
 		t.Fatalf("open_app without an app name must error, not launch nothing")
+	}
+}
+
+// Regression: a plain capture right after open_app must stay on the app just
+// launched (pid 99), not re-detect the frontmost window (the fake's list_windows
+// reports a different pid, 42 — e.g. a mounted DMG's Finder window that stole the
+// front). Before the fix, capture clobbered the launched target with frontmost.
+func TestCaptureAfterOpenAppStaysOnLaunchedApp(t *testing.T) {
+	ctx := context.Background()
+	cs := newComputerServer(startFakeDriver(t, ctx), types.ComputerConfig{SessionID: "dante-x"})
+	if _, _, err := cs.computerUse(ctx, nil, ComputerUseInput{Action: "open_app", App: "Google Chrome"}); err != nil {
+		t.Fatal(err)
+	}
+	if cs.sticky.PID != 99 {
+		t.Fatalf("open_app should pin pid 99, got %d", cs.sticky.PID)
+	}
+	if _, _, err := cs.computerUse(ctx, nil, ComputerUseInput{Action: "capture", Mode: "ax"}); err != nil {
+		t.Fatal(err)
+	}
+	if cs.sticky.PID != 99 {
+		t.Fatalf("capture after open_app must stay on the launched app (99), got %d (re-detected frontmost)", cs.sticky.PID)
+	}
+}
+
+func TestFocusAppResolvesByNameAndErrorsWhenAbsent(t *testing.T) {
+	ctx := context.Background()
+	cs := newComputerServer(startFakeDriver(t, ctx), types.ComputerConfig{SessionID: "dante-x"})
+	// The fake reports a "Finder" window (pid 42); focusing it matches by name.
+	if _, _, err := cs.computerUse(ctx, nil, ComputerUseInput{Action: "focus_app", App: "Finder"}); err != nil {
+		t.Fatalf("focus_app on an open app should succeed: %v", err)
+	}
+	if cs.sticky.PID != 42 || !cs.sticky.Explicit {
+		t.Fatalf("focus_app must pin the matched window as an explicit target, got pid=%d explicit=%v", cs.sticky.PID, cs.sticky.Explicit)
+	}
+	// An app with no on-screen window must error, not silently grab the frontmost.
+	if _, _, err := cs.computerUse(ctx, nil, ComputerUseInput{Action: "focus_app", App: "Safari"}); err == nil {
+		t.Fatalf("focus_app on an app with no window must error")
 	}
 }
 
