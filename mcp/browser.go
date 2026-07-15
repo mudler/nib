@@ -2,12 +2,16 @@ package mcp
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 
+	"github.com/chromedp/cdproto/accessibility"
 	"github.com/chromedp/chromedp"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/mudler/nib/types"
 )
 
@@ -102,4 +106,117 @@ func (b *browserServer) close() {
 		b.allocCancel()
 	}
 	b.bctx = nil
+}
+
+// checkURLAllowed is the SSRF guard: it rejects navigation to
+// localhost/RFC1918/link-local targets unless allowPrivate is set.
+//
+// TODO(task8): real SSRF guard. Temporary stub for Task 4 — always allows.
+func checkURLAllowed(string, bool) error { return nil }
+
+// BrowserInput is the shared input shape for every browser_* tool. Only the
+// fields relevant to a given tool are populated by the model for that call.
+type BrowserInput struct {
+	URL       string `json:"url,omitempty" jsonschema:"the URL to open (browser_navigate)"`
+	Ref       string `json:"ref,omitempty" jsonschema:"element ref from the snapshot, e.g. @e5 (browser_click/browser_type)"`
+	Text      string `json:"text,omitempty" jsonschema:"text to type (browser_type)"`
+	Key       string `json:"key,omitempty" jsonschema:"key to press, e.g. Enter, Tab, Escape (browser_press)"`
+	Direction string `json:"direction,omitempty" jsonschema:"up or down (browser_scroll)"`
+	Full      bool   `json:"full,omitempty" jsonschema:"return the full page snapshot, not just interactive elements (browser_snapshot)"`
+	Question  string `json:"question,omitempty" jsonschema:"what to look for in the screenshot (browser_vision)"`
+}
+
+// BrowserOutput is the structured result returned to the model for every
+// browser_* tool that produces (or refreshes) a snapshot.
+type BrowserOutput struct {
+	Snapshot     string `json:"snapshot,omitempty"`
+	ElementCount int    `json:"element_count,omitempty"`
+}
+
+// snapshotNow captures the current page's accessibility tree, renders it to
+// the compact indented outline (buildSnapshot), and stores the resulting
+// ref→backendDOMNodeID map on b.refs for subsequent browser_click/type calls.
+func (b *browserServer) snapshotNow(ctx context.Context, compact bool) (string, int, error) {
+	var raw []*accessibility.Node
+	if err := chromedp.Run(ctx, chromedp.ActionFunc(func(ctx context.Context) error {
+		var err error
+		raw, err = accessibility.GetFullAXTree().Do(ctx)
+		return err
+	})); err != nil {
+		return "", 0, err
+	}
+	nodes := make([]axNode, 0, len(raw))
+	for _, n := range raw {
+		nn := axNode{NodeID: string(n.NodeID), BackendID: int64(n.BackendDOMNodeID), Ignored: n.Ignored}
+		if n.Role != nil {
+			nn.Role = trimQuotes(string(n.Role.Value))
+		}
+		if n.Name != nil {
+			nn.Name = trimQuotes(string(n.Name.Value))
+		}
+		for _, c := range n.ChildIDs {
+			nn.ChildIDs = append(nn.ChildIDs, string(c))
+		}
+		nodes = append(nodes, nn)
+	}
+	text, refs := buildSnapshot(nodes, compact)
+	b.mu.Lock()
+	b.refs = refs
+	b.mu.Unlock()
+	return text, len(refs), nil
+}
+
+// trimQuotes strips the surrounding quotes chromedp leaves on AXValue.Value,
+// which is JSON-encoded (e.g. `"foo"` for a string value).
+func trimQuotes(s string) string {
+	if len(s) >= 2 && s[0] == '"' && s[len(s)-1] == '"' {
+		return s[1 : len(s)-1]
+	}
+	return s
+}
+
+// browserNavigate loads a URL in the (lazily-launched) headed browser and
+// returns a fresh compact snapshot of the resulting page.
+func (b *browserServer) browserNavigate(ctx context.Context, _ *mcp.CallToolRequest, in BrowserInput) (*mcp.CallToolResult, BrowserOutput, error) {
+	url := strings.TrimSpace(in.URL)
+	if url == "" {
+		return nil, BrowserOutput{}, fmt.Errorf("browser_navigate needs a url")
+	}
+	if err := checkURLAllowed(url, b.cfg.AllowPrivateURLs); err != nil {
+		return nil, BrowserOutput{}, err
+	}
+	bctx, err := b.ensureBrowser(ctx)
+	if err != nil {
+		return nil, BrowserOutput{}, fmt.Errorf("start browser: %w", err)
+	}
+	if err := chromedp.Run(bctx, chromedp.Navigate(url), chromedp.WaitReady("body")); err != nil {
+		return nil, BrowserOutput{}, err
+	}
+	text, n, err := b.snapshotNow(bctx, true)
+	if err != nil {
+		return nil, BrowserOutput{}, err
+	}
+	return textResult(text), BrowserOutput{Snapshot: text, ElementCount: n}, nil
+}
+
+// browserSnapshot re-reads the accessibility tree of the currently open page
+// without navigating. in.Full selects the full outline vs. the default
+// interactive-elements-only compact view.
+func (b *browserServer) browserSnapshot(ctx context.Context, _ *mcp.CallToolRequest, in BrowserInput) (*mcp.CallToolResult, BrowserOutput, error) {
+	b.mu.Lock()
+	live := b.bctx
+	b.mu.Unlock()
+	if live == nil {
+		return nil, BrowserOutput{}, fmt.Errorf("no page open — call browser_navigate first")
+	}
+	text, n, err := b.snapshotNow(live, !in.Full)
+	if err != nil {
+		return nil, BrowserOutput{}, err
+	}
+	return textResult(text), BrowserOutput{Snapshot: text, ElementCount: n}, nil
+}
+
+// textResult wraps a plain-text tool response in the MCP content shape.
+func textResult(s string) *mcp.CallToolResult {
+	return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: s}}}
 }
