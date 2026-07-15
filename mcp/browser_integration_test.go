@@ -119,6 +119,87 @@ func TestTypeAgainstRealChrome(t *testing.T) {
 	}
 }
 
+// TestScrollAgainstRealChrome drives a real headed Chrome against a tall
+// page, scrolls down via browserScroll, and asserts window.scrollY actually
+// advanced.
+//
+// Opt-in only (needs a real Chrome/Chromium on the machine):
+//
+//	go test -tags browserintegration ./mcp/ -run Scroll
+func TestScrollAgainstRealChrome(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `<html><body style="height:6000px"><h1>top</h1></body></html>`)
+	}))
+	defer srv.Close()
+
+	b := newBrowserServer(types.BrowserConfig{AllowPrivateURLs: true, ProfileDir: t.TempDir() + "/p"})
+	defer b.close()
+
+	if _, _, err := b.browserNavigate(context.Background(), nil, BrowserInput{URL: srv.URL}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, _, err := b.browserScroll(context.Background(), nil, BrowserInput{Direction: "down"}); err != nil {
+		t.Fatal(err)
+	}
+
+	var scrollY float64
+	if err := chromedp.Run(b.bctx, chromedp.Evaluate("window.scrollY", &scrollY)); err != nil {
+		t.Fatal(err)
+	}
+	if scrollY <= 0 {
+		t.Fatalf("scrollY = %v, want > 0 after scrolling down", scrollY)
+	}
+}
+
+// TestPressEnterSubmitsFormAgainstRealChrome drives a real headed Chrome
+// against a page with a GET form, types into its input via browserType,
+// presses Enter via browserPress, and asserts the resulting navigation (the
+// query string lands in the URL) actually happened.
+//
+// Opt-in only (needs a real Chrome/Chromium on the machine):
+//
+//	go test -tags browserintegration ./mcp/ -run PressEnter
+func TestPressEnterSubmitsFormAgainstRealChrome(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.RawQuery != "" {
+			fmt.Fprint(w, `<html><head><title>submitted</title></head><body>ok</body></html>`)
+			return
+		}
+		fmt.Fprint(w, `<html><body><form action="" method="GET"><input name="q" aria-label="Query box"></form></body></html>`)
+	}))
+	defer srv.Close()
+
+	b := newBrowserServer(types.BrowserConfig{AllowPrivateURLs: true, ProfileDir: t.TempDir() + "/p"})
+	defer b.close()
+
+	_, out, err := b.browserNavigate(context.Background(), nil, BrowserInput{URL: srv.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ref := refForText(out.Snapshot, "Query box")
+	if ref == "" {
+		t.Fatalf("no ref found for the input in snapshot:\n%s", out.Snapshot)
+	}
+
+	if _, _, err := b.browserType(context.Background(), nil, BrowserInput{Ref: ref, Text: "hello"}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, _, err := b.browserPress(context.Background(), nil, BrowserInput{Key: "Enter"}); err != nil {
+		t.Fatal(err)
+	}
+
+	var title string
+	if err := chromedp.Run(b.bctx, chromedp.Title(&title)); err != nil {
+		t.Fatal(err)
+	}
+	if title != "submitted" {
+		t.Fatalf("title = %q, want %q (form should have submitted on Enter)", title, "submitted")
+	}
+}
+
 // refForText scans a rendered snapshot for the line containing text and
 // returns its leading "@eN" ref, or "" if not found.
 func refForText(snapshot, text string) string {

@@ -252,6 +252,63 @@ func (b *browserServer) browserType(ctx context.Context, _ *mcp.CallToolRequest,
 	return textResult("typed into " + in.Ref + "\n" + text), BrowserOutput{Snapshot: text, ElementCount: n}, nil
 }
 
+// browserPress sends a single named key event (Enter, Tab, Escape, an arrow,
+// etc.) to whatever currently has focus on the page — there's no ref, unlike
+// click/type. Re-snapshots after, since Enter often submits a form or
+// navigates.
+func (b *browserServer) browserPress(ctx context.Context, _ *mcp.CallToolRequest, in BrowserInput) (*mcp.CallToolResult, BrowserOutput, error) {
+	key, err := keyForName(in.Key)
+	if err != nil {
+		return nil, BrowserOutput{}, err
+	}
+	live, err := b.liveCtx()
+	if err != nil {
+		return nil, BrowserOutput{}, err
+	}
+	if err := chromedp.Run(live, chromedp.KeyEvent(key)); err != nil {
+		return nil, BrowserOutput{}, err
+	}
+	// Enter (and occasionally other keys) can trigger a native navigation;
+	// give it a brief, bounded chance to actually happen before we
+	// re-snapshot, or the snapshot risks describing stale pre-navigation DOM.
+	settleAfterKey(live)
+	// Re-snapshot so the model sees the result (and gets fresh refs).
+	text, n, _ := b.snapshotNow(live, true)
+	return textResult("pressed " + in.Key + "\n" + text), BrowserOutput{Snapshot: text, ElementCount: n}, nil
+}
+
+// browserScroll scrolls the viewport up or down ~90% of its height — there's
+// no ref; it acts on the whole page, not an element. Re-snapshots after,
+// since scrolling reveals new content.
+func (b *browserServer) browserScroll(ctx context.Context, _ *mcp.CallToolRequest, in BrowserInput) (*mcp.CallToolResult, BrowserOutput, error) {
+	delta, err := scrollDelta(in.Direction)
+	if err != nil {
+		return nil, BrowserOutput{}, err
+	}
+	live, err := b.liveCtx()
+	if err != nil {
+		return nil, BrowserOutput{}, err
+	}
+	if err := chromedp.Run(live, chromedp.Evaluate("window.scrollBy(0, "+delta+")", nil)); err != nil {
+		return nil, BrowserOutput{}, err
+	}
+	// Re-snapshot so the model sees the result (and gets fresh refs).
+	text, n, _ := b.snapshotNow(live, true)
+	return textResult("scrolled " + in.Direction + "\n" + text), BrowserOutput{Snapshot: text, ElementCount: n}, nil
+}
+
+// liveCtx returns the live browser ctx for actions that don't target a
+// specific ref (browser_press, browser_scroll), erroring if no page is open.
+func (b *browserServer) liveCtx() (context.Context, error) {
+	b.mu.Lock()
+	live := b.bctx
+	b.mu.Unlock()
+	if live == nil {
+		return nil, fmt.Errorf("no page open — call browser_navigate first")
+	}
+	return live, nil
+}
+
 // liveRef returns the live browser ctx + the ref's backend id, erroring if no
 // page is open or the ref is stale.
 func (b *browserServer) liveRef(ref string) (context.Context, int64, error) {
