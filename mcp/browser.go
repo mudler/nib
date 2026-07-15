@@ -108,12 +108,6 @@ func (b *browserServer) close() {
 	b.bctx = nil
 }
 
-// checkURLAllowed is the SSRF guard: it rejects navigation to
-// localhost/RFC1918/link-local targets unless allowPrivate is set.
-//
-// TODO(task8): real SSRF guard. Temporary stub for Task 4 — always allows.
-func checkURLAllowed(string, bool) error { return nil }
-
 // BrowserInput is the shared input shape for every browser_* tool. Only the
 // fields relevant to a given tool are populated by the model for that call.
 type BrowserInput struct {
