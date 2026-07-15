@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/mudler/nib/types"
@@ -38,6 +39,15 @@ func startFakeDriver(t *testing.T, ctx context.Context) *mcp.ClientSession {
 	})
 	mcp.AddTool(srv, &mcp.Tool{Name: "click"}, func(_ context.Context, _ *mcp.CallToolRequest, _ map[string]any) (*mcp.CallToolResult, map[string]any, error) {
 		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "clicked"}}}, map[string]any{}, nil
+	})
+	mcp.AddTool(srv, &mcp.Tool{Name: "double_click"}, func(_ context.Context, _ *mcp.CallToolRequest, _ map[string]any) (*mcp.CallToolResult, map[string]any, error) {
+		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "double-clicked"}}}, map[string]any{}, nil
+	})
+	mcp.AddTool(srv, &mcp.Tool{Name: "type_text"}, func(_ context.Context, _ *mcp.CallToolRequest, _ map[string]any) (*mcp.CallToolResult, map[string]any, error) {
+		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "typed"}}}, map[string]any{}, nil
+	})
+	mcp.AddTool(srv, &mcp.Tool{Name: "press_key"}, func(_ context.Context, _ *mcp.CallToolRequest, _ map[string]any) (*mcp.CallToolResult, map[string]any, error) {
+		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "pressed"}}}, map[string]any{}, nil
 	})
 	mcp.AddTool(srv, &mcp.Tool{Name: "launch_app"}, func(_ context.Context, _ *mcp.CallToolRequest, args map[string]any) (*mcp.CallToolResult, map[string]any, error) {
 		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "launched"}}},
@@ -192,6 +202,80 @@ func TestAllMenuElementsSignalsInaccessibleWindow(t *testing.T) {
 	}
 	if allMenuElements(nil) {
 		t.Fatal("empty (no elements) is the no-AX case, not menu-only")
+	}
+}
+
+func TestTypeEnforcesAField(t *testing.T) {
+	ctx := context.Background()
+	cs := newComputerServer(startFakeDriver(t, ctx), types.ComputerConfig{SessionID: "dante-x"})
+	cs.sticky.PID, cs.sticky.WindowID = 42, 7 // pinned so click/type don't auto-capture (which would overwrite lastElements)
+	cs.lastElements = []ComputerElement{
+		{Index: 5, Role: "AXTextField", Label: "Address and search bar"},
+		{Index: 14, Role: "AXTextField", Label: "Search IMDb"},
+		{Index: 17, Role: "AXButton", Label: "Submit search"},
+	}
+	// Bare type with nothing focused → fails, and the error names the fields.
+	_, _, err := cs.computerUse(ctx, nil, ComputerUseInput{Action: "type", Text: "matrix"})
+	if err == nil {
+		t.Fatal("bare type with nothing focused must fail")
+	}
+	if !strings.Contains(err.Error(), "Search IMDb") {
+		t.Fatalf("error should list the available text fields, got: %v", err)
+	}
+	// type targeting a BUTTON → fails.
+	if _, _, err := cs.computerUse(ctx, nil, ComputerUseInput{Action: "type", Element: 17, Text: "x"}); err == nil {
+		t.Fatal("type into a non-input element must fail")
+	}
+	// type targeting a text FIELD → allowed.
+	if _, _, err := cs.computerUse(ctx, nil, ComputerUseInput{Action: "type", Element: 14, Text: "matrix"}); err != nil {
+		t.Fatalf("type into a text field must be allowed: %v", err)
+	}
+	// After clicking the text field, a bare type is allowed (focus tracked).
+	if _, _, err := cs.computerUse(ctx, nil, ComputerUseInput{Action: "click", Element: 14}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := cs.computerUse(ctx, nil, ComputerUseInput{Action: "type", Text: "matrix"}); err != nil {
+		t.Fatalf("bare type after clicking a text field must be allowed: %v", err)
+	}
+	// But clicking a button first → bare type fails again (focus moved off inputs).
+	if _, _, err := cs.computerUse(ctx, nil, ComputerUseInput{Action: "click", Element: 17}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := cs.computerUse(ctx, nil, ComputerUseInput{Action: "type", Text: "matrix"}); err == nil {
+		t.Fatal("bare type after clicking a non-input must fail")
+	}
+}
+
+func TestAppSwitchKeysAreRejected(t *testing.T) {
+	ctx := context.Background()
+	cs := newComputerServer(startFakeDriver(t, ctx), types.ComputerConfig{SessionID: "dante-x"})
+	cs.sticky.PID = 1 // so it doesn't auto-capture-first
+	for _, keys := range []string{"cmd+tab", "alt+tab", "cmd+shift+tab", `["cmd","tab"]`} {
+		if _, _, err := cs.computerUse(ctx, nil, ComputerUseInput{Action: "key", Keys: keys}); err == nil {
+			t.Fatalf("app-switch combo %q must be rejected", keys)
+		}
+	}
+	// A normal shortcut still works.
+	if !isAppSwitchCombo("cmd+c") == false {
+		t.Fatal("cmd+c is not an app switch")
+	}
+	if isAppSwitchCombo("cmd+c") || isAppSwitchCombo("return") || isAppSwitchCombo("ctrl+a") {
+		t.Fatal("non-switch combos must not be flagged")
+	}
+}
+
+func TestSettleTreeStopsWhenStable(t *testing.T) {
+	// The settle probe must return once the element count stops growing, without
+	// hanging. Uses the fake driver whose get_window_state count is constant, so it
+	// settles after two identical probes.
+	ctx := context.Background()
+	cs := newComputerServer(startFakeDriver(t, ctx), types.ComputerConfig{SessionID: "dante-x"})
+	done := make(chan struct{})
+	go func() { cs.settleTree(ctx, 42, 7, 80); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("settleTree hung — it must stop when the tree is stable")
 	}
 }
 

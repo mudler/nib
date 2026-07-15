@@ -203,7 +203,14 @@ func buildCuaCall(in ComputerUseInput, ctx StickyContext) (string, map[string]an
 		}
 		return "scroll", withCtx(m), nil
 	case "type":
-		return "type_text", withCtx(map[string]any{"text": in.Text}), nil
+		m := map[string]any{"text": in.Text}
+		// An explicit element targets a specific field: the driver focuses that
+		// element (by index, needs pid+window_id) before writing, so the text can't
+		// land in the wrong place. A bare type goes to the focused element.
+		if in.Element != 0 && ctx.PID != 0 {
+			m["element_index"] = in.Element
+		}
+		return "type_text", withCtx(m), nil
 	case "key":
 		var mods []string
 		key := ""

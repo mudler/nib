@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -37,6 +38,120 @@ type computerServer struct {
 	mu     sync.Mutex
 	sticky StickyContext
 	scope  string // current cua-driver capture_scope ("window" | "desktop")
+
+	// lastElements is the element list (index→role/label) from the most recent
+	// capture, so type/click can validate a target's role without a fresh walk.
+	lastElements []ComputerElement
+	// focusedInput is true when the last action put keyboard focus on a text
+	// input (a click on a text field). It gates a bare type (no element) so the
+	// model can't type into "whatever's focused" (usually the address bar).
+	focusedInput bool
+	// dirty marks that the last action likely changed the window, so the next
+	// capture should wait for the AX tree to settle before returning.
+	dirty bool
+}
+
+// inputRoles are the AX roles that accept typed text.
+var inputRoles = map[string]bool{
+	"AXTextField": true, "AXTextArea": true, "AXSearchField": true,
+	"AXComboBox": true, "AXSecureTextField": true,
+}
+
+func isInputRole(role string) bool { return inputRoles[role] }
+
+// roleOf returns the role of the element with the given index in els, or "".
+func roleOf(els []ComputerElement, idx int) string {
+	for _, e := range els {
+		if e.Index == idx {
+			return e.Role
+		}
+	}
+	return ""
+}
+
+// inputFieldsHint lists the text-input elements in els for a self-correcting
+// error message ("click one of these, or pass its element").
+func inputFieldsHint(els []ComputerElement) string {
+	var parts []string
+	for _, e := range els {
+		if isInputRole(e.Role) {
+			label := e.Label
+			if label == "" {
+				label = "(no label)"
+			}
+			parts = append(parts, fmt.Sprintf("[%d] %s %q", e.Index, e.Role, label))
+		}
+	}
+	if len(parts) == 0 {
+		return "none in the last capture — capture again after the page/app loads"
+	}
+	return strings.Join(parts, ", ")
+}
+
+const (
+	settleMaxProbes = 4                     // ~1.2s ceiling
+	settleInterval  = 350 * time.Millisecond
+)
+
+// settleTree polls the window's AX tree cheaply (tree-only, no screenshot) until
+// it stops growing or a timeout, so a subsequent capture sees the fully-built
+// tree. App-agnostic: keyed on element-count growth, not app type.
+func (c *computerServer) settleTree(ctx context.Context, pid, windowID, maxEls int) {
+	prev := -1
+	for probe := 0; probe < settleMaxProbes; probe++ {
+		ps, err := c.call(ctx, "get_window_state", map[string]any{
+			"pid": pid, "window_id": windowID, "session": c.cfg.SessionID,
+			"max_elements": maxEls, "include_screenshot": false,
+		})
+		if err != nil || (ps != nil && ps.IsError) {
+			return // let the real capture surface any error
+		}
+		n := len(parseElements(structuredMap(ps), maxEls))
+		if n > 0 && n == prev {
+			return // two identical walks → settled
+		}
+		prev = n
+		if probe < settleMaxProbes-1 {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(settleInterval):
+			}
+		}
+	}
+}
+
+// cacheElements records the last capture's elements for later role lookups
+// (type/click target validation).
+func (c *computerServer) cacheElements(els []ComputerElement) {
+	c.mu.Lock()
+	c.lastElements = els
+	c.mu.Unlock()
+}
+
+// isAppSwitchCombo reports whether a key combo is an app switcher (cmd+tab /
+// alt+tab, ± shift). The driver posts keystrokes to a single pid, which does NOT
+// drive the system app switcher — so these are no-ops that waste turns.
+func isAppSwitchCombo(keys string) bool {
+	var mods, key string
+	first := true
+	for _, p := range normalizeKeys(keys) {
+		lp := strings.ToLower(p)
+		if lp == "shift" {
+			continue
+		}
+		if modifierKeys[lp] {
+			mods += lp
+		} else if first {
+			key = lp
+			first = false
+		}
+	}
+	if key != "tab" {
+		return false
+	}
+	return strings.Contains(mods, "cmd") || strings.Contains(mods, "alt") ||
+		strings.Contains(mods, "option") || strings.Contains(mods, "win") || strings.Contains(mods, "super")
 }
 
 func newComputerServer(driver *mcp.ClientSession, cfg types.ComputerConfig) *computerServer {
@@ -172,6 +287,20 @@ func (c *computerServer) capture(ctx context.Context, in ComputerUseInput) (*mcp
 	if in.Mode == "ax" {
 		args["include_screenshot"] = false // tree only — the cheap re-index path
 	}
+	// Settle the AX tree before the real capture. Many UIs build their
+	// accessibility tree LAZILY after a focus/navigation/action — a browser's web
+	// content, an Electron renderer, a slow native view — so the first capture can
+	// miss the real content and the model acts on a stale tree. App-agnostic: poll
+	// the tree cheaply (no screenshot) and stop as soon as it stops growing. Only
+	// runs when `dirty` (the last action likely changed the window), so plain
+	// re-index captures stay instant.
+	c.mu.Lock()
+	dirty := c.dirty
+	c.dirty = false
+	c.mu.Unlock()
+	if dirty {
+		c.settleTree(ctx, pid, windowID, maxEls)
+	}
 	st, err := c.call(ctx, "get_window_state", args)
 	if err != nil {
 		return nil, ComputerUseOutput{}, err
@@ -203,6 +332,7 @@ func (c *computerServer) capture(ctx context.Context, in ComputerUseInput) (*mcp
 	switch in.Mode {
 	case "ax":
 		els := parseElements(structuredMap(st), maxEls)
+		c.cacheElements(els)
 		// Drop the driver's verbose Markdown tree; nib's numbered list is the
 		// model-facing surface. Keeping both duplicated hundreds of menu nodes and
 		// overflowed context.
@@ -221,6 +351,7 @@ func (c *computerServer) capture(ctx context.Context, in ComputerUseInput) (*mcp
 		// it re-capture forever). The image is the grounding; the list is how it
 		// clicks. Keep only the image; drop the driver's Markdown tree (context).
 		els := parseElements(structuredMap(st), maxEls)
+		c.cacheElements(els)
 		st.Content = withElementText(imagesOnly(st.Content), els)
 		summary := "captured screen"
 		if allMenuElements(els) {
@@ -230,6 +361,7 @@ func (c *computerServer) capture(ctx context.Context, in ComputerUseInput) (*mcp
 		return st, ComputerUseOutput{Summary: summary, ImageMIME: imageMIME(), Elements: els}, nil
 	default: // som
 		els := parseElements(structuredMap(st), maxEls)
+		c.cacheElements(els)
 		// Surface the clickable elements as TEXT alongside the screenshot. The
 		// driver returns them only as structured data, and the model's tool
 		// message otherwise collapses to a bare "[image content …]" placeholder —
@@ -476,6 +608,7 @@ func (c *computerServer) computerUse(ctx context.Context, _ *mcp.CallToolRequest
 		c.bringToFront(ctx, pid, windowID)
 		c.mu.Lock()
 		c.sticky.PID, c.sticky.WindowID, c.sticky.Desktop, c.sticky.Explicit = pid, windowID, false, true
+		c.focusedInput, c.dirty = false, true // window changed; next capture settles
 		c.mu.Unlock()
 		summary := fmt.Sprintf("focused %q (pid %d) and brought it to the front — call action=capture to see it", strings.TrimSpace(in.App), pid)
 		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: summary}}}, ComputerUseOutput{Summary: summary}, nil
@@ -509,6 +642,23 @@ func (c *computerServer) computerUse(ctx context.Context, _ *mcp.CallToolRequest
 		}
 	}
 
+	// Intercept the app-switch keystrokes the model reaches for: the driver posts
+	// keys to a single pid, which does NOT drive the system app switcher, so
+	// cmd+tab/alt+tab are silent no-ops that burn turns. Fail with the real path.
+	if in.Action == "key" && isAppSwitchCombo(in.Keys) {
+		return nil, ComputerUseOutput{}, fmt.Errorf(
+			"cmd+tab/alt+tab don't switch apps here (a keystroke goes to one app, not the system switcher). " +
+				"Use action=focus_app with app=\"<name>\" to switch to an app.")
+	}
+	// Field-aware type: don't let the model type into "whatever's focused" (usually
+	// the browser address bar). Prefer type with an explicit element target; a bare
+	// type is only allowed right after clicking a text field.
+	if in.Action == "type" {
+		if err := c.checkTypeTarget(in); err != nil {
+			return nil, ComputerUseOutput{}, err
+		}
+	}
+
 	tool, args, err := buildCuaCall(in, sticky)
 	if err != nil {
 		return nil, ComputerUseOutput{}, err
@@ -524,11 +674,58 @@ func (c *computerServer) computerUse(ctx context.Context, _ *mcp.CallToolRequest
 	if err != nil {
 		return nil, ComputerUseOutput{}, err
 	}
+	c.trackAfterAction(in)
 	out := ComputerUseOutput{Summary: fmt.Sprintf("%s ok", in.Action)}
 	if in.CaptureAfter {
 		return c.capture(ctx, ComputerUseInput{Action: "capture", Mode: "som"})
 	}
 	return res, out, nil
+}
+
+// checkTypeTarget enforces that a type action has somewhere valid to land.
+// With an explicit element it must be a text-input role; a bare type is only
+// allowed immediately after a click on a text field (else the text would go to
+// whatever happens to be focused — typically the address bar).
+func (c *computerServer) checkTypeTarget(in ComputerUseInput) error {
+	c.mu.Lock()
+	els, focused := c.lastElements, c.focusedInput
+	c.mu.Unlock()
+	if in.Element != 0 {
+		role := roleOf(els, in.Element)
+		if role == "" {
+			return fmt.Errorf("element %d isn't in the last capture — call action=capture first", in.Element)
+		}
+		if !isInputRole(role) {
+			return fmt.Errorf("element %d is a %s, not a text field — type into a text field. Fields available: %s",
+				in.Element, role, inputFieldsHint(els))
+		}
+		return nil
+	}
+	if focused {
+		return nil // the model just clicked a text field
+	}
+	return fmt.Errorf("nothing is focused to type into (text would go to the address bar or nowhere). "+
+		"Click a text field first, or pass type element=N. Text fields in the last capture: %s", inputFieldsHint(els))
+}
+
+// trackAfterAction updates the focus/dirty state after a successful action:
+// dirty (the window likely changed → next capture settles) for any mutating
+// action; focusedInput true only when a click landed on a text field.
+func (c *computerServer) trackAfterAction(in ComputerUseInput) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if IsDestructiveComputerAction(in.Action) {
+		c.dirty = true
+	}
+	switch in.Action {
+	case "click", "double_click", "right_click", "middle_click":
+		// A click on a text field focuses it; a click on anything else moves focus
+		// off any field. (A bare-coordinate click has no known role → treat as off.)
+		c.focusedInput = in.Element != 0 && isInputRole(roleOf(c.lastElements, in.Element))
+	case "type":
+		// typing keeps focus on the field — leave focusedInput as-is so consecutive
+		// types work.
+	}
 }
 
 // openApp launches an app by name (or bundle id) via the driver's launch_app —
@@ -541,6 +738,19 @@ func (c *computerServer) openApp(ctx context.Context, in ComputerUseInput) (*mcp
 	app := strings.TrimSpace(in.App)
 	if app == "" {
 		return nil, ComputerUseOutput{}, fmt.Errorf(`open_app needs an app in "app", e.g. app="Google Chrome"`)
+	}
+	// If the app is already running (has an on-screen window), just focus it —
+	// don't try to launch. launch_app can't "launch" always-running apps like
+	// Finder ("No installed macOS app found for name 'Finder'"), and relaunching
+	// an open app is pointless. "open" means "show it", whether launch or focus.
+	if pid, windowID := c.windowForApp(ctx, app); pid != 0 {
+		c.bringToFront(ctx, pid, windowID)
+		c.mu.Lock()
+		c.sticky.PID, c.sticky.WindowID, c.sticky.Desktop, c.sticky.Explicit = pid, windowID, false, true
+		c.focusedInput, c.dirty = false, true
+		c.mu.Unlock()
+		summary := fmt.Sprintf("%q is already open (pid %d) — brought it to the front. Call action=capture to see it.", app, pid)
+		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: summary}}}, ComputerUseOutput{Summary: summary}, nil
 	}
 	args := map[string]any{}
 	if c.sticky.SessionID != "" {
@@ -577,6 +787,7 @@ func (c *computerServer) openApp(ctx context.Context, in ComputerUseInput) (*mcp
 		// Explicit: a plain capture next must target THIS app, not re-detect the
 		// frontmost window (which may be a mounted DMG / Finder window).
 		c.sticky.PID, c.sticky.WindowID, c.sticky.Desktop, c.sticky.Explicit = pid, windowID, false, true
+		c.focusedInput, c.dirty = false, true // just launched → next capture settles
 		c.mu.Unlock()
 		summary += fmt.Sprintf(" (pid %d), now frontmost. Call computer_use action=capture to see it, then click/type.", pid)
 	} else {
@@ -706,13 +917,16 @@ func StartComputerMCPServer(ctx context.Context, transport mcp.Transport, cfg ty
 		Description: "See and control a native desktop app: take a SCREENSHOT, then click, type, scroll, " +
 			"and drag. Use this whenever the user wants to look at, see, screenshot, read, or interact with " +
 			"the screen, a window, or a running app — do NOT use shell commands (e.g. `screenshot`, `scrot`, " +
-			"`screencapture`) for this. Preferred workflow: call action='capture' (mode='som' numbers the " +
-			"clickable elements) then click by `element` index for reliability; pixel x,y is the fallback. " +
-			"To OPEN or launch an app, call action='open_app' with app='<App Name>' (e.g. app='TextEdit') — " +
-			"do NOT try to click it open; action='close_app' quits one. For a keyboard SHORTCUT (cmd+a, " +
-			"ctrl+c, cmd+s) use action='key' with keys='cmd+a' — never type the shortcut as text. The target " +
-			"app is brought to the front so actions land. This drives native app UI; it is NOT for browsing " +
-			"the web (use the web tools for that). Requires an armed session.",
+			"`screencapture`) for this. To work on a SPECIFIC app (especially one the user names), FIRST call " +
+			"action='focus_app' app='<Name>' (or action='open_app' to launch it) — do NOT rely on whatever is " +
+			"frontmost, and NEVER use cmd+tab/alt+tab to switch apps (they don't work here; use focus_app). " +
+			"Then action='capture' (mode='som' numbers the clickable elements) and click by `element` index; " +
+			"pixel x,y is the fallback. To TYPE into a field, target it: action='type' element=<N of the text " +
+			"field> text='…' (or click the field first) — typing without a field goes to the wrong place. For a " +
+			"keyboard SHORTCUT (cmd+a, ctrl+c) use action='key' keys='cmd+a' — never type the shortcut as text. " +
+			"open_app also focuses an already-running app (use it for Finder etc). The target app is brought to " +
+			"the front so actions land. This drives native app UI; it is NOT for browsing the web. " +
+			"Requires an armed session.",
 	}
 	// Give the enum-valued fields REAL JSON Schema enums (not just a prose list in
 	// the description). The go-sdk's `jsonschema:"…"` struct tag only sets a
