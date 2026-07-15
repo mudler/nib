@@ -393,6 +393,28 @@ func isDesktopApp(app string) bool {
 	return a == "screen" || a == "desktop"
 }
 
+// actionAliases maps the raw cua-driver / page tool names a model reaches for to
+// the real computer_use action. Observed: after we added the page tool, models
+// call action="click_element" (a page_action) as a top-level action, or reach
+// for the driver's press_key/type_text/launch_app names directly.
+var actionAliases = map[string]string{
+	"click_element": "click",
+	"type_text":     "type",
+	"press_key":     "key",
+	"launch_app":    "open_app",
+	"kill_app":      "close_app",
+	"screenshot":    "capture",
+	"launch":        "open_app",
+	"open":          "open_app",
+}
+
+func normalizeAction(a string) string {
+	if alias, ok := actionAliases[strings.ToLower(strings.TrimSpace(a))]; ok {
+		return alias
+	}
+	return a
+}
+
 func parseElements(m map[string]any, max int) []ComputerElement {
 	if max <= 0 {
 		max = 100
@@ -431,6 +453,7 @@ func str(v any) string {
 
 // computerUse is the single MCP tool handler.
 func (c *computerServer) computerUse(ctx context.Context, _ *mcp.CallToolRequest, in ComputerUseInput) (*mcp.CallToolResult, ComputerUseOutput, error) {
+	in.Action = normalizeAction(in.Action)
 	if reason := BlockedComputerReason(in); reason != "" {
 		return nil, ComputerUseOutput{}, fmt.Errorf("%s", reason)
 	}
@@ -616,12 +639,16 @@ func (c *computerServer) pageOp(ctx context.Context, in ComputerUseInput) (*mcp.
 		return nil, ComputerUseOutput{}, fmt.Errorf("page needs page_action: get_text, query_dom, click_element, insert_text, type_keystrokes, or execute_javascript")
 	}
 	c.mu.Lock()
-	pid := c.sticky.PID
+	pid, windowID := c.sticky.PID, c.sticky.WindowID
 	c.mu.Unlock()
 	if pid == 0 {
 		return nil, ComputerUseOutput{}, fmt.Errorf("no browser targeted — open it first with action=open_app (app=\"Google Chrome\", optionally url=...)")
 	}
-	args := c.withSession(map[string]any{"pid": pid, "action": sub})
+	if windowID == 0 {
+		return nil, ComputerUseOutput{}, fmt.Errorf("no browser window pinned — capture it first (action=capture app=\"Google Chrome\") so the page can be targeted")
+	}
+	// The driver's page tool requires BOTH pid and window_id to locate the CDP tab.
+	args := c.withSession(map[string]any{"pid": pid, "window_id": windowID, "action": sub})
 	switch sub {
 	case "query_dom", "click_element":
 		if strings.TrimSpace(in.Selector) == "" {

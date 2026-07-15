@@ -250,6 +250,24 @@ func TestCloseAppKillsResolvedApp(t *testing.T) {
 	}
 }
 
+// Regression: after adding the page tool, models called action="click_element"
+// (a page sub-action) as a top-level action and looped on "not a direct
+// cua-driver call". It must alias to the numbered-element click.
+func TestActionAliasClickElement(t *testing.T) {
+	ctx := context.Background()
+	cs := newComputerServer(startFakeDriver(t, ctx), types.ComputerConfig{SessionID: "dante-x"})
+	if _, _, err := cs.computerUse(ctx, nil, ComputerUseInput{Action: "open_app", App: "Google Chrome"}); err != nil {
+		t.Fatal(err)
+	}
+	// "click_element" as a top-level action -> click element 1 (not an error).
+	if _, _, err := cs.computerUse(ctx, nil, ComputerUseInput{Action: "click_element", Element: 1}); err != nil {
+		t.Fatalf("action=click_element must alias to click, got: %v", err)
+	}
+	if normalizeAction("press_key") != "key" || normalizeAction("type_text") != "type" || normalizeAction("launch_app") != "open_app" {
+		t.Fatal("driver-name aliases must normalize")
+	}
+}
+
 func TestComputerBlockedActionErrors(t *testing.T) {
 	ctx := context.Background()
 	cs := newComputerServer(startFakeDriver(t, ctx), types.ComputerConfig{SessionID: "dante-x"})
