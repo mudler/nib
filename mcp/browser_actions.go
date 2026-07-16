@@ -47,40 +47,75 @@ func keyForName(name string) (string, error) {
 }
 
 const (
-	pressSettleMaxProbes = 3 // ~450ms ceiling
+	pressSettleMaxProbes = 8 // ~1.2s ceiling for a triggered navigation to finish loading
+	pressSettleNavGrace  = 2 // ~300ms to decide a key triggered NO navigation
 	pressSettleInterval  = 150 * time.Millisecond
 )
 
 // settleAfterKey gives a key that may have triggered a native navigation
 // (Enter submitting a form, Backspace on some SPAs, ...) a brief, bounded
 // chance to actually kick off and finish loading before the caller
-// re-snapshots. Without this, the CDP round-trip for the key event routinely
-// returns before the browser has even started the navigation, so an
-// immediate re-snapshot describes stale pre-navigation DOM (verified via a
-// real headless Chrome: an unconditional re-snapshot right after
-// chromedp.KeyEvent(kb.Enter) caught the old page far more often than not).
+// re-snapshots. Without this the re-snapshot describes stale pre-navigation
+// DOM: chromedp's key dispatch returns before the browser even starts the
+// navigation, so at that instant the ORIGINAL document is still
+// readyState=="complete" — an unconditional "is it complete?" check returns
+// true on the page we're trying to leave (verified against a real Chrome: an
+// immediate re-snapshot after chromedp.KeyEvent(kb.Enter) caught the old page,
+// and a single readyState==complete check returned on it too).
 //
-// Polls document.readyState instead of sleeping a single fixed duration so
-// keys that never navigate (arrows, Tab, ...) settle fast, and slower
-// navigations still get up to ~450ms to reach "complete". Best-effort: swallows
-// errors (e.g. an in-flight navigation makes Evaluate transiently fail) since
-// the fallback is only a possibly-stale snapshot, not a broken tool call.
-func settleAfterKey(ctx context.Context) {
+// beforeURL is location.href captured BEFORE the key was dispatched. A
+// navigating key changes the URL (or transiently tears down the JS execution
+// context mid-load); we wait until the URL actually changes AND the new
+// document reaches "complete". A key that navigates nowhere (arrows, Tab,
+// Escape) never changes the URL, so once a short grace passes with no sign of
+// navigation we return immediately rather than stalling the full ceiling.
+// Best-effort throughout: a possibly-stale snapshot is a worse outcome than a
+// broken tool call only in that the model can just re-snapshot.
+func settleAfterKey(ctx context.Context, beforeURL string) {
+	navSeen := false
 	for probe := 0; probe < pressSettleMaxProbes; probe++ {
 		select {
 		case <-ctx.Done():
 			return
 		case <-time.After(pressSettleInterval):
 		}
-		var readyState string
-		if err := chromedp.Run(ctx, chromedp.Evaluate("document.readyState", &readyState)); err != nil {
-			continue // likely mid-navigation (execution context torn down); keep polling
+		var href, readyState string
+		if err := chromedp.Run(ctx,
+			chromedp.Evaluate("location.href", &href),
+			chromedp.Evaluate("document.readyState", &readyState),
+		); err != nil {
+			navSeen = true // execution context torn down => a navigation is underway
+			continue
 		}
-		if readyState == "complete" {
+		if href != beforeURL {
+			navSeen = true
+			if readyState == "complete" {
+				return // navigation committed and the new document finished loading
+			}
+			continue // navigation in flight; wait for the new document to load
+		}
+		// Still on the original document. If nothing has hinted at a navigation
+		// within the grace window, the key was a no-op (arrow/Tab/Escape) — return
+		// rather than stalling to the ceiling. Enter's form submit commits (URL
+		// change or context teardown) well inside this window.
+		if readyState == "complete" && !navSeen && probe+1 >= pressSettleNavGrace {
 			return
 		}
 	}
 }
+
+// browserImplicitSubmitJS reproduces the browser's default action for Enter in
+// a focused form field: submit the form the active element belongs to. Returns
+// "submitted" when it did, else "noform"/"noactive". requestSubmit (not the
+// bare .submit()) is used so the submit event fires and constraint validation
+// runs — exactly like a real Enter, so an onsubmit that preventDefaults still
+// wins and a form with unfilled required fields is not submitted.
+const browserImplicitSubmitJS = `(function(){
+	var e=document.activeElement; if(!e) return 'noactive';
+	var f=e.form; if(!f) return 'noform';
+	if(f.requestSubmit){ f.requestSubmit(); } else { f.submit(); }
+	return 'submitted';
+})()`
 
 // scrollDelta maps an allowed browser_scroll direction to the JS expression
 // used as the y argument of window.scrollBy — positive (down the page) or

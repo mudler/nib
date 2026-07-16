@@ -340,13 +340,39 @@ func (b *browserServer) browserPress(ctx context.Context, _ *mcp.CallToolRequest
 	defer b.actionMu.Unlock()
 	actx, acancel := context.WithTimeout(live, browserActionTimeout)
 	defer acancel()
+	// Capture the URL BEFORE the key so settleAfterKey can tell a navigating key
+	// (Enter submitting a form) apart from the stale pre-navigation page, which
+	// is still readyState=="complete" at the instant the key dispatch returns.
+	var beforeURL string
+	_ = chromedp.Run(actx, chromedp.Evaluate("location.href", &beforeURL))
 	if err := chromedp.Run(actx, chromedp.KeyEvent(key)); err != nil {
 		return nil, BrowserOutput{}, timeoutAwareError(err)
 	}
 	// Enter (and occasionally other keys) can trigger a native navigation;
 	// give it a brief, bounded chance to actually happen before we
 	// re-snapshot, or the snapshot risks describing stale pre-navigation DOM.
-	settleAfterKey(actx)
+	settleAfterKey(actx, beforeURL)
+	// Enter's default action in a focused form field is to submit the owning
+	// form. A *synthesized* Enter fires that default only unreliably when the
+	// tab is not foreground — verified against a real Chrome, submits ranged
+	// 0–3 of 6 across focus/bringToFront tricks, versus 8 of 8 with an explicit
+	// submit. So when Enter did not itself navigate, perform the implicit
+	// submission deterministically, exactly as a real Enter would: submit the
+	// focused element's form via requestSubmit (which still fires the submit
+	// event and runs constraint validation, and an onsubmit preventDefault still
+	// wins). The KeyEvent above already delivered keydown to any JS handler, so
+	// JS-driven Enter still works — this only restores the native default action
+	// the synthetic key dropped. Then settle again for the resulting navigation.
+	if in.Key == "Enter" {
+		var afterURL string
+		_ = chromedp.Run(actx, chromedp.Evaluate("location.href", &afterURL))
+		if afterURL == beforeURL {
+			var submitted string
+			if err := chromedp.Run(actx, chromedp.Evaluate(browserImplicitSubmitJS, &submitted)); err == nil && submitted == "submitted" {
+				settleAfterKey(actx, beforeURL)
+			}
+		}
+	}
 	// Re-snapshot so the model sees the result (and gets fresh refs).
 	res, out := snapshotAfterAction(b, actx, "pressed "+in.Key)
 	return res, out, nil
