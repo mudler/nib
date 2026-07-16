@@ -55,5 +55,17 @@ func StartTransports(ctx context.Context, cfg types.Config, shellJobs *ShellJobs
 		transports = append(transports, computerClient)
 	}
 
+	// Start the browser MCP server only when browser automation is armed
+	// (opt-in). It drives a headed, persistent-profile Chrome via chromedp.
+	if cfg.Browser.Enabled {
+		browserServerTransport, browserClient := mcp.NewInMemoryTransports()
+		go func() {
+			if err := StartBrowserMCPServer(ctx, browserServerTransport, cfg); err != nil {
+				fmt.Fprintf(os.Stderr, "browser MCP server error: %v\n", err)
+			}
+		}()
+		transports = append(transports, browserClient)
+	}
+
 	return transports, nil
 }
