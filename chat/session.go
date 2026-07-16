@@ -840,6 +840,15 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 		}),
 	}
 
+	// Step-boundary commentary: the assistant text that accompanied a tool
+	// selection ("I'll search for X now…"), delivered before the tools run so
+	// a UI can commit it in chronological order relative to OnToolResult.
+	if s.callbacks.OnStepContent != nil {
+		cogitoOpts = append(cogitoOpts, cogito.WithStepContentCallback(func(content string) {
+			s.callbacks.OnStepContent(content)
+		}))
+	}
+
 	// Live token streaming: opt into cogito's streaming decision/answer path only
 	// when a consumer wants per-token deltas. Left unset (e.g. the CLI), the path
 	// is identical to before. The step-boundary callbacks still fire either way.
