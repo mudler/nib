@@ -250,6 +250,15 @@ func RunCLI(ctx context.Context, cfg types.Config, shellJobs *wizmcp.ShellJobs, 
 			fmt.Println(response)
 			fmt.Println()
 		},
+		// The model's step commentary ("I'll search for X now…") — printed dim,
+		// before the tool it announced runs, so the transcript reads in order.
+		OnStepContent: func(content string) {
+			spin.stop()
+			for _, line := range strings.Split(strings.TrimRight(content, "\n"), "\n") {
+				fmt.Println("  " + theme.Subtle.Render(line))
+			}
+			spin.start(theme.Status(theme.VerbWorking, 0))
+		},
 		OnCompactDone: func(before, after int) {
 			fmt.Println(theme.Subtle.Render(compactNotice(before, after)))
 		},

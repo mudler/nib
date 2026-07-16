@@ -104,7 +104,13 @@ type Callbacks struct {
 	// fire afterwards. Optional — leave nil for the non-streaming path.
 	OnStream   func(ev StreamEvent)
 	OnToolCall func(req ToolCallRequest) ToolCallResponse
-	OnResponse  func(response string)
+	// OnStepContent is called with the assistant text that accompanied a tool
+	// selection ("I'll search for X now…") at the step boundary, before the
+	// selected tools run — so a UI can commit the commentary in chronological
+	// order relative to OnToolResult. Never fires with empty content and never
+	// for the turn's final reply (that arrives via OnResponse). Optional.
+	OnStepContent func(content string)
+	OnResponse    func(response string)
 	OnError     func(err error)
 	// OnToolResult is called after a tool finishes, with its output. Optional.
 	OnToolResult func(res ToolResult)
