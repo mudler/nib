@@ -714,7 +714,9 @@ func buildUserFragment(f cogito.Fragment, text string, parts []ContentPart) cogi
 // cached prefix and silently wastes the prime.
 //
 // goal is passed in rather than read via s.Goal(): Goal() takes runMu, and Warm
-// calls this while already holding it.
+// reads the goal under runMu before releasing it to make the long-running
+// Prefill call. Reading it here instead would either re-take a held lock or
+// force Warm to hold runMu across the network call, blocking Interrupt.
 func (s *Session) toolOptions(turnCtx context.Context, goal string) []cogito.Option {
 	opts := []cogito.Option{
 		cogito.WithMCPs(s.allClients()...),
