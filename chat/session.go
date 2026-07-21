@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/mudler/nib/config"
@@ -29,15 +30,15 @@ import (
 
 // Session represents a chat session with the AI assistant
 type Session struct {
-	ctx                 context.Context
-	turnMu              sync.Mutex
-	turnCancel          context.CancelFunc
-	llm                 cogito.LLM
-	clients             []*mcp.ClientSession
-	mcpClient           *mcp.Client
-	cfgClients          map[string]*mcp.ClientSession // config/plugin MCP servers, by name
-	cfgServers          map[string]types.MCPServer    // desired set, for diffing
-	skillsClient        *mcp.ClientSession            // the load_skill server
+	ctx          context.Context
+	turnMu       sync.Mutex
+	turnCancel   context.CancelFunc
+	llm          cogito.LLM
+	clients      []*mcp.ClientSession
+	mcpClient    *mcp.Client
+	cfgClients   map[string]*mcp.ClientSession // config/plugin MCP servers, by name
+	cfgServers   map[string]types.MCPServer    // desired set, for diffing
+	skillsClient *mcp.ClientSession            // the load_skill server
 	// historyMu guards the parallel conversation state — fragment (the real
 	// model context handed to cogito) and messages (the {role,content} log
 	// surfaced to the UI). SendMessage mutates both as a turn progresses; the
@@ -117,7 +118,32 @@ type Session struct {
 	// actually registered. Fixed at construction (Computer config is runtime-only).
 	computerEnabled bool
 
+	// prefixWarm records whether this session has actually issued a request that
+	// prefilled its prompt prefix (system prompt + tool schemas) on the server.
+	// On CPU hardware that prefill costs tens of seconds on the first request and
+	// nothing afterwards, so a UI reads this to label the cold turn rather than
+	// leaving the user staring at a silent minute.
+	//
+	// An atomic rather than a mutex-guarded bool on purpose: PrefixWarm is read
+	// from the UI goroutine while a turn holds runMu/historyMu, and Warm
+	// deliberately avoids holding runMu across its network call.
+	prefixWarm atomic.Bool
+
 	tracer *trace.Recorder // non-nil when session tracing is enabled
+}
+
+// PrefixWarm reports whether this session has already issued a request that
+// prefilled its prompt prefix, so the next turn will hit the server's prefix
+// cache instead of paying the full prefill again.
+//
+// It is set only where the model was genuinely reached — a completed
+// SendMessage turn or a successful Warm — and never by the paths that bail
+// before that (an attachments failure, or an all-blocked attachment set with no
+// text). It is safe to call from another goroutine while a turn is running.
+//
+// There is no reset: a rebuilt session is a new *Session and starts false.
+func (s *Session) PrefixWarm() bool {
+	return s.prefixWarm.Load()
 }
 
 // AgentLog returns the captured activity log for a sub-agent (for the
@@ -1076,6 +1102,21 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 			return "", err
 		}
 
+		// ExecuteTools returned an answer, so a request completed against the
+		// model and the server has prefilled this session's prompt prefix. This
+		// is the true boundary: everything above can bail without a request
+		// (hooks, reload, fragment assembly, option building), and the paths in
+		// SendWithAttachments that return before SendMessage never get here.
+		//
+		// An interrupted turn deliberately does NOT count. Cancellation after the
+		// request reached the server may or may not have populated the cache, and
+		// the two mistakes are not symmetric: staying cold costs at worst one
+		// extra "preparing the model" label, while claiming warm too early costs
+		// the user a silent minute with no explanation.
+		if turnCtx.Err() == nil {
+			s.prefixWarm.Store(true)
+		}
+
 		response = newFragment.LastMessage().Content
 		s.historyMu.Lock()
 		s.fragment = newFragment
@@ -1185,7 +1226,14 @@ func (s *Session) Warm(ctx context.Context) error {
 		opts = append(opts, cogito.WithForceReasoning())
 	}
 
-	return cogito.Prefill(ctx, s.llm, f, opts...)
+	if err := cogito.Prefill(ctx, s.llm, f, opts...); err != nil {
+		return err
+	}
+	// Priming the prefix is Warm's entire purpose, so a successful prime is by
+	// definition the prefix having been sent to the model. A failed or cancelled
+	// prime leaves the session cold, as it should.
+	s.prefixWarm.Store(true)
+	return nil
 }
 
 // GetMessages returns all messages in the conversation
@@ -1364,7 +1412,6 @@ func (s *Session) Close() error {
 	}
 	return firstErr
 }
-
 
 // fragmentHasSystemContent reports whether the fragment already carries a system
 // message with exactly this content, so SendMessage can add the system prompt
