@@ -133,8 +133,11 @@ type Session struct {
 }
 
 // PrefixWarm reports whether this session has already issued a request that
-// prefilled its prompt prefix, so the next turn will hit the server's prefix
-// cache instead of paying the full prefill again.
+// SHOULD have prefilled its prompt prefix on the server — not that the server's
+// cache still holds it. A LocalAI restart, a model swap, or KV eviction leaves
+// this stale-true. That direction is deliberate: a stale true costs a missing
+// "preparing" label, while a false negative would only cost a redundant one, so
+// callers should treat it as a hint for labelling and never as a guarantee.
 //
 // It is set only where the model was genuinely reached — a completed
 // SendMessage turn or a successful Warm — and never by the paths that bail
