@@ -702,6 +702,165 @@ func buildUserFragment(f cogito.Fragment, text string, parts []ContentPart) cogi
 	return f.AddMessage("user", text, mm...)
 }
 
+// toolOptions returns the cogito options that shape the tool schemas a run
+// advertises: the MCP sessions and their filter, the built-in tools (each gated
+// by the BuiltinTools allowlist via toolEnabled), the media tools, the goal
+// tool, the self-config tools, agent spawning, and the sink-state setting
+// (cogito appends its own "reply" tool unless it is disabled).
+//
+// SendMessage and Warm both call this so a priming request advertises exactly
+// the tools a real turn advertises. The tool schemas are serialized into the
+// prompt by the server's chat template, so any difference here changes the
+// cached prefix and silently wastes the prime.
+//
+// goal is passed in rather than read via s.Goal(): Goal() takes runMu, and Warm
+// calls this while already holding it.
+func (s *Session) toolOptions(turnCtx context.Context, goal string) []cogito.Option {
+	opts := []cogito.Option{
+		cogito.WithMCPs(s.allClients()...),
+		// Disable cogito's sink-state "reply" tool so ExecuteTools is the whole
+		// turn: when the LLM stops calling tools it records its text reply as the
+		// final answer (read via LastMessage below). This matches cogito's own
+		// examples (examples/chat, examples/sub-agents) and avoids a redundant
+		// follow-up Ask that returns empty on many models. This also removes a
+		// tool from the advertised set, so it belongs here and not with the
+		// run-behavior options.
+		cogito.DisableSinkState,
+		cogito.WithAgentDefinitions(s.agentDefs...),
+		cogito.WithAgentLLMFactory(func(model string, temperature float32, metadata map[string]string) cogito.LLM {
+			// The spawn_agent tool lets the LLM request a `model`, which it may
+			// fill with a name the endpoint doesn't serve (e.g. "sonar") and
+			// 404 the sub-agent. Honor a requested model only when wiz actually
+			// serves it — the main model, or one configured for an agent type —
+			// otherwise fall back to the main model. This keeps per-agent model
+			// overrides from config working while ignoring invented names.
+			chosen := resolveAgentModel(model, s.llmModel, s.agentModels)
+			if model != "" && chosen != model {
+				xlog.Warn("sub-agent requested an unserved model; using the main model",
+					"requested", model, "model", chosen)
+			}
+			// metadata is this agent type's override; overlay it on the global
+			// session metadata (per-key: agent wins, global-only keys inherited).
+			agentLLM := clients.NewLocalAILLM(chosen, s.apiKey, s.baseURL)
+			agentLLM.SetTemperature(temperature)
+			agentLLM.SetMetadata(mergeMetadata(s.metadata, metadata))
+			agentLLM.SetReasoningEffort(s.reasoningEffort)
+			return agentLLM
+		}),
+	}
+
+	// Built-in tools, each gated by the BuiltinTools allowlist (toolEnabled). The
+	// agent-spawning tools (spawn_agent/check_agent/get_agent_result) ride
+	// EnableAgentSpawning; the rest are individual registrations. The agent
+	// manager/factory stay wired regardless — harmless without the tools.
+	if s.toolEnabled("spawn_agent") {
+		opts = append(opts, cogito.EnableAgentSpawning)
+	}
+	if s.toolEnabled("ask_user") {
+		opts = append(opts, cogito.WithTools(askUserToolDefinition(func(req AskRequest) string {
+			if s.callbacks.OnAskUser != nil {
+				return s.callbacks.OnAskUser(req)
+			}
+			return ""
+		})))
+	}
+	if s.toolEnabled("agent_logs") {
+		opts = append(opts, cogito.WithTools(agentLogsToolDefinition(s.AgentLog)))
+	}
+	if s.toolEnabled("schedule_wakeup") {
+		opts = append(opts, cogito.WithTools(scheduleWakeupToolDefinition(func(req WakeupRequest) string {
+			if s.callbacks.OnScheduleWakeup != nil {
+				return s.callbacks.OnScheduleWakeup(req)
+			}
+			return "Scheduling is not available in this session."
+		}, func() bool {
+			return s.agentManager.HasRunning() || (s.shellJobs != nil && s.shellJobs.HasRunning())
+		})))
+	}
+	if s.toolEnabled("cron") {
+		opts = append(opts, cogito.WithTools(cronToolDefinition(func(req CronRequest) string {
+			if s.callbacks.OnCronCreate != nil {
+				return s.callbacks.OnCronCreate(req)
+			}
+			return "Scheduling is not available in this session."
+		})))
+	}
+	if s.toolEnabled("cron_list") {
+		opts = append(opts, cogito.WithTools(cronListToolDefinition(func() string {
+			if s.callbacks.OnCronList != nil {
+				return s.callbacks.OnCronList()
+			}
+			return "No scheduler available."
+		})))
+	}
+	if s.toolEnabled("cron_delete") {
+		opts = append(opts, cogito.WithTools(cronDeleteToolDefinition(func(id string) string {
+			if s.callbacks.OnCronDelete != nil {
+				return s.callbacks.OnCronDelete(id)
+			}
+			return "No scheduler available."
+		})))
+	}
+
+	// Media understanding tools, gated by the allowlist. Each delegates to a
+	// specialist client with the tool's dedicated model and scopes the path to
+	// the session working dir, mirroring how host file tools resolve paths.
+	if s.toolEnabled("read_image") {
+		opts = append(opts, cogito.WithTools(readImageToolDefinition(
+			func(path, question string) (string, error) {
+				return specialist.New(s.baseURL, s.apiKey).Describe(
+					turnCtx, resolveWorkspacePath(s.workingDir, path), s.visionModel, question)
+			})))
+	}
+	if s.toolEnabled("transcribe_audio") {
+		opts = append(opts, cogito.WithTools(transcribeAudioToolDefinition(
+			func(path string) (string, error) {
+				return specialist.New(s.baseURL, s.apiKey).Transcribe(
+					turnCtx, resolveWorkspacePath(s.workingDir, path), s.transcribeModel)
+			})))
+	}
+	if s.toolEnabled("read_video") {
+		opts = append(opts, cogito.WithTools(readVideoToolDefinition(
+			func(path, question string) (string, error) {
+				return specialist.New(s.baseURL, s.apiKey).DescribeVideo(
+					turnCtx, resolveWorkspacePath(s.workingDir, path), s.videoModel, question)
+			})))
+	}
+
+	// Register the goal_done tool only while a goal is active, so it never
+	// appears as a no-op tool in ordinary turns. The callback records
+	// completion: it sets the per-run flag (read by the stop-gate) and clears
+	// the goal so it does not re-arm on the next message. The callback body takes
+	// runMu, which is correct: it fires during a run, not during option assembly.
+	if goal != "" {
+		opts = append(opts, cogito.WithTools(goalDoneToolDefinition(func(justification string) string {
+			s.runMu.Lock()
+			s.goalDone = true
+			s.goal = ""
+			s.runMu.Unlock()
+			return "Goal marked complete: " + justification
+		})))
+	}
+
+	// Wire the native self-configuration tools so the assistant can manage its
+	// own plugins, skills, and MCP servers. requestReload re-wires the live
+	// session on the next turn after any mutating op.
+	for _, d := range selfConfigToolDefs(s.configurator, s.requestReload) {
+		if s.toolEnabled(d.name) {
+			opts = append(opts, cogito.WithTools(d.def))
+		}
+	}
+
+	// Restrict built-in host tools (read/write/edit/bash/glob/grep/web_*) to the
+	// allowlist too, but never MCP servers the user explicitly configured —
+	// see mcpToolFilter. Installed only when an allowlist is set (empty = all).
+	if len(s.toolAllow) > 0 {
+		opts = append(opts, cogito.WithMCPToolFilter(s.mcpToolFilter()))
+	}
+
+	return opts
+}
+
 func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error) {
 	if s.hooks != nil {
 		s.hooks.Fire(s.ctx, hooks.EventUserPromptSubmit, "", map[string]any{"event": "UserPromptSubmit", "prompt": text})
@@ -773,7 +932,6 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 				s.callbacks.OnReasoning(reasoning)
 			}
 		}),
-		cogito.WithMCPs(s.allClients()...),
 		// Feed tool-returned images (e.g. computer_use screenshots) back to the
 		// model only when desktop control is armed for this session.
 		cogito.WithToolImageForwarding(s.computerEnabled),
@@ -864,34 +1022,7 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 	}
 
 	cogitoOpts = append(cogitoOpts,
-		// Disable cogito's sink-state "reply" tool so ExecuteTools is the whole
-		// turn: when the LLM stops calling tools it records its text reply as the
-		// final answer (read via LastMessage below). This matches cogito's own
-		// examples (examples/chat, examples/sub-agents) and avoids a redundant
-		// follow-up Ask that returns empty on many models.
-		cogito.DisableSinkState,
 		cogito.WithAgentManager(s.agentManager),
-		cogito.WithAgentDefinitions(s.agentDefs...),
-		cogito.WithAgentLLMFactory(func(model string, temperature float32, metadata map[string]string) cogito.LLM {
-			// The spawn_agent tool lets the LLM request a `model`, which it may
-			// fill with a name the endpoint doesn't serve (e.g. "sonar") and
-			// 404 the sub-agent. Honor a requested model only when wiz actually
-			// serves it — the main model, or one configured for an agent type —
-			// otherwise fall back to the main model. This keeps per-agent model
-			// overrides from config working while ignoring invented names.
-			chosen := resolveAgentModel(model, s.llmModel, s.agentModels)
-			if model != "" && chosen != model {
-				xlog.Warn("sub-agent requested an unserved model; using the main model",
-					"requested", model, "model", chosen)
-			}
-			// metadata is this agent type's override; overlay it on the global
-			// session metadata (per-key: agent wins, global-only keys inherited).
-			agentLLM := clients.NewLocalAILLM(chosen, s.apiKey, s.baseURL)
-			agentLLM.SetTemperature(temperature)
-			agentLLM.SetMetadata(mergeMetadata(s.metadata, metadata))
-			agentLLM.SetReasoningEffort(s.reasoningEffort)
-			return agentLLM
-		}),
 		cogito.WithAgentSpawnCallback(func(a *cogito.AgentState) {
 			s.emitAgentEvent(a)
 		}),
@@ -900,113 +1031,9 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 		}),
 	)
 
-	// Built-in tools, each gated by the BuiltinTools allowlist (toolEnabled). The
-	// agent-spawning tools (spawn_agent/check_agent/get_agent_result) ride
-	// EnableAgentSpawning; the rest are individual registrations. The agent
-	// manager/factory above stay wired regardless — harmless without the tools.
-	if s.toolEnabled("spawn_agent") {
-		cogitoOpts = append(cogitoOpts, cogito.EnableAgentSpawning)
-	}
-	if s.toolEnabled("ask_user") {
-		cogitoOpts = append(cogitoOpts, cogito.WithTools(askUserToolDefinition(func(req AskRequest) string {
-			if s.callbacks.OnAskUser != nil {
-				return s.callbacks.OnAskUser(req)
-			}
-			return ""
-		})))
-	}
-	if s.toolEnabled("agent_logs") {
-		cogitoOpts = append(cogitoOpts, cogito.WithTools(agentLogsToolDefinition(s.AgentLog)))
-	}
-	if s.toolEnabled("schedule_wakeup") {
-		cogitoOpts = append(cogitoOpts, cogito.WithTools(scheduleWakeupToolDefinition(func(req WakeupRequest) string {
-			if s.callbacks.OnScheduleWakeup != nil {
-				return s.callbacks.OnScheduleWakeup(req)
-			}
-			return "Scheduling is not available in this session."
-		}, func() bool {
-			return s.agentManager.HasRunning() || (s.shellJobs != nil && s.shellJobs.HasRunning())
-		})))
-	}
-	if s.toolEnabled("cron") {
-		cogitoOpts = append(cogitoOpts, cogito.WithTools(cronToolDefinition(func(req CronRequest) string {
-			if s.callbacks.OnCronCreate != nil {
-				return s.callbacks.OnCronCreate(req)
-			}
-			return "Scheduling is not available in this session."
-		})))
-	}
-	if s.toolEnabled("cron_list") {
-		cogitoOpts = append(cogitoOpts, cogito.WithTools(cronListToolDefinition(func() string {
-			if s.callbacks.OnCronList != nil {
-				return s.callbacks.OnCronList()
-			}
-			return "No scheduler available."
-		})))
-	}
-	if s.toolEnabled("cron_delete") {
-		cogitoOpts = append(cogitoOpts, cogito.WithTools(cronDeleteToolDefinition(func(id string) string {
-			if s.callbacks.OnCronDelete != nil {
-				return s.callbacks.OnCronDelete(id)
-			}
-			return "No scheduler available."
-		})))
-	}
-
-	// Media understanding tools, gated by the allowlist. Each delegates to a
-	// specialist client with the tool's dedicated model and scopes the path to
-	// the session working dir, mirroring how host file tools resolve paths.
-	if s.toolEnabled("read_image") {
-		cogitoOpts = append(cogitoOpts, cogito.WithTools(readImageToolDefinition(
-			func(path, question string) (string, error) {
-				return specialist.New(s.baseURL, s.apiKey).Describe(
-					turnCtx, resolveWorkspacePath(s.workingDir, path), s.visionModel, question)
-			})))
-	}
-	if s.toolEnabled("transcribe_audio") {
-		cogitoOpts = append(cogitoOpts, cogito.WithTools(transcribeAudioToolDefinition(
-			func(path string) (string, error) {
-				return specialist.New(s.baseURL, s.apiKey).Transcribe(
-					turnCtx, resolveWorkspacePath(s.workingDir, path), s.transcribeModel)
-			})))
-	}
-	if s.toolEnabled("read_video") {
-		cogitoOpts = append(cogitoOpts, cogito.WithTools(readVideoToolDefinition(
-			func(path, question string) (string, error) {
-				return specialist.New(s.baseURL, s.apiKey).DescribeVideo(
-					turnCtx, resolveWorkspacePath(s.workingDir, path), s.videoModel, question)
-			})))
-	}
-
-	// Register the goal_done tool only while a goal is active, so it never
-	// appears as a no-op tool in ordinary turns. The callback records
-	// completion: it sets the per-run flag (read by the stop-gate) and clears
-	// the goal so it does not re-arm on the next message.
-	if s.Goal() != "" {
-		cogitoOpts = append(cogitoOpts, cogito.WithTools(goalDoneToolDefinition(func(justification string) string {
-			s.runMu.Lock()
-			s.goalDone = true
-			s.goal = ""
-			s.runMu.Unlock()
-			return "Goal marked complete: " + justification
-		})))
-	}
-
-	// Wire the native self-configuration tools so the assistant can manage its
-	// own plugins, skills, and MCP servers. requestReload re-wires the live
-	// session on the next turn after any mutating op.
-	for _, d := range selfConfigToolDefs(s.configurator, s.requestReload) {
-		if s.toolEnabled(d.name) {
-			cogitoOpts = append(cogitoOpts, cogito.WithTools(d.def))
-		}
-	}
-
-	// Restrict built-in host tools (read/write/edit/bash/glob/grep/web_*) to the
-	// allowlist too, but never MCP servers the user explicitly configured —
-	// see mcpToolFilter. Installed only when an allowlist is set (empty = all).
-	if len(s.toolAllow) > 0 {
-		cogitoOpts = append(cogitoOpts, cogito.WithMCPToolFilter(s.mcpToolFilter()))
-	}
+	// Tool schemas — shared with Warm so a priming request advertises exactly
+	// the tools this turn advertises. See toolOptions.
+	cogitoOpts = append(cogitoOpts, s.toolOptions(turnCtx, s.Goal())...)
 
 	// Add ForceReasoning only if enabled in config
 	if s.cogitoOptions.ForceReasoning {
