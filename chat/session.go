@@ -1141,6 +1141,51 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 	return response, nil
 }
 
+// Warm issues the same request the next SendMessage would build — same system
+// prompt, same tool schemas, same model — capped at one output token, so the
+// server prefills and caches the prompt prefix.
+//
+// It does not touch s.fragment or s.messages and fires no callbacks: nothing
+// enters the transcript and the UI never sees it. It honors ctx, so a user who
+// sends a message mid-prime cancels it rather than queueing behind it.
+//
+// The prefix must match the real request to hit the cache, which is why this
+// builds through toolOptions rather than assembling its own list. Note that a
+// nil error only means the request was accepted — the server may or may not
+// have retained the prefix.
+func (s *Session) Warm(ctx context.Context) error {
+	// Take runMu only to read the goal, and release it before the network call.
+	// Holding it across a prime would block Interrupt and the injection path for
+	// the whole prefill. Do not "fix" a prime/turn race by widening this without
+	// measuring what it blocks.
+	s.runMu.Lock()
+	goal := s.goal
+	s.runMu.Unlock()
+
+	s.historyMu.Lock()
+	sys := s.systemPrompt
+	s.historyMu.Unlock()
+
+	f := cogito.NewEmptyFragment()
+	if sys != "" {
+		f = f.AddMessage("system", sys)
+	}
+	// A minimal user turn: the prime and the real first message diverge only at
+	// this content, so the server reuses the whole system-plus-tools prefix.
+	f = f.AddMessage("user", "hi")
+
+	opts := append([]cogito.Option{cogito.WithContext(ctx)}, s.toolOptions(ctx, goal)...)
+	// cogito.Prefill rejects force reasoning outright: with it on, the real
+	// turn's first request is a reasoning call this prime does not reproduce.
+	// Pass the flag through so that refusal surfaces here rather than letting
+	// Warm cache a prefix nothing will ask for and report success.
+	if s.cogitoOptions.ForceReasoning {
+		opts = append(opts, cogito.WithForceReasoning())
+	}
+
+	return cogito.Prefill(ctx, s.llm, f, opts...)
+}
+
 // GetMessages returns all messages in the conversation
 func (s *Session) GetMessages() []Message {
 	s.historyMu.Lock()
