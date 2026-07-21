@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"reflect"
 	"slices"
 	"strings"
@@ -1258,13 +1259,21 @@ func (s *Session) GetMessages() []Message {
 // start (and is deferred while background sub-agents run, see
 // applyPendingReload), so it does not race with detached agents and no lock is
 // needed.
+//
+// The order here is load-bearing, not cosmetic: it decides the order of the
+// tool definitions in the request, which the chat template renders into the
+// prompt ahead of the user's turn. Ranging cfgClients (a map) directly made
+// that order random per turn, so roughly every other request moved the token
+// prefix and lost the server's KV cache for the whole system+tools block — a
+// full reprocess, seconds of it on CPU. Config servers are therefore emitted
+// by sorted name, which is stable across turns *and* across restarts.
 func (s *Session) allClients() []*mcp.ClientSession {
 	out := append([]*mcp.ClientSession{}, s.clients...)
 	if s.skillsClient != nil {
 		out = append(out, s.skillsClient)
 	}
-	for _, c := range s.cfgClients {
-		out = append(out, c)
+	for _, name := range slices.Sorted(maps.Keys(s.cfgClients)) {
+		out = append(out, s.cfgClients[name])
 	}
 	return out
 }
