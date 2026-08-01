@@ -1,4 +1,4 @@
-package main
+package app
 
 // setupDecision is the outcome of the first-run setup gate.
 type setupDecision int

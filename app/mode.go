@@ -1,4 +1,4 @@
-package main
+package app
 
 // runMode is the resolved execution mode for an invocation.
 type runMode int
