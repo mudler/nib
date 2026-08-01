@@ -15,8 +15,8 @@ func sampleRegistries() ([]types.CommandConfig, []types.Skill, []types.AgentType
 func TestBuildAndFilter(t *testing.T) {
 	cmds, skills, agents := sampleRegistries()
 	items := buildCompItems(cmds, skills, agents)
-	if len(items) != 6 {
-		t.Fatalf("want 6 items, got %d", len(items))
+	if len(items) != 9 {
+		t.Fatalf("want 9 items, got %d", len(items))
 	}
 	got := filterComp(items, "rev")
 	if len(got) != 2 {
@@ -108,4 +108,33 @@ func TestGoalBuiltinInCompletion(t *testing.T) {
 		}
 	}
 	t.Fatalf("expected /goal built-in in completion items, got %+v", items)
+}
+
+// The builtin list is hand-maintained, so a new slash verb is only discoverable
+// once someone remembers to add it here. /model and /models were missing until
+// they were wired into the front ends.
+func TestBuiltinsCoverTheModelVerbs(t *testing.T) {
+	cmds, skills, agents := sampleRegistries()
+	items := buildCompItems(cmds, skills, agents)
+
+	want := map[string]string{"model": "/model ", "models": "/models "}
+	for _, it := range items {
+		if it.Cat != compBuiltin {
+			continue
+		}
+		if insert, ok := want[it.Name]; ok {
+			if it.Insert != insert {
+				t.Fatalf("%s insert = %q, want %q", it.Name, it.Insert, insert)
+			}
+			delete(want, it.Name)
+		}
+	}
+	for name := range want {
+		t.Errorf("builtin completion is missing %q", name)
+	}
+
+	// Typing "/model" must offer both, so the list verb stays reachable.
+	if got := filterComp(items, "model"); len(got) != 2 {
+		t.Fatalf("filter 'model' should surface both verbs, got %+v", got)
+	}
 }

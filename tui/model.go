@@ -1046,6 +1046,27 @@ func (m *Model) dispatchResolved(input string) tea.Cmd {
 		m.interruptArmed = false
 		m.status = "Compacting conversation…"
 		return m.compactCmd()
+	case slash.KindModelList:
+		// Bounded: dispatchResolved runs on the Update goroutine, so an endpoint
+		// that accepts the connection and never answers would freeze the TUI.
+		lookupCtx, cancel := context.WithTimeout(m.ctx, chat.ModelListTimeout)
+		defer cancel()
+		models, err := m.session.ListModels(lookupCtx)
+		if err != nil {
+			m.messages = append(m.messages, ChatMessage{Role: "error", Content: err.Error()})
+		} else {
+			listing := strings.TrimRight(chat.FormatModelList(models, m.session.Model()), "\n")
+			m.messages = append(m.messages, ChatMessage{Role: "agent", Content: listing})
+		}
+		return nil
+	case slash.KindModelSet:
+		notice, err := m.session.SwitchModel(m.ctx, action.Model)
+		if err != nil {
+			m.messages = append(m.messages, ChatMessage{Role: "error", Content: err.Error()})
+		} else {
+			m.messages = append(m.messages, ChatMessage{Role: "agent", Content: notice})
+		}
+		return nil
 	case slash.KindLoopStart:
 		return m.startLoop(action)
 	case slash.KindLoopStop:

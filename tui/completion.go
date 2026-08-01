@@ -31,11 +31,17 @@ type compItem struct {
 // buildCompItems builds the tagged completion list: the built-in verbs first,
 // then the command, skill, and agent registries.
 func buildCompItems(cmds []types.CommandConfig, skills []types.Skill, agents []types.AgentTypeConfig) []compItem {
-	items := make([]compItem, 0, 3+len(cmds)+len(skills)+len(agents))
+	items := make([]compItem, 0, 6+len(cmds)+len(skills)+len(agents))
 	items = append(items,
 		compItem{Cat: compBuiltin, Name: "loop", Desc: "recurring or self-paced task", Insert: "/loop "},
 		compItem{Cat: compBuiltin, Name: "compact", Desc: "compact the conversation", Insert: "/compact "},
 		compItem{Cat: compBuiltin, Name: "goal", Desc: "set a goal nib checks before stopping", Insert: "/goal "},
+		compItem{Cat: compBuiltin, Name: "model", Desc: "switch the session model", Insert: "/model "},
+		compItem{Cat: compBuiltin, Name: "models", Desc: "list the models this endpoint serves", Insert: "/models "},
+		// skill and agent are deliberately absent: their registries already
+		// contribute one entry per name below, which completes to a usable line,
+		// where a bare "/skill " would complete to a usage error.
+		compItem{Cat: compBuiltin, Name: "attach", Desc: "stage a file for the next message", Insert: "/attach "},
 	)
 	for _, c := range cmds {
 		items = append(items, compItem{Cat: compCmd, Name: c.Name, Desc: c.Description, Insert: "/" + c.Name + " "})
