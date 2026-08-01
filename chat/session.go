@@ -1548,7 +1548,15 @@ func (s *Session) ListModels(ctx context.Context) ([]string, error) {
 // front ends run that lookup on the goroutine that draws the prompt, so an
 // endpoint that accepts the connection and then never answers would otherwise
 // freeze the UI with no way out.
-const ModelListTimeout = 10 * time.Second
+//
+// It is deliberately short. In the TUI this is the only synchronous network
+// call on the Update goroutine, so the whole interface, Ctrl+C included, stops
+// responding for as long as it runs: the bound is a responsiveness budget, not
+// a patience budget. A listing that a local endpoint cannot produce in three
+// seconds is a listing the user is better off not waiting for, and the
+// degraded outcome is mild (a switch that goes through unverified, never a
+// refusal).
+const ModelListTimeout = 3 * time.Second
 
 // FormatModelList renders a model listing, marking the current model. Order is
 // the endpoint's own; the caller decides whether to sort.
