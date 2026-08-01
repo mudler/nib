@@ -62,6 +62,8 @@ func childArgs() []string {
 type childProc struct {
 	cmd     *exec.Cmd
 	stderr  string
+	stdin   *os.File
+	stdout  *os.File
 	done    chan struct{}
 	waitErr error
 }
@@ -92,12 +94,21 @@ func startChild(t *testing.T, mode, args, xdg string) *childProc {
 		"NIB_TRACE_DIR=",
 		"NIB_YOLO=",
 	)
-	// An open, never-written stdin keeps the serving modes parked in their read
-	// rather than seeing an immediate EOF.
-	if _, err := c.StdinPipe(); err != nil {
+	// Hand-rolled pipes rather than c.StdinPipe/c.StdoutPipe: those are closed by
+	// c.Wait, which runs in a goroutine here, and reading from a StdoutPipe
+	// concurrently with Wait is documented as incorrect. An open, never-closed
+	// stdin also keeps the serving modes parked in their read rather than seeing
+	// an immediate EOF.
+	inR, inW, err := os.Pipe()
+	if err != nil {
 		t.Fatal(err)
 	}
-	c.Stdout = io.Discard
+	outR, outW, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Stdin = inR
+	c.Stdout = outW
 	c.Stderr = errFile
 	// Own process group: the fixture's helper processes (an MCP server that
 	// sleeps) are cleaned up wholesale, while the signals the tests send still
@@ -107,8 +118,12 @@ func startChild(t *testing.T, mode, args, xdg string) *childProc {
 	if err := c.Start(); err != nil {
 		t.Fatal(err)
 	}
+	// The child holds its own duplicates. Dropping the parent's copies is what
+	// makes outR see EOF once the child is gone.
+	inR.Close()
+	outW.Close()
 
-	p := &childProc{cmd: c, stderr: errPath, done: make(chan struct{})}
+	p := &childProc{cmd: c, stderr: errPath, stdin: inW, stdout: outR, done: make(chan struct{})}
 	go func() {
 		p.waitErr = c.Wait()
 		close(p.done)
@@ -116,6 +131,8 @@ func startChild(t *testing.T, mode, args, xdg string) *childProc {
 	t.Cleanup(func() {
 		_ = syscall.Kill(-c.Process.Pid, syscall.SIGKILL)
 		<-p.done
+		inW.Close()
+		outR.Close()
 	})
 	return p
 }
@@ -196,6 +213,42 @@ func waitForFile(t *testing.T, path string, within time.Duration, p *childProc) 
 	}
 }
 
+// awaitServing waits until the child is actually inside the `nib mcp` serve
+// loop, by driving one MCP handshake over its stdio and waiting for the first
+// byte of the answer.
+//
+// It replaces a fixed settle sleep. The condition that matters is not "some
+// time has passed" but "the run is past its signal wiring and parked in a
+// context-aware block", and a served response is direct evidence of it. A
+// bounded poll for the real condition is also what keeps the two serve tests
+// meaningful: signalling too early would kill the child before Main installs
+// its handler, or before Run has anything to prove.
+func (p *childProc) awaitServing(t *testing.T, within time.Duration) {
+	t.Helper()
+
+	const initialize = `{"jsonrpc":"2.0","id":1,"method":"initialize","params":` +
+		`{"protocolVersion":"2025-06-18","clientInfo":{"name":"nib-signal-test","version":"0"},"capabilities":{}}}` + "\n"
+	if _, err := p.stdin.WriteString(initialize); err != nil {
+		t.Fatalf("writing the handshake to the child: %v\nstderr:\n%s", err, p.stderrText())
+	}
+
+	// Any bytes will do. A protocol version the server dislikes comes back as a
+	// JSON-RPC error, which answers the only question here: is it serving?
+	answered := make(chan error, 1)
+	go func() {
+		_, err := io.ReadFull(p.stdout, make([]byte, 1))
+		answered <- err
+	}()
+	select {
+	case err := <-answered:
+		if err != nil {
+			t.Fatalf("child stdout closed before it answered the handshake: %v\nstderr:\n%s", err, p.stderrText())
+		}
+	case <-time.After(within):
+		t.Fatalf("child did not answer the MCP handshake within %s\nstderr:\n%s", within, p.stderrText())
+	}
+}
+
 // hangingMCPConfig configures one stdio MCP server that touches marker and then
 // sleeps, so `nib mcp test hang` parks inside its connect handshake. It is a
 // local subprocess, not a network call.
@@ -253,7 +306,7 @@ func TestMainStillCatchesSIGINTOutsideTheManagementSubcommands(t *testing.T) {
 	// `nib mcp` with no subcommand serves the agent over stdio and parks there
 	// until its context is cancelled.
 	p := startChild(t, "main", "mcp", xdg)
-	time.Sleep(2 * time.Second)
+	p.awaitServing(t, 30*time.Second)
 
 	p.signal(t, syscall.SIGINT)
 
@@ -270,7 +323,7 @@ func TestRunInstallsNoSignalHandler(t *testing.T) {
 	xdg := childConfigDir(t, "model: test-model\n")
 
 	p := startChild(t, "run", "mcp", xdg)
-	time.Sleep(2 * time.Second)
+	p.awaitServing(t, 30*time.Second)
 
 	p.signal(t, syscall.SIGINT)
 
