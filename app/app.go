@@ -114,7 +114,8 @@ func (o Options) stderr() io.Writer {
 }
 
 // Main runs nib and returns a process exit code. argv is the full argument
-// vector including the program name.
+// vector including the program name. It routes through the same code as Run,
+// so the process-wide xlog side effect noted there applies here too.
 func Main(argv []string) int {
 	var args []string
 	if len(argv) > 1 {
@@ -126,10 +127,11 @@ func Main(argv []string) int {
 // Run runs nib and returns an error. It never calls os.Exit.
 //
 // Every failure comes back as a bare ExitError carrying nothing but an exit
-// code: a config error, an MCP transport failure, the setup abort, the
+// code, the cause having been written to Stderr instead: an unparseable flag,
+// an unknown --init shell, an MCP transport failure, the setup abort, the
 // injected-stream refusal and a management subcommand's non-zero code are all
-// indistinguishable to the caller, because the cause is written to Stderr
-// rather than carried in the error.
+// indistinguishable to the caller. The code is 1 for every one of those except
+// an unparseable flag, which is 2 and the only non-1 code runCtx produces.
 //
 // Run also reconfigures the process-wide xlog logger from the resolved config,
 // which an embedder sharing that logger will observe.
