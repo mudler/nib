@@ -375,27 +375,25 @@ func TestDefaultsSliceSeedsAreNotAliased(t *testing.T) {
 	}
 }
 
-// blindToSeeds names the fields LoadWith writes unconditionally AFTER
-// applySeeds, so they come back non-zero whether or not the seed landed.
-// TestDefaultsSeedEveryFieldOfConfig cannot see them, and each needs a direct
-// test naming the seeded value instead. Keep this list and those tests in sync.
-var blindToSeeds = map[string]string{
-	"BaseDir":      "overwritten by LoadOptions.BaseDir: TestDefaultsBaseDirIsNotSeedable",
-	"Agents":       "MergeAgentTypes always returns the built-ins: TestDefaultsSeedAgents",
-	"Prompt":       "withDefaults supplies one: TestPrecedenceDefaultsThenFileThenEnv",
-	"AgentOptions": "withDefaults fills its fields: TestDefaultsMergeNestedStructsPerField",
-	"Compaction":   "withDefaults fills its fields: TestPrecedenceDefaultsThenFileThenEnv",
+// seedCarveOuts names the fields LoadOptions.Defaults deliberately does not
+// seed. There is exactly one, and it should stay that way; the reasoning and
+// the enforcement live in TestDefaultsBaseDirIsNotSeedable.
+var seedCarveOuts = map[string]string{
+	"BaseDir": "the root has a single knob, LoadOptions.BaseDir",
 }
 
 // The rot guard the whitelist needed and the reflective merge should not: fill
-// EVERY field of types.Config with a non-zero value, load, and demand that none
-// of them came back zero. A field type the merge cannot carry shows up here as
-// a concrete named field rather than as a silent no-op at some embedder's call
-// site.
+// EVERY field of types.Config with a non-zero value, then load twice against
+// the same empty root, once with those seeds and once with none, and require
+// every field to come back DIFFERENT. A field the merge cannot carry shows up
+// here by name rather than as a silent no-op at some embedder's call site.
 //
-// Read blindToSeeds before trusting a pass. A non-zero result only proves the
-// seed landed for fields nothing downstream rewrites, which is most of them but
-// not all; this test is a net, not a proof.
+// The comparison is differential rather than a zero-check because a zero-check
+// is blind to anything LoadWith writes after applySeeds: withDefaults filling a
+// gap, MergeAgentTypes returning the built-ins, or the BaseDir assignment all
+// leave a field non-zero whether or not the seed landed. Those writes happen in
+// the unseeded load too, so differencing cancels them out, and a NEW one added
+// later is caught with no list to keep in sync.
 func TestDefaultsSeedEveryFieldOfConfig(t *testing.T) {
 	clearBareEnv(t)
 	dir := t.TempDir()
@@ -403,31 +401,22 @@ func TestDefaultsSeedEveryFieldOfConfig(t *testing.T) {
 	var defaults types.Config
 	fillNonZero(t, reflect.ValueOf(&defaults).Elem())
 
-	cfg := LoadWith(LoadOptions{BaseDir: dir, Defaults: defaults, SkipBareEnv: true})
+	seeded := LoadWith(LoadOptions{BaseDir: dir, Defaults: defaults, SkipBareEnv: true})
+	unseeded := LoadWith(LoadOptions{BaseDir: dir, SkipBareEnv: true})
 
-	v := reflect.ValueOf(cfg)
-	for i := range v.NumField() {
-		name := v.Type().Field(i).Name
-		if why, blind := blindToSeeds[name]; blind {
-			if v.Field(i).IsZero() {
-				t.Errorf("types.Config.%s came back zero, and this guard is blind to it (%s)", name, why)
+	s, u := reflect.ValueOf(seeded), reflect.ValueOf(unseeded)
+	for i := range s.NumField() {
+		name := s.Type().Field(i).Name
+		differs := !reflect.DeepEqual(s.Field(i).Interface(), u.Field(i).Interface())
+		if why, carved := seedCarveOuts[name]; carved {
+			if differs {
+				t.Errorf("types.Config.%s responded to a seed, but it is a carve-out (%s)", name, why)
 			}
 			continue
 		}
-		if v.Field(i).IsZero() {
-			t.Errorf("types.Config.%s was seeded but came back zero: LoadOptions.Defaults does not cover it", name)
-		}
-	}
-}
-
-// Every name in blindToSeeds must still be a field of types.Config: a renamed
-// or removed field would otherwise leave a stale excuse behind, quietly
-// re-blinding the guard for whatever replaced it.
-func TestBlindToSeedsNamesRealFields(t *testing.T) {
-	ty := reflect.TypeOf(types.Config{})
-	for name := range blindToSeeds {
-		if _, ok := ty.FieldByName(name); !ok {
-			t.Errorf("blindToSeeds names %q, which is no longer a field of types.Config", name)
+		if !differs {
+			t.Errorf("types.Config.%s is identical seeded and unseeded (%v): the seed never landed",
+				name, s.Field(i).Interface())
 		}
 	}
 }
@@ -460,9 +449,9 @@ func TestDefaultsBaseDirIsNotSeedable(t *testing.T) {
 	}
 }
 
-// Agents was one of the fields the whitelist dropped, and the rot guard is
-// blind to it because MergeAgentTypes always returns the built-in types. Assert
-// the seeded agent by name.
+// Agents was one of the fields the whitelist dropped. The rot guard only proves
+// the seeded list changed the result; assert the seeded agent by name, and that
+// it joined the built-in types rather than displacing them.
 func TestDefaultsSeedAgents(t *testing.T) {
 	clearBareEnv(t)
 	dir := t.TempDir()
