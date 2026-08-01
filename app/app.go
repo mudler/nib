@@ -47,6 +47,17 @@ type Options struct {
 	// run is refused with an error saying so, rather than rendering into a
 	// stream the TUI cannot drive. Injecting the process streams, or any other
 	// terminal, leaves every mode working.
+	//
+	// One consequence is worth spelling out, because it inverts the usual
+	// instinct that passing os.Stdout is the safe, explicit choice. An embedder
+	// that wants nib's shell-capture idiom, where the user runs
+	// `out=$(myprog agent)` and the TUI prints the selected command on stdout
+	// for the shell to capture, must leave Stdout NIL rather than set it to
+	// os.Stdout. Nil means "not injected": nib falls back to the process stream,
+	// the TUI runs, and the capture line lands on stdout as it should. Setting
+	// os.Stdout explicitly injects whatever stdout happens to be, and under
+	// $(...) that is a pipe, so the run is refused for a stream nib would have
+	// used anyway.
 	Stdin  io.Reader
 	Stdout io.Writer
 	Stderr io.Writer

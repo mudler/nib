@@ -161,6 +161,25 @@ in-turn "keep going" gate: the model self-judges progress and continues until
 done. You can still chat and steer while a goal is being pursued. Goals are
 session-only and single (setting a new one replaces the old).
 
+### `/model` and `/models`: switch model mid-session
+
+- `/models` lists the models the configured endpoint serves, marking the
+  current one with `*`. Bare `/model` lists too, so forgetting the name gets
+  you the menu rather than an error.
+- `/model <name>` switches the session to that model.
+
+The switch **keeps the conversation**: history carries over to the new model.
+It applies from the next turn (a turn already in flight finishes on the model
+it started with), and the sub-agents those turns spawn follow along. Use
+`/compact` first when the history needs trimming, for instance before moving to
+a model with a smaller context window.
+
+A name the endpoint does not serve is refused, and the refusal lists what it
+does serve. If the lookup fails or the endpoint advertises nothing (it is
+bounded at 3 seconds, since it runs on the goroutine that draws the prompt),
+the switch still goes through and is marked unverified: a broken endpoint may
+be the very reason you are switching. Both the TUI and `--cli` support this.
+
 ## Plugins
 
 A **plugin** is a single installable unit — a git repo (or local dir) with a
@@ -480,6 +499,68 @@ mcp_servers:
 ## tmux
 
 Inside tmux, nib automatically uses a split pane for the TUI. Pass `--no-tmux` to disable.
+
+## Embedding nib
+
+nib's entrypoint is importable, so another Go binary can ship it as a subcommand:
+
+```go
+import (
+	"context"
+
+	"github.com/mudler/nib/app"
+	"github.com/mudler/nib/types"
+)
+
+func runAgent(ctx context.Context, args []string) error {
+	return app.Run(ctx, app.Options{
+		Args:        args,           // the arguments after your subcommand
+		ProgramName: "myprog agent", // shown in usage and error messages
+		BaseDir:     "/path/to/state",
+		Defaults: types.Config{ // seeds fields the config file leaves empty
+			BaseURL: "http://127.0.0.1:8080/v1",
+		},
+		SkipSetup:   true, // you resolve the model yourself
+		SkipBareEnv: true, // ignore bare MODEL / API_KEY / BASE_URL
+	})
+}
+```
+
+Every option's zero value reproduces standalone nib, so an embedder opts in to
+each difference. `BaseDir` is the root for `config.yaml`, `plugins/` and
+`skills/`, keeping embedded state out of a separately installed nib's.
+
+`app.Run` never calls `os.Exit`, and it takes cancellation from the context you
+pass rather than installing its own signal handling. A non-zero exit code from
+a management subcommand (`plugin`, `skill`, `mcp`) comes back as an
+`app.ExitError`. `app.Main(os.Args) int` is the same entrypoint shaped for a
+`main` function: it installs nib's SIGINT/SIGTERM handling and takes no
+options, which is all nib's own `main.go` needs.
+
+### Injecting streams
+
+`Options.Stdin`, `Stdout` and `Stderr` default to the process streams when nil,
+but only CLI mode honors them fully. The TUI, which is the **default** mode,
+renders on `/dev/tty` deliberately: stdout is often a pipe while the terminal is
+still there, and serving that case is the whole reason it opens `/dev/tty` (it
+is what makes the `Ctrl+Space` shell widget work). Only the shell-capture line
+the TUI prints on exit goes to `Stdout`.
+
+So, for an embedder:
+
+- Injecting a stream that is **not** a terminal (a buffer, a pipe, a file)
+  requires `--cli`. Without it the run is refused, with an error naming `--cli`
+  and the offending stream, rather than rendering into a writer the TUI cannot
+  drive and leaving it empty.
+- Injecting real terminals, including the process streams while attached to
+  one, leaves every mode working.
+- To keep nib's shell-capture idiom, where a user runs `out=$(myprog agent)`
+  and the TUI prints the selected command for the shell to pick up, leave
+  `Stdout` **nil**, not `os.Stdout`. Nil means "not injected": nib falls back
+  to the process stream and the capture line lands on stdout as it should.
+  Setting `os.Stdout` explicitly injects whatever stdout happens to be, and
+  under `$(...)` that is a pipe, so the TUI refuses a stream it would have used
+  anyway.
 
 ## License
 
