@@ -3,6 +3,7 @@ package cmd
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"path/filepath"
@@ -322,7 +323,23 @@ func RunCLI(ctx context.Context, cfg types.Config, streams Streams, shellJobs *w
 	// successful send only.
 	var pending []attachstage.StagedFile
 
+	// Set once stdin has run out. That is the end of the input, not a failure:
+	// `echo "question" | nib --cli` has to answer and exit 0, and an
+	// interactive Ctrl-D is the same EOF and ends the session the same way.
+	// Only EOF; any other read error is still reported, so a stdin that is
+	// genuinely broken does not look like a session the user finished.
+	//
+	// It is a flag checked at the top of the loop rather than an immediate
+	// return because a last line arriving without a trailing newline
+	// (`printf 'question' | nib --cli`) comes back from bufio alongside the
+	// EOF. Letting the body run for it and stopping on the next trip is what
+	// keeps that line from being dropped.
+	eof := false
+
 	for {
+		if eof {
+			return nil
+		}
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
@@ -330,7 +347,10 @@ func RunCLI(ctx context.Context, cfg types.Config, streams Streams, shellJobs *w
 			fmt.Fprint(out, theme.Prompt.Render(theme.PromptGlyph)+" ")
 
 			text, err := readStringCancellable(ctx, reader)
-			if err != nil {
+			switch {
+			case errors.Is(err, io.EOF):
+				eof = true
+			case err != nil:
 				return err
 			}
 			text = strings.TrimSpace(text)

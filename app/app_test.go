@@ -188,6 +188,24 @@ func cancelledContext(t *testing.T) context.Context {
 	return ctx
 }
 
+// The exit code the documented one-shot idiom depends on. Piping a question
+// into `--cli` used to answer it and then exit 1 with "Error: EOF", because
+// stdin running out came back through the CLI loop as a failure, so every
+// script wrapping nib saw a false failure on every successful run.
+//
+// This is the far side of the setup gate rather than a unit of the loop: the
+// exit code is what the shell sees, and it is what was wrong.
+func TestPipedStdinExitsZero(t *testing.T) {
+	var errOut bytes.Buffer
+	o := skipSetupOptions(t, io.Discard, &errOut)
+	o.SkipSetup = true
+	o.Stdin = strings.NewReader("help\n")
+
+	if code := runCtx(context.Background(), o); code != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr = %q", code, errOut.String())
+	}
+}
+
 // The control: with SkipSetup off, standalone nib's abort must be untouched.
 func TestSetupAbortStillFiresWithoutSkipSetup(t *testing.T) {
 	var errOut bytes.Buffer

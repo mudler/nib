@@ -108,7 +108,15 @@ base_url: https://api.openai.com/v1   # or your local endpoint, e.g. http://loca
 ## Usage
 
 Run `nib` to open the TUI, or press `Ctrl+Space` from your shell. Use `--cli` for a plain,
-pipe-friendly mode.
+pipe-friendly mode:
+
+```bash
+echo "how do I list every open port?" | nib --cli
+```
+
+Running out of input ends the session, so a piped question is answered and nib exits `0`.
+`Ctrl+D` does the same thing interactively. `Ctrl+C` still exits non-zero, so a script can
+tell an interrupted run from a finished one.
 
 ### Summon nib from your shell (`Ctrl+Space`)
 
