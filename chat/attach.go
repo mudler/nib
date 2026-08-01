@@ -35,7 +35,7 @@ func composeAttachments(userText string, res attachments.Result) (string, []Cont
 func (s *Session) SendWithAttachments(ctx context.Context, text string, files []string,
 	overrides map[string]attachments.Override) (string, []attachments.Blocked, error) {
 
-	caps := attachments.FetchCapabilities(ctx, s.baseURL, s.apiKey, s.llmModel)
+	caps := attachments.FetchCapabilities(ctx, s.baseURL, s.apiKey, s.Model())
 	sp := specialist.New(s.baseURL, s.apiKey)
 
 	extract := func(path string) (string, error) {

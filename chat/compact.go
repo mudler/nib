@@ -150,7 +150,8 @@ func (s *Session) compactHistory(ctx context.Context) (before, after int, err er
 	}
 
 	prompt := compactInstruction + "\n\n--- CONVERSATION ---\n" + headContent
-	res, aerr := s.llm.Ask(ctx, cogito.NewFragment().AddMessage(cogito.UserMessageRole, prompt))
+	llm, _ := s.currentLLM()
+	res, aerr := llm.Ask(ctx, cogito.NewFragment().AddMessage(cogito.UserMessageRole, prompt))
 	if aerr != nil {
 		return before, before, fmt.Errorf("compaction summary failed: %w", aerr)
 	}

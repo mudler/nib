@@ -93,10 +93,20 @@ type Session struct {
 	// sub-agents). May be nil (e.g. headless CLI without a job registry).
 	shellJobs *wizmcp.ShellJobs
 
-	agentManager    *cogito.AgentManager
-	agentDefs       []cogito.AgentDefinition
-	agentModels     map[string]bool // models configured per agent type (for the LLM-model guard)
-	agentLogs       *agentLogStore  // per-sub-agent activity log (for the agent_logs tool)
+	agentManager *cogito.AgentManager
+	agentDefs    []cogito.AgentDefinition
+	agentModels  map[string]bool // models configured per agent type (for the LLM-model guard)
+	agentLogs    *agentLogStore  // per-sub-agent activity log (for the agent_logs tool)
+
+	// modelMu guards the (llm, llmModel) pair, which SetModel replaces together
+	// when the user switches model mid-session. Not turnMu: that one is held
+	// only across beginTurn/endTurn/Interrupt (it guards turnCancel, not the
+	// turn), so taking it here would order nothing against a running request.
+	// Readers snapshot the pair through currentLLM/Model, which is what keeps a
+	// turn on one client from start to finish while the switch applies from the
+	// next one. The rest of the endpoint state below (apiKey, baseURL,
+	// metadata, reasoningEffort) is fixed at construction and read lock-free.
+	modelMu         sync.RWMutex
 	llmModel        string
 	apiKey          string
 	baseURL         string
@@ -166,6 +176,28 @@ func resolveAgentModel(requested, main string, configured map[string]bool) strin
 		return requested
 	}
 	return main
+}
+
+// newAgentLLM builds the LLM client for a spawned sub-agent. mainModel is the
+// session model this turn runs against; requested is what the spawn_agent tool
+// asked for, which the LLM may fill with a name the endpoint doesn't serve
+// (e.g. "sonar") and 404 the sub-agent. Honor a requested model only when wiz
+// actually serves it (the main model, or one configured for an agent type),
+// otherwise fall back to the main model. This keeps per-agent model overrides
+// from config working while ignoring invented names.
+func (s *Session) newAgentLLM(mainModel, requested string, temperature float32, metadata map[string]string) cogito.LLM {
+	chosen := resolveAgentModel(requested, mainModel, s.agentModels)
+	if requested != "" && chosen != requested {
+		xlog.Warn("sub-agent requested an unserved model; using the main model",
+			"requested", requested, "model", chosen)
+	}
+	// metadata is this agent type's override; overlay it on the global
+	// session metadata (per-key: agent wins, global-only keys inherited).
+	agentLLM := clients.NewLocalAILLM(chosen, s.apiKey, s.baseURL)
+	agentLLM.SetTemperature(temperature)
+	agentLLM.SetMetadata(mergeMetadata(s.metadata, metadata))
+	agentLLM.SetReasoningEffort(s.reasoningEffort)
+	return agentLLM
 }
 
 // mergeMetadata overlays per-agent metadata on top of the global metadata,
@@ -745,7 +777,12 @@ func buildUserFragment(f cogito.Fragment, text string, parts []ContentPart) cogi
 // reads the goal under runMu before releasing it to make the long-running
 // Prefill call. Reading it here instead would either re-take a held lock or
 // force Warm to hold runMu across the network call, blocking Interrupt.
-func (s *Session) toolOptions(turnCtx context.Context, goal string) []cogito.Option {
+//
+// mainModel is passed in for the same reason plus one of its own: the caller
+// snapshots it alongside the LLM client it will run with (see currentLLM), so
+// the sub-agents a turn spawns resolve against the same model the turn itself
+// is using, even if SetModel lands halfway through.
+func (s *Session) toolOptions(turnCtx context.Context, goal, mainModel string) []cogito.Option {
 	opts := []cogito.Option{
 		cogito.WithMCPs(s.allClients()...),
 		// Disable cogito's sink-state "reply" tool so ExecuteTools is the whole
@@ -758,24 +795,7 @@ func (s *Session) toolOptions(turnCtx context.Context, goal string) []cogito.Opt
 		cogito.DisableSinkState,
 		cogito.WithAgentDefinitions(s.agentDefs...),
 		cogito.WithAgentLLMFactory(func(model string, temperature float32, metadata map[string]string) cogito.LLM {
-			// The spawn_agent tool lets the LLM request a `model`, which it may
-			// fill with a name the endpoint doesn't serve (e.g. "sonar") and
-			// 404 the sub-agent. Honor a requested model only when wiz actually
-			// serves it — the main model, or one configured for an agent type —
-			// otherwise fall back to the main model. This keeps per-agent model
-			// overrides from config working while ignoring invented names.
-			chosen := resolveAgentModel(model, s.llmModel, s.agentModels)
-			if model != "" && chosen != model {
-				xlog.Warn("sub-agent requested an unserved model; using the main model",
-					"requested", model, "model", chosen)
-			}
-			// metadata is this agent type's override; overlay it on the global
-			// session metadata (per-key: agent wins, global-only keys inherited).
-			agentLLM := clients.NewLocalAILLM(chosen, s.apiKey, s.baseURL)
-			agentLLM.SetTemperature(temperature)
-			agentLLM.SetMetadata(mergeMetadata(s.metadata, metadata))
-			agentLLM.SetReasoningEffort(s.reasoningEffort)
-			return agentLLM
+			return s.newAgentLLM(mainModel, model, temperature, metadata)
 		}),
 	}
 
@@ -946,6 +966,12 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 	})
 	s.historyMu.Unlock()
 
+	// Snapshot the client and its model once for the whole turn: SetModel can
+	// swap them from another goroutine at any point in here (turnMu does not
+	// hold a turn), and a turn that changed model halfway would send its
+	// remaining requests to a different model than the one it started on.
+	llm, mainModel := s.currentLLM()
+
 	// Build cogito options from config
 	cogitoOpts := []cogito.Option{
 		cogito.WithContext(turnCtx),
@@ -1063,7 +1089,7 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 
 	// Tool schemas — shared with Warm so a priming request advertises exactly
 	// the tools this turn advertises. See toolOptions.
-	cogitoOpts = append(cogitoOpts, s.toolOptions(turnCtx, s.Goal())...)
+	cogitoOpts = append(cogitoOpts, s.toolOptions(turnCtx, s.Goal(), mainModel)...)
 
 	// Add ForceReasoning only if enabled in config
 	if s.cogitoOptions.ForceReasoning {
@@ -1089,7 +1115,7 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 		// whole call — holding it across the call would block ExportHistory for
 		// the entire turn.
 		var newFragment cogito.Fragment
-		newFragment, err = cogito.ExecuteTools(s.llm, s.fragment, cogitoOpts...)
+		newFragment, err = cogito.ExecuteTools(llm, s.fragment, cogitoOpts...)
 		if err != nil && !errors.Is(err, cogito.ErrNoToolSelected) {
 			// Interrupt (turnCtx cancelled) surfaces here as a context error;
 			// clear the goal so the user's stop sticks and it doesn't re-arm.
@@ -1219,7 +1245,12 @@ func (s *Session) Warm(ctx context.Context) error {
 	// this content, so the server reuses the whole system-plus-tools prefix.
 	f = f.AddMessage("user", "hi")
 
-	opts := append([]cogito.Option{cogito.WithContext(ctx)}, s.toolOptions(ctx, goal)...)
+	// One snapshot for the prime, for the same reason SendMessage takes one:
+	// the prefix is only worth caching for the model that will actually be
+	// asked for it.
+	llm, mainModel := s.currentLLM()
+
+	opts := append([]cogito.Option{cogito.WithContext(ctx)}, s.toolOptions(ctx, goal, mainModel)...)
 	// cogito.Prefill rejects force reasoning outright: with it on, the real
 	// turn's first request is a reasoning call this prime does not reproduce.
 	// Pass the flag through so that refusal surfaces here rather than letting
@@ -1228,7 +1259,7 @@ func (s *Session) Warm(ctx context.Context) error {
 		opts = append(opts, cogito.WithForceReasoning())
 	}
 
-	if err := cogito.Prefill(ctx, s.llm, f, opts...); err != nil {
+	if err := cogito.Prefill(ctx, llm, f, opts...); err != nil {
 		return err
 	}
 	// Priming the prefix is Warm's entire purpose, so a successful prime is by
@@ -1434,4 +1465,72 @@ func fragmentHasSystemContent(f cogito.Fragment, content string) bool {
 		}
 	}
 	return false
+}
+
+// Model returns the model the session is currently using. Safe to call from
+// another goroutine while a turn is running.
+func (s *Session) Model() string {
+	s.modelMu.RLock()
+	defer s.modelMu.RUnlock()
+	return s.llmModel
+}
+
+// currentLLM returns the client and the model name it was built for as one
+// snapshot, so a caller can never pair a client with the wrong model name.
+// Callers that need both for a whole turn must take the snapshot once, up
+// front: SetModel can land at any point inside a turn.
+func (s *Session) currentLLM() (cogito.LLM, string) {
+	s.modelMu.RLock()
+	defer s.modelMu.RUnlock()
+	return s.llm, s.llmModel
+}
+
+// SetModel switches the session to a different model, rebuilding the LLM client
+// the same way NewSession does: same endpoint and credentials, same
+// per-request metadata and reasoning effort, same trace wrapper when tracing is
+// on. Relabelling the existing client would not switch anything, and rebuilding
+// without re-applying that configuration would silently drop it.
+//
+// Conversation history is kept: nib is built around persistent context, and
+// /compact exists when history needs trimming. Sub-agents follow automatically,
+// because newAgentLLM resolves against the session model.
+//
+// A turn already in flight finishes on the client it started with (see
+// currentLLM); the switch applies from the next turn. Safe to call from another
+// goroutine while a turn is running.
+func (s *Session) SetModel(name string) {
+	// Built outside the lock: every input is construction-time state, so
+	// nothing here needs to be ordered against a reader.
+	c := clients.NewLocalAILLM(name, s.apiKey, s.baseURL)
+	c.SetMetadata(s.metadata)
+	c.SetReasoningEffort(s.reasoningEffort)
+
+	var llm cogito.LLM = c
+	if s.tracer != nil {
+		llm = trace.NewRecordingLLM(llm, s.tracer, name, "")
+	}
+
+	s.modelMu.Lock()
+	s.llm = llm
+	s.llmModel = name
+	s.modelMu.Unlock()
+}
+
+// ListModels returns the model IDs the configured endpoint advertises, so a UI
+// can offer them for /model. A failing endpoint surfaces as an error rather
+// than an empty list.
+func (s *Session) ListModels(ctx context.Context) ([]string, error) {
+	cfg := openai.DefaultConfig(s.apiKey)
+	cfg.BaseURL = s.baseURL
+	resp, err := openai.NewClientWithConfig(cfg).ListModels(ctx)
+	if err != nil {
+		return nil, err
+	}
+	models := make([]string, 0, len(resp.Models))
+	for _, m := range resp.Models {
+		if m.ID != "" {
+			models = append(models, m.ID)
+		}
+	}
+	return models, nil
 }
