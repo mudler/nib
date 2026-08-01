@@ -92,11 +92,18 @@ func run(o Options) int {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	// run is library code, so the handler has to be torn down on the way out:
+	// without signal.Stop the channel stays registered with the runtime, and
+	// without the ctx.Done() arm the goroutine blocks on <-sigs forever.
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+	defer signal.Stop(sigs)
 	go func() {
-		<-sigs
-		cancel()
+		select {
+		case <-sigs:
+			cancel()
+		case <-ctx.Done():
+		}
 	}()
 
 	return runCtx(ctx, o)
