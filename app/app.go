@@ -148,6 +148,22 @@ type ExitError struct{ Code int }
 func (e ExitError) Error() string { return fmt.Sprintf("exit status %d", e.Code) }
 
 func run(o Options) int {
+	// The management subcommands run BEFORE the handler is installed, exactly as
+	// standalone nib's main dispatched them above its signal.Notify.
+	//
+	// They take no context, so a handler installed around them would have
+	// nothing to cancel: the signal would land in the buffered channel and stop
+	// there, leaving `nib skill install` over a slow network needing a kill -9.
+	// Dispatching first restores the process default disposition, so Ctrl+C kills
+	// them outright.
+	//
+	// Suppressing the handler for those argv shapes instead would work equally
+	// well, but this keeps the ordering itself the reason, which is what the
+	// baseline expressed and what stays true if a subcommand is added later.
+	if code, handled := dispatchManage(o); handled {
+		return code
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -168,20 +184,36 @@ func run(o Options) int {
 	return runCtx(ctx, o)
 }
 
+// dispatchManage runs the management subcommands: `plugin`, `skill`, and the
+// `mcp` verbs that manage configured servers rather than serving the agent.
+// They need config but neither transports nor a context, so they early-exit
+// before any of the setup below. handled is false for every other argv.
+//
+// It is a function rather than inline dispatch because run has to reach it
+// before installing its signal handler while runCtx, which Run enters directly,
+// still has to reach it at all. Calling it twice on the run path is harmless:
+// run has already returned by then whenever handled was true.
+func dispatchManage(o Options) (code int, handled bool) {
+	args := o.Args
+	switch {
+	case len(args) >= 1 && args[0] == "plugin":
+		return cmd.RunPluginCommand(o.BaseDir, args[1:]), true
+	case len(args) >= 1 && args[0] == "skill":
+		return cmd.RunSkillCommand(o.BaseDir, args[1:]), true
+	// Bare `nib mcp` / --http / --stdio still serve, so only the management
+	// verbs match here.
+	case len(args) >= 2 && args[0] == "mcp" && cmd.IsMCPManageSubcommand(args[1]):
+		return cmd.RunMCPCommand(o.BaseDir, args[1:]), true
+	}
+	return 0, false
+}
+
 func runCtx(ctx context.Context, o Options) int {
 	args := o.Args
 
 	// Subcommand dispatch must precede flag parsing.
-	if len(args) >= 1 && args[0] == "plugin" {
-		return cmd.RunPluginCommand(o.BaseDir, args[1:])
-	}
-	if len(args) >= 1 && args[0] == "skill" {
-		return cmd.RunSkillCommand(o.BaseDir, args[1:])
-	}
-	// `nib mcp <add|list|remove|test>` manages configured servers and early-exits
-	// (needs config, not transports). Bare `nib mcp` / --http / --stdio still serve.
-	if len(args) >= 2 && args[0] == "mcp" && cmd.IsMCPManageSubcommand(args[1]) {
-		return cmd.RunMCPCommand(o.BaseDir, args[1:])
+	if code, handled := dispatchManage(o); handled {
+		return code
 	}
 
 	// `nib mcp` needs config + transports (built below), so it cannot early-exit
