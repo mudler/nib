@@ -89,7 +89,7 @@ func TestParseAddArgsErrors(t *testing.T) {
 
 func TestMCPTestMissingServer(t *testing.T) {
 	dir := t.TempDir()
-	cfgr := manage.New(dir, dir+"/config.yaml")
+	cfgr := manage.NewIn(dir)
 	if code := mcpTest(cfgr, []string{"nope"}); code == 0 {
 		t.Fatalf("expected nonzero exit for missing server")
 	}
@@ -155,7 +155,7 @@ func TestParseAddArgsAuthErrors(t *testing.T) {
 
 func TestMCPListShowsAuthenticatedMarker(t *testing.T) {
 	dir := t.TempDir()
-	cfgr := manage.New(dir, dir+"/config.yaml")
+	cfgr := manage.NewIn(dir)
 	if err := cfgr.AddMCPServer("plain", types.MCPServer{URL: "https://a"}); err != nil {
 		t.Fatalf("AddMCPServer plain: %v", err)
 	}
@@ -184,7 +184,7 @@ func TestMCPListShowsAuthenticatedMarker(t *testing.T) {
 
 func TestMCPSetEnabledTogglesAndErrors(t *testing.T) {
 	dir := t.TempDir()
-	cfgr := manage.New(dir, dir+"/config.yaml")
+	cfgr := manage.NewIn(dir)
 	if err := cfgr.AddMCPServer("s", types.MCPServer{Command: "cmd"}); err != nil {
 		t.Fatalf("AddMCPServer: %v", err)
 	}
@@ -210,7 +210,7 @@ func TestMCPSetEnabledTogglesAndErrors(t *testing.T) {
 
 func TestMCPListShowsDisabledMarker(t *testing.T) {
 	dir := t.TempDir()
-	cfgr := manage.New(dir, dir+"/config.yaml")
+	cfgr := manage.NewIn(dir)
 	if err := cfgr.AddMCPServer("on", types.MCPServer{URL: "https://a"}); err != nil {
 		t.Fatalf("AddMCPServer on: %v", err)
 	}
