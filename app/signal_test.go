@@ -1,3 +1,12 @@
+// Everything in this file is POSIX signal semantics: process groups (Setpgid),
+// delivery of SIGINT/SIGTERM through os.Process.Signal, and
+// syscall.WaitStatus.Signaled. None of that exists on Windows, where nib's
+// non-test code does still build, so the file is excluded there rather than
+// breaking `GOOS=windows go vet ./app/...`. app/entrypoint_test.go carries the
+// portable coverage of the same two entrypoints.
+
+//go:build unix
+
 package app
 
 import (
