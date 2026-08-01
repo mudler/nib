@@ -33,12 +33,19 @@ type Options struct {
 	// the --version line, the flag package's usage and parse errors, the setup
 	// gate's two aborts, and the injected-stream refusal. Empty means "nib".
 	//
-	// It reaches nothing else, so parts of an embedded nib still say "nib"
-	// whatever this is set to: the management subcommands' usage strings
-	// ("usage: nib plugin ..." and its skill and mcp equivalents), the --init
-	// shell snippets, and the "nib: ..." diagnostics that config loading and
-	// plugin/skill discovery write straight to os.Stderr on every run.
-	// Threading the name through those is follow-up work.
+	// It also renames the --init shell snippets, which is more than a cosmetic
+	// substitution: the widget they define invokes this name, so an embedder's
+	// Ctrl+Space runs the embedder's command rather than a `nib` its users do
+	// not have. A name of several words ("local-ai chat") stays several words
+	// in command position, and the widget's function name is derived from it by
+	// reducing it to an identifier.
+	//
+	// It reaches nothing beyond that, so parts of an embedded nib still say
+	// "nib" whatever this is set to: the management subcommands' usage strings
+	// ("usage: nib plugin ..." and its skill and mcp equivalents), and the
+	// "nib: ..." diagnostics that config loading and plugin/skill discovery
+	// write straight to os.Stderr on every run. Threading the name through
+	// those is follow-up work.
 	ProgramName string
 	// BaseDir overrides the config, plugins, and skills root. Empty means
 	// nib's default XDG resolution.
@@ -261,7 +268,7 @@ func runCtx(ctx context.Context, o Options) int {
 	}
 
 	if *initFlag != "" {
-		script := cmd.GetInitScript(*initFlag)
+		script := cmd.GetInitScript(*initFlag, o.name())
 		if script == "" {
 			fmt.Fprintf(o.stderr(), "Unknown shell: %s. Supported: zsh, bash, fish\n", *initFlag)
 			return 1

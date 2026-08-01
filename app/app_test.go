@@ -36,8 +36,8 @@ func TestVersionUsesProgramName(t *testing.T) {
 	}
 }
 
-// The init scripts hardcode "nib" and cmd.GetInitScript takes no program name,
-// so this covers only that a known shell yields a script on stdout.
+// The default name's script is covered byte for byte in cmd; this covers only
+// that a known shell yields a script on stdout.
 func TestInitEmitsScriptForKnownShell(t *testing.T) {
 	var out bytes.Buffer
 	o := Options{Args: []string{"--init", "zsh"}, Stdout: &out}
@@ -46,6 +46,33 @@ func TestInitEmitsScriptForKnownShell(t *testing.T) {
 	}
 	if out.Len() == 0 {
 		t.Fatal("--init zsh wrote nothing")
+	}
+}
+
+// ProgramName has to reach the emitted widget, for every shell. An embedder's
+// users do not have a `nib` on their PATH, so a script that invokes one is a
+// keybinding that fails with "command not found" the first time it is pressed.
+//
+// The assertion is that the standalone name survives nowhere in the script:
+// every mention of it is either the command the widget runs, the function name,
+// or prose telling the reader what they installed, and all three are wrong when
+// they name a binary the reader does not have.
+func TestInitScriptUsesProgramName(t *testing.T) {
+	for _, shell := range []string{"zsh", "bash", "fish"} {
+		t.Run(shell, func(t *testing.T) {
+			var out bytes.Buffer
+			o := Options{Args: []string{"--init", shell}, Stdout: &out, ProgramName: "local-ai chat"}
+			if code := run(o); code != 0 {
+				t.Fatalf("--init %s exit code = %d, want 0", shell, code)
+			}
+			script := out.String()
+			if !strings.Contains(script, "local-ai chat --height 50%") {
+				t.Fatalf("--init %s does not invoke the embedder's command:\n%s", shell, script)
+			}
+			if strings.Contains(script, "nib") {
+				t.Fatalf("--init %s still names the standalone binary:\n%s", shell, script)
+			}
+		})
 	}
 }
 

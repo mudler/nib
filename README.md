@@ -515,7 +515,7 @@ import (
 func runAgent(ctx context.Context, args []string) error {
 	return app.Run(ctx, app.Options{
 		Args:        args,           // the arguments after your subcommand
-		ProgramName: "myprog agent", // see the caveat below on where it shows
+		ProgramName: "myprog agent", // see below for where it reaches
 		BaseDir:     "/path/to/state",
 		Defaults: types.Config{ // seeds fields the config file leaves empty
 			BaseURL: "http://127.0.0.1:8080/v1",
@@ -544,11 +544,21 @@ handling covers the modes that take a context; the management subcommands below
 run under the process default disposition, so `Ctrl+C` kills them outright,
 exactly as it does for standalone nib.
 
-**`ProgramName` renames only what `app` itself prints.** That is the `--version`
-line, the flag package's usage and parse errors, the setup gate's two aborts,
-and the injected-stream refusal described below. The rest of nib still says
-`nib`: the management subcommands' usage strings (`usage: nib plugin ...` and
-its `skill` and `mcp` equivalents), the `--init` shell snippets, and the
+**`ProgramName` renames what `app` itself prints, and the `--init` scripts.**
+The printed messages are the `--version` line, the flag package's usage and
+parse errors, the setup gate's two aborts, and the injected-stream refusal
+described below.
+
+The `--init` snippets are more than a cosmetic rename: the `Ctrl+Space` widget
+they define invokes this name, so `myprog agent --init zsh` emits a widget that
+runs `myprog agent`, not a `nib` your users never installed. A name of several
+words stays several words where a command belongs, and the widget's function
+name is derived from it by reducing it to an identifier, so `local-ai chat`
+defines `__local_ai_chat_widget`. An empty `ProgramName` still emits standalone
+nib's script byte for byte.
+
+The rest of nib still says `nib`: the management subcommands' usage strings
+(`usage: nib plugin ...` and its `skill` and `mcp` equivalents), and the
 `nib: ...` diagnostics that config loading and plugin/skill discovery write
 straight to `os.Stderr` on every run. Threading the name through those is
 follow-up work.
