@@ -1577,6 +1577,34 @@ func FormatModelList(models []string, current string) string {
 	return b.String()
 }
 
+// UnservedModelError is what SwitchModel returns when the endpoint's listing
+// does not contain the requested name.
+//
+// It keeps the headline and the listing separate instead of pre-joining them
+// into one message, because the two halves want different rendering: the TUI
+// word-wraps error text, which strips the listing's indent column and
+// truncates long model IDs, while a fenced block survives verbatim. A front
+// end with no such distinction can just use Error().
+type UnservedModelError struct {
+	Name    string   // the name the user asked for
+	Models  []string // what the endpoint does serve
+	Current string   // the session's model, marked in the listing
+}
+
+// Headline is the one-line explanation, safe to wrap.
+func (e *UnservedModelError) Headline() string {
+	return fmt.Sprintf("model %q is not served by this endpoint. Available:", e.Name)
+}
+
+// Listing is the column-aligned model list, which must NOT be re-wrapped.
+func (e *UnservedModelError) Listing() string {
+	return FormatModelList(e.Models, e.Current)
+}
+
+func (e *UnservedModelError) Error() string {
+	return e.Headline() + "\n" + strings.TrimRight(e.Listing(), "\n")
+}
+
 // SwitchModel is the checked entry point behind /model <name>: it validates the
 // name against what the endpoint advertises and only then calls SetModel. It
 // returns the notice to show the user, or an error to show instead. Both front
@@ -1610,8 +1638,7 @@ func (s *Session) SwitchModel(ctx context.Context, name string) (string, error) 
 		s.SetModel(name)
 		return "model: " + name + " (unverified: the endpoint advertises no models)", nil
 	case !slices.Contains(models, name):
-		return "", fmt.Errorf("model %q is not served by this endpoint. Available:\n%s",
-			name, strings.TrimRight(FormatModelList(models, s.Model()), "\n"))
+		return "", &UnservedModelError{Name: name, Models: models, Current: s.Model()}
 	}
 
 	s.SetModel(name)

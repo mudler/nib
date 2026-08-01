@@ -1014,6 +1014,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(cmds...)
 }
 
+// fencedListing wraps a model listing in a code fence so the transcript leaves
+// its columns alone. An "agent" line is rendered as markdown, where a plain
+// listing loses its two-space indent and "* current" becomes an ordinary
+// bullet: the marker column, which is the only thing the listing has to say,
+// is exactly what gets eaten.
+func fencedListing(listing string) string {
+	return "```\n" + listing + "```"
+}
+
 // dispatchInput echoes the user's literal input to the transcript, resolves it
 // as a slash command / skill / message, and starts the appropriate action.
 // Returns the command to run (nil for actions that don't start a turn, e.g. a
@@ -1055,19 +1064,26 @@ func (m *Model) dispatchResolved(input string) tea.Cmd {
 		if err != nil {
 			m.messages = append(m.messages, ChatMessage{Role: "error", Content: err.Error()})
 		} else {
-			// Fenced, because an "agent" line is rendered as markdown: left
-			// plain, the two-space indent is stripped and "* current" turns
-			// into a bullet like every other row, losing the one thing the
-			// listing has to say. In a fence the columns survive verbatim.
-			listing := "```\n" + chat.FormatModelList(models, m.session.Model()) + "```"
+			listing := fencedListing(chat.FormatModelList(models, m.session.Model()))
 			m.messages = append(m.messages, ChatMessage{Role: "agent", Content: listing})
 		}
 		return nil
 	case slash.KindModelSet:
 		notice, err := m.session.SwitchModel(m.ctx, action.Model)
-		if err != nil {
+		var unserved *chat.UnservedModelError
+		switch {
+		case errors.As(err, &unserved):
+			// Two transcript lines, not one. The refusal itself is prose and
+			// wraps happily, but the listing must not: an "error" line goes
+			// through wrapText, which re-flows on word boundaries, drops the
+			// leading indent and clips a long model ID, so at a narrow width
+			// the marker column stops meaning anything.
+			m.messages = append(m.messages,
+				ChatMessage{Role: "error", Content: unserved.Headline()},
+				ChatMessage{Role: "agent", Content: fencedListing(unserved.Listing())})
+		case err != nil:
 			m.messages = append(m.messages, ChatMessage{Role: "error", Content: err.Error()})
-		} else {
+		default:
 			m.messages = append(m.messages, ChatMessage{Role: "agent", Content: notice})
 		}
 		return nil

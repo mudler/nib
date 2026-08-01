@@ -107,20 +107,47 @@ func TestDispatchModelSetSwitchesTheSession(t *testing.T) {
 // A typo must be refused in the transcript, as an error, with the session left
 // where it was: SetModel takes no error, so this is the only place the mistake
 // can still be caught before the next turn 404s.
+//
+// The refusal arrives as TWO lines. The listing rides an "agent" line inside a
+// fence because the "error" role is word-wrapped, and a wrapped listing loses
+// the indent column and clips long model IDs, which is the same failure the
+// plain markdown path had. The names here are deliberately long and the render
+// width deliberately narrow, so a regression shows up.
 func TestDispatchModelSetRejectsAnUnknownName(t *testing.T) {
-	m := newModelSwitchTestModel(t, "model-a", "model-b")
+	const long = "hf.co/unsloth/gemma-4-27b-GGUF:Q4_K_M"
+	m := newModelSwitchTestModel(t, "qwen3-coder-30b", long)
 
-	if cmd := m.dispatchResolved("/model model-c"); cmd != nil {
+	if cmd := m.dispatchResolved("/model qwen3-codr-30b"); cmd != nil {
 		t.Fatal("a refused /model must not start a turn")
 	}
-	msg := lastMessage(t, m)
-	if msg.Role != "error" {
-		t.Fatalf("refusal posted as %q, want error", msg.Role)
+	if len(m.messages) < 2 {
+		t.Fatalf("want a headline and a listing, got %d message(s): %+v", len(m.messages), m.messages)
 	}
-	if !strings.Contains(msg.Content, "model-c") || !strings.Contains(msg.Content, "model-b") {
-		t.Fatalf("refusal = %q, want it to name the typo and the alternatives", msg.Content)
+	headline, listing := m.messages[len(m.messages)-2], m.messages[len(m.messages)-1]
+
+	if headline.Role != "error" {
+		t.Fatalf("headline posted as %q, want error", headline.Role)
 	}
-	if got := m.session.Model(); got != "model-a" {
+	if !strings.Contains(headline.Content, "qwen3-codr-30b") {
+		t.Fatalf("headline = %q, want it to name the typo", headline.Content)
+	}
+	if strings.Contains(headline.Content, long) {
+		t.Fatalf("the listing must not ride on the wrapped error line: %q", headline.Content)
+	}
+	if listing.Role != "agent" {
+		t.Fatalf("listing posted as %q, want agent", listing.Role)
+	}
+
+	// 30 columns: narrow enough that the long ID cannot fit, which is where a
+	// re-wrapped listing loses its indent and its marker column.
+	rendered := renderMarkdownWith(m.markdownFor(30), listing.Content, 30)
+	if !strings.Contains(rendered, "* qwen3-coder-30b") {
+		t.Fatalf("the current-model marker did not survive a narrow render: %q", rendered)
+	}
+	if !strings.Contains(rendered, "  hf.co/unsloth/gemma-4-27b-") {
+		t.Fatalf("the alternative lost its indent at a narrow width: %q", rendered)
+	}
+	if got := m.session.Model(); got != "qwen3-coder-30b" {
 		t.Fatalf("session model = %q, want the switch refused", got)
 	}
 }

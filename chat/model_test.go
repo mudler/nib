@@ -3,6 +3,7 @@ package chat
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -460,5 +461,33 @@ func TestSwitchModelRejectsAnEmptyName(t *testing.T) {
 	}
 	if got := s.Model(); got != "model-a" {
 		t.Fatalf("Model() = %q, want the session untouched", got)
+	}
+}
+
+// The refusal is a typed error so a front end can render its two halves
+// differently: the headline word-wraps safely, the listing must not be
+// re-wrapped at all.
+func TestUnservedModelErrorSplitsHeadlineFromListing(t *testing.T) {
+	srv := newModelsServer(t, "model-a", "model-b")
+	s := &Session{llmModel: "model-a", baseURL: srv.URL + "/v1"}
+
+	_, err := s.SwitchModel(context.Background(), "model-c")
+	var unserved *UnservedModelError
+	if !errors.As(err, &unserved) {
+		t.Fatalf("SwitchModel returned %T (%v), want *UnservedModelError", err, err)
+	}
+	if unserved.Name != "model-c" {
+		t.Fatalf("Name = %q, want model-c", unserved.Name)
+	}
+	if strings.Contains(unserved.Headline(), "model-b") {
+		t.Fatalf("the headline must not carry the listing: %q", unserved.Headline())
+	}
+	if unserved.Listing() != "* model-a\n  model-b\n" {
+		t.Fatalf("Listing() = %q", unserved.Listing())
+	}
+	// Error() stays the joined form, so a front end that does not care keeps
+	// working unchanged.
+	if want := unserved.Headline() + "\n* model-a\n  model-b"; unserved.Error() != want {
+		t.Fatalf("Error() = %q, want %q", unserved.Error(), want)
 	}
 }
