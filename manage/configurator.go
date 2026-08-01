@@ -17,12 +17,19 @@ import (
 type Configurator struct {
 	baseDir    string
 	configPath string
-	plugins    *plugin.Manager
-	skills     *skill.Manager
+	// baseDirOverride is the RAW root override (empty for standalone nib) that
+	// baseDir and configPath were resolved from. It is kept alongside them
+	// because EffectiveConfig has to re-run the whole load, and config.LoadWith
+	// takes the override, not a resolved directory.
+	baseDirOverride string
+	plugins         *plugin.Manager
+	skills          *skill.Manager
 }
 
 // New returns a Configurator rooted at baseDir (use plugin.BaseDir() in prod)
 // writing MCP-server config to configPath (use config.WritablePath() in prod).
+// It carries no root override, so EffectiveConfig reloads from nib's default
+// paths; embedders want NewIn.
 func New(baseDir, configPath string) *Configurator {
 	return &Configurator{
 		baseDir:    baseDir,
@@ -30,6 +37,17 @@ func New(baseDir, configPath string) *Configurator {
 		plugins:    plugin.NewManager(baseDir),
 		skills:     skill.NewManager(baseDir),
 	}
+}
+
+// NewIn returns a Configurator for a base-directory override, resolving the
+// registry root and the writable config path from it. An empty override
+// reproduces standalone nib exactly. Unlike New, the override is remembered, so
+// EffectiveConfig reloads from the injected root instead of the user's real
+// ~/.config/nib.
+func NewIn(baseDirOverride string) *Configurator {
+	c := New(plugin.BaseDirIn(baseDirOverride), config.WritablePathIn(baseDirOverride))
+	c.baseDirOverride = baseDirOverride
+	return c
 }
 
 // PluginInfo is a registry plugin record in tool-facing form.
@@ -105,7 +123,7 @@ func (c *Configurator) ListSkills() ([]SkillInfo, error) {
 // re-wire a live session after a change. Disabled MCP servers are dropped here
 // so they never start a transport; ListMCPServers still reports them for the UI.
 func (c *Configurator) EffectiveConfig() (types.Config, error) {
-	cfg := config.Load()
+	cfg := config.LoadWith(config.LoadOptions{BaseDir: c.baseDirOverride})
 	cfg.MCPServers = enabledMCPServers(cfg.MCPServers)
 	return cfg, nil
 }

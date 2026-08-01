@@ -13,11 +13,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/mudler/nib/config"
 	"github.com/mudler/nib/hooks"
 	"github.com/mudler/nib/manage"
 	wizmcp "github.com/mudler/nib/mcp"
-	"github.com/mudler/nib/plugin"
 	"github.com/mudler/nib/specialist"
 	"github.com/mudler/nib/trace"
 	"github.com/mudler/nib/types"
@@ -289,7 +287,7 @@ func NewSession(ctx context.Context, cfg types.Config, callbacks Callbacks, tran
 		computerEnabled:     cfg.Computer.Enabled,
 		cfgClients:          map[string]*mcp.ClientSession{},
 		cfgServers:          map[string]types.MCPServer{},
-		configurator:        manage.New(plugin.BaseDirIn(cfg.BaseDir), config.WritablePathIn(cfg.BaseDir)),
+		configurator:        manage.NewIn(cfg.BaseDir),
 		tracer:              tracer,
 	}
 	// Resume/rehydration: seed a prior conversation so the very next SendMessage
