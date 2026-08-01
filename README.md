@@ -515,7 +515,7 @@ import (
 func runAgent(ctx context.Context, args []string) error {
 	return app.Run(ctx, app.Options{
 		Args:        args,           // the arguments after your subcommand
-		ProgramName: "myprog agent", // shown in usage and error messages
+		ProgramName: "myprog agent", // see the caveat below on where it shows
 		BaseDir:     "/path/to/state",
 		Defaults: types.Config{ // seeds fields the config file leaves empty
 			BaseURL: "http://127.0.0.1:8080/v1",
@@ -539,7 +539,19 @@ below, a management subcommand's non-zero code and a TUI error are all
 indistinguishable to the caller. The code is `1` for every one of those except
 an unparseable flag, which is `2`. `app.Main(os.Args) int` is the same
 entrypoint shaped for a `main` function: it installs nib's SIGINT/SIGTERM
-handling and takes no options, which is all nib's own `main.go` needs.
+handling and takes no options, which is all nib's own `main.go` needs. That
+handling covers the modes that take a context; the management subcommands below
+run under the process default disposition, so `Ctrl+C` kills them outright,
+exactly as it does for standalone nib.
+
+**`ProgramName` renames only what `app` itself prints.** That is the `--version`
+line, the flag package's usage and parse errors, the setup gate's two aborts,
+and the injected-stream refusal described below. The rest of nib still says
+`nib`: the management subcommands' usage strings (`usage: nib plugin ...` and
+its `skill` and `mcp` equivalents), the `--init` shell snippets, and the
+`nib: ...` diagnostics that config loading and plugin/skill discovery write
+straight to `os.Stderr` on every run. Threading the name through those is
+follow-up work.
 
 **The management subcommands do not honor injected streams.** Every `plugin`
 and `skill` subcommand, and every `nib mcp` subcommand that manages configured

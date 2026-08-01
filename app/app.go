@@ -29,7 +29,16 @@ import (
 type Options struct {
 	// Args are the arguments after the program name (os.Args[1:]).
 	Args []string
-	// ProgramName is the name shown in usage and error messages. Empty means "nib".
+	// ProgramName is the name shown in the messages this package prints itself:
+	// the --version line, the flag package's usage and parse errors, the setup
+	// gate's two aborts, and the injected-stream refusal. Empty means "nib".
+	//
+	// It reaches nothing else, so parts of an embedded nib still say "nib"
+	// whatever this is set to: the management subcommands' usage strings
+	// ("usage: nib plugin ..." and its skill and mcp equivalents), the --init
+	// shell snippets, and the "nib: ..." diagnostics that config loading and
+	// plugin/skill discovery write straight to os.Stderr on every run.
+	// Threading the name through those is follow-up work.
 	ProgramName string
 	// BaseDir overrides the config, plugins, and skills root. Empty means
 	// nib's default XDG resolution.
