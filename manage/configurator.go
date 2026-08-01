@@ -26,10 +26,10 @@ type Configurator struct {
 	skills          *skill.Manager
 }
 
-// New returns a Configurator rooted at baseDir (use plugin.BaseDir() in prod)
-// writing MCP-server config to configPath (use config.WritablePath() in prod).
-// It carries no root override, so EffectiveConfig reloads from nib's default
-// paths; embedders want NewIn.
+// New returns a Configurator rooted at an already-resolved baseDir, writing
+// MCP-server config to configPath. It carries no root override, so
+// EffectiveConfig reloads from nib's default paths: production code wants
+// NewIn, which resolves both paths and keeps the override for the reload.
 func New(baseDir, configPath string) *Configurator {
 	return &Configurator{
 		baseDir:    baseDir,
