@@ -54,9 +54,17 @@ func TestInjectedStreamProbes(t *testing.T) {
 		t.Fatalf("a bytes.Buffer = %+v, want provided and not a terminal", got)
 	}
 	// An *os.File is only a terminal when it really is one: under `go test`
-	// stdout is a pipe, which is exactly the shape that must be refused.
-	if got := injectedWriter(os.Stdout); !got.provided {
-		t.Fatalf("os.Stdout = %+v, want provided", got)
+	// stdout is a pipe, which is exactly the shape that must be refused. The
+	// !terminal half is what makes this more than a `provided` check: every
+	// other non-terminal fixture here is a non-*os.File, so the probe's
+	// term.IsTerminal call would go untested without a real *os.File that is
+	// not a terminal. The guard exists only for someone running the compiled
+	// test binary straight on a tty; `go test` never takes it.
+	if term.IsTerminal(int(os.Stdout.Fd())) {
+		t.Skip("stdout is a real terminal here, so it cannot stand in for a non-terminal *os.File")
+	}
+	if got := injectedWriter(os.Stdout); !got.provided || got.terminal {
+		t.Fatalf("os.Stdout under `go test` = %+v, want provided and not a terminal", got)
 	}
 }
 
