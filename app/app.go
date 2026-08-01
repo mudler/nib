@@ -262,6 +262,11 @@ func runCtx(ctx context.Context, o Options) int {
 		return 0
 	}
 
+	// The raw fields, not the o.stdX() accessors: cmd.Streams keeps "the caller
+	// said nothing" distinguishable from "the caller asked for the process
+	// stream", which is what lets RunTUI stay on /dev/tty for standalone nib.
+	streams := cmd.Streams{In: o.Stdin, Out: o.Stdout, Err: o.Stderr}
+
 	mode := selectMode(modeInputs{
 		cli:    *cliFlag,
 		tui:    *tuiFlag,
@@ -272,7 +277,7 @@ func runCtx(ctx context.Context, o Options) int {
 
 	switch mode {
 	case modeCLI:
-		if err := cmd.RunCLI(ctx, cfg, shellJobs, transports...); err != nil {
+		if err := cmd.RunCLI(ctx, cfg, streams, shellJobs, transports...); err != nil {
 			fmt.Fprintf(o.stderr(), "Error: %v\n", err)
 			return 1
 		}
@@ -289,13 +294,13 @@ func runCtx(ctx context.Context, o Options) int {
 				return 1
 			}
 		} else {
-			if err := cmd.RunTUI(ctx, cfg, height, shellJobs, transports...); err != nil {
+			if err := cmd.RunTUI(ctx, cfg, height, streams, shellJobs, transports...); err != nil {
 				fmt.Fprintf(o.stderr(), "Error: %v\n", err)
 				return 1
 			}
 		}
 	default: // modeTUI, fullscreen, direct (no tmux split)
-		if err := cmd.RunTUI(ctx, cfg, parseHeight("100%"), shellJobs, transports...); err != nil {
+		if err := cmd.RunTUI(ctx, cfg, parseHeight("100%"), streams, shellJobs, transports...); err != nil {
 			fmt.Fprintf(o.stderr(), "Error: %v\n", err)
 			return 1
 		}

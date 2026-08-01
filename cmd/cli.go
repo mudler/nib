@@ -4,7 +4,7 @@ import (
 	"bufio"
 	"context"
 	"fmt"
-	"os"
+	"io"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -18,7 +18,6 @@ import (
 	"github.com/mudler/nib/slash"
 	"github.com/mudler/nib/theme"
 	"github.com/mudler/nib/types"
-	"golang.org/x/term"
 )
 
 // resolveCLIInput maps a CLI input line to a slash Action, mirroring the TUI.
@@ -39,6 +38,7 @@ var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "�
 // prints each distinct message once.
 type spinner struct {
 	mu       sync.Mutex
+	out      io.Writer
 	active   bool
 	message  string
 	stopChan chan struct{}
@@ -47,11 +47,12 @@ type spinner struct {
 	lastLine string // last message printed in non-TTY mode, for de-duplication
 }
 
-func newSpinner() *spinner {
+func newSpinner(out io.Writer) *spinner {
 	return &spinner{
+		out:      out,
 		stopChan: make(chan struct{}),
 		doneChan: make(chan struct{}),
-		tty:      term.IsTerminal(int(os.Stdout.Fd())),
+		tty:      isTerminal(out),
 	}
 }
 
@@ -63,7 +64,7 @@ func (s *spinner) printStatic(message string) {
 		return
 	}
 	s.lastLine = message
-	fmt.Println(theme.Help.Render(message))
+	fmt.Fprintln(s.out, theme.Help.Render(message))
 }
 
 func (s *spinner) start(message string) {
@@ -97,13 +98,13 @@ func (s *spinner) start(message string) {
 			select {
 			case <-s.stopChan:
 				// Clear the spinner line
-				fmt.Print("\r\033[K")
+				fmt.Fprint(s.out, "\r\033[K")
 				return
 			case <-ticker.C:
 				s.mu.Lock()
 				msg := s.message
 				s.mu.Unlock()
-				fmt.Printf("\r%s %s", theme.Help.Render(spinnerFrames[frame]), theme.Help.Render(msg))
+				fmt.Fprintf(s.out, "\r%s %s", theme.Help.Render(spinnerFrames[frame]), theme.Help.Render(msg))
 				frame = (frame + 1) % len(spinnerFrames)
 			}
 		}
@@ -183,9 +184,10 @@ func formatAgentEventLine(ev chat.AgentEvent) string {
 	}
 }
 
-func RunCLI(ctx context.Context, cfg types.Config, shellJobs *wizmcp.ShellJobs, transports ...mcp.Transport) error {
-	reader := bufio.NewReader(os.Stdin)
-	spin := newSpinner()
+func RunCLI(ctx context.Context, cfg types.Config, streams Streams, shellJobs *wizmcp.ShellJobs, transports ...mcp.Transport) error {
+	in, out, errOut := streams.stdin(), streams.stdout(), streams.stderr()
+	reader := bufio.NewReader(in)
+	spin := newSpinner(out)
 
 	callbacks := chat.Callbacks{
 		OnStatus: func(status string) {
@@ -193,29 +195,29 @@ func RunCLI(ctx context.Context, cfg types.Config, shellJobs *wizmcp.ShellJobs, 
 		},
 		OnReasoning: func(reasoning string) {
 			spin.stop()
-			fmt.Println(theme.ReasoningHeader())
+			fmt.Fprintln(out, theme.ReasoningHeader())
 			for _, line := range strings.Split(strings.TrimRight(reasoning, "\n"), "\n") {
-				fmt.Println("  " + theme.Reasoning.Render(line))
+				fmt.Fprintln(out, "  "+theme.Reasoning.Render(line))
 			}
 			spin.start(theme.Status(theme.VerbThinking, 0))
 		},
 		OnToolCall: func(req chat.ToolCallRequest) chat.ToolCallResponse {
 			spin.stop()
 			g := theme.Gutter.Render(theme.ApprovalGutter) + " "
-			fmt.Println()
-			fmt.Println(g + theme.ApproveKey.Render(req.Name+" wants to run"))
+			fmt.Fprintln(out)
+			fmt.Fprintln(out, g+theme.ApproveKey.Render(req.Name+" wants to run"))
 			for _, line := range strings.Split(chat.FormatToolCall(req.Name, req.Arguments), "\n") {
-				fmt.Println(g + theme.Help.Render(line))
+				fmt.Fprintln(out, g+theme.Help.Render(line))
 			}
 			if req.Reasoning != "" {
-				fmt.Println(g + theme.Reasoning.Render(req.Reasoning))
+				fmt.Fprintln(out, g+theme.Reasoning.Render(req.Reasoning))
 			}
 			scope, prefix := chat.GrantScope(req.Name, req.Arguments)
-			fmt.Print(g + theme.ApproveKey.Render(theme.CLIApprovePrompt(scope)) + " ")
+			fmt.Fprint(out, g+theme.ApproveKey.Render(theme.CLIApprovePrompt(scope))+" ")
 
 			text, _ := readStringCancellable(ctx, reader)
 			text = strings.TrimSpace(text)
-			fmt.Println()
+			fmt.Fprintln(out)
 
 			var response chat.ToolCallResponse
 			switch strings.ToLower(text) {
@@ -225,18 +227,18 @@ func RunCLI(ctx context.Context, cfg types.Config, shellJobs *wizmcp.ShellJobs, 
 			case "a", "always", "2":
 				response = chat.ToolCallResponse{Approved: true, AlwaysAllow: true, AlwaysPrefix: prefix}
 				if prefix != "" {
-					fmt.Println(theme.Subtle.Render("allowing " + prefix + " … commands for this session"))
+					fmt.Fprintln(out, theme.Subtle.Render("allowing "+prefix+" … commands for this session"))
 				} else {
-					fmt.Println(theme.Subtle.Render("added '" + req.Name + "' to the session allow list"))
+					fmt.Fprintln(out, theme.Subtle.Render("added '"+req.Name+"' to the session allow list"))
 				}
 				spin.start(theme.Status(theme.VerbWorking, 0))
 			case "all", "3":
 				response = chat.ToolCallResponse{Approved: true, AllowAllTurn: true}
-				fmt.Println(theme.Subtle.Render("approving all tool calls for this turn"))
+				fmt.Fprintln(out, theme.Subtle.Render("approving all tool calls for this turn"))
 				spin.start(theme.Status(theme.VerbWorking, 0))
 			case "n", "no":
 				response = chat.ToolCallResponse{Approved: false}
-				fmt.Println(theme.Error.Render(theme.Cross + " denied"))
+				fmt.Fprintln(out, theme.Error.Render(theme.Cross+" denied"))
 			default:
 				response = chat.ToolCallResponse{Approved: true, Adjustment: text}
 				spin.start(theme.Status(theme.VerbWorking, 0))
@@ -245,26 +247,26 @@ func RunCLI(ctx context.Context, cfg types.Config, shellJobs *wizmcp.ShellJobs, 
 		},
 		OnResponse: func(response string) {
 			spin.stop()
-			fmt.Println()
-			fmt.Println(theme.LabelNib.Render(theme.BrandName) + " " + theme.SepStyle.Render(theme.Sep))
-			fmt.Println(response)
-			fmt.Println()
+			fmt.Fprintln(out)
+			fmt.Fprintln(out, theme.LabelNib.Render(theme.BrandName)+" "+theme.SepStyle.Render(theme.Sep))
+			fmt.Fprintln(out, response)
+			fmt.Fprintln(out)
 		},
 		// The model's step commentary ("I'll search for X now…") — printed dim,
 		// before the tool it announced runs, so the transcript reads in order.
 		OnStepContent: func(content string) {
 			spin.stop()
 			for _, line := range strings.Split(strings.TrimRight(content, "\n"), "\n") {
-				fmt.Println("  " + theme.Subtle.Render(line))
+				fmt.Fprintln(out, "  "+theme.Subtle.Render(line))
 			}
 			spin.start(theme.Status(theme.VerbWorking, 0))
 		},
 		OnCompactDone: func(before, after int) {
-			fmt.Println(theme.Subtle.Render(compactNotice(before, after)))
+			fmt.Fprintln(out, theme.Subtle.Render(compactNotice(before, after)))
 		},
 		OnError: func(err error) {
 			spin.stop()
-			fmt.Fprintln(os.Stderr, theme.Error.Render(theme.Cross+" "+err.Error()))
+			fmt.Fprintln(errOut, theme.Error.Render(theme.Cross+" "+err.Error()))
 		},
 		OnToolResult: func(res chat.ToolResult) {
 			preview := chat.PreviewResult(res.Result, 12)
@@ -280,15 +282,15 @@ func RunCLI(ctx context.Context, cfg types.Config, shellJobs *wizmcp.ShellJobs, 
 				label = theme.SubAgent + " " + id + " · " + res.Name
 			}
 			spin.stop()
-			fmt.Println(theme.Subtle.Render(theme.Sep + " " + label))
+			fmt.Fprintln(out, theme.Subtle.Render(theme.Sep+" "+label))
 			for _, line := range strings.Split(preview, "\n") {
-				fmt.Println(theme.Help.Render("  " + line))
+				fmt.Fprintln(out, theme.Help.Render("  "+line))
 			}
 			spin.start(theme.Status(theme.VerbThinking, 0))
 		},
 		OnAgentEvent: func(ev chat.AgentEvent) {
 			spin.stop()
-			fmt.Println(formatAgentEventLine(ev))
+			fmt.Fprintln(out, formatAgentEventLine(ev))
 			spin.start(theme.Status(theme.VerbThinking, 0))
 		},
 	}
@@ -304,17 +306,17 @@ func RunCLI(ctx context.Context, cfg types.Config, shellJobs *wizmcp.ShellJobs, 
 		session.SetShellJobs(shellJobs)
 	}
 
-	fmt.Println(theme.Brand.Render(theme.BrandName))
-	fmt.Println(theme.Rule.Render(strings.Repeat("─", 50)))
-	fmt.Println(theme.Help.Render(theme.CLIWelcome))
-	fmt.Println(theme.Help.Render(theme.CLIExit))
+	fmt.Fprintln(out, theme.Brand.Render(theme.BrandName))
+	fmt.Fprintln(out, theme.Rule.Render(strings.Repeat("─", 50)))
+	fmt.Fprintln(out, theme.Help.Render(theme.CLIWelcome))
+	fmt.Fprintln(out, theme.Help.Render(theme.CLIExit))
 	if cfg.ApprovalMode == "auto" {
-		fmt.Println(theme.Yolo.Render(theme.YoloNotice))
+		fmt.Fprintln(out, theme.Yolo.Render(theme.YoloNotice))
 	}
-	fmt.Println()
+	fmt.Fprintln(out)
 
 	// Display help immediately
-	help()
+	help(out)
 
 	// Files staged via /attach, sent with the next message and cleared on
 	// successful send only.
@@ -325,7 +327,7 @@ func RunCLI(ctx context.Context, cfg types.Config, shellJobs *wizmcp.ShellJobs, 
 		case <-ctx.Done():
 			return ctx.Err()
 		default:
-			fmt.Print(theme.Prompt.Render(theme.PromptGlyph) + " ")
+			fmt.Fprint(out, theme.Prompt.Render(theme.PromptGlyph)+" ")
 
 			text, err := readStringCancellable(ctx, reader)
 			if err != nil {
@@ -343,21 +345,21 @@ func RunCLI(ctx context.Context, cfg types.Config, shellJobs *wizmcp.ShellJobs, 
 			case "exit":
 				return nil
 			case "help":
-				help()
+				help(out)
 				continue
 			}
 
 			action := resolveCLIInput(text, cfg)
 			switch action.Kind {
 			case slash.KindError:
-				fmt.Fprintln(os.Stderr, theme.Error.Render(theme.Cross+" "+action.Err))
+				fmt.Fprintln(errOut, theme.Error.Render(theme.Cross+" "+action.Err))
 				continue
 			case slash.KindLoadSkill:
 				notice, err := session.LoadSkill(action.Skill)
 				if err != nil {
-					fmt.Fprintln(os.Stderr, theme.Error.Render(theme.Cross+" "+err.Error()))
+					fmt.Fprintln(errOut, theme.Error.Render(theme.Cross+" "+err.Error()))
 				} else {
-					fmt.Println(theme.Subtle.Render(notice))
+					fmt.Fprintln(out, theme.Subtle.Render(notice))
 				}
 				continue
 			case slash.KindCompact:
@@ -365,11 +367,11 @@ func RunCLI(ctx context.Context, cfg types.Config, shellJobs *wizmcp.ShellJobs, 
 				before, after, err := session.CompactHistory()
 				spin.stop()
 				if err != nil {
-					fmt.Fprintln(os.Stderr, theme.Error.Render(theme.Cross+" "+err.Error()))
+					fmt.Fprintln(errOut, theme.Error.Render(theme.Cross+" "+err.Error()))
 				} else if before == after {
-					fmt.Println(theme.Subtle.Render("Nothing to compact yet."))
+					fmt.Fprintln(out, theme.Subtle.Render("Nothing to compact yet."))
 				} else {
-					fmt.Println(theme.Subtle.Render(compactNotice(before, after)))
+					fmt.Fprintln(out, theme.Subtle.Render(compactNotice(before, after)))
 				}
 				continue
 			case slash.KindAttach:
@@ -380,23 +382,23 @@ func RunCLI(ctx context.Context, cfg types.Config, shellJobs *wizmcp.ShellJobs, 
 					if action.Transcribe {
 						mode = "transcribe"
 					}
-					fmt.Println(theme.Subtle.Render("attached: " + filepath.Base(action.AttachPath) + " (" + mode + ") — sends with your next message"))
+					fmt.Fprintln(out, theme.Subtle.Render("attached: "+filepath.Base(action.AttachPath)+" ("+mode+") — sends with your next message"))
 				case slash.AttachList:
 					if len(pending) == 0 {
-						fmt.Println(theme.Subtle.Render("nothing staged"))
+						fmt.Fprintln(out, theme.Subtle.Render("nothing staged"))
 					} else {
 						for _, s := range pending {
-							fmt.Println(theme.Subtle.Render("  " + filepath.Base(s.Path)))
+							fmt.Fprintln(out, theme.Subtle.Render("  "+filepath.Base(s.Path)))
 						}
 					}
 				case slash.AttachClear:
 					n := len(pending)
 					pending = nil
-					fmt.Println(theme.Subtle.Render(fmt.Sprintf("cleared %d staged attachment(s)", n)))
+					fmt.Fprintln(out, theme.Subtle.Render(fmt.Sprintf("cleared %d staged attachment(s)", n)))
 				}
 				continue
 			default: // slash.KindSend
-				fmt.Println()
+				fmt.Fprintln(out)
 				spin.start(theme.Status(theme.VerbThinking, 0))
 				files, overrides := attachstage.BuildSend(pending, action)
 				if len(files) == 0 {
@@ -407,16 +409,16 @@ func RunCLI(ctx context.Context, cfg types.Config, shellJobs *wizmcp.ShellJobs, 
 					_, blocked, err = session.SendWithAttachments(ctx, action.Text, files, overrides)
 					spin.stop()
 					for _, b := range blocked {
-						fmt.Fprintln(os.Stderr, theme.Error.Render(theme.Cross+" "+filepath.Base(b.Path)+" — "+b.Reason))
+						fmt.Fprintln(errOut, theme.Error.Render(theme.Cross+" "+filepath.Base(b.Path)+" — "+b.Reason))
 					}
 					if err == nil {
 						pending = nil // clear on success only
 					}
 				}
 				if err != nil {
-					fmt.Fprintln(os.Stderr, theme.Error.Render(theme.Cross+" "+err.Error()))
+					fmt.Fprintln(errOut, theme.Error.Render(theme.Cross+" "+err.Error()))
 				}
-				fmt.Println()
+				fmt.Fprintln(out)
 			}
 		}
 	}
@@ -427,6 +429,6 @@ func compactNotice(before, after int) string {
 	return fmt.Sprintf("📦 Compacted conversation — %s → %s tokens", chat.HumanTokens(before), chat.HumanTokens(after))
 }
 
-func help() {
-	fmt.Println(theme.Help.Render("commands:  exit  ·  clear  ·  help"))
+func help(out io.Writer) {
+	fmt.Fprintln(out, theme.Help.Render("commands:  exit  ·  clear  ·  help"))
 }

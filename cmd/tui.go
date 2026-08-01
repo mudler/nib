@@ -15,8 +15,16 @@ import (
 	"github.com/mudler/nib/types"
 )
 
-// runTUI runs the Bubble Tea TUI
-func RunTUI(ctx context.Context, cfg types.Config, height int, shellJobs *wizmcp.ShellJobs, transports ...mcp.Transport) error {
+// RunTUI runs the Bubble Tea TUI.
+//
+// Only streams.stdout() is honored, for the shell-capture line at the end. The
+// interactive rendering deliberately stays on /dev/tty: the whole reason this
+// function opens it is that stdout may be a pipe while the terminal is still
+// there, and an embedder's Stdout is exactly as likely to be a pipe as the
+// shell widget's. Rendering into a non-terminal writer would produce a frozen
+// TUI, which is worse than ignoring the injection. An embedder that wants nib's
+// output on its own streams should use CLI mode, which honors all three.
+func RunTUI(ctx context.Context, cfg types.Config, height int, streams Streams, shellJobs *wizmcp.ShellJobs, transports ...mcp.Transport) error {
 
 	model := tui.NewModel(ctx, cfg, height, shellJobs, transports...)
 
@@ -78,10 +86,11 @@ func RunTUI(ctx context.Context, cfg types.Config, height int, shellJobs *wizmcp
 		return err
 	}
 
-	// Output any command to shell if needed (this goes to real stdout for shell capture)
+	// Output any command to shell if needed (this goes to stdout for shell
+	// capture, which is the one stream an embedder can usefully replace here)
 	if m, ok := finalModel.(tui.Model); ok {
 		if output := m.Output(); output != "" {
-			fmt.Print(output)
+			fmt.Fprint(streams.stdout(), output)
 		}
 	}
 

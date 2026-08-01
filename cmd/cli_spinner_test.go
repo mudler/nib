@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bufio"
+	"bytes"
 	"io"
 	"os"
 	"strings"
@@ -38,16 +39,18 @@ func captureStdout(t *testing.T, fn func()) string {
 // distinct status once as its own line, collapsing a steady "thinking" state
 // into a single entry instead of hundreds of carriage-return frames.
 func TestSpinnerNonTTYDeduplicates(t *testing.T) {
-	out := captureStdout(t, func() {
-		s := newSpinner()
-		s.tty = false // force non-TTY regardless of the test's stdout
+	var buf bytes.Buffer
+	s := newSpinner(&buf)
+	if s.tty {
+		t.Fatal("a plain buffer must never be taken for a terminal")
+	}
 
-		s.start("thinking")
-		s.update("thinking") // duplicate — must not reprint
-		s.update("thinking")
-		s.stop()
-	})
+	s.start("thinking")
+	s.update("thinking") // duplicate, must not reprint
+	s.update("thinking")
+	s.stop()
 
+	out := buf.String()
 	if strings.Contains(out, "\r") {
 		t.Fatalf("non-TTY output must not contain carriage returns, got %q", out)
 	}
@@ -59,17 +62,15 @@ func TestSpinnerNonTTYDeduplicates(t *testing.T) {
 // After a stop()/start() cycle (e.g. across a tool-call boundary) the same
 // status reprints, so progress stays visible in the log.
 func TestSpinnerNonTTYReprintsAfterStop(t *testing.T) {
-	out := captureStdout(t, func() {
-		s := newSpinner()
-		s.tty = false
+	var buf bytes.Buffer
+	s := newSpinner(&buf)
 
-		s.start("thinking")
-		s.stop() // tool call interleaves here
-		s.start("thinking")
-		s.stop()
-	})
+	s.start("thinking")
+	s.stop() // tool call interleaves here
+	s.start("thinking")
+	s.stop()
 
-	if n := strings.Count(out, "thinking"); n != 2 {
-		t.Fatalf("expected 'thinking' reprinted after stop, got %d in %q", n, out)
+	if n := strings.Count(buf.String(), "thinking"); n != 2 {
+		t.Fatalf("expected 'thinking' reprinted after stop, got %d in %q", n, buf.String())
 	}
 }
