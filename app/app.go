@@ -39,8 +39,11 @@ type Options struct {
 	Stdout io.Writer
 	Stderr io.Writer
 	// Defaults seed config fields the config file leaves empty. Every field of
-	// types.Config is seedable; see config.LoadOptions.Defaults for what
-	// "empty" means for maps, slices and booleans.
+	// types.Config is seedable except BaseDir, which is ignored: the root has
+	// exactly one knob, the BaseDir field above, and it overwrites any seeded
+	// value. See config.LoadOptions.Defaults for what "empty" means for maps,
+	// slices and booleans, including that a seeded true beats an explicit
+	// `false:` in the config file for every bool.
 	Defaults types.Config
 	// SkipSetup suppresses the first-run model wizard. Embedders that resolve
 	// the model themselves set this. It suppresses the whole gate, so an

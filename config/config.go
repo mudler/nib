@@ -139,9 +139,12 @@ type LoadOptions struct {
 	// default XDG resolution.
 	BaseDir string
 	// Defaults seed fields the config file leaves empty. They sit beneath the
-	// file so a user edit always wins. EVERY field of types.Config is seedable,
-	// not a hand-picked subset; see applySeeds for exactly what "empty" means
-	// for maps, slices and booleans.
+	// file so a user edit always wins. Every field of types.Config is seedable,
+	// not a hand-picked subset, with ONE carve-out: Defaults.BaseDir is ignored.
+	// The root has exactly one knob, LoadOptions.BaseDir above, and a seeded
+	// BaseDir is overwritten by it (including when it is empty, which is what
+	// selects standalone nib's XDG resolution). See applySeeds for exactly what
+	// "empty" means for maps, slices and booleans.
 	Defaults types.Config
 	// SkipBareEnv suppresses the bare MODEL / API_KEY / BASE_URL environment
 	// variables. Embedders that expose their own prefixed variables set this so
@@ -185,6 +188,12 @@ func LoadWith(o LoadOptions) types.Config {
 	// through plugin.BaseDirIn / config.WritablePathIn: with no override those
 	// two reproduce standalone nib exactly, including WritablePath's
 	// first-existing-file search, which <base>/config.yaml would not.
+	//
+	// Unconditional, so it also enforces the one carve-out in Defaults: the root
+	// has a single knob and a seeded BaseDir loses to it, empty included. Two
+	// ways to set one thing would be worse than one, and the file this very load
+	// came from was already chosen by o.BaseDir, so honoring a seed here would
+	// leave cfg pointing at a root it was not read from.
 	cfg.BaseDir = o.BaseDir
 	root := BaseDirOf(cfg)
 
@@ -229,9 +238,15 @@ func LoadWith(o LoadOptions) types.Config {
 //     nothing. A file that lists any entry keeps exactly its own list; the
 //     seeded list is used only when the file has none. Element-wise merging
 //     would be meaningless for order-dependent lists of named things.
-//   - Booleans: false is indistinguishable from unset, so a seeded true beats
-//     an explicit `false:` in the file. Compaction.Disabled is the one place
-//     that bites; an embedder that wants compaction on should leave it unset.
+//   - Booleans: false is indistinguishable from unset, so for EVERY bool field
+//     a seeded true beats an explicit `false:` in the file. There is no
+//     exception: Compaction.Disabled, AgentOptions.ForceReasoning,
+//     Computer.Enabled, Browser.Enabled and Browser.AllowPrivateURLs all behave
+//     this way, as does any bool added later. AllowPrivateURLs is the
+//     consequential one, since it gates the browser tools' access to localhost
+//     and RFC1918 addresses: seeding it true cannot be walked back by a config
+//     file, only by not seeding it. An embedder should seed a bool only when it
+//     genuinely means "on regardless of what the user wrote".
 //
 // Slice-valued seeds are cloned before the merge. mergo adopts an empty
 // destination slice by reference, and skill.Apply/plugin.Apply then append to

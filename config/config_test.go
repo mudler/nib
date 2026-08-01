@@ -375,11 +375,27 @@ func TestDefaultsSliceSeedsAreNotAliased(t *testing.T) {
 	}
 }
 
+// blindToSeeds names the fields LoadWith writes unconditionally AFTER
+// applySeeds, so they come back non-zero whether or not the seed landed.
+// TestDefaultsSeedEveryFieldOfConfig cannot see them, and each needs a direct
+// test naming the seeded value instead. Keep this list and those tests in sync.
+var blindToSeeds = map[string]string{
+	"BaseDir":      "overwritten by LoadOptions.BaseDir: TestDefaultsBaseDirIsNotSeedable",
+	"Agents":       "MergeAgentTypes always returns the built-ins: TestDefaultsSeedAgents",
+	"Prompt":       "withDefaults supplies one: TestPrecedenceDefaultsThenFileThenEnv",
+	"AgentOptions": "withDefaults fills its fields: TestDefaultsMergeNestedStructsPerField",
+	"Compaction":   "withDefaults fills its fields: TestPrecedenceDefaultsThenFileThenEnv",
+}
+
 // The rot guard the whitelist needed and the reflective merge should not: fill
-// EVERY field of types.Config with a non-zero value, load against an empty
-// root, and demand that none of them came back zero. A field type the merge
-// cannot carry shows up here as a concrete named field rather than as a silent
-// no-op at some embedder's call site.
+// EVERY field of types.Config with a non-zero value, load, and demand that none
+// of them came back zero. A field type the merge cannot carry shows up here as
+// a concrete named field rather than as a silent no-op at some embedder's call
+// site.
+//
+// Read blindToSeeds before trusting a pass. A non-zero result only proves the
+// seed landed for fields nothing downstream rewrites, which is most of them but
+// not all; this test is a net, not a proof.
 func TestDefaultsSeedEveryFieldOfConfig(t *testing.T) {
 	clearBareEnv(t)
 	dir := t.TempDir()
@@ -392,9 +408,146 @@ func TestDefaultsSeedEveryFieldOfConfig(t *testing.T) {
 	v := reflect.ValueOf(cfg)
 	for i := range v.NumField() {
 		name := v.Type().Field(i).Name
+		if why, blind := blindToSeeds[name]; blind {
+			if v.Field(i).IsZero() {
+				t.Errorf("types.Config.%s came back zero, and this guard is blind to it (%s)", name, why)
+			}
+			continue
+		}
 		if v.Field(i).IsZero() {
 			t.Errorf("types.Config.%s was seeded but came back zero: LoadOptions.Defaults does not cover it", name)
 		}
+	}
+}
+
+// Every name in blindToSeeds must still be a field of types.Config: a renamed
+// or removed field would otherwise leave a stale excuse behind, quietly
+// re-blinding the guard for whatever replaced it.
+func TestBlindToSeedsNamesRealFields(t *testing.T) {
+	ty := reflect.TypeOf(types.Config{})
+	for name := range blindToSeeds {
+		if _, ok := ty.FieldByName(name); !ok {
+			t.Errorf("blindToSeeds names %q, which is no longer a field of types.Config", name)
+		}
+	}
+}
+
+// The one carve-out. LoadOptions.BaseDir is the single knob for the root, so a
+// seeded Defaults.BaseDir must lose to it, and must lose to an EMPTY one too:
+// empty is not "unset", it is the explicit request for standalone nib's XDG
+// resolution. Honoring the seed would also leave cfg claiming a root the config
+// file was not read from, since loadFromFileIn already used LoadOptions.BaseDir.
+func TestDefaultsBaseDirIsNotSeedable(t *testing.T) {
+	clearBareEnv(t)
+	dir := t.TempDir()
+	defaults := types.Config{BaseDir: "/seeded/root"}
+
+	cfg := LoadWith(LoadOptions{BaseDir: dir, Defaults: defaults, SkipBareEnv: true})
+	if cfg.BaseDir != dir {
+		t.Fatalf("BaseDir = %q, want the LoadOptions root %q", cfg.BaseDir, dir)
+	}
+
+	// Empty LoadOptions.BaseDir still wins, and BaseDirOf must resolve to the
+	// XDG root rather than to anything the seed named.
+	xdg := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", xdg)
+	cfg = LoadWith(LoadOptions{Defaults: defaults, SkipBareEnv: true})
+	if cfg.BaseDir != "" {
+		t.Fatalf("BaseDir = %q, want empty: a seed must not supply the root", cfg.BaseDir)
+	}
+	if got, want := BaseDirOf(cfg), filepath.Join(xdg, "nib"); got != want {
+		t.Fatalf("BaseDirOf = %q, want the XDG root %q", got, want)
+	}
+}
+
+// Agents was one of the fields the whitelist dropped, and the rot guard is
+// blind to it because MergeAgentTypes always returns the built-in types. Assert
+// the seeded agent by name.
+func TestDefaultsSeedAgents(t *testing.T) {
+	clearBareEnv(t)
+	dir := t.TempDir()
+	defaults := types.Config{Agents: []types.AgentTypeConfig{
+		{Name: "localai-seeded", Description: "seeded by the embedder"},
+	}}
+
+	cfg := LoadWith(LoadOptions{BaseDir: dir, Defaults: defaults, SkipBareEnv: true})
+	var found *types.AgentTypeConfig
+	for i := range cfg.Agents {
+		if cfg.Agents[i].Name == "localai-seeded" {
+			found = &cfg.Agents[i]
+		}
+	}
+	if found == nil {
+		t.Fatalf("seeded agent missing from %d merged agents", len(cfg.Agents))
+	}
+	if found.Description != "seeded by the embedder" {
+		t.Fatalf("seeded agent Description = %q", found.Description)
+	}
+	if len(cfg.Agents) < 2 {
+		t.Fatalf("seeded agent replaced the built-ins: %v", cfg.Agents)
+	}
+}
+
+// A file that lists agents keeps exactly its own list, seeds and all-or-nothing
+// slice semantics included.
+func TestDefaultsSeedAgentsLoseToTheFile(t *testing.T) {
+	clearBareEnv(t)
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "config.yaml"),
+		[]byte("agents:\n  - name: from-file\n    description: written by the user\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	defaults := types.Config{Agents: []types.AgentTypeConfig{{Name: "localai-seeded"}}}
+
+	cfg := LoadWith(LoadOptions{BaseDir: dir, Defaults: defaults, SkipBareEnv: true})
+	for _, a := range cfg.Agents {
+		if a.Name == "localai-seeded" {
+			t.Fatalf("seeded agent survived a file that lists its own: %v", cfg.Agents)
+		}
+	}
+}
+
+// Bools are the documented sharp edge: false is indistinguishable from unset,
+// so a seeded true beats an explicit `false:` in the file for EVERY bool. This
+// pins the behavior the comment on applySeeds promises, Browser.AllowPrivateURLs
+// above all, since it gates localhost and RFC1918 access.
+func TestSeededBoolsBeatAnExplicitFalse(t *testing.T) {
+	clearBareEnv(t)
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(
+		"compaction:\n  disabled: false\n"+
+			"agent_options:\n  force_reasoning: false\n"+
+			"browser:\n  enabled: false\n  allow_private_urls: false\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	defaults := types.Config{
+		Compaction:   types.CompactionConfig{Disabled: true},
+		AgentOptions: types.AgentOptions{ForceReasoning: true},
+		Browser:      types.BrowserConfig{Enabled: true, AllowPrivateURLs: true},
+	}
+
+	cfg := LoadWith(LoadOptions{BaseDir: dir, Defaults: defaults, SkipBareEnv: true})
+	if !cfg.Compaction.Disabled {
+		t.Fatal("Compaction.Disabled = false; the documented bool behavior changed")
+	}
+	if !cfg.AgentOptions.ForceReasoning {
+		t.Fatal("AgentOptions.ForceReasoning = false; the documented bool behavior changed")
+	}
+	if !cfg.Browser.Enabled || !cfg.Browser.AllowPrivateURLs {
+		t.Fatalf("Browser = %+v; the documented bool behavior changed", cfg.Browser)
+	}
+}
+
+// The other half of the bool rule: an unseeded bool is untouched, so nib's own
+// defaults still apply and nothing is silently switched on.
+func TestUnseededBoolsStayFalse(t *testing.T) {
+	clearBareEnv(t)
+	dir := t.TempDir()
+	cfg := LoadWith(LoadOptions{BaseDir: dir, Defaults: types.Config{Model: "m"}, SkipBareEnv: true})
+	if cfg.Compaction.Disabled || cfg.Browser.Enabled || cfg.Browser.AllowPrivateURLs ||
+		cfg.Computer.Enabled || cfg.AgentOptions.ForceReasoning {
+		t.Fatalf("an unseeded bool was switched on: %+v %+v %+v",
+			cfg.Compaction, cfg.Browser, cfg.AgentOptions)
 	}
 }
 
