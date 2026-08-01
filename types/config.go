@@ -157,6 +157,13 @@ type Config struct {
 	// WorkingDir, when non-empty, is the directory host tools (bash, filesystem)
 	// operate in. Runtime-only; empty means the process cwd (legacy behavior).
 	WorkingDir string `yaml:"-"`
+	// BaseDir overrides the config/plugins/skills root for this invocation, so
+	// an embedder's state does not collide with a separately installed nib.
+	// Set by config.LoadWith from LoadOptions.BaseDir; empty means nib's own
+	// default resolution, so resolve it through plugin.BaseDirIn (or
+	// config.WritablePathIn for the config file) rather than using it raw.
+	// Runtime-only: never read from or written to YAML.
+	BaseDir string `yaml:"-"`
 	// Computer is the opt-in desktop-control capability (cua-driver). Runtime-only.
 	Computer ComputerConfig `yaml:"-"`
 	// Browser is the opt-in browser-automation capability (chromedp-driven).

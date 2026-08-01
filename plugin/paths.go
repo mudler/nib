@@ -17,6 +17,16 @@ func BaseDir() string {
 	return nib
 }
 
+// BaseDirIn returns root when non-empty, otherwise nib's default base
+// directory. Embedders pass their own root so nib's plugins, skills, and
+// registry do not collide with a separately installed nib.
+func BaseDirIn(root string) string {
+	if root != "" {
+		return root
+	}
+	return BaseDir()
+}
+
 // basePair returns the candidate nib and wiz base directories using the same
 // XDG-aware resolution logic for both.
 func basePair() (nib, wiz string) {

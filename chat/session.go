@@ -289,7 +289,7 @@ func NewSession(ctx context.Context, cfg types.Config, callbacks Callbacks, tran
 		computerEnabled:     cfg.Computer.Enabled,
 		cfgClients:          map[string]*mcp.ClientSession{},
 		cfgServers:          map[string]types.MCPServer{},
-		configurator:        manage.New(plugin.BaseDir(), config.WritablePath()),
+		configurator:        manage.New(plugin.BaseDirIn(cfg.BaseDir), config.WritablePathIn(cfg.BaseDir)),
 		tracer:              tracer,
 	}
 	// Resume/rehydration: seed a prior conversation so the very next SendMessage

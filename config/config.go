@@ -63,6 +63,16 @@ func configPaths() []string {
 	return paths
 }
 
+// configPathsIn returns the config paths to try. A non-empty root collapses
+// the search to that single directory, so an embedder gets exactly the file it
+// asked for and never picks up a stray ~/.config/nib or /etc/nib.
+func configPathsIn(root string) []string {
+	if root != "" {
+		return []string{filepath.Join(root, "config.yaml")}
+	}
+	return configPaths()
+}
+
 // WritablePath returns the config file self-configuration should write to: the
 // first existing config path (so additions are visible to Load), else the
 // preferred default ~/.config/nib/config.yaml.
@@ -78,11 +88,20 @@ func WritablePath() string {
 	return ".nib.yaml"
 }
 
-// loadFromFile attempts to load config from the first existing config file
-func loadFromFile() types.Config {
+// WritablePathIn returns the config file to write to for the given root.
+func WritablePathIn(root string) string {
+	if root != "" {
+		return filepath.Join(root, "config.yaml")
+	}
+	return WritablePath()
+}
+
+// loadFromFileIn attempts to load config from the first existing config file
+// under root (or, for an empty root, the default search path).
+func loadFromFileIn(root string) types.Config {
 	var cfg types.Config
 
-	for _, path := range configPaths() {
+	for _, path := range configPathsIn(root) {
 		data, err := os.ReadFile(path)
 		if err != nil {
 			continue
@@ -99,11 +118,21 @@ func loadFromFile() types.Config {
 	return cfg
 }
 
+// LoadOptions configures LoadWith. The zero value is what standalone nib uses.
+type LoadOptions struct {
+	// BaseDir overrides the config/plugins/skills root. Empty means the
+	// default XDG resolution.
+	BaseDir string
+}
+
 // Load loads the configuration from YAML file and environment variables.
 // Environment variables take precedence over YAML config.
-func Load() types.Config {
+func Load() types.Config { return LoadWith(LoadOptions{}) }
+
+// LoadWith is Load with injectable roots and behavior switches.
+func LoadWith(o LoadOptions) types.Config {
 	// Load from YAML file first
-	cfg := loadFromFile()
+	cfg := loadFromFileIn(o.BaseDir)
 
 	// Override with environment variables if set
 	if model := os.Getenv("MODEL"); model != "" {
@@ -118,16 +147,23 @@ func Load() types.Config {
 
 	cfg = withDefaults(cfg)
 
+	// Carry the override (not the resolved root) so consumers keep resolving it
+	// through plugin.BaseDirIn / config.WritablePathIn: with no override those
+	// two reproduce standalone nib exactly, including WritablePath's
+	// first-existing-file search, which <base>/config.yaml would not.
+	cfg.BaseDir = o.BaseDir
+	root := plugin.BaseDirIn(o.BaseDir)
+
 	// Merge enabled skill-pack skills before plugins, so precedence is
 	// built-in defaults < plugins < skill-packs < user. plugin.Apply skips any
 	// skill name already present (user + packs), so packs win over plugins.
-	if err := skill.Apply(&cfg, plugin.BaseDir()); err != nil {
+	if err := skill.Apply(&cfg, root); err != nil {
 		fmt.Fprintf(os.Stderr, "nib: skill load: %v\n", err)
 	}
 
 	// Merge enabled plugin contributions (mcp servers + agents) before the
 	// agent default-merge, so precedence is built-in defaults < plugins < user.
-	if err := plugin.Apply(&cfg, plugin.BaseDir(), internal.Version); err != nil {
+	if err := plugin.Apply(&cfg, root, internal.Version); err != nil {
 		fmt.Fprintf(os.Stderr, "nib: plugin load: %v\n", err)
 	}
 
