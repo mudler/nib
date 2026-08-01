@@ -531,11 +531,22 @@ each difference. `BaseDir` is the root for `config.yaml`, `plugins/` and
 `skills/`, keeping embedded state out of a separately installed nib's.
 
 `app.Run` never calls `os.Exit`, and it takes cancellation from the context you
-pass rather than installing its own signal handling. A non-zero exit code from
-a management subcommand (`plugin`, `skill`, `mcp`) comes back as an
-`app.ExitError`. `app.Main(os.Args) int` is the same entrypoint shaped for a
+pass rather than installing its own signal handling. Every failure comes back
+as a bare `app.ExitError` carrying nothing but an exit code: a config error, an
+MCP transport failure, the setup abort, the stream refusal described below, a
+management subcommand's non-zero code and a TUI error are all
+indistinguishable, because the cause is printed to `Stderr` rather than carried
+in the error. `app.Main(os.Args) int` is the same entrypoint shaped for a
 `main` function: it installs nib's SIGINT/SIGTERM handling and takes no
 options, which is all nib's own `main.go` needs.
+
+**The management subcommands do not honor injected streams.** `plugin`, `skill`
+and `mcp <add|list|remove|test>` read `os.Stdin` and write `os.Stdout` and
+`os.Stderr` directly. So an embedded `nib plugin install` with no terminal
+behind stdin hits EOF on the "Enable this plugin?" prompt, reads that as "no",
+and exits **0** with the plugin installed but left **disabled**, having said so
+on a stream the embedder never set. Pass `--yes` to install and enable in one
+step.
 
 ### Injecting streams
 
@@ -548,10 +559,12 @@ the TUI prints on exit goes to `Stdout`.
 
 So, for an embedder:
 
-- Injecting a stream that is **not** a terminal (a buffer, a pipe, a file)
-  requires `--cli`. Without it the run is refused, with an error naming `--cli`
-  and the offending stream, rather than rendering into a writer the TUI cannot
-  drive and leaving it empty.
+- Injecting a `Stdin` or a `Stdout` that is **not** a terminal (a buffer, a
+  pipe, a file) requires `--cli`. Without it the run is refused, with an error
+  naming `--cli` and the offending stream, rather than rendering into a writer
+  the TUI cannot drive and leaving it empty. Only those two are gated: a
+  non-terminal `Stderr` is always accepted, so a TUI session with its error
+  output captured to a buffer or a log file is fine.
 - Injecting real terminals, including the process streams while attached to
   one, leaves every mode working.
 - To keep nib's shell-capture idiom, where a user runs `out=$(myprog agent)`

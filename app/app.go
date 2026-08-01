@@ -42,11 +42,16 @@ type Options struct {
 	// opens /dev/tty at all. Only the shell-capture line the TUI prints on exit
 	// goes to Stdout.
 	//
-	// For an embedder that is a rule rather than a caveat: injecting a stream
-	// that is NOT a terminal (a buffer, a pipe, a file) requires --cli, or the
-	// run is refused with an error saying so, rather than rendering into a
-	// stream the TUI cannot drive. Injecting the process streams, or any other
+	// For an embedder that is a rule rather than a caveat: injecting a Stdin or
+	// a Stdout that is NOT a terminal (a buffer, a pipe, a file) requires --cli,
+	// or the run is refused with an error saying so, rather than rendering into
+	// a stream the TUI cannot drive. Injecting the process streams, or any other
 	// terminal, leaves every mode working.
+	//
+	// Only those two are gated (see decideStreamRefusal). A non-terminal Stderr
+	// is always accepted, because every error this package prints goes through
+	// o.stderr() rather than through the TUI, so a TUI session with its error
+	// output captured to a buffer or a log file is a supported combination.
 	//
 	// One consequence is worth spelling out, because it inverts the usual
 	// instinct that passing os.Stdout is the safe, explicit choice. An embedder
@@ -118,8 +123,16 @@ func Main(argv []string) int {
 	return run(Options{Args: args})
 }
 
-// Run runs nib and returns an error. It never calls os.Exit. A non-zero exit
-// code from a management subcommand is returned as an ExitError.
+// Run runs nib and returns an error. It never calls os.Exit.
+//
+// Every failure comes back as a bare ExitError carrying nothing but an exit
+// code: a config error, an MCP transport failure, the setup abort, the
+// injected-stream refusal and a management subcommand's non-zero code are all
+// indistinguishable to the caller, because the cause is written to Stderr
+// rather than carried in the error.
+//
+// Run also reconfigures the process-wide xlog logger from the resolved config,
+// which an embedder sharing that logger will observe.
 func Run(ctx context.Context, o Options) error {
 	if code := runCtx(ctx, o); code != 0 {
 		return ExitError{Code: code}
