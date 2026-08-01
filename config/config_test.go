@@ -34,7 +34,18 @@ func TestWithDefaultsKeepsUserValues(t *testing.T) {
 	}
 }
 
+// clearBareEnv neutralizes the MODEL/API_KEY/BASE_URL overrides LoadWith reads
+// from the process environment. Without it these tests assert against whatever
+// the developer happens to export: `MODEL=oops go test ./config/` fails them.
+func clearBareEnv(t *testing.T) {
+	t.Helper()
+	t.Setenv("MODEL", "")
+	t.Setenv("API_KEY", "")
+	t.Setenv("BASE_URL", "")
+}
+
 func TestLoadWithBaseDirReadsInjectedRoot(t *testing.T) {
+	clearBareEnv(t)
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte("model: injected-model\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -49,6 +60,7 @@ func TestLoadWithBaseDirReadsInjectedRoot(t *testing.T) {
 }
 
 func TestLoadWithEmptyBaseDirUsesDefaultPaths(t *testing.T) {
+	clearBareEnv(t)
 	home := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", home)
 	if err := os.MkdirAll(filepath.Join(home, "nib"), 0o755); err != nil {
@@ -77,6 +89,29 @@ func TestLoadWithEmptyBaseDirKeepsWritablePath(t *testing.T) {
 	cfg := LoadWith(LoadOptions{})
 	if got, want := WritablePathIn(cfg.BaseDir), filepath.Join(home, ".nib.yaml"); got != want {
 		t.Fatalf("WritablePathIn(cfg.BaseDir) = %q, want %q", got, want)
+	}
+}
+
+// BaseDirOf must return the injected root itself, not a path derived from it,
+// and must not consult the XDG/home resolution at all when an override is set.
+func TestBaseDirOfReturnsInjectedRoot(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", home)
+	dir := t.TempDir()
+	if got := BaseDirOf(types.Config{BaseDir: dir}); got != dir {
+		t.Fatalf("BaseDirOf = %q, want %q", got, dir)
+	}
+}
+
+// With no override the field is empty, and BaseDirOf must reproduce standalone
+// nib's default resolution rather than returning the empty string, which would
+// make every filepath.Join on it relative to the working directory.
+func TestBaseDirOfEmptyResolvesDefaultRoot(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", home)
+	want := filepath.Join(home, "nib")
+	if got := BaseDirOf(types.Config{}); got != want {
+		t.Fatalf("BaseDirOf = %q, want %q", got, want)
 	}
 }
 

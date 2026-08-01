@@ -96,6 +96,17 @@ func WritablePathIn(root string) string {
 	return WritablePath()
 }
 
+// BaseDirOf resolves the plugins/skills root that a loaded config points at.
+//
+// types.Config.BaseDir holds the RAW OVERRIDE, empty for standalone nib, so it
+// is not a directory and must never be joined onto a path: filepath.Join("",
+// "plugins") silently yields a relative path under the process working
+// directory. Reading the field through this helper is the only safe way.
+//
+// This cannot be a method on types.Config: plugin already imports types, so
+// types importing plugin would be an import cycle.
+func BaseDirOf(cfg types.Config) string { return plugin.BaseDirIn(cfg.BaseDir) }
+
 // loadFromFileIn attempts to load config from the first existing config file
 // under root (or, for an empty root, the default search path).
 func loadFromFileIn(root string) types.Config {
@@ -152,7 +163,7 @@ func LoadWith(o LoadOptions) types.Config {
 	// two reproduce standalone nib exactly, including WritablePath's
 	// first-existing-file search, which <base>/config.yaml would not.
 	cfg.BaseDir = o.BaseDir
-	root := plugin.BaseDirIn(o.BaseDir)
+	root := BaseDirOf(cfg)
 
 	// Merge enabled skill-pack skills before plugins, so precedence is
 	// built-in defaults < plugins < skill-packs < user. plugin.Apply skips any
