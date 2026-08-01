@@ -110,6 +110,28 @@ func TestResolveLoop(t *testing.T) {
 	}
 }
 
+func TestResolveModel(t *testing.T) {
+	var (
+		cmds   []types.CommandConfig
+		skills []types.Skill
+		agents []types.AgentTypeConfig
+	)
+
+	if a := Resolve("/models", cmds, skills, agents); a.Kind != KindModelList {
+		t.Fatalf("/models: %+v", a)
+	}
+	if a := Resolve("/model", cmds, skills, agents); a.Kind != KindModelList {
+		t.Fatalf("bare /model should list: %+v", a)
+	}
+	a := Resolve("/model qwen3.5-4b", cmds, skills, agents)
+	if a.Kind != KindModelSet || a.Model != "qwen3.5-4b" {
+		t.Fatalf("/model <name>: %+v", a)
+	}
+	if a := Resolve("/model   spaced-name  ", cmds, skills, agents); a.Kind != KindModelSet || a.Model != "spaced-name" {
+		t.Fatalf("/model should trim: %+v", a)
+	}
+}
+
 func TestResolveGoal(t *testing.T) {
 	cases := []struct {
 		in   string
