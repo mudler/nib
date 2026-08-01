@@ -1,6 +1,7 @@
 package setup
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -67,5 +68,49 @@ func TestSavePreservesExistingKeys(t *testing.T) {
 	}
 	if got["model"] != "new" {
 		t.Errorf("model not overwritten: %v", got)
+	}
+}
+
+// An embedded nib runs onboarding against an injected root. Save must write
+// there, not into the user's real ~/.config/nib: the embedder's model and, more
+// importantly, its api_key would otherwise land in the user's own config.
+func TestSaveHonorsBaseDirOverride(t *testing.T) {
+	xdg := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", xdg)
+	root := t.TempDir()
+
+	path, err := Save(types.Config{Model: "embedded", APIKey: "sk-embedded", BaseURL: "u", BaseDir: root})
+	if err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	if want := filepath.Join(root, "config.yaml"); path != want {
+		t.Fatalf("path = %q, want %q", path, want)
+	}
+	if _, err := os.Stat(filepath.Join(xdg, "nib", "config.yaml")); !os.IsNotExist(err) {
+		t.Fatalf("wrote into the user's real nib root: err = %v", err)
+	}
+
+	data, _ := os.ReadFile(path)
+	var got map[string]any
+	if err := yaml.Unmarshal(data, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got["api_key"] != "sk-embedded" {
+		t.Fatalf("written config = %v", got)
+	}
+	// BaseDir is runtime-only and must never be serialized into the file.
+	if _, ok := got["base_dir"]; ok {
+		t.Fatalf("base_dir leaked into the config file: %v", got)
+	}
+}
+
+// The wizard collects only the three connection fields, so the override has to
+// survive newModel or Save would fall back to the default root.
+func TestWizardCarriesBaseDirIntoSavedConfig(t *testing.T) {
+	root := t.TempDir()
+	m := newModel(context.Background(), types.Config{BaseDir: root})
+	m.collect()
+	if m.cfg.BaseDir != root {
+		t.Fatalf("wizard dropped the override: BaseDir = %q, want %q", m.cfg.BaseDir, root)
 	}
 }

@@ -21,11 +21,28 @@ func configDir() (string, error) {
 	return filepath.Join(home, ".config", "nib"), nil
 }
 
+// configDirIn returns the config directory for a root override, falling back to
+// the default resolution when the override is empty. It guards against joining
+// an empty override onto a path, which would silently write into the process
+// working directory. The default is setup's own XDG resolution rather than
+// plugin.BaseDirIn's: the latter also falls back to the legacy wiz directory,
+// and onboarding has never written there.
+func configDirIn(root string) (string, error) {
+	if root != "" {
+		return root, nil
+	}
+	return configDir()
+}
+
 // Save writes the LLM connection fields (model, api_key, base_url) into
 // <configDir>/config.yaml, preserving any keys that already exist in the file.
 // It returns the path written. The file uses mode 0600 because it holds a key.
+//
+// cfg.BaseDir, when set, redirects the write into that root: onboarding inside
+// an embedded nib must not put the embedder's model and api_key into the user's
+// real ~/.config/nib.
 func Save(cfg types.Config) (string, error) {
-	dir, err := configDir()
+	dir, err := configDirIn(cfg.BaseDir)
 	if err != nil {
 		return "", err
 	}

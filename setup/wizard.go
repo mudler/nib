@@ -88,6 +88,10 @@ func newModel(ctx context.Context, existing types.Config) model {
 		step:    stepProvider,
 		presets: Presets(),
 		inputs:  inputs,
+		// Only the root override carries over from the existing config: the
+		// three editable fields come from the inputs (see collect), while Save
+		// needs to know which root to write into. Everything else stays zero.
+		cfg: types.Config{BaseDir: existing.BaseDir},
 	}
 }
 
