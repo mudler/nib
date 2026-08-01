@@ -118,6 +118,11 @@ Running out of input ends the session, so a piped question is answered and nib e
 `Ctrl+D` does the same thing interactively. `Ctrl+C` still exits non-zero, so a script can
 tell an interrupted run from a finished one.
 
+A piped run has nobody at the keyboard, so it cannot answer a tool-approval prompt. Any
+tool call that would need one is **denied** and the session ends: a closed stdin is not
+consent. To let a piped run act, say so explicitly with `--yolo` (`NIB_YOLO=1`), which
+auto-approves every tool call, or allowlist the tools you trust in `config.yaml`.
+
 ### Summon nib from your shell (`Ctrl+Space`)
 
 The `install.sh` script wires this up for you. Inside tmux, nib opens in a split pane so it

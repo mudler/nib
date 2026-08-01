@@ -26,6 +26,12 @@ const (
 	CLIWelcome = "a calm assistant for your terminal."
 	CLIExit    = "ctrl+c or 'exit' to leave · 'help' for commands"
 
+	// Shown when a CLI approval prompt gets no answer at all. A closed stdin
+	// (the piped one-shot idiom) and a cancelled run are both "nobody
+	// decided", which is not a yes, so the call is denied.
+	CLIDeniedNoInput  = "denied: stdin closed, nobody left to approve this"
+	CLIDeniedNoAnswer = "denied: no answer (the run was cancelled)"
+
 	// Shown when --yolo / NIB_YOLO auto-approves every tool call. The header
 	// carries the compact badge; the CLI prints the fuller notice at startup.
 	YoloBadge  = "yolo"

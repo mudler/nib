@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -190,6 +191,12 @@ func RunCLI(ctx context.Context, cfg types.Config, streams Streams, shellJobs *w
 	reader := bufio.NewReader(in)
 	spin := newSpinner(out)
 
+	// stdinClosed records that a read hit EOF. Both readers of this session
+	// consult it: the prompt loop, to stop, and the approval callback, to deny
+	// rather than ask a stream that cannot answer. It is atomic because the
+	// callbacks run on the agent's goroutine, not the loop's.
+	var stdinClosed atomic.Bool
+
 	callbacks := chat.Callbacks{
 		OnStatus: func(status string) {
 			spin.update(status)
@@ -213,12 +220,41 @@ func RunCLI(ctx context.Context, cfg types.Config, streams Streams, shellJobs *w
 			if req.Reasoning != "" {
 				fmt.Fprintln(out, g+theme.Reasoning.Render(req.Reasoning))
 			}
+			// Nothing can answer a prompt once stdin has closed, so record the
+			// call and deny it instead of printing a question at a dead stream.
+			if stdinClosed.Load() {
+				fmt.Fprintln(out, g+theme.Error.Render(theme.Cross+" "+theme.CLIDeniedNoInput))
+				return chat.ToolCallResponse{Approved: false}
+			}
+
 			scope, prefix := chat.GrantScope(req.Name, req.Arguments)
 			fmt.Fprint(out, g+theme.ApproveKey.Render(theme.CLIApprovePrompt(scope))+" ")
 
-			text, _ := readStringCancellable(ctx, reader)
+			text, readErr := readStringCancellable(ctx, reader)
 			text = strings.TrimSpace(text)
 			fmt.Fprintln(out)
+
+			// A failed read is not a decision, and the switch below has no arm
+			// that means "nobody answered": its default is the free-text
+			// "approve, but do it like this" arm, which is right for a human
+			// typing and catastrophic for an empty string handed back by a
+			// closed stdin. Under the piped one-shot idiom that approved and
+			// ran a shell command unattended, then exited 0. Fail closed.
+			//
+			// This is EOF and cancellation only. The empty line a human types
+			// at a live terminal is a different thing, a deliberate keypress,
+			// and it still means what it always meant.
+			if readErr != nil {
+				if errors.Is(readErr, io.EOF) {
+					// Gone for good: nothing later in this session can be
+					// answered either, so end it rather than prompting on.
+					stdinClosed.Store(true)
+					fmt.Fprintln(out, theme.Error.Render(theme.Cross+" "+theme.CLIDeniedNoInput))
+				} else {
+					fmt.Fprintln(out, theme.Error.Render(theme.Cross+" "+theme.CLIDeniedNoAnswer))
+				}
+				return chat.ToolCallResponse{Approved: false}
+			}
 
 			var response chat.ToolCallResponse
 			switch strings.ToLower(text) {
@@ -323,21 +359,20 @@ func RunCLI(ctx context.Context, cfg types.Config, streams Streams, shellJobs *w
 	// successful send only.
 	var pending []attachstage.StagedFile
 
-	// Set once stdin has run out. That is the end of the input, not a failure:
-	// `echo "question" | nib --cli` has to answer and exit 0, and an
-	// interactive Ctrl-D is the same EOF and ends the session the same way.
-	// Only EOF; any other read error is still reported, so a stdin that is
-	// genuinely broken does not look like a session the user finished.
+	// stdinClosed, set here or by the approval callback, ends the loop. Running
+	// out of input is the end of the input, not a failure: `echo "question" |
+	// nib --cli` has to answer and exit 0, and an interactive Ctrl-D is the
+	// same EOF and ends the session the same way. Only EOF; any other read
+	// error is still reported, so a stdin that is genuinely broken does not
+	// look like a session the user finished.
 	//
 	// It is a flag checked at the top of the loop rather than an immediate
 	// return because a last line arriving without a trailing newline
 	// (`printf 'question' | nib --cli`) comes back from bufio alongside the
 	// EOF. Letting the body run for it and stopping on the next trip is what
 	// keeps that line from being dropped.
-	eof := false
-
 	for {
-		if eof {
+		if stdinClosed.Load() {
 			return nil
 		}
 		select {
@@ -349,7 +384,7 @@ func RunCLI(ctx context.Context, cfg types.Config, streams Streams, shellJobs *w
 			text, err := readStringCancellable(ctx, reader)
 			switch {
 			case errors.Is(err, io.EOF):
-				eof = true
+				stdinClosed.Store(true)
 			case err != nil:
 				return err
 			}
