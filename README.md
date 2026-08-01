@@ -544,7 +544,11 @@ each difference. `BaseDir` is the root for `config.yaml`, `plugins/` and
 `skills/`, keeping embedded state out of a separately installed nib's.
 
 `app.Run` never calls `os.Exit`, and it takes cancellation from the context you
-pass rather than installing its own signal handling. Every failure comes back
+pass rather than installing its own signal handling. Cancelling that context
+unwinds whichever mode is running, the TUI included, and comes back as
+`ExitError{1}` with the context's error on `Stderr`. Nothing below `app.Run`
+listens for a signal, so an embedded nib is stopped by your handler cancelling
+your context, which is also what restores the terminal. Every failure comes back
 as a bare `app.ExitError` carrying nothing but an exit code, the cause having
 been printed to `Stderr` instead: an unparseable flag, an unknown `--init`
 shell, an MCP transport failure, the setup abort, the stream refusal described

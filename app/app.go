@@ -149,6 +149,11 @@ func Main(argv []string) int {
 // indistinguishable to the caller. The code is 1 for every one of those except
 // an unparseable flag, which is 2 and the only non-1 code runCtx produces.
 //
+// Cancelling ctx unwinds whichever mode is running, the TUI included, and
+// comes back as ExitError{1} with the context's error on Stderr. Signals are
+// the caller's: this entrypoint installs no handler, and nothing below it
+// listens for one either.
+//
 // Run also reconfigures the process-wide xlog logger from the resolved config,
 // which an embedder sharing that logger will observe.
 func Run(ctx context.Context, o Options) error {
