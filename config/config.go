@@ -136,6 +136,13 @@ type LoadOptions struct {
 	// BaseDir overrides the config/plugins/skills root. Empty means the
 	// default XDG resolution.
 	BaseDir string
+	// Defaults seed fields the config file leaves empty. They sit beneath the
+	// file so a user edit always wins.
+	Defaults types.Config
+	// SkipBareEnv suppresses the bare MODEL / API_KEY / BASE_URL environment
+	// variables. Embedders that expose their own prefixed variables set this so
+	// a MODEL meant for some other tool cannot retarget the agent.
+	SkipBareEnv bool
 }
 
 // Load loads the configuration from YAML file and environment variables.
@@ -147,15 +154,39 @@ func LoadWith(o LoadOptions) types.Config {
 	// Load from YAML file first
 	cfg := loadFromFileIn(o.BaseDir)
 
-	// Override with environment variables if set
-	if model := os.Getenv("MODEL"); model != "" {
-		cfg.Model = model
+	// Seed the gaps the file left. This runs before the env block and before
+	// withDefaults, which is what makes the precedence read, lowest to highest:
+	// nib's built-in defaults, the embedder's seeds, the config file, the
+	// environment.
+	if cfg.Model == "" {
+		cfg.Model = o.Defaults.Model
 	}
-	if apiKey := os.Getenv("API_KEY"); apiKey != "" {
-		cfg.APIKey = apiKey
+	if cfg.APIKey == "" {
+		cfg.APIKey = o.Defaults.APIKey
 	}
-	if baseURL := os.Getenv("BASE_URL"); baseURL != "" {
-		cfg.BaseURL = baseURL
+	if cfg.BaseURL == "" {
+		cfg.BaseURL = o.Defaults.BaseURL
+	}
+	if cfg.ApprovalMode == "" {
+		cfg.ApprovalMode = o.Defaults.ApprovalMode
+	}
+	if cfg.TraceDir == "" {
+		cfg.TraceDir = o.Defaults.TraceDir
+	}
+
+	// Override with environment variables if set. An embedder that publishes its
+	// own prefixed variables suppresses these, so a bare MODEL exported for some
+	// unrelated tool cannot silently retarget the agent.
+	if !o.SkipBareEnv {
+		if model := os.Getenv("MODEL"); model != "" {
+			cfg.Model = model
+		}
+		if apiKey := os.Getenv("API_KEY"); apiKey != "" {
+			cfg.APIKey = apiKey
+		}
+		if baseURL := os.Getenv("BASE_URL"); baseURL != "" {
+			cfg.BaseURL = baseURL
+		}
 	}
 
 	cfg = withDefaults(cfg)

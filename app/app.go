@@ -19,6 +19,7 @@ import (
 	"github.com/mudler/nib/internal"
 	"github.com/mudler/nib/mcp"
 	"github.com/mudler/nib/setup"
+	"github.com/mudler/nib/types"
 	"github.com/mudler/xlog"
 	"golang.org/x/term"
 )
@@ -37,6 +38,13 @@ type Options struct {
 	Stdin  io.Reader
 	Stdout io.Writer
 	Stderr io.Writer
+	// Defaults seed config fields the config file leaves empty.
+	Defaults types.Config
+	// SkipSetup suppresses the first-run model wizard. Embedders that resolve
+	// the model themselves set this.
+	SkipSetup bool
+	// SkipBareEnv suppresses the bare MODEL / API_KEY / BASE_URL variables.
+	SkipBareEnv bool
 }
 
 func (o Options) name() string {
@@ -173,7 +181,11 @@ func runCtx(ctx context.Context, o Options) int {
 		return 0
 	}
 
-	cfg := config.LoadWith(config.LoadOptions{BaseDir: o.BaseDir})
+	cfg := config.LoadWith(config.LoadOptions{
+		BaseDir:     o.BaseDir,
+		Defaults:    o.Defaults,
+		SkipBareEnv: o.SkipBareEnv,
+	})
 
 	// Tracing is runtime-only: the flag wins, otherwise fall back to the env var.
 	if *traceDirFlag != "" {
@@ -198,24 +210,28 @@ func runCtx(ctx context.Context, o Options) int {
 		isTTY = term.IsTerminal(int(f.Fd()))
 	}
 
-	switch decideSetup(cfg.Model != "", *setupFlag, isTTY) {
-	case setupAbort:
-		if *setupFlag {
-			fmt.Fprintf(o.stderr(), "%s --setup requires an interactive terminal\n", o.name())
-		} else {
-			fmt.Fprintf(o.stderr(), "%s: no model configured. Run `%s --setup`, or set MODEL/API_KEY/BASE_URL.\n", o.name(), o.name())
-		}
-		return 1
-	case setupRun:
-		newCfg, saved, err := setup.Run(ctx, cfg)
-		if err != nil {
-			fmt.Fprintf(o.stderr(), "setup: %v\n", err)
+	// An embedder that resolves the model itself owns that decision, so neither
+	// the abort nor the wizard applies: cfg is used as loaded.
+	if !o.SkipSetup {
+		switch decideSetup(cfg.Model != "", *setupFlag, isTTY) {
+		case setupAbort:
+			if *setupFlag {
+				fmt.Fprintf(o.stderr(), "%s --setup requires an interactive terminal\n", o.name())
+			} else {
+				fmt.Fprintf(o.stderr(), "%s: no model configured. Run `%s --setup`, or set MODEL/API_KEY/BASE_URL.\n", o.name(), o.name())
+			}
 			return 1
+		case setupRun:
+			newCfg, saved, err := setup.Run(ctx, cfg)
+			if err != nil {
+				fmt.Fprintf(o.stderr(), "setup: %v\n", err)
+				return 1
+			}
+			if !saved {
+				return 0 // user cancelled
+			}
+			cfg.Model, cfg.APIKey, cfg.BaseURL = newCfg.Model, newCfg.APIKey, newCfg.BaseURL
 		}
-		if !saved {
-			return 0 // user cancelled
-		}
-		cfg.Model, cfg.APIKey, cfg.BaseURL = newCfg.Model, newCfg.APIKey, newCfg.BaseURL
 	}
 
 	// Shared shell-job registry: the shell MCP server starts/manages jobs in it,

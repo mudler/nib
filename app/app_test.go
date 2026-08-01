@@ -2,10 +2,14 @@ package app
 
 import (
 	"bytes"
+	"context"
+	"io"
 	"runtime"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/mudler/nib/types"
 )
 
 func TestVersionReturnsZero(t *testing.T) {
@@ -119,5 +123,96 @@ func TestFlagErrorsGoToConfiguredStderr(t *testing.T) {
 	}
 	if out.Len() != 0 {
 		t.Fatalf("--bogus wrote %q to stdout, want nothing", out.String())
+	}
+}
+
+// skipSetupOptions is the one situation the setup gate fires in: an empty
+// injected root, the bare environment suppressed, and a stdin that is not a
+// terminal, so decideSetup lands on setupAbort rather than the wizard.
+//
+// --cli is what makes "the gate was skipped" observable. --version returns
+// before the config load, so it never reaches the gate at all and would pass
+// with SkipSetup ignored. The CLI loop, handed an already-cancelled context,
+// returns context.Canceled on its first iteration without reading stdin or
+// talking to a model, which gives the far side of the gate a cheap, terminating
+// exit.
+func skipSetupOptions(t *testing.T, out, errOut io.Writer) Options {
+	t.Helper()
+	t.Setenv("MODEL", "")
+	t.Setenv("API_KEY", "")
+	t.Setenv("BASE_URL", "")
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	return Options{
+		Args:        []string{"--cli"},
+		BaseDir:     t.TempDir(), // empty: no model configured anywhere
+		SkipBareEnv: true,
+		Stdin:       strings.NewReader(""),
+		Stdout:      out,
+		Stderr:      errOut,
+	}
+}
+
+func cancelledContext(t *testing.T) context.Context {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	t.Cleanup(func() { cancel() })
+	return ctx
+}
+
+// The control: with SkipSetup off, standalone nib's abort must be untouched.
+func TestSetupAbortStillFiresWithoutSkipSetup(t *testing.T) {
+	var errOut bytes.Buffer
+	o := skipSetupOptions(t, io.Discard, &errOut)
+	if code := runCtx(cancelledContext(t), o); code != 1 {
+		t.Fatalf("exit code = %d, want 1; stderr = %q", code, errOut.String())
+	}
+	if !strings.Contains(errOut.String(), "no model configured") {
+		t.Fatalf("stderr = %q, want the no-model abort", errOut.String())
+	}
+}
+
+func TestSkipSetupSuppressesTheWizardAbort(t *testing.T) {
+	var errOut bytes.Buffer
+	o := skipSetupOptions(t, io.Discard, &errOut)
+	o.SkipSetup = true
+
+	runCtx(cancelledContext(t), o)
+
+	if strings.Contains(errOut.String(), "no model configured") {
+		t.Fatalf("SkipSetup did not suppress the setup abort: %q", errOut.String())
+	}
+	if !strings.Contains(errOut.String(), "context canceled") {
+		t.Fatalf("stderr = %q, want the run to have reached the CLI past the gate", errOut.String())
+	}
+}
+
+// Options.Defaults must reach config.LoadWith. A seeded model satisfies the
+// setup gate on its own, which is the whole point for an embedder: no wizard,
+// no bare MODEL, just the host's own resolution.
+func TestOptionsDefaultsSeedTheLoadedConfig(t *testing.T) {
+	var errOut bytes.Buffer
+	o := skipSetupOptions(t, io.Discard, &errOut)
+	o.Defaults = types.Config{Model: "seeded-model", BaseURL: "http://seed.invalid/v1"}
+
+	runCtx(cancelledContext(t), o)
+
+	if strings.Contains(errOut.String(), "no model configured") {
+		t.Fatalf("Options.Defaults never reached the config load: %q", errOut.String())
+	}
+}
+
+// Options.SkipBareEnv must reach config.LoadWith too: with it set, a bare MODEL
+// in the environment must not be enough to get past the gate.
+func TestOptionsSkipBareEnvReachesTheConfigLoad(t *testing.T) {
+	var errOut bytes.Buffer
+	o := skipSetupOptions(t, io.Discard, &errOut)
+	t.Setenv("MODEL", "env-model")
+
+	if code := runCtx(cancelledContext(t), o); code != 1 {
+		t.Fatalf("exit code = %d, want 1: MODEL must not satisfy the gate under SkipBareEnv", code)
+	}
+	if !strings.Contains(errOut.String(), "no model configured") {
+		t.Fatalf("stderr = %q, want the no-model abort", errOut.String())
 	}
 }

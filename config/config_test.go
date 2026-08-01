@@ -115,6 +115,130 @@ func TestBaseDirOfEmptyResolvesDefaultRoot(t *testing.T) {
 	}
 }
 
+// SkipBareEnv is what lets an embedder publish its own prefixed variables: a
+// bare MODEL exported for some unrelated tool must not retarget the agent.
+func TestSkipBareEnvIgnoresBareVars(t *testing.T) {
+	t.Setenv("MODEL", "from-env")
+	t.Setenv("API_KEY", "key-from-env")
+	t.Setenv("BASE_URL", "http://env.invalid/v1")
+	dir := t.TempDir()
+
+	cfg := LoadWith(LoadOptions{BaseDir: dir, SkipBareEnv: true})
+	if cfg.Model == "from-env" {
+		t.Fatal("SkipBareEnv did not suppress MODEL")
+	}
+	if cfg.APIKey == "key-from-env" {
+		t.Fatal("SkipBareEnv did not suppress API_KEY")
+	}
+	if cfg.BaseURL == "http://env.invalid/v1" {
+		t.Fatal("SkipBareEnv did not suppress BASE_URL")
+	}
+}
+
+// The zero value has to reproduce standalone nib exactly, so with the switch
+// off all three bare variables still apply.
+func TestBareEnvStillAppliesByDefault(t *testing.T) {
+	t.Setenv("MODEL", "from-env")
+	t.Setenv("API_KEY", "key-from-env")
+	t.Setenv("BASE_URL", "http://env.invalid/v1")
+	dir := t.TempDir()
+
+	cfg := LoadWith(LoadOptions{BaseDir: dir})
+	if cfg.Model != "from-env" {
+		t.Fatalf("Model = %q, want from-env (standalone nib must be unaffected)", cfg.Model)
+	}
+	if cfg.APIKey != "key-from-env" {
+		t.Fatalf("APIKey = %q, want key-from-env", cfg.APIKey)
+	}
+	if cfg.BaseURL != "http://env.invalid/v1" {
+		t.Fatalf("BaseURL = %q, want the env value", cfg.BaseURL)
+	}
+}
+
+// Seeds fill the gaps the config file leaves; they never override it.
+func TestDefaultsSitBeneathTheConfigFile(t *testing.T) {
+	clearBareEnv(t)
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte("model: from-file\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	defaults := types.Config{Model: "from-defaults", BaseURL: "http://seed.invalid/v1"}
+
+	cfg := LoadWith(LoadOptions{BaseDir: dir, Defaults: defaults, SkipBareEnv: true})
+	if cfg.Model != "from-file" {
+		t.Fatalf("Model = %q, want from-file (the file must win over Defaults)", cfg.Model)
+	}
+	if cfg.BaseURL != "http://seed.invalid/v1" {
+		t.Fatalf("BaseURL = %q, want the seeded value to fill the gap", cfg.BaseURL)
+	}
+}
+
+// The whole ladder in one place: built-in defaults < Defaults < config file <
+// environment. Each field below is set at exactly one rung above the seeds, so
+// a collapsed precedence shows up as a concrete wrong value rather than as a
+// missing assertion.
+func TestPrecedenceDefaultsThenFileThenEnv(t *testing.T) {
+	t.Setenv("MODEL", "from-env")
+	t.Setenv("API_KEY", "")
+	t.Setenv("BASE_URL", "")
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "config.yaml"),
+		[]byte("model: from-file\napi_key: key-from-file\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	defaults := types.Config{
+		Model:        "model-from-defaults",
+		APIKey:       "key-from-defaults",
+		BaseURL:      "http://seed.invalid/v1",
+		ApprovalMode: "auto",
+		Prompt:       "seeded prompt",
+	}
+
+	cfg := LoadWith(LoadOptions{BaseDir: dir, Defaults: defaults})
+
+	// env beats file beats seeds
+	if cfg.Model != "from-env" {
+		t.Fatalf("Model = %q, want from-env", cfg.Model)
+	}
+	// file beats seeds, and the env var is unset so it does not intervene
+	if cfg.APIKey != "key-from-file" {
+		t.Fatalf("APIKey = %q, want key-from-file", cfg.APIKey)
+	}
+	// nothing above the seeds sets these, so the seeds stand
+	if cfg.BaseURL != "http://seed.invalid/v1" {
+		t.Fatalf("BaseURL = %q, want the seeded value", cfg.BaseURL)
+	}
+	if cfg.ApprovalMode != "auto" {
+		t.Fatalf("ApprovalMode = %q, want auto (seeded)", cfg.ApprovalMode)
+	}
+	// Prompt is not among the seeded fields, so nib's built-in default stands.
+	if cfg.Prompt != defaultPrompt {
+		t.Fatalf("Prompt = %q, want nib's built-in default", cfg.Prompt)
+	}
+}
+
+// TraceDir is runtime-only (yaml:"-"), so a seed is the only way an embedder
+// can preset it, and nothing in the file can shadow it.
+func TestDefaultsSeedTraceDir(t *testing.T) {
+	clearBareEnv(t)
+	dir := t.TempDir()
+	cfg := LoadWith(LoadOptions{BaseDir: dir, Defaults: types.Config{TraceDir: "/seeded/traces"}})
+	if cfg.TraceDir != "/seeded/traces" {
+		t.Fatalf("TraceDir = %q, want /seeded/traces", cfg.TraceDir)
+	}
+}
+
+// The zero Defaults must change nothing: an unseeded load still yields empty
+// credentials, not some accidental placeholder.
+func TestZeroDefaultsSeedNothing(t *testing.T) {
+	clearBareEnv(t)
+	dir := t.TempDir()
+	cfg := LoadWith(LoadOptions{BaseDir: dir})
+	if cfg.Model != "" || cfg.APIKey != "" || cfg.BaseURL != "" || cfg.ApprovalMode != "" || cfg.TraceDir != "" {
+		t.Fatalf("zero Defaults seeded something: %+v", cfg)
+	}
+}
+
 func TestWritablePathInPrefersInjectedRoot(t *testing.T) {
 	dir := t.TempDir()
 	got := WritablePathIn(dir)
