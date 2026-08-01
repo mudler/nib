@@ -38,12 +38,19 @@ type Options struct {
 	Stdin  io.Reader
 	Stdout io.Writer
 	Stderr io.Writer
-	// Defaults seed config fields the config file leaves empty.
+	// Defaults seed config fields the config file leaves empty. Every field of
+	// types.Config is seedable; see config.LoadOptions.Defaults for what
+	// "empty" means for maps, slices and booleans.
 	Defaults types.Config
 	// SkipSetup suppresses the first-run model wizard. Embedders that resolve
-	// the model themselves set this.
+	// the model themselves set this. It suppresses the whole gate, so an
+	// explicit --setup in Args becomes a silent no-op rather than an error.
 	SkipSetup bool
-	// SkipBareEnv suppresses the bare MODEL / API_KEY / BASE_URL variables.
+	// SkipBareEnv suppresses the bare MODEL / API_KEY / BASE_URL variables, and
+	// only those three. nib's prefixed variables keep reading the ambient
+	// environment and still outrank a seed: NIB_TRACE_DIR overrides a seeded
+	// TraceDir, NIB_YOLO forces ApprovalMode to "auto" over a seeded one, and
+	// LOG_FORMAT selects the log encoding.
 	SkipBareEnv bool
 }
 

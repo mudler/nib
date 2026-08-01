@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 
+	"dario.cat/mergo"
 	"github.com/mudler/nib/internal"
 	"github.com/mudler/nib/plugin"
 	"github.com/mudler/nib/skill"
@@ -137,7 +139,9 @@ type LoadOptions struct {
 	// default XDG resolution.
 	BaseDir string
 	// Defaults seed fields the config file leaves empty. They sit beneath the
-	// file so a user edit always wins.
+	// file so a user edit always wins. EVERY field of types.Config is seedable,
+	// not a hand-picked subset; see applySeeds for exactly what "empty" means
+	// for maps, slices and booleans.
 	Defaults types.Config
 	// SkipBareEnv suppresses the bare MODEL / API_KEY / BASE_URL environment
 	// variables. Embedders that expose their own prefixed variables set this so
@@ -158,21 +162,7 @@ func LoadWith(o LoadOptions) types.Config {
 	// withDefaults, which is what makes the precedence read, lowest to highest:
 	// nib's built-in defaults, the embedder's seeds, the config file, the
 	// environment.
-	if cfg.Model == "" {
-		cfg.Model = o.Defaults.Model
-	}
-	if cfg.APIKey == "" {
-		cfg.APIKey = o.Defaults.APIKey
-	}
-	if cfg.BaseURL == "" {
-		cfg.BaseURL = o.Defaults.BaseURL
-	}
-	if cfg.ApprovalMode == "" {
-		cfg.ApprovalMode = o.Defaults.ApprovalMode
-	}
-	if cfg.TraceDir == "" {
-		cfg.TraceDir = o.Defaults.TraceDir
-	}
+	applySeeds(&cfg, o.Defaults)
 
 	// Override with environment variables if set. An embedder that publishes its
 	// own prefixed variables suppresses these, so a bare MODEL exported for some
@@ -215,6 +205,62 @@ func LoadWith(o LoadOptions) types.Config {
 	cfg.Agents = MergeAgentTypes(cfg.Agents)
 
 	return cfg
+}
+
+// applySeeds fills every zero-valued field of cfg from the embedder's seeds.
+//
+// It is reflective rather than field-by-field on purpose: LoadOptions.Defaults
+// is typed types.Config, so the type promises a merge, and a hand-written
+// whitelist would silently stop honoring each field added to types.Config
+// afterwards. Seeding LogLevel is the sharp end of that: the seed has to land
+// here or app's `if cfg.LogLevel == ""` forces "error" over it, with no
+// compile error and no warning to say the seed was dropped.
+//
+// What "empty" means, since a zero-value merge cannot ask the YAML decoder
+// which keys the file actually contained:
+//
+//   - Scalars and structs: recursive, per leaf field. A file that sets
+//     agent_options.iterations but not max_attempts keeps its iterations and
+//     takes the seeded max_attempts.
+//   - Maps (Metadata, MCPServers, MCPServer.Env, ...): merged per key. A key
+//     the file sets wins whole; a key only the seeds have is added. cfg's map
+//     is freshly allocated, so it never aliases the caller's.
+//   - Slices (Agents, Skills, Hooks, Commands, AllowedTools, ...): all or
+//     nothing. A file that lists any entry keeps exactly its own list; the
+//     seeded list is used only when the file has none. Element-wise merging
+//     would be meaningless for order-dependent lists of named things.
+//   - Booleans: false is indistinguishable from unset, so a seeded true beats
+//     an explicit `false:` in the file. Compaction.Disabled is the one place
+//     that bites; an embedder that wants compaction on should leave it unset.
+//
+// Slice-valued seeds are cloned before the merge. mergo adopts an empty
+// destination slice by reference, and skill.Apply/plugin.Apply then append to
+// cfg.Hooks, cfg.Skills and cfg.Commands, which would write into the caller's
+// backing array whenever it has spare capacity.
+func applySeeds(cfg *types.Config, defaults types.Config) {
+	if err := mergo.Merge(cfg, cloneSliceFields(defaults)); err != nil {
+		// Only reachable for a nil or non-struct argument, neither of which the
+		// single call site can produce. Report rather than drop it silently.
+		fmt.Fprintf(os.Stderr, "nib: config defaults: %v\n", err)
+	}
+}
+
+// cloneSliceFields returns c with each of its top-level slice fields replaced
+// by a copy, so nothing downstream can reach the caller's backing arrays. It
+// walks the struct reflectively so a slice field added to types.Config later is
+// covered without an edit here.
+func cloneSliceFields(c types.Config) types.Config {
+	v := reflect.ValueOf(&c).Elem()
+	for i := range v.NumField() {
+		f := v.Field(i)
+		if f.Kind() != reflect.Slice || f.IsNil() || !f.CanSet() {
+			continue
+		}
+		clone := reflect.MakeSlice(f.Type(), f.Len(), f.Len())
+		reflect.Copy(clone, f)
+		f.Set(clone)
+	}
+	return c
 }
 
 // withDefaults fills in zero-valued config fields with their defaults. It is

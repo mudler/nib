@@ -3,6 +3,7 @@ module github.com/mudler/nib
 go 1.26
 
 require (
+	dario.cat/mergo v1.0.1
 	github.com/Masterminds/semver/v3 v3.5.0
 	github.com/Masterminds/sprig/v3 v3.3.0
 	github.com/charmbracelet/bubbles v0.21.0
@@ -23,7 +24,6 @@ require (
 )
 
 require (
-	dario.cat/mergo v1.0.1 // indirect
 	github.com/Masterminds/goutils v1.1.1 // indirect
 	github.com/alecthomas/chroma/v2 v2.20.0 // indirect
 	github.com/atotto/clipboard v0.1.4 // indirect

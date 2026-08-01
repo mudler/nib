@@ -155,8 +155,9 @@ func skipSetupOptions(t *testing.T, out, errOut io.Writer) Options {
 func cancelledContext(t *testing.T) context.Context {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
+	// cancel is idempotent and the parent is Background, so the immediate call
+	// releases everything: no t.Cleanup is needed to avoid a leak.
 	cancel()
-	t.Cleanup(func() { cancel() })
 	return ctx
 }
 
