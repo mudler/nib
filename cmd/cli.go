@@ -374,6 +374,30 @@ func RunCLI(ctx context.Context, cfg types.Config, streams Streams, shellJobs *w
 					fmt.Fprintln(out, theme.Subtle.Render(compactNotice(before, after)))
 				}
 				continue
+			case slash.KindModelList:
+				// Bounded like the switch below: the user is waiting at the
+				// prompt, so an endpoint that accepts the connection and never
+				// answers must not wedge the loop.
+				listCtx, cancel := context.WithTimeout(ctx, chat.ModelListTimeout)
+				models, err := session.ListModels(listCtx)
+				cancel()
+				if err != nil {
+					fmt.Fprintln(errOut, theme.Error.Render(theme.Cross+" "+err.Error()))
+				} else {
+					// Raw, like the assistant's own reply: these are names the
+					// user reads and copies, and the marker column is the
+					// emphasis the listing needs.
+					fmt.Fprint(out, chat.FormatModelList(models, session.Model()))
+				}
+				continue
+			case slash.KindModelSet:
+				notice, err := session.SwitchModel(ctx, action.Model)
+				if err != nil {
+					fmt.Fprintln(errOut, theme.Error.Render(theme.Cross+" "+err.Error()))
+				} else {
+					fmt.Fprintln(out, theme.Subtle.Render(notice))
+				}
+				continue
 			case slash.KindAttach:
 				switch action.AttachOp {
 				case slash.AttachStage:
