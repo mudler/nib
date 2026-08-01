@@ -167,6 +167,21 @@ func TestSetModelKeepsHistory(t *testing.T) {
 	}
 }
 
+// TestSetModelResetsPrefixWarm: the prefix a warm session prefilled belongs to
+// the model it was sent to, so a switch leaves the session cold again. Left
+// stale-true, a UI would drop the "preparing the model" label on exactly the
+// turn that pays the full prefill.
+func TestSetModelResetsPrefixWarm(t *testing.T) {
+	s := &Session{llmModel: "old-model", baseURL: "http://unused.invalid/v1"}
+	s.prefixWarm.Store(true)
+
+	s.SetModel("new-model")
+
+	if s.PrefixWarm() {
+		t.Fatal("SetModel left the session marked warm for a model that never saw its prefix")
+	}
+}
+
 // TestSetModelIsFollowedBySubAgents: a sub-agent resolves its model against the
 // session model, so switching the session must switch the sub-agents too. Pins
 // that the resolution reads the live session model rather than a value captured

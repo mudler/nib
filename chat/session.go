@@ -32,7 +32,7 @@ type Session struct {
 	ctx          context.Context
 	turnMu       sync.Mutex
 	turnCancel   context.CancelFunc
-	llm          cogito.LLM
+	llm          cogito.LLM // guarded by modelMu
 	clients      []*mcp.ClientSession
 	mcpClient    *mcp.Client
 	cfgClients   map[string]*mcp.ClientSession // config/plugin MCP servers, by name
@@ -107,7 +107,7 @@ type Session struct {
 	// next one. The rest of the endpoint state below (apiKey, baseURL,
 	// metadata, reasoningEffort) is fixed at construction and read lock-free.
 	modelMu         sync.RWMutex
-	llmModel        string
+	llmModel        string // guarded by modelMu
 	apiKey          string
 	baseURL         string
 	transcribeModel string
@@ -143,8 +143,8 @@ type Session struct {
 
 // PrefixWarm reports whether this session has already issued a request that
 // SHOULD have prefilled its prompt prefix on the server — not that the server's
-// cache still holds it. A LocalAI restart, a model swap, or KV eviction leaves
-// this stale-true. That direction is deliberate: a stale true costs a missing
+// cache still holds it. A LocalAI restart or a KV eviction leaves this
+// stale-true. That direction is deliberate: a stale true costs a missing
 // "preparing" label, while a false negative would only cost a redundant one, so
 // callers should treat it as a hint for labelling and never as a guarantee.
 //
@@ -153,7 +153,9 @@ type Session struct {
 // before that (an attachments failure, or an all-blocked attachment set with no
 // text). It is safe to call from another goroutine while a turn is running.
 //
-// There is no reset: a rebuilt session is a new *Session and starts false.
+// SetModel resets it to false: unlike a restart or an eviction, a switch is a
+// cold prefix the session knows about. Nothing else resets it, and a rebuilt
+// session is a new *Session that starts false.
 func (s *Session) PrefixWarm() bool {
 	return s.prefixWarm.Load()
 }
@@ -1493,7 +1495,8 @@ func (s *Session) currentLLM() (cogito.LLM, string) {
 //
 // Conversation history is kept: nib is built around persistent context, and
 // /compact exists when history needs trimming. Sub-agents follow automatically,
-// because newAgentLLM resolves against the session model.
+// because newAgentLLM resolves against the session model. The prefix-warm flag
+// does not: the new model has never seen this session's prefix.
 //
 // A turn already in flight finishes on the client it started with (see
 // currentLLM); the switch applies from the next turn. Safe to call from another
@@ -1514,6 +1517,12 @@ func (s *Session) SetModel(name string) {
 	s.llm = llm
 	s.llmModel = name
 	s.modelMu.Unlock()
+
+	// The new model has never been asked for this session's prefix, so it is
+	// genuinely cold. Unlike a server restart or a KV eviction, which the
+	// session cannot see, a switch is something we know about, and PrefixWarm
+	// prefers a redundant "preparing" label over a silent minute.
+	s.prefixWarm.Store(false)
 }
 
 // ListModels returns the model IDs the configured endpoint advertises, so a UI
