@@ -63,6 +63,17 @@ func TestDispatchModelListPostsTheListing(t *testing.T) {
 	if !strings.Contains(msg.Content, "* model-a") || !strings.Contains(msg.Content, "  model-b") {
 		t.Fatalf("listing = %q, want the current model marked", msg.Content)
 	}
+
+	// The transcript renders an "agent" line as markdown, which is where a
+	// plain listing loses its indent and its marker column. Assert on what the
+	// user actually sees, not just on what was appended.
+	rendered := renderMarkdownWith(m.markdownFor(70), msg.Content, 70)
+	if !strings.Contains(rendered, "* model-a") {
+		t.Fatalf("the current-model marker did not survive rendering: %q", rendered)
+	}
+	if !strings.Contains(rendered, "  model-b") {
+		t.Fatalf("the listing lost its column alignment when rendered: %q", rendered)
+	}
 }
 
 // Bare /model lists rather than erroring, so a user who forgets the name gets

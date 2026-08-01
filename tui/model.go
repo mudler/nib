@@ -1055,7 +1055,11 @@ func (m *Model) dispatchResolved(input string) tea.Cmd {
 		if err != nil {
 			m.messages = append(m.messages, ChatMessage{Role: "error", Content: err.Error()})
 		} else {
-			listing := strings.TrimRight(chat.FormatModelList(models, m.session.Model()), "\n")
+			// Fenced, because an "agent" line is rendered as markdown: left
+			// plain, the two-space indent is stripped and "* current" turns
+			// into a bullet like every other row, losing the one thing the
+			// listing has to say. In a fence the columns survive verbatim.
+			listing := "```\n" + chat.FormatModelList(models, m.session.Model()) + "```"
 			m.messages = append(m.messages, ChatMessage{Role: "agent", Content: listing})
 		}
 		return nil
