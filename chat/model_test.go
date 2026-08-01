@@ -338,3 +338,127 @@ func TestListModelsPropagatesFailure(t *testing.T) {
 		t.Fatalf("ListModels returned %v and no error for a failing endpoint", got)
 	}
 }
+
+func TestFormatModelList(t *testing.T) {
+	got := FormatModelList([]string{"a", "b"}, "b")
+	want := "  a\n* b\n"
+	if got != want {
+		t.Fatalf("FormatModelList = %q, want %q", got, want)
+	}
+}
+
+func TestFormatModelListEmpty(t *testing.T) {
+	if got := FormatModelList(nil, ""); got != "no models available\n" {
+		t.Fatalf("FormatModelList(nil) = %q", got)
+	}
+}
+
+// A current model the endpoint does not advertise must not silently star
+// something else, and the endpoint's own order is preserved.
+func TestFormatModelListKeepsOrderAndStarsNothingUnknown(t *testing.T) {
+	got := FormatModelList([]string{"z", "a"}, "gone")
+	if want := "  z\n  a\n"; got != want {
+		t.Fatalf("FormatModelList = %q, want %q", got, want)
+	}
+}
+
+// newModelsServer serves an OpenAI-shaped /v1/models listing.
+func newModelsServer(t *testing.T, ids ...string) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		data := make([]map[string]string, 0, len(ids))
+		for _, id := range ids {
+			data = append(data, map[string]string{"id": id, "object": "model"})
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"object": "list", "data": data})
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func TestSwitchModelAcceptsAServedModel(t *testing.T) {
+	srv := newModelsServer(t, "model-a", "model-b")
+	s := &Session{llmModel: "model-a", baseURL: srv.URL + "/v1"}
+
+	notice, err := s.SwitchModel(context.Background(), "model-b")
+	if err != nil {
+		t.Fatalf("SwitchModel: %v", err)
+	}
+	if !strings.Contains(notice, "model-b") {
+		t.Fatalf("notice = %q, want it to name the new model", notice)
+	}
+	if got := s.Model(); got != "model-b" {
+		t.Fatalf("Model() = %q, want model-b", got)
+	}
+}
+
+// The whole point of validating: a typo must be refused on the spot, with the
+// names that would have worked, instead of 404ing a turn later.
+func TestSwitchModelRejectsAModelTheEndpointDoesNotServe(t *testing.T) {
+	srv := newModelsServer(t, "model-a", "model-b")
+	s := &Session{llmModel: "model-a", baseURL: srv.URL + "/v1"}
+
+	notice, err := s.SwitchModel(context.Background(), "model-bb")
+	if err == nil {
+		t.Fatalf("SwitchModel accepted an unserved model, notice = %q", notice)
+	}
+	if got := s.Model(); got != "model-a" {
+		t.Fatalf("Model() = %q, want the switch to have been refused", got)
+	}
+	msg := err.Error()
+	for _, want := range []string{"model-bb", "model-a", "model-b"} {
+		if !strings.Contains(msg, want) {
+			t.Fatalf("error %q should name %q", msg, want)
+		}
+	}
+}
+
+// A dead endpoint must not veto a switch the user asked for explicitly: they
+// may be switching because something is wrong. Switch, and say it is unverified.
+func TestSwitchModelSwitchesWhenTheLookupFails(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, `{"error":{"message":"nope"}}`, http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+	s := &Session{llmModel: "model-a", baseURL: srv.URL + "/v1"}
+
+	notice, err := s.SwitchModel(context.Background(), "model-b")
+	if err != nil {
+		t.Fatalf("a failing lookup must not block the switch: %v", err)
+	}
+	if got := s.Model(); got != "model-b" {
+		t.Fatalf("Model() = %q, want model-b", got)
+	}
+	if !strings.Contains(notice, "unverified") {
+		t.Fatalf("notice = %q, want it to say the name went unverified", notice)
+	}
+}
+
+// Same reasoning for an endpoint that answers with an empty list: validating
+// against nothing would make every name wrong and leave the user stuck.
+func TestSwitchModelSwitchesWhenTheEndpointListsNothing(t *testing.T) {
+	srv := newModelsServer(t)
+	s := &Session{llmModel: "model-a", baseURL: srv.URL + "/v1"}
+
+	notice, err := s.SwitchModel(context.Background(), "model-b")
+	if err != nil {
+		t.Fatalf("an empty listing must not block the switch: %v", err)
+	}
+	if got := s.Model(); got != "model-b" {
+		t.Fatalf("Model() = %q, want model-b", got)
+	}
+	if !strings.Contains(notice, "unverified") {
+		t.Fatalf("notice = %q, want it to say the name went unverified", notice)
+	}
+}
+
+func TestSwitchModelRejectsAnEmptyName(t *testing.T) {
+	s := &Session{llmModel: "model-a", baseURL: "http://unused.invalid/v1"}
+	if _, err := s.SwitchModel(context.Background(), "   "); err == nil {
+		t.Fatal("SwitchModel accepted an empty name")
+	}
+	if got := s.Model(); got != "model-a" {
+		t.Fatalf("Model() = %q, want the session untouched", got)
+	}
+}

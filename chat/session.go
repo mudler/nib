@@ -1543,3 +1543,69 @@ func (s *Session) ListModels(ctx context.Context) ([]string, error) {
 	}
 	return models, nil
 }
+
+// ModelListTimeout bounds the endpoint lookup behind /model and /models. Both
+// front ends run that lookup on the goroutine that draws the prompt, so an
+// endpoint that accepts the connection and then never answers would otherwise
+// freeze the UI with no way out.
+const ModelListTimeout = 10 * time.Second
+
+// FormatModelList renders a model listing, marking the current model. Order is
+// the endpoint's own; the caller decides whether to sort.
+func FormatModelList(models []string, current string) string {
+	if len(models) == 0 {
+		return "no models available\n"
+	}
+	var b strings.Builder
+	for _, m := range models {
+		if m == current {
+			b.WriteString("* ")
+		} else {
+			b.WriteString("  ")
+		}
+		b.WriteString(m)
+		b.WriteByte('\n')
+	}
+	return b.String()
+}
+
+// SwitchModel is the checked entry point behind /model <name>: it validates the
+// name against what the endpoint advertises and only then calls SetModel. It
+// returns the notice to show the user, or an error to show instead. Both front
+// ends go through it, so the policy and its wording cannot drift between them.
+//
+// SetModel takes no error by design, so a typo would otherwise switch happily
+// and surface a turn later as a 404 from the backend, with nothing pointing at
+// the cause. Validating here turns that into an immediate message that names
+// the models the endpoint does serve.
+//
+// A lookup that fails does NOT veto the switch. The list is a convenience, and
+// a user asking for a different model may well be asking precisely because
+// something is wrong with the endpoint right now; refusing would leave them
+// stuck. The same goes for an endpoint that answers with an empty list. Both
+// cases switch and say the name went unverified.
+func (s *Session) SwitchModel(ctx context.Context, name string) (string, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return "", errors.New("usage: /model <name>")
+	}
+
+	lookupCtx, cancel := context.WithTimeout(ctx, ModelListTimeout)
+	models, err := s.ListModels(lookupCtx)
+	cancel()
+
+	switch {
+	case err != nil:
+		s.SetModel(name)
+		return "model: " + name + " (unverified: " + err.Error() + ")", nil
+	case len(models) == 0:
+		s.SetModel(name)
+		return "model: " + name + " (unverified: the endpoint advertises no models)", nil
+	case !slices.Contains(models, name):
+		return "", fmt.Errorf("model %q is not served by this endpoint. Available:\n%s",
+			name, strings.TrimRight(FormatModelList(models, s.Model()), "\n"))
+	}
+
+	s.SetModel(name)
+	return "model: " + name, nil
+}
