@@ -14,40 +14,37 @@ import (
 
 // Configurator performs self-configuration operations against a base directory
 // (the plugin/skill registries) and a single user config file (mcp_servers).
+//
+// Every field is derived from the one root override handed to NewIn, which is
+// the only constructor. That is deliberate: a Configurator built from
+// pre-resolved paths could not tell EffectiveConfig which root to reload from,
+// so the reload would silently fall back to nib's default paths while the
+// writes went somewhere else. Keeping the override as the sole input makes that
+// mismatch unrepresentable rather than merely discouraged.
 type Configurator struct {
+	// baseDirOverride is the RAW root override, empty for standalone nib. It is
+	// not a directory: resolve it, never join onto it.
+	baseDirOverride string
+	// baseDir and configPath are resolved from baseDirOverride at construction.
 	baseDir    string
 	configPath string
-	// baseDirOverride is the RAW root override (empty for standalone nib) that
-	// baseDir and configPath were resolved from. It is kept alongside them
-	// because EffectiveConfig has to re-run the whole load, and config.LoadWith
-	// takes the override, not a resolved directory.
-	baseDirOverride string
-	plugins         *plugin.Manager
-	skills          *skill.Manager
-}
-
-// New returns a Configurator rooted at an already-resolved baseDir, writing
-// MCP-server config to configPath. It carries no root override, so
-// EffectiveConfig reloads from nib's default paths: production code wants
-// NewIn, which resolves both paths and keeps the override for the reload.
-func New(baseDir, configPath string) *Configurator {
-	return &Configurator{
-		baseDir:    baseDir,
-		configPath: configPath,
-		plugins:    plugin.NewManager(baseDir),
-		skills:     skill.NewManager(baseDir),
-	}
+	plugins    *plugin.Manager
+	skills     *skill.Manager
 }
 
 // NewIn returns a Configurator for a base-directory override, resolving the
 // registry root and the writable config path from it. An empty override
-// reproduces standalone nib exactly. Unlike New, the override is remembered, so
-// EffectiveConfig reloads from the injected root instead of the user's real
-// ~/.config/nib.
+// reproduces standalone nib exactly: plugin.BaseDirIn and config.WritablePathIn
+// both fall back to the default resolution. Tests pass a temp dir.
 func NewIn(baseDirOverride string) *Configurator {
-	c := New(plugin.BaseDirIn(baseDirOverride), config.WritablePathIn(baseDirOverride))
-	c.baseDirOverride = baseDirOverride
-	return c
+	baseDir := plugin.BaseDirIn(baseDirOverride)
+	return &Configurator{
+		baseDirOverride: baseDirOverride,
+		baseDir:         baseDir,
+		configPath:      config.WritablePathIn(baseDirOverride),
+		plugins:         plugin.NewManager(baseDir),
+		skills:          skill.NewManager(baseDir),
+	}
 }
 
 // PluginInfo is a registry plugin record in tool-facing form.

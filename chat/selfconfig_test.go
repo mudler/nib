@@ -1,7 +1,6 @@
 package chat
 
 import (
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -10,7 +9,7 @@ import (
 
 func newToolConfigurator(t *testing.T) *manage.Configurator {
 	t.Helper()
-	return manage.New(t.TempDir(), filepath.Join(t.TempDir(), "config.yaml"))
+	return manage.NewIn(t.TempDir())
 }
 
 func runTool(t *testing.T, defs []toolDef, name string, args map[string]any) string {

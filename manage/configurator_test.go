@@ -1,7 +1,6 @@
 package manage
 
 import (
-	"path/filepath"
 	"testing"
 
 	"github.com/mudler/nib/plugin"
@@ -11,8 +10,7 @@ import (
 func newTestConfigurator(t *testing.T) (*Configurator, string) {
 	t.Helper()
 	base := t.TempDir()
-	cfgPath := filepath.Join(t.TempDir(), "config.yaml")
-	return New(base, cfgPath), base
+	return NewIn(base), base
 }
 
 func TestListPluginsEmpty(t *testing.T) {

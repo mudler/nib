@@ -123,3 +123,29 @@ func TestNewInRootsManagersAtInjectedDir(t *testing.T) {
 		t.Fatalf("wrote into the user's real nib root: err = %v", err)
 	}
 }
+
+// NewIn is the only constructor precisely so a Configurator cannot be built
+// with a write target and a reload target that disagree. That invariant is what
+// this pins: a server added through the Configurator must be visible to its own
+// EffectiveConfig. The deleted two-argument New could satisfy the write half
+// and still reload from ~/.config/nib.
+func TestConfiguratorWriteAndReloadShareOneRoot(t *testing.T) {
+	t.Setenv("MODEL", "")
+	t.Setenv("API_KEY", "")
+	t.Setenv("BASE_URL", "")
+	xdg := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", xdg)
+	seedUserRoot(t, xdg)
+
+	c := NewIn(t.TempDir())
+	if err := c.AddMCPServer("only-here", types.MCPServer{Command: "demo-mcp"}); err != nil {
+		t.Fatalf("AddMCPServer: %v", err)
+	}
+	cfg, err := c.EffectiveConfig()
+	if err != nil {
+		t.Fatalf("EffectiveConfig: %v", err)
+	}
+	if _, ok := cfg.MCPServers["only-here"]; !ok {
+		t.Fatalf("the write target and the reload target disagree: %+v", cfg.MCPServers)
+	}
+}

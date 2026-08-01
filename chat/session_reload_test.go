@@ -11,9 +11,7 @@ import (
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/mudler/cogito"
-	"github.com/mudler/nib/config"
 	"github.com/mudler/nib/manage"
-	"github.com/mudler/nib/plugin"
 	"github.com/mudler/nib/types"
 )
 
@@ -208,7 +206,8 @@ func TestNewSessionWiresSkillsServer(t *testing.T) {
 func TestApplyPendingReloadDefersWhileAgentsRunning(t *testing.T) {
 	s := newReloadTestSession(t)
 	s.agentManager = cogito.NewAgentManager()
-	s.configurator = manage.New(plugin.BaseDir(), config.WritablePath())
+	// The empty override is standalone nib: the default root and WritablePath.
+	s.configurator = manage.NewIn("")
 	s.pendingReload = true
 
 	// A running agent must defer the reload: pendingReload stays set.

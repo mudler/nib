@@ -101,7 +101,9 @@ func WritablePathIn(root string) string {
 // types.Config.BaseDir holds the RAW OVERRIDE, empty for standalone nib, so it
 // is not a directory and must never be joined onto a path: filepath.Join("",
 // "plugins") silently yields a relative path under the process working
-// directory. Reading the field through this helper is the only safe way.
+// directory. Use this helper wherever a resolved directory is wanted. Handing
+// the raw field to something that documents its parameter as an override
+// (manage.NewIn, setup.Save) is the other correct use and needs no wrapping.
 //
 // This cannot be a method on types.Config: plugin already imports types, so
 // types importing plugin would be an import cycle.
