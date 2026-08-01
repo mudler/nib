@@ -30,6 +30,9 @@ type Options struct {
 	Args []string
 	// ProgramName is the name shown in usage and error messages. Empty means "nib".
 	ProgramName string
+	// BaseDir overrides the config, plugins, and skills root. Empty means
+	// nib's default XDG resolution.
+	BaseDir string
 	// Stdin, Stdout, Stderr default to the process streams when nil.
 	Stdin  io.Reader
 	Stdout io.Writer
@@ -114,15 +117,15 @@ func runCtx(ctx context.Context, o Options) int {
 
 	// Subcommand dispatch must precede flag parsing.
 	if len(args) >= 1 && args[0] == "plugin" {
-		return cmd.RunPluginCommand(args[1:])
+		return cmd.RunPluginCommand(o.BaseDir, args[1:])
 	}
 	if len(args) >= 1 && args[0] == "skill" {
-		return cmd.RunSkillCommand(args[1:])
+		return cmd.RunSkillCommand(o.BaseDir, args[1:])
 	}
 	// `nib mcp <add|list|remove|test>` manages configured servers and early-exits
 	// (needs config, not transports). Bare `nib mcp` / --http / --stdio still serve.
 	if len(args) >= 2 && args[0] == "mcp" && cmd.IsMCPManageSubcommand(args[1]) {
-		return cmd.RunMCPCommand(args[1:])
+		return cmd.RunMCPCommand(o.BaseDir, args[1:])
 	}
 
 	// `nib mcp` needs config + transports (built below), so it cannot early-exit
@@ -170,7 +173,7 @@ func runCtx(ctx context.Context, o Options) int {
 		return 0
 	}
 
-	cfg := config.Load()
+	cfg := config.LoadWith(config.LoadOptions{BaseDir: o.BaseDir})
 
 	// Tracing is runtime-only: the flag wins, otherwise fall back to the env var.
 	if *traceDirFlag != "" {

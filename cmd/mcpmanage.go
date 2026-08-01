@@ -9,10 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mudler/nib/config"
 	"github.com/mudler/nib/manage"
 	wizmcp "github.com/mudler/nib/mcp"
-	"github.com/mudler/nib/plugin"
 	"github.com/mudler/nib/types"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -29,12 +27,13 @@ func mcpUsage() {
 }
 
 // RunMCPCommand dispatches `nib mcp <sub> ...` and returns an exit code.
-func RunMCPCommand(args []string) int {
+// baseDir overrides the config/plugins/skills root; empty means nib's default.
+func RunMCPCommand(baseDir string, args []string) int {
 	if len(args) == 0 {
 		mcpUsage()
 		return 1
 	}
-	cfgr := manage.New(plugin.BaseDir(), config.WritablePath())
+	cfgr := manage.NewIn(baseDir)
 	switch args[0] {
 	case "add":
 		return mcpAdd(cfgr, args[1:])

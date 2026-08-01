@@ -24,25 +24,27 @@ var confirmFn = func(prompt string) bool {
 }
 
 // RunPluginCommand dispatches `nib plugin <sub> ...` and returns an exit code.
-func RunPluginCommand(args []string) int {
+// baseDir overrides the config/plugins/skills root; empty means nib's default.
+func RunPluginCommand(baseDir string, args []string) int {
 	if len(args) == 0 {
 		pluginUsage()
 		return 1
 	}
-	mgr := plugin.NewManager(plugin.BaseDir())
+	root := plugin.BaseDirIn(baseDir)
+	mgr := plugin.NewManager(root)
 	switch args[0] {
 	case "install":
-		return pluginInstall(mgr, args[1:])
+		return pluginInstall(mgr, root, args[1:])
 	case "browse":
-		return runBrowse(catalogBaseDir(), catalog.KindPlugin)
+		return runBrowse(root, catalog.KindPlugin)
 	case "search":
 		if len(args) < 2 {
 			fmt.Fprintln(os.Stderr, "usage: nib plugin search <query>")
 			return 1
 		}
-		return runSearch(catalogBaseDir(), catalog.KindPlugin, strings.Join(args[1:], " "))
+		return runSearch(root, catalog.KindPlugin, strings.Join(args[1:], " "))
 	case "source":
-		return runSource(catalogBaseDir(), args[1:])
+		return runSource(root, args[1:])
 	case "list":
 		return pluginList(mgr)
 	case "update":
@@ -90,7 +92,9 @@ func parseInstallArgs(args []string) (url, ref string, yes bool, err error) {
 	return url, *refp, *yesp, nil
 }
 
-func pluginInstall(mgr *plugin.Manager, args []string) int {
+// pluginInstall installs from a git URL, a local dir, a .zip, or a catalog
+// name. root is the already-resolved config base the catalog is read from.
+func pluginInstall(mgr *plugin.Manager, root string, args []string) int {
 	src, ref, yes, err := parseInstallArgs(args)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "usage: nib plugin install [--ref REF] [--yes] <git-url|local-path|zip|catalog-name>")
@@ -111,7 +115,7 @@ func pluginInstall(mgr *plugin.Manager, args []string) int {
 	// (and not the .zip handled above) is treated as a catalog plugin to
 	// resolve and install DISABLED.
 	if !looksLikeGitSource(src) {
-		return pluginCatalogInstall(mgr, catalogBaseDir(), src, yes)
+		return pluginCatalogInstall(mgr, root, src, yes)
 	}
 
 	m, err := mgr.Install(src, ref, internal.Version)

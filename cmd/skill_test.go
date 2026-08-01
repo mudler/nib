@@ -100,10 +100,10 @@ func TestParseSkillInstallArgsLink(t *testing.T) {
 }
 
 func TestRunSkillCommandUnknownSubcommand(t *testing.T) {
-	if code := RunSkillCommand([]string{"frobnicate"}); code != 1 {
+	if code := RunSkillCommand("", []string{"frobnicate"}); code != 1 {
 		t.Fatalf("expected exit 1 for unknown subcommand, got %d", code)
 	}
-	if code := RunSkillCommand(nil); code != 1 {
+	if code := RunSkillCommand("", nil); code != 1 {
 		t.Fatalf("expected exit 1 for no args, got %d", code)
 	}
 }

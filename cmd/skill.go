@@ -16,25 +16,27 @@ import (
 )
 
 // RunSkillCommand dispatches `nib skill <sub> ...` and returns an exit code.
-func RunSkillCommand(args []string) int {
+// baseDir overrides the config/plugins/skills root; empty means nib's default.
+func RunSkillCommand(baseDir string, args []string) int {
 	if len(args) == 0 {
 		skillUsage()
 		return 1
 	}
-	mgr := skill.NewManager(plugin.BaseDir())
+	root := plugin.BaseDirIn(baseDir)
+	mgr := skill.NewManager(root)
 	switch args[0] {
 	case "install":
-		return skillInstall(mgr, args[1:])
+		return skillInstall(mgr, root, args[1:])
 	case "browse":
-		return runBrowse(catalogBaseDir(), catalog.KindSkill)
+		return runBrowse(root, catalog.KindSkill)
 	case "search":
 		if len(args) < 2 {
 			fmt.Fprintln(os.Stderr, "usage: nib skill search <query>")
 			return 1
 		}
-		return runSearch(catalogBaseDir(), catalog.KindSkill, strings.Join(args[1:], " "))
+		return runSearch(root, catalog.KindSkill, strings.Join(args[1:], " "))
 	case "source":
-		return runSource(catalogBaseDir(), args[1:])
+		return runSource(root, args[1:])
 	case "list":
 		return skillList(mgr)
 	case "update":
@@ -84,7 +86,10 @@ func parseSkillInstallArgs(args []string) (src, ref string, yes, link bool, err 
 	return src, *refp, *yesp, *linkp, nil
 }
 
-func skillInstall(mgr *skill.Manager, args []string) int {
+// skillInstall installs from a git URL, a local dir, a .zip, a SKILL.md URL, or
+// a catalog name. root is the already-resolved config base the catalog is read
+// from.
+func skillInstall(mgr *skill.Manager, root string, args []string) int {
 	src, ref, yes, link, err := parseSkillInstallArgs(args)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "usage: nib skill install [--ref REF] [--link] [--yes] <git-url|local-path|zip|url|catalog-name>")
@@ -106,7 +111,7 @@ func skillInstall(mgr *skill.Manager, args []string) int {
 	// A bare name that is neither a git URL/dir nor a handled local import
 	// (zip/SKILL.md URL) is treated as a catalog entry to resolve and install.
 	if !link && !looksLikeGitSource(src) {
-		return skillCatalogInstall(mgr, catalogBaseDir(), src, yes)
+		return skillCatalogInstall(mgr, root, src, yes)
 	}
 
 	name, skills, err := mgr.Install(src, ref, link)

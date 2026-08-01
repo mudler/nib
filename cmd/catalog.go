@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"github.com/mudler/nib/catalog"
-	"github.com/mudler/nib/plugin"
 )
 
 // renderBrowse formats merged metas (already sorted by category then name)
@@ -184,7 +183,3 @@ func runSource(baseDir string, args []string) int {
 		return 1
 	}
 }
-
-// catalogBaseDir is the nib config base for CLI catalog operations. Wrapped so
-// tests can call runSource/runBrowse with an explicit dir.
-func catalogBaseDir() string { return plugin.BaseDir() }
