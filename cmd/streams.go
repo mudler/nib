@@ -11,9 +11,11 @@ import (
 // field means the matching process stream, so the zero value reproduces
 // standalone nib exactly and an embedder overrides only what it cares about.
 //
-// The fields stay nil-able rather than being defaulted at construction: RunTUI
-// has to tell "the embedder handed me a stream" apart from "nobody said
-// anything", because the two want different terminals (see RunTUI).
+// The fields stay nil-able rather than being defaulted at construction so that
+// "nobody said anything" survives the trip from app.Options, which needs that
+// distinction to gate the TUI. Nothing in this package inspects nil-ness: every
+// read goes through the accessors below, which resolve it to the process
+// stream.
 type Streams struct {
 	In  io.Reader
 	Out io.Writer

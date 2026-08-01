@@ -35,6 +35,18 @@ type Options struct {
 	// nib's default XDG resolution.
 	BaseDir string
 	// Stdin, Stdout, Stderr default to the process streams when nil.
+	//
+	// CLI mode (--cli) reads and writes exactly these. The TUI, which is the
+	// DEFAULT mode, does not: it renders on /dev/tty, because the terminal is
+	// still there even when stdout is a pipe, and serving that case is why it
+	// opens /dev/tty at all. Only the shell-capture line the TUI prints on exit
+	// goes to Stdout.
+	//
+	// For an embedder that is a rule rather than a caveat: injecting a stream
+	// that is NOT a terminal (a buffer, a pipe, a file) requires --cli, or the
+	// run is refused with an error saying so, rather than rendering into a
+	// stream the TUI cannot drive. Injecting the process streams, or any other
+	// terminal, leaves every mode working.
 	Stdin  io.Reader
 	Stdout io.Writer
 	Stderr io.Writer
@@ -262,9 +274,9 @@ func runCtx(ctx context.Context, o Options) int {
 		return 0
 	}
 
-	// The raw fields, not the o.stdX() accessors: cmd.Streams keeps "the caller
-	// said nothing" distinguishable from "the caller asked for the process
-	// stream", which is what lets RunTUI stay on /dev/tty for standalone nib.
+	// The raw fields, not the o.stdX() accessors: cmd.Streams applies the same
+	// nil-means-process-stream defaulting itself, so forwarding the accessors'
+	// output would just resolve the defaults twice.
 	streams := cmd.Streams{In: o.Stdin, Out: o.Stdout, Err: o.Stderr}
 
 	mode := selectMode(modeInputs{
@@ -274,6 +286,15 @@ func runCtx(ctx context.Context, o Options) int {
 		height: *heightFlag,
 		inTmux: cmd.IsInTmux(),
 	})
+
+	// Only CLI mode can honor injected streams. Rendering the TUI into a
+	// buffer or a pipe is not something to attempt and half-succeed at, so say
+	// so instead of quietly using /dev/tty and leaving the embedder's writer
+	// empty.
+	if name := decideStreamRefusal(mode, injectedReader(o.Stdin), injectedWriter(o.Stdout)); name != "" {
+		fmt.Fprintf(o.stderr(), "%s: %s was injected as a non-terminal stream, which the TUI cannot render into. Re-run with --cli to use the injected streams.\n", o.name(), name)
+		return 1
+	}
 
 	switch mode {
 	case modeCLI:
