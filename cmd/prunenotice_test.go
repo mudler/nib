@@ -22,11 +22,24 @@ func TestPruneNoticeReadsAsPlainProse(t *testing.T) {
 	}
 }
 
-// "1 stale tool result", not "1 stale tool results".
+// "1 tool result", not "1 tool results".
 func TestPruneNoticeSingular(t *testing.T) {
 	got := pruneNotice(1, 900)
-	if strings.Contains(got, "1 results") || strings.Contains(got, "1 stale tool results") {
-		t.Fatalf("notice should be singular for one result: %q", got)
+	for _, bad := range []string{"1 results", "1 tool results", "1 stale tool results"} {
+		if strings.Contains(got, bad) {
+			t.Fatalf("notice should be singular for one result: %q", got)
+		}
+	}
+}
+
+// The high-water sweep picks the oldest LARGE results on size alone, so a
+// notice that calls what it pruned "stale" tells the user their still-valid
+// read output had gone bad.
+func TestPruneNoticeDoesNotClaimStaleness(t *testing.T) {
+	for _, got := range []string{pruneNotice(3, 12400), pruneNotice(1, 900)} {
+		if strings.Contains(got, "stale") {
+			t.Fatalf("notice claims staleness the size sweep cannot support: %q", got)
+		}
 	}
 }
 

@@ -563,6 +563,11 @@ func RunCLI(ctx context.Context, cfg types.Config, streams Streams, shellJobs *w
 
 // pruneNotice formats the one-line summary shown when tool output is pruned.
 //
+// It does not say "stale": the high-water sweep picks the oldest LARGE results
+// purely on size, and nothing about those is stale, so the word would tell the
+// user their still-valid read output had gone bad. The count and the token
+// figure carry everything the notice has to say.
+//
 // The saving is rendered with HumanTokensOrZero rather than HumanTokens: a
 // stale read is stubbed however small it was, so a pass can free nothing
 // measurable, and HumanTokens renders 0 as "" — leaving the sentence a hole
@@ -572,7 +577,7 @@ func pruneNotice(results, freed int) string {
 	if results == 1 {
 		noun = "result"
 	}
-	return fmt.Sprintf("pruned %d stale tool %s — freed %s tokens", results, noun, chat.HumanTokensOrZero(freed))
+	return fmt.Sprintf("pruned %d tool %s — freed %s tokens", results, noun, chat.HumanTokensOrZero(freed))
 }
 
 // compactNotice formats the one-line summary shown after a conversation is compacted.

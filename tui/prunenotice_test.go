@@ -21,8 +21,15 @@ func TestPrunedNoticeWording(t *testing.T) {
 	if strings.Contains(got, "\n") {
 		t.Fatalf("notice must stay one line: %q", got)
 	}
-	if one := prunedNotice(1, 900); strings.Contains(one, "1 stale tool results") {
+	if one := prunedNotice(1, 900); strings.Contains(one, "1 tool results") || strings.Contains(one, "1 results") {
 		t.Fatalf("notice should be singular for one result: %q", one)
+	}
+	// The high-water sweep picks the oldest LARGE results on size alone, so
+	// calling what it pruned "stale" would be untrue.
+	for _, n := range []string{got, prunedNotice(1, 900)} {
+		if strings.Contains(n, "stale") {
+			t.Fatalf("notice claims staleness the size sweep cannot support: %q", n)
+		}
 	}
 	// A stale read is stubbed however small it was, so a pass can free nothing
 	// measurable — and HumanTokens renders 0 as the empty string.

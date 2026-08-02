@@ -1984,15 +1984,17 @@ func (m Model) isWorking() bool {
 
 // prunedNotice formats a one-line tool-output pruning summary for the
 // transcript. It repeats cmd.pruneNotice's wording because tui cannot import
-// cmd (cmd builds the TUI), and renders the saving with HumanTokensOrZero: a
-// stale read is stubbed however small it was, so a pass can free nothing
-// measurable and HumanTokens renders 0 as "".
+// cmd (cmd builds the TUI) — including its silence about staleness, since the
+// high-water sweep prunes on size alone and calling those results stale would
+// be untrue. The saving uses HumanTokensOrZero: a stale read is stubbed however
+// small it was, so a pass can free nothing measurable and HumanTokens renders
+// 0 as "".
 func prunedNotice(results, freed int) string {
 	noun := "results"
 	if results == 1 {
 		noun = "result"
 	}
-	return fmt.Sprintf("pruned %d stale tool %s — freed %s tokens", results, noun, chat.HumanTokensOrZero(freed))
+	return fmt.Sprintf("pruned %d tool %s — freed %s tokens", results, noun, chat.HumanTokensOrZero(freed))
 }
 
 // compactNotice formats a one-line compaction summary for the transcript.
