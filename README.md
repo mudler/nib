@@ -616,8 +616,18 @@ file under a `BaseDir` you control rather than reaching over it.
 Two fields still sit above `Overrides`, by design rather than by omission. nib's
 own `--trace-dir` and `--yolo`, and their `NIB_TRACE_DIR` and `NIB_YOLO` twins,
 are resolved after the config load and keep winning for `TraceDir` and
-`ApprovalMode`: they are the end user's direct instruction to nib, and an
-embedder that does not want them filters them out of `Args`.
+`ApprovalMode`. Both are deliberate instructions to nib rather than ambient
+environment, which is what separates them from the bare `MODEL` / `API_KEY` /
+`BASE_URL` that `SkipBareEnv` exists to suppress.
+
+> **`NIB_YOLO=1` escalates past a stricter override.** If you set
+> `Overrides.ApprovalMode` to `strict`, `allowlist` or `prompt`, that variable
+> silently downgrades it to `auto`, which approves every tool call without
+> prompting. Filtering `Args` does not help, because this one arrives through
+> the environment: to prevent it, control the child process environment and do
+> not pass `NIB_YOLO` through. `NIB_TRACE_DIR` has no equivalent hazard, since
+> the config file cannot set `TraceDir` at all and the variable only retargets
+> where a trace is written.
 
 `app.Run` never calls `os.Exit`, and it takes cancellation from the context you
 pass rather than installing its own signal handling. Cancelling that context

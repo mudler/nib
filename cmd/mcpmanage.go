@@ -144,7 +144,12 @@ func mcpAdd(prog string, cfgr *manage.Configurator, args []string) int {
 		fmt.Fprintf(os.Stderr, "add failed: %v\n", err)
 		return 1
 	}
-	fmt.Printf("Added MCP server %q. It will be available on the next nib session (verify now with: %s mcp test %s).\n", name, prog, name)
+	// One sentence, one name. The "verify now with" half is an instruction and
+	// the "next ... session" half is prose, but a reader does not parse it that
+	// way: two names for one tool in a single sentence is more confusing than
+	// either name used consistently, so this follows the system prompt and
+	// renames both. Standalone still reads exactly as it always did.
+	fmt.Printf("Added MCP server %q. It will be available on the next %s session (verify now with: %s mcp test %s).\n", name, prog, prog, name)
 	return 0
 }
 

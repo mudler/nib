@@ -261,8 +261,14 @@ func LoadWith(o LoadOptions) types.Config {
 //     agent_options.iterations but not max_attempts keeps its iterations and
 //     takes the seeded max_attempts.
 //   - Maps (Metadata, MCPServers, MCPServer.Env, ...): merged per key. A key
-//     the file sets wins whole; a key only the seeds have is added. cfg's map
-//     is freshly allocated, so it never aliases the caller's.
+//     the file sets wins whole; a key only the seeds have is added. The
+//     TOP-LEVEL map is freshly allocated, so cfg.Metadata and cfg.MCPServers
+//     never alias the caller's. That is one level deep only: a value stored
+//     under a key keeps whatever containers the caller built, so
+//     cfg.MCPServers[k].Env, .Args and cfg.Agents[i].Metadata DO alias the
+//     seeds. Nothing in nib mutates those in place, which is why this has been
+//     safe, but an embedder that reuses a seed struct across two loads is
+//     sharing them and should not write through either.
 //   - Slices (Agents, Skills, Hooks, Commands, AllowedTools, ...): all or
 //     nothing. A file that lists any entry keeps exactly its own list; the
 //     seeded list is used only when the file has none. Element-wise merging
@@ -302,7 +308,11 @@ func applySeeds(cfg *types.Config, defaults types.Config) {
 //   - Scalars and structs: recursive, per leaf field. An override of
 //     agent_options.iterations leaves the file's max_attempts alone.
 //   - Maps: merged per key. An overridden key wins, a key only the file has
-//     survives. cfg's map is nib's own either way, never the caller's.
+//     survives. The TOP-LEVEL map is nib's own either way, never the caller's,
+//     with the same one-level-deep caveat applySeeds documents: the containers
+//     inside a map VALUE (MCPServers[k].Env, .Args, Agents[i].Metadata) still
+//     alias the overrides. Inherited from the seed path rather than introduced
+//     here, and safe only because nothing in nib writes to them in place.
 //   - Slices: all or nothing. A non-empty override replaces the file's list
 //     whole; an empty one leaves it. Cloned first, because mergo adopts the
 //     SOURCE slice by reference under WithOverride and skill.Apply /

@@ -17,7 +17,13 @@ const DefaultProgramName = "nib"
 // The words are re-joined with single spaces. That is not cosmetic: the name
 // comes from an embedder, and every string this feeds is either read as nib
 // speaking or handed to a model as instructions. A name carrying a newline
-// would otherwise be able to forge a line of either.
+// would otherwise be able to forge a LINE of either.
+//
+// A line is all it stops. Same-line injection remains possible, and that is
+// fine: this value is the embedder's own Go source, not user input, and an
+// embedder that wanted to steer the model would set Config.Prompt instead. The
+// flattening is there so an accidental newline cannot silently restructure
+// someone's output or prompt.
 func ProgramNameOr(programName string) string {
 	words := strings.Fields(programName)
 	if len(words) == 0 {

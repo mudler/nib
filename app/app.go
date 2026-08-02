@@ -142,10 +142,20 @@ type Options struct {
 	// Two fields stay above it, by design rather than by omission. nib's own
 	// --trace-dir and --yolo, and their NIB_TRACE_DIR and NIB_YOLO twins, are
 	// resolved after the config load and still win for TraceDir and
-	// ApprovalMode: those are the end user's direct instruction to nib, and an
-	// embedder that does not want them filters them out of Args. Neither
-	// weakens the flag case above, since the config file cannot set TraceDir at
-	// all (it is runtime-only) and --yolo only ever forces "auto".
+	// ApprovalMode. Both are deliberate instructions to nib rather than ambient
+	// environment, which is what separates them from the bare MODEL / API_KEY /
+	// BASE_URL that SkipBareEnv exists to suppress.
+	//
+	// One consequence is sharp and worth stating outright: NIB_YOLO=1 ESCALATES
+	// PAST A STRICTER OVERRIDE. An embedder that sets Overrides.ApprovalMode to
+	// "strict", "allowlist" or "prompt" is silently downgraded to "auto", which
+	// approves every tool call. Filtering Args does not help, because this
+	// arrives through the environment: an embedder that must prevent it controls
+	// the child process environment, i.e. does not pass NIB_YOLO through.
+	//
+	// TraceDir has no equivalent hazard: the config file cannot set it at all
+	// (it is runtime-only), so routing --trace-dir through Defaults already
+	// worked and NIB_TRACE_DIR merely retargets where a trace is written.
 	Overrides types.Config
 	// SkipSetup suppresses the first-run model wizard. Embedders that resolve
 	// the model themselves set this. It suppresses the whole gate, so an

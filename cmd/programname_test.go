@@ -144,9 +144,10 @@ func TestSkillDisabledHintUsesTheProgramName(t *testing.T) {
 	}
 }
 
-// `mcp add` ends with a command to verify the server with. The sentence also
-// says "the next nib session", which is prose naming the tool rather than an
-// instruction, and is deliberately left alone.
+// `mcp add` ends with a command to verify the server with, in a sentence that
+// also names the tool in passing. Both halves use the program name: a reader
+// does not sort a sentence into "instruction" and "prose", so two names for one
+// tool in one sentence reads worse than either name used throughout.
 func TestMCPAddHintUsesTheProgramName(t *testing.T) {
 	base := t.TempDir()
 	stdout, _ := captureOutput(t, func() {
@@ -157,8 +158,11 @@ func TestMCPAddHintUsesTheProgramName(t *testing.T) {
 	if !strings.Contains(stdout, "local-ai chat mcp test demo") {
 		t.Fatalf("the verify hint does not name the embedding program: %q", stdout)
 	}
-	if strings.Contains(stdout, "nib mcp test") {
-		t.Fatalf("the verify hint still points at a binary the user does not have: %q", stdout)
+	if !strings.Contains(stdout, "the next local-ai chat session") {
+		t.Fatalf("the sentence uses two names for one tool: %q", stdout)
+	}
+	if strings.Contains(stdout, "nib mcp test") || strings.Contains(stdout, "next nib session") {
+		t.Fatalf("the confirmation still points at a binary the user does not have: %q", stdout)
 	}
 }
 
