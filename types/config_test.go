@@ -102,11 +102,12 @@ func TestGetPromptNoSkillsNoIndex(t *testing.T) {
 	// With no skills, fragments, or context files, GetPrompt appends only the
 	// unconditional tool guidance and the static MCP fragment to the base
 	// prompt — assert the exact output so no unexpected content sneaks in.
-	// The guidance is referenced through the constant rather than copied, so
-	// rewording it stays a one-file change; this assertion is about which
-	// blocks appear and in what order, not about their wording.
+	// The guidance is rendered through the same function GetPrompt calls,
+	// against this config's own BuiltinTools, so rewording it stays a one-file
+	// change; this assertion is about which blocks appear and in what order,
+	// not about their wording.
 	want := "BASE" +
-		"\n\n" + toolGuidance +
+		"\n\n" + toolGuidance(c.BuiltinTools) +
 		"\n\nYou can register additional MCP servers from the command line: " +
 		"`nib mcp add <name> -- <command> [args...]` for a local server, or " +
 		"`nib mcp add <name> --url <url> [--transport http|sse]` for a remote one; " +

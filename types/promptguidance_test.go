@@ -170,3 +170,73 @@ func TestToolGuidanceDoesNotBanDirectoryListing(t *testing.T) {
 		}
 	}
 }
+
+// BuiltinTools is an allowlist gating exactly these tools (chat.Session.
+// toolEnabled). Empty means everything is exposed, so the full paragraph is right.
+func TestToolGuidanceEmptyAllowlistNamesEveryFileTool(t *testing.T) {
+	got := (&Config{Prompt: "BASE"}).GetPrompt()
+
+	for _, want := range []string{
+		"read, write and edit for files",
+		"glob to find files by name",
+		"grep to search file contents",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("an empty allowlist exposes every tool, so %q must appear:\n%s", want, got)
+		}
+	}
+}
+
+// A partial allowlist must name only what it exposes. Promising tools the
+// session never registered costs a wasted call and teaches the model that the
+// prompt is unreliable.
+func TestToolGuidancePartialAllowlistNamesOnlyExposedTools(t *testing.T) {
+	c := &Config{Prompt: "BASE", BuiltinTools: []string{"read", "glob", "bash"}}
+	got := c.GetPrompt()
+
+	for _, want := range []string{"read for files", "glob to find files by name"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("exposed tool not named (%q missing):\n%s", want, got)
+		}
+	}
+	for _, unwanted := range []string{
+		"write",
+		"edit",
+		"grep to search file contents",
+		"shell grep",  // grep is not exposed, so its shell form is all there is
+		"at most 50",  // grep's cap is irrelevant without grep
+		"out of date", // nothing here can change a file
+		"all=true",    // edit's contract is irrelevant without edit
+	} {
+		if strings.Contains(got, unwanted) {
+			t.Fatalf("guidance names %q, which `builtin_tools: [read, glob, bash]` never exposes:\n%s", unwanted, got)
+		}
+	}
+	// Still steers away from the shell commands read does replace.
+	if !strings.Contains(got, "Do not use cat, sed, head or tail for these") {
+		t.Fatalf("the shell commands read replaces should still be discouraged:\n%s", got)
+	}
+}
+
+// With none of the five exposed, the paragraph and its shell ban must go
+// entirely: `builtin_tools: [bash]` otherwise leaves the model forbidden from
+// cat/sed while holding no sanctioned way to read a file. The act-don't-narrate
+// rule is about behavior, not tools, so it stays.
+func TestToolGuidanceWithoutFileToolsOmitsTheParagraph(t *testing.T) {
+	c := &Config{Prompt: "BASE", BuiltinTools: []string{"bash", "spawn_agent"}}
+	got := c.GetPrompt()
+
+	for _, unwanted := range []string{
+		"Prefer the dedicated tools",
+		"Do not use",
+		"whole file by default",
+		"all=true",
+	} {
+		if strings.Contains(got, unwanted) {
+			t.Fatalf("file-tools guidance survived an allowlist that exposes none of them (%q):\n%s", unwanted, got)
+		}
+	}
+	if strings.Count(got, "Always act by CALLING the available tools") != 1 {
+		t.Fatalf("the act-don't-narrate rule is unconditional and must render exactly once:\n%s", got)
+	}
+}
