@@ -159,3 +159,58 @@ func TestSendMessageAccumulatesAcrossTurns(t *testing.T) {
 			afterOne.TotalTokens, afterTwo.TotalTokens)
 	}
 }
+
+// interruptedLLM models the shape of a real interrupt: a call that the backend
+// served and billed, followed by a turn that never finishes.
+//
+// It reports usage and then cancels the turn, and returns a reply with no
+// choices so cogito treats the attempt as unusable and goes to retry. cogito's
+// retry backoff aborts immediately on a cancelled context, so ExecuteTools
+// returns an error — with the tokens from the served call already stamped onto
+// the fragment by cogito's defer. Scripting it through a plain error return
+// instead would prove nothing: cogito's counting wrapper only records usage
+// when the call succeeded, so a first call that errors has no spend to lose.
+type interruptedLLM struct {
+	mu      sync.Mutex
+	n       int
+	session *Session
+}
+
+func (u *interruptedLLM) CreateChatCompletion(ctx context.Context, req openai.ChatCompletionRequest) (cogito.LLMReply, cogito.LLMUsage, error) {
+	if err := ctx.Err(); err != nil {
+		return cogito.LLMReply{}, cogito.LLMUsage{}, err
+	}
+	u.mu.Lock()
+	u.n++
+	u.mu.Unlock()
+
+	// The user hits Ctrl+C after the backend already answered and billed.
+	u.session.Interrupt()
+
+	return cogito.LLMReply{}, cogito.LLMUsage{PromptTokens: 900, CompletionTokens: 40, TotalTokens: 940}, nil
+}
+
+func (u *interruptedLLM) Ask(ctx context.Context, f cogito.Fragment) (cogito.Fragment, error) {
+	return f, ctx.Err()
+}
+
+// Tokens spent before an interrupt stay counted. The turn does not: the user
+// never got the exchange. Without the accumulation on SendMessage's error
+// return, a Ctrl+C would silently erase everything the run had already paid for.
+func TestInterruptedTurnKeepsTokensButNotTurn(t *testing.T) {
+	s := newUsageTestSession(t)
+	llm := &interruptedLLM{session: s}
+	s.llm = llm
+
+	if _, err := s.SendMessage("start something long"); err == nil {
+		t.Fatal("SendMessage succeeded; the interrupt did not reach the run loop")
+	}
+
+	got := s.Usage()
+	if got.TotalTokens == 0 {
+		t.Fatal("interrupted turn recorded no tokens; spend before the interrupt was discarded")
+	}
+	if got.Turns != 0 {
+		t.Fatalf("Turns = %d, want 0 — an interrupted turn is not a completed exchange", got.Turns)
+	}
+}

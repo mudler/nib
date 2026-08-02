@@ -1140,6 +1140,22 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 			if turnCtx.Err() != nil {
 				s.ClearGoal()
 			}
+			// The tokens this run already burned are real and already billed,
+			// so record them before bailing. cogito stamps CumulativeUsage in a
+			// defer onto the fragment it returns, including on its error paths,
+			// so an interrupt that lands after several tool-loop calls arrives
+			// here with the whole spend in hand. Dropping it would let a user
+			// erase thousands of paid-for tokens by pressing Ctrl+C — in a
+			// counter that exists to account for spend, and in the usage.json a
+			// benchmark harness reads.
+			//
+			// The turn deliberately is NOT counted here: the user never got the
+			// exchange they asked for. Tokens and turns diverge on this path,
+			// which is the point of keeping them separate counters.
+			if newFragment.Status != nil {
+				s.addUsage(newFragment.Status.CumulativeUsage)
+			}
+
 			err = humanizeError(err)
 			if s.callbacks.OnError != nil {
 				s.callbacks.OnError(err)
@@ -1240,9 +1256,13 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 
 	// One turn per completed SendMessage, counted after the goal loop rather
 	// than inside it: a goal that took five ExecuteTools runs is still one
-	// exchange the user asked for. The error paths above return before here, so
-	// an interrupted or failed turn adds no turn — its tokens are still counted,
-	// because the backend was still paid for them.
+	// exchange the user asked for.
+	//
+	// Tokens are counted on every run — including the interrupted and failed
+	// ones, which return above and add their spend there — while Turns counts
+	// only exchanges that completed. So an interrupted session can hold tokens
+	// with a lower turn count, and that asymmetry is deliberate: the backend
+	// was paid either way, but the user only got the answers it finished.
 	s.countTurn()
 
 	return response, nil
