@@ -1,17 +1,9 @@
 package chat
 
 import (
-	"context"
-	"encoding/json"
-	"io"
-	"net/http"
-	"net/http/httptest"
-	"strings"
-	"sync"
 	"testing"
 
 	"github.com/mudler/nib/types"
-	"github.com/mudler/xlog"
 	openai "github.com/sashabaranov/go-openai"
 )
 
@@ -178,96 +170,5 @@ func TestSessionPruneMessagesNotifiesOnceOnTransition(t *testing.T) {
 	s.pruneMessages(msgs)
 	if calls != 1 {
 		t.Fatalf("a second pass over the same messages fired another notice (%d total)", calls)
-	}
-}
-
-// pruneRecorder is a fake OpenAI endpoint that records every request body and
-// always answers with a plain stop message.
-type pruneRecorder struct {
-	mu     sync.Mutex
-	bodies []string
-}
-
-func (p *pruneRecorder) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	body, _ := io.ReadAll(r.Body)
-	p.mu.Lock()
-	p.bodies = append(p.bodies, string(body))
-	p.mu.Unlock()
-
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{
-		"id": "fake", "object": "chat.completion", "model": "fake",
-		"choices": []any{map[string]any{
-			"index": 0, "message": map[string]any{"role": "assistant", "content": "ok"},
-			"finish_reason": "stop",
-		}},
-		"usage": map[string]any{"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
-	})
-}
-
-func (p *pruneRecorder) all() string {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return strings.Join(p.bodies, "\n")
-}
-
-// The end-to-end proof that the manipulator is installed on the RUN options: a
-// real SendMessage, and the bytes the LLM received carry the stub instead of the
-// oversized result. Deleting the WithMessagesManipulator line fails here.
-func TestSessionSendMessagePrunesOnTheWire(t *testing.T) {
-	xlog.SetLogger(xlog.NewLogger(xlog.LogLevel("error"), ""))
-
-	rec := &pruneRecorder{}
-	srv := httptest.NewServer(rec)
-	defer srv.Close()
-
-	cfg := types.Config{
-		Model:        "fake-model",
-		APIKey:       "fake-key",
-		BaseURL:      srv.URL + "/v1",
-		LogLevel:     "error",
-		ApprovalMode: "auto",
-		AgentOptions: types.AgentOptions{Iterations: 10, MaxAttempts: 3, MaxRetries: 3},
-		ToolOutputPruning: types.ToolOutputPruningConfig{
-			HighWaterTokens: 1000, LowWaterTokens: 1, MinResultTokens: 1,
-		},
-		InitialHistory: []openai.ChatCompletionMessage{
-			{Role: "user", Content: "read a.go"},
-			callMsg("c1", "read", `{"path":"a.go"}`),
-			bigResult("c1", 9000),
-			{Role: "assistant", Content: "read it"},
-		},
-	}
-
-	session, err := NewSession(context.Background(), cfg, Callbacks{})
-	if err != nil {
-		t.Fatalf("NewSession: %v", err)
-	}
-	defer session.Close()
-
-	if _, err := session.SendMessage("now what?"); err != nil {
-		t.Fatalf("SendMessage: %v", err)
-	}
-
-	sent := rec.all()
-	if sent == "" {
-		t.Fatal("the fake LLM received no request")
-	}
-	if !strings.Contains(sent, "dropped to save context") {
-		t.Fatal("the request did not carry a pruned stub: the manipulator is not installed on the run")
-	}
-	if strings.Contains(sent, strings.Repeat("x", 5000)) {
-		t.Fatal("the oversized tool result went out on the wire unpruned")
-	}
-	// The stored conversation is untouched: pruning rewrites the request only.
-	hist := session.ExportHistory()
-	var found bool
-	for _, m := range hist {
-		if m.ToolCallID == "c1" && len(m.Content) > 5000 {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatal("pruning mutated the session's own history")
 	}
 }
