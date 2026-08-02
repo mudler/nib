@@ -35,6 +35,33 @@ func TestUsageBadgeFormatsBothDirections(t *testing.T) {
 	}
 }
 
+// The badge names both directions, so both slots must carry a number. A
+// provider that reports only one of them used to render "session 1.2k in /  out"
+// — the same hole chat.HumanTokensOrZero was written to close for the exit
+// summary, which the badge re-opened by formatting with chat.HumanTokens.
+func TestUsageBadgeFillsAZeroDirection(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		usage chat.SessionUsage
+	}{
+		{"no completion tokens", chat.SessionUsage{PromptTokens: 1200}},
+		{"no prompt tokens", chat.SessionUsage{CompletionTokens: 8}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := Model{sessionUsage: tc.usage}.usageBadge()
+			if got == "" {
+				t.Fatal("a session with spend on one side renders no badge at all")
+			}
+			if !strings.Contains(got, "0") {
+				t.Fatalf("the zero direction dropped its number: %q", got)
+			}
+			if strings.Contains(got, "  ") {
+				t.Fatalf("badge has a hole where a count should be: %q", got)
+			}
+		})
+	}
+}
+
 // The context badge predicts compaction and is therefore actionable; session
 // totals are informational and are dropped WHOLE rather than truncated. ttyd in
 // a browser is the reporter's normal case, so this is the common path, not an

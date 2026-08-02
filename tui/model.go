@@ -1994,13 +1994,18 @@ func (m Model) contextBadge() string {
 //
 // Plain words rather than arrows: it matches contextBadge's phrasing and the
 // calm editorial voice TestNoEmojiInRenderHelpers guards.
+//
+// chat.HumanTokensOrZero, not chat.HumanTokens: the badge names both directions,
+// so a zero one has to render "0" rather than the empty string HumanTokens
+// returns, or the badge shows "session 1.2k in /  out". The exit summary prints
+// the same fixed shape and shares the same formatter.
 func (m Model) usageBadge() string {
 	in, out := m.sessionUsage.PromptTokens, m.sessionUsage.CompletionTokens
 	if in <= 0 && out <= 0 {
 		return ""
 	}
 	return theme.Meta.Render(fmt.Sprintf("session %s in / %s out",
-		chat.HumanTokens(in), chat.HumanTokens(out)))
+		chat.HumanTokensOrZero(in), chat.HumanTokensOrZero(out)))
 }
 
 // footerBadges renders the right-aligned bottom-bar badges for a help line of
