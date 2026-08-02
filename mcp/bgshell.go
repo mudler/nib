@@ -3,6 +3,7 @@ package mcp
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os/exec"
 	"sort"
 	"strconv"
@@ -16,6 +17,18 @@ import (
 // bgMaxOutput caps the captured output per stream for a shell job, so a chatty
 // long-running command can't grow memory without bound.
 const bgMaxOutput = 64 * 1024
+
+// bgJobWaitDelay bounds how long cmd.Wait() may block on the output pipes after
+// the process itself has finished or been cancelled.
+//
+// configureJobProcess already kills the whole process group on Unix, which
+// handles the ordinary case of a shell that forked its command. This is the
+// backstop for what that cannot reach: a job that daemonizes with setsid()
+// escapes the group, survives the kill, and keeps the inherited stdout/stderr
+// write ends open — and cmd.Wait() does not return until those pipes reach EOF.
+// Without a delay, one such job would leave a killed job "running" forever,
+// parking the agent on work nobody is waiting for.
+const bgJobWaitDelay = 2 * time.Second
 
 // lockedBuffer is a concurrency-safe, size-capped writer: the running command's
 // goroutine writes to it while tool handlers / the UI read it. Once the cap is
@@ -150,6 +163,11 @@ func (m *bgJobManager) launch(parent context.Context, script string, foreground 
 	cmd.Stdout = &j.stdout
 	cmd.Stderr = &j.stderr
 
+	// Both must be set before Start: Start captures Cancel and WaitDelay when it
+	// arms the context watchdog.
+	configureJobProcess(cmd)
+	cmd.WaitDelay = bgJobWaitDelay
+
 	if err := cmd.Start(); err != nil {
 		cancel()
 		j.mu.Lock()
@@ -162,7 +180,23 @@ func (m *bgJobManager) launch(parent context.Context, script string, foreground 
 			err := cmd.Wait()
 			j.mu.Lock()
 			j.done = true
-			if err != nil {
+			switch {
+			case err == nil:
+				// Clean exit, pipes closed on their own.
+			case errors.Is(err, exec.ErrWaitDelay) && cmd.ProcessState != nil:
+				// The command itself finished; WaitDelay fired only because
+				// something it spawned still held the inherited output pipes
+				// open. That is not a failure of the command, and reporting it
+				// as one would tell the model to "fix" a script that worked —
+				// `npm run dev &` and any other job that leaves a helper
+				// running would come back as exit -1. Report the process's real
+				// status instead, and only carry an error when it actually
+				// failed.
+				j.exitCode = cmd.ProcessState.ExitCode()
+				if j.exitCode != 0 {
+					j.errMsg = err.Error()
+				}
+			default:
 				if ee, ok := err.(*exec.ExitError); ok {
 					j.exitCode = ee.ExitCode()
 				} else {
