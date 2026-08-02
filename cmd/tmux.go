@@ -20,17 +20,28 @@ func IsInTmux() bool {
 // stdout directly. Instead the inner nib writes its command to a temp file and
 // signals a tmux channel on exit; we block on that channel, then relay the file
 // to our own stdout — which is what the Ctrl+Space shell widget captures.
-func RunTmuxSplit(height string) error {
+//
+// programName is how the user reaches this program, and it is load-bearing
+// rather than cosmetic here: the pane has to re-enter nib, and for an embedder
+// that means the host binary PLUS its subcommand. Empty means "nib". See
+// tmuxSelfInvocation.
+//
+// The temp file prefix and the tmux channel name stay "nib"-flavored. They are
+// internal identifiers, never shown and never typed: the prefix goes to
+// os.CreateTemp and the channel is that file's basename, so both are unique per
+// invocation and neither is affected by a program name of any shape.
+func RunTmuxSplit(programName, height string) error {
 	// Get current working directory
 	dir, err := os.Getwd()
 	if err != nil {
 		dir = "."
 	}
 
-	// Get the nib executable path
+	// The binary the pane should re-enter. An empty string means the lookup
+	// failed and tmuxInnerCommand should fall back to the program name.
 	executable, err := os.Executable()
 	if err != nil {
-		executable = "nib"
+		executable = ""
 	}
 
 	// Temp file the inner nib's stdout (the selected command) is captured into,
@@ -44,10 +55,7 @@ func RunTmuxSplit(height string) error {
 	defer os.Remove(outPath)
 	channel := "nib-" + filepath.Base(outPath)
 
-	// Inside the pane: run nib (with --no-tmux to avoid recursion), redirect its
-	// stdout to the temp file, then signal the channel so we can stop waiting.
-	inner := fmt.Sprintf("%s --height %s --no-tmux > %s; tmux wait-for -S %s",
-		executable, height, shellQuote(outPath), shellQuote(channel))
+	inner := tmuxInnerCommand(programName, executable, height, outPath, channel)
 
 	// -v vertical split (pane below), -l height, -c working dir. Focus moves to
 	// the new pane so the user interacts with nib.
@@ -68,6 +76,59 @@ func RunTmuxSplit(height string) error {
 	}
 	fmt.Print(string(data))
 	return nil
+}
+
+// tmuxInnerCommand builds the shell line the split pane runs: re-enter this
+// program with --no-tmux (so it renders instead of splitting again), redirect
+// its stdout to the capture file, then signal the tmux channel the outer
+// process is blocked on.
+//
+// Pure, and separated from RunTmuxSplit for exactly that reason: RunTmuxSplit
+// shells out to tmux, so the only way to assert what the pane is actually told
+// to run is to build the string somewhere a test can call.
+//
+// An empty executable means os.Executable() failed and the program name is the
+// only thing left to go on.
+func tmuxInnerCommand(programName, executable, height, outPath, channel string) string {
+	return fmt.Sprintf("%s --height %s --no-tmux > %s; tmux wait-for -S %s",
+		tmuxSelfInvocation(programName, executable), height, shellQuote(outPath), shellQuote(channel))
+}
+
+// tmuxSelfInvocation renders how the pane re-enters THIS program.
+//
+// The executable path alone is not the invocation. An embedder reaches nib as a
+// subcommand, so os.Executable() hands back the host binary with the subcommand
+// missing: for `local-ai chat` the pane would run `local-ai --height 50%
+// --no-tmux`, and since LocalAI's `run` is its default command that does not
+// even fail cleanly, it tries to boot a server in the split. So the program
+// name supplies the words and os.Executable() supplies only the FIRST of them,
+// replacing the binary's name with the absolute path nib is actually running
+// from. Standalone that leaves exactly the path, which is what it always was.
+//
+// The result is interpolated into an `sh -c` string, so each word is quoted
+// separately with the same helper initScriptCommand uses, and for the same
+// reason: quoting the invocation as a unit would make sh look for a single
+// command literally called "local-ai chat". shellQuoteWord leaves a word alone
+// when every byte in it is safe, which is what keeps an ordinary executable
+// path bare and the standalone line byte-identical.
+//
+// An empty executable means the lookup failed. Standalone that has always meant
+// the bare name and a PATH lookup; embedded, the program name is the only thing
+// left that can still name the right binary, so it is the fallback rather than
+// a hardcoded "nib" that is not installed.
+func tmuxSelfInvocation(programName, executable string) string {
+	words := strings.Fields(programName)
+	if len(words) == 0 {
+		words = []string{defaultProgramName}
+	}
+	if executable != "" {
+		words[0] = executable
+	}
+	quoted := make([]string, 0, len(words))
+	for _, w := range words {
+		quoted = append(quoted, shellQuoteWord(w))
+	}
+	return strings.Join(quoted, " ")
 }
 
 // shellQuote single-quotes s for safe interpolation into the `sh -c` string.
