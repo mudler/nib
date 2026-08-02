@@ -310,6 +310,18 @@ func TestPruneSweepsToLowWaterOldestFirst(t *testing.T) {
 	if newly[0] != "c1" || newly[1] != "c2" {
 		t.Fatalf("swept out of order: %v, want [c1 c2]", newly)
 	}
+	// freed is not merely positive, it is a specific number: Task 5 renders it in
+	// a user-facing notice ("freed 12.4k tokens"), so an unverified figure would
+	// become a visible lie. It is the size of what was replaced minus the size of
+	// what replaced it, in the same byte/4 estimate compact.go's estimateTokens
+	// uses. Computed from the fixture and the real stub text so it moves with
+	// them, and spelled out as len()/4 rather than via tokensOf so that a broken
+	// tokensOf cannot cancel itself out on both sides of the comparison.
+	wantFreed := (len(msgs[1].Content)/4 - len(prunedStub("read", "a.go", ""))/4) +
+		(len(msgs[3].Content)/4 - len(prunedStub("read", "b.go", ""))/4)
+	if freed != wantFreed {
+		t.Fatalf("freed = %d, want %d (the two swept bodies minus their stubs)", freed, wantFreed)
+	}
 	if freed <= 0 {
 		t.Fatalf("freed = %d, want a positive token count", freed)
 	}
@@ -553,5 +565,67 @@ func TestPruneStubsAnOrphanedResultReadably(t *testing.T) {
 	}
 	if !strings.Contains(out[0].Content, "tool") {
 		t.Fatalf("orphan stub names nothing the model can act on: %q", out[0].Content)
+	}
+}
+
+// A result below the floor must not STALL the sweep. Both floor tests above use
+// uniformly small results, so they pass whether the sweep skips a small result
+// and keeps going or stops dead at the first one it sees. Here a small OLD
+// result sits ahead of a large one: the sweep has to step over c1 and still
+// reach c2, or the one result actually worth stubbing is never found.
+func TestPruneSkipsASmallResultWithoutStallingTheSweep(t *testing.T) {
+	msgs := []openai.ChatCompletionMessage{
+		callMsg("c1", "read", `{"path":"a.go"}`), bigResult("c1", 50),
+		callMsg("c2", "read", `{"path":"b.go"}`), bigResult("c2", 5000),
+		{Role: "user", Content: "next"},
+	}
+	cfg := types.ToolOutputPruningConfig{HighWaterTokens: 1000, LowWaterTokens: 1, MinResultTokens: 200}
+
+	out, newly, _ := pruneToolOutputs(msgs, cfg, map[string]bool{})
+
+	if len(newly) != 1 || newly[0] != "c2" {
+		t.Fatalf("newly = %v, want [c2]: a small old result must not stop the sweep reaching a large newer one", newly)
+	}
+	if out[1].Content != msgs[1].Content {
+		t.Fatal("stubbed the small result that sits below the floor")
+	}
+}
+
+// Monotonicity has a second, quieter half. The trailing run is protected from
+// being stubbed, but that protection must NOT reach back and un-stub something
+// already stubbed: compaction rewrites history, and a result that was stubbed
+// turns ago can end up back inside the trailing run. Dropping it from the target
+// set there would hand the model back a body it had already lost — a
+// stubbed->kept transition, the one direction the policy must never move, and a
+// prefix-cache invalidation on top.
+//
+// The parallel tool calls are what put two results next to each other at the end
+// of the conversation, which is what makes c1 trailing AND previously stubbed.
+func TestPruneKeepsAStubbedResultStubbedInsideTheTrailingRun(t *testing.T) {
+	msgs := []openai.ChatCompletionMessage{
+		{Role: "assistant", ToolCalls: []openai.ToolCall{
+			{ID: "c1", Function: openai.FunctionCall{Name: "read", Arguments: `{"path":"a.go"}`}},
+			{ID: "c2", Function: openai.FunctionCall{Name: "read", Arguments: `{"path":"b.go"}`}},
+		}},
+		bigResult("c1", 5000),
+		bigResult("c2", 5000),
+	}
+	// Well under the high-water mark, so the sweep never runs and this test
+	// isolates the `already` seeding.
+	cfg := types.ToolOutputPruningConfig{HighWaterTokens: 24000, LowWaterTokens: 8000, MinResultTokens: 200}
+
+	already := map[string]bool{"c1": true}
+
+	out, newly, freed := pruneToolOutputs(msgs, cfg, already)
+
+	if out[1].Content == msgs[1].Content {
+		t.Fatal("a previously stubbed result came back unstubbed because it is now in the trailing run: pruning is not monotonic")
+	}
+	if len(newly) != 0 || freed != 0 {
+		t.Fatalf("nothing new should be stubbed here: newly=%v freed=%d", newly, freed)
+	}
+	// The protection still does its job for results that were never stubbed.
+	if out[2].Content != msgs[2].Content {
+		t.Fatal("stubbed a trailing result that had never been stubbed before")
 	}
 }
