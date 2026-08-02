@@ -19,7 +19,7 @@ func TestTmuxInnerCommandStandaloneIsUnchanged(t *testing.T) {
 	// An empty program name and the explicit "nib" are the same thing, the same
 	// way they are for the --init scripts.
 	for _, prog := range []string{"", "nib"} {
-		got := tmuxInnerCommand(prog, exe, "50%", "/tmp/nib-yank-42", "nib-nib-yank-42")
+		got := tmuxInnerCommand(prog, exe, "50%", "", "/tmp/nib-yank-42", "nib-nib-yank-42")
 		if got != want {
 			t.Fatalf("program name %q:\n got  %s\n want %s", prog, got, want)
 		}
@@ -31,7 +31,7 @@ func TestTmuxInnerCommandStandaloneIsUnchanged(t *testing.T) {
 // spawning that without `chat` does not fail cleanly, because `run` is
 // LocalAI's default command. The pane would try to boot a server.
 func TestTmuxInnerCommandKeepsTheEmbedderSubcommand(t *testing.T) {
-	got := tmuxInnerCommand("local-ai chat", "/usr/bin/local-ai", "50%", "/tmp/o", "ch")
+	got := tmuxInnerCommand("local-ai chat", "/usr/bin/local-ai", "50%", "", "/tmp/o", "ch")
 	if !strings.HasPrefix(got, "/usr/bin/local-ai chat --height 50% --no-tmux ") {
 		t.Fatalf("the pane does not re-enter the embedded agent: %s", got)
 	}
@@ -40,7 +40,7 @@ func TestTmuxInnerCommandKeepsTheEmbedderSubcommand(t *testing.T) {
 // A three-word program name keeps all of its subcommand words, in order. One
 // dropped word is the same failure as the reported one.
 func TestTmuxInnerCommandKeepsEverySubcommandWord(t *testing.T) {
-	got := tmuxInnerCommand("myprog ai agent", "/opt/bin/myprog", "20", "/tmp/o", "ch")
+	got := tmuxInnerCommand("myprog ai agent", "/opt/bin/myprog", "20", "", "/tmp/o", "ch")
 	if !strings.HasPrefix(got, "/opt/bin/myprog ai agent --height 20 ") {
 		t.Fatalf("subcommand words were dropped or reordered: %s", got)
 	}
@@ -50,7 +50,7 @@ func TestTmuxInnerCommandKeepsEverySubcommandWord(t *testing.T) {
 // pasted, the same rule initScriptCommand follows. Quoting the invocation as a
 // unit would instead make sh look for one command with a space in its name.
 func TestTmuxInnerCommandQuotesPerWord(t *testing.T) {
-	got := tmuxInnerCommand("prog sub;rm -rf /", "/opt/my prog/bin", "20", "/tmp/o", "ch")
+	got := tmuxInnerCommand("prog sub;rm -rf /", "/opt/my prog/bin", "20", "", "/tmp/o", "ch")
 	if !strings.HasPrefix(got, `'/opt/my prog/bin' 'sub;rm' -rf / --height 20 `) {
 		t.Fatalf("words were not quoted individually: %s", got)
 	}
@@ -60,10 +60,10 @@ func TestTmuxInnerCommandQuotesPerWord(t *testing.T) {
 // a PATH lookup; embedded, the program name is the only thing that can still
 // name the right binary, so it has to be the fallback rather than "nib".
 func TestTmuxInnerCommandFallsBackToTheProgramName(t *testing.T) {
-	if got := tmuxInnerCommand("", "", "50%", "/tmp/o", "ch"); !strings.HasPrefix(got, "nib --height ") {
+	if got := tmuxInnerCommand("", "", "50%", "", "/tmp/o", "ch"); !strings.HasPrefix(got, "nib --height ") {
 		t.Fatalf("standalone fallback changed: %s", got)
 	}
-	got := tmuxInnerCommand("local-ai chat", "", "50%", "/tmp/o", "ch")
+	got := tmuxInnerCommand("local-ai chat", "", "50%", "", "/tmp/o", "ch")
 	if !strings.HasPrefix(got, "local-ai chat --height ") {
 		t.Fatalf("embedded fallback does not name the embedder: %s", got)
 	}
@@ -87,7 +87,7 @@ func TestTmuxInnerCommandExecutesAsTheRightArgv(t *testing.T) {
 	}
 	outPath := filepath.Join(dir, "capture out")
 
-	inner := tmuxInnerCommand("local-ai chat", exe, "50%", outPath, "unused-channel")
+	inner := tmuxInnerCommand("local-ai chat", exe, "50%", "", outPath, "unused-channel")
 	// tmux is absent here, so the trailing wait-for signal fails; the redirect
 	// before it is what this asserts, and a non-zero exit from the tail is not
 	// a failure of the construction.
@@ -106,5 +106,33 @@ func TestTmuxInnerCommandExecutesAsTheRightArgv(t *testing.T) {
 		if got[i] != want[i] {
 			t.Fatalf("argv = %q, want %q", got, want)
 		}
+	}
+}
+
+// tmux hands a new pane the SERVER's environment, not the invoking client's,
+// so NIB_TRACE_DIR exported in the user's shell dies at the pane boundary. The
+// flag is the only thing that crosses it.
+func TestTmuxInnerCommandForwardsTraceDir(t *testing.T) {
+	got := tmuxInnerCommand("nib", "/usr/bin/nib", "50%", "/tmp/tr", "/tmp/o", "ch")
+	if !strings.Contains(got, `--trace-dir '/tmp/tr'`) {
+		t.Fatalf("the pane would run untraced: %s", got)
+	}
+}
+
+// A dir with spaces or quotes goes into an `sh -c` string, so it is quoted as
+// one word — unlike the program name, which is quoted per word.
+func TestTmuxInnerCommandQuotesTheTraceDir(t *testing.T) {
+	got := tmuxInnerCommand("nib", "/usr/bin/nib", "50%", "/tmp/my traces", "/tmp/o", "ch")
+	if !strings.Contains(got, `--trace-dir '/tmp/my traces'`) {
+		t.Fatalf("trace dir was not quoted as a single word: %s", got)
+	}
+}
+
+// No tracing means no flag: the standalone command line must stay exactly what
+// it was, which TestTmuxInnerCommandStandaloneIsUnchanged pins byte for byte.
+func TestTmuxInnerCommandOmitsAnEmptyTraceDir(t *testing.T) {
+	got := tmuxInnerCommand("nib", "/usr/bin/nib", "50%", "", "/tmp/o", "ch")
+	if strings.Contains(got, "--trace-dir") {
+		t.Fatalf("an empty trace dir still emitted the flag: %s", got)
 	}
 }

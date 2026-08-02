@@ -116,3 +116,30 @@ func innerCommandFrom(t *testing.T, recorded string) string {
 	t.Fatalf("no `sh -c` command in the recorded tmux argv: %q", args)
 	return ""
 }
+
+// The wiring half: cmd's unit tests cover how the pane command is BUILT, this
+// covers that the resolved TraceDir actually reaches the builder. A slip here
+// is invisible to both the compiler and the cmd tests.
+func TestTmuxSplitForwardsTheTraceDir(t *testing.T) {
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("no sh on this host")
+	}
+	recorded := stubTmux(t)
+	dir := filepath.Join(t.TempDir(), "trace")
+
+	var errOut bytes.Buffer
+	o := Options{
+		BaseDir:     t.TempDir(),
+		Args:        []string{"--height", "50%", "--trace-dir", dir},
+		Defaults:    types.Config{Model: "m", BaseURL: "http://127.0.0.1:1/v1"},
+		SkipSetup:   true,
+		SkipBareEnv: true,
+		Stderr:      &errOut,
+	}
+	runCtx(context.Background(), o)
+
+	inner := innerCommandFrom(t, recorded)
+	if !strings.Contains(inner, "--trace-dir '"+dir+"'") {
+		t.Fatalf("the split pane would run untraced: %q", inner)
+	}
+}

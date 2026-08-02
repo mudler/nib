@@ -495,7 +495,7 @@ func runCtx(ctx context.Context, o Options) int {
 		height := parseHeight(h)
 		useTmux := *tmuxFlag || (cmd.IsInTmux() && !*noTmuxFlag)
 		if useTmux && cmd.IsInTmux() {
-			if err := cmd.RunTmuxSplit(o.name(), *heightFlag); err != nil {
+			if err := cmd.RunTmuxSplit(o.name(), *heightFlag, cfg.TraceDir); err != nil {
 				fmt.Fprintf(o.stderr(), "Error: %v\n", err)
 				return 1
 			}
