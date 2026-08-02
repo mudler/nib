@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"strings"
 	"testing"
 
@@ -82,5 +83,50 @@ func TestRunCLIStillReportsCancellation(t *testing.T) {
 	}, nil)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("RunCLI under a cancelled context = %v, want context.Canceled", err)
+	}
+}
+
+// pipeThatCancelsAfterEOF hands back one line together with io.EOF, the
+// no-trailing-newline shape, and then cancels the context on the next write,
+// which is the loop reacting to that line. The cancellation therefore lands
+// strictly after the read, in the window between the EOF being recorded and the
+// loop deciding what to do about it, with no race to make the test flaky.
+type pipeThatCancelsAfterEOF struct {
+	line   string
+	cancel func()
+	read   bool
+	fired  bool
+}
+
+func (p *pipeThatCancelsAfterEOF) Read(b []byte) (int, error) {
+	if p.read {
+		return 0, io.EOF
+	}
+	p.read = true
+	return copy(b, p.line), io.EOF
+}
+
+func (p *pipeThatCancelsAfterEOF) Write(b []byte) (int, error) {
+	if p.read && !p.fired {
+		p.fired = true
+		p.cancel()
+	}
+	return len(b), nil
+}
+
+// An interrupted run is not a finished one, even when the input had already run
+// out. Checking the closed stdin ahead of the cancellation would report a
+// Ctrl+C as a clean end of input, inverting the distinction the EOF handling
+// exists to keep.
+func TestCancellationBeatsAnAlreadyClosedStdin(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// "help" is handled entirely inside the loop, so the cancel lands without
+	// any turn being started.
+	p := &pipeThatCancelsAfterEOF{line: "help", cancel: cancel}
+	err := RunCLI(ctx, types.Config{}, Streams{In: p, Out: p, Err: io.Discard}, nil)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("RunCLI = %v, want context.Canceled", err)
 	}
 }

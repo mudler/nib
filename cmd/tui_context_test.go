@@ -108,3 +108,23 @@ func TestDecideTUIExit(t *testing.T) {
 		})
 	}
 }
+
+// The invariant RunTUI leans on when it stops checking runErr after
+// decideTUIExit: a program that did not come back clean never maps to a
+// success, so anything past that check has a final model state to capture.
+func TestDecideTUIExitNeverReportsAFailureAsSuccess(t *testing.T) {
+	runErrs := []error{
+		errors.New("render exploded"),
+		tea.ErrProgramKilled,
+		errors.Join(tea.ErrProgramKilled, context.Canceled),
+		errors.Join(tea.ErrProgramKilled, tea.ErrInterrupted),
+		errors.Join(tea.ErrProgramKilled, context.DeadlineExceeded),
+	}
+	for _, ctxErr := range []error{nil, context.Canceled, context.DeadlineExceeded} {
+		for _, runErr := range runErrs {
+			if got := decideTUIExit(runErr, ctxErr); got == nil {
+				t.Fatalf("decideTUIExit(%v, %v) = nil: a program that was killed reported success", runErr, ctxErr)
+			}
+		}
+	}
+}

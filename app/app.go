@@ -147,7 +147,8 @@ func Main(argv []string) int {
 // an unknown --init shell, an MCP transport failure, the setup abort, the
 // injected-stream refusal and a management subcommand's non-zero code are all
 // indistinguishable to the caller. The code is 1 for every one of those except
-// an unparseable flag, which is 2 and the only non-1 code runCtx produces.
+// two: an unparseable flag is 2, and a CLI session that had to refuse a tool
+// call because stdin could not approve it is ExitCodeApprovalNoInput.
 //
 // Cancelling ctx unwinds whichever mode is running, the TUI included, and
 // comes back as ExitError{1} with the context's error on Stderr. Signals are
@@ -167,6 +168,16 @@ func Run(ctx context.Context, o Options) error {
 type ExitError struct{ Code int }
 
 func (e ExitError) Error() string { return fmt.Sprintf("exit status %d", e.Code) }
+
+// ExitCodeApprovalNoInput is the exit code for a CLI session that refused a
+// tool call because stdin was closed and nothing could approve it. See
+// cmd.ErrApprovalNoInput for why that is not a success.
+//
+// It is deliberately neither 0 nor 1: a script piping a prompt in has to be
+// able to tell "answered" from "refused to act" without reading stdout, and
+// from a crash or a bad flag (2) without guessing. Scripts branch on this
+// number, so it is part of nib's interface and does not change.
+const ExitCodeApprovalNoInput = 3
 
 func run(o Options) int {
 	// The management subcommands run BEFORE the handler is installed, exactly as
@@ -379,6 +390,11 @@ func runCtx(ctx context.Context, o Options) int {
 	case modeCLI:
 		if err := cmd.RunCLI(ctx, cfg, streams, shellJobs, transports...); err != nil {
 			fmt.Fprintf(o.stderr(), "Error: %v\n", err)
+			// The one CLI failure a caller is expected to branch on rather than
+			// just report, so it gets its own code instead of the blanket 1.
+			if errors.Is(err, cmd.ErrApprovalNoInput) {
+				return ExitCodeApprovalNoInput
+			}
 			return 1
 		}
 	case modeInline:

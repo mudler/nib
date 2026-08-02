@@ -118,10 +118,39 @@ Running out of input ends the session, so a piped question is answered and nib e
 `Ctrl+D` does the same thing interactively. `Ctrl+C` still exits non-zero, so a script can
 tell an interrupted run from a finished one.
 
-A piped run has nobody at the keyboard, so it cannot answer a tool-approval prompt. Any
-tool call that would need one is **denied** and the session ends: a closed stdin is not
-consent. To let a piped run act, say so explicitly with `--yolo` (`NIB_YOLO=1`), which
-auto-approves every tool call, or allowlist the tools you trust in `config.yaml`.
+#### What a piped run may and may not do
+
+A piped run still uses tools, but only the ones that cannot change anything. In the default
+approval mode nib auto-approves **read-only** tools without asking, so a piped question can
+read your files and inspect your repo to answer you:
+
+- read-only tools: `read`, `grep`, `glob`, `read_image`, `read_video`, `transcribe_audio`,
+  `bash_jobs`, `bash_job_output`, `agent_logs`, `check_agent`, `get_agent_result`,
+  `cron_list`
+- read-only shell commands, run through `bash` or `bash_background`: `ls`, `cat`, `head`, `tail`, `grep`, `rg`,
+  `wc`, `pwd`, `stat`, `file`, `du`, `df`, `basename`, `dirname`, `echo`, `printf`,
+  `whoami`, `uname`, `which`, `type`, `cut`, `column`, `nl`, `less`, `more`, plus specific
+  subcommands of mixed tools: `git status|log|diff|show|blame|describe|rev-parse|ls-files`,
+  `go list|version|doc|vet`, `docker ps|images|inspect|logs|version|info`,
+  `kubectl get|describe|logs|version`, `npm ls|list|view|outdated`, `cargo tree|metadata`.
+  Extend the list with `read_only_commands` in `config.yaml`
+
+Everything else needs approval, and a piped run has nobody at the keyboard to give it, so
+those calls are **denied** and the session ends. A closed stdin is not consent. That
+includes every write, every other shell command, and every MCP or plugin tool.
+
+The exit code says which happened:
+
+| code | meaning |
+|---|---|
+| `0` | answered, and the input ran out (also `exit` and `Ctrl+D`) |
+| `1` | a failure, including `Ctrl+C` and a broken stdin |
+| `2` | an unparseable flag |
+| `3` | a tool call needed approval and stdin was closed, so nib refused to act |
+
+`3` exists so a script that discards stdout can still tell "here is your answer" from "I
+refused to act". To let a piped run act, say so explicitly with `--yolo` (`NIB_YOLO=1`),
+which auto-approves every tool call, or allowlist the tools you trust in `config.yaml`.
 
 ### Summon nib from your shell (`Ctrl+Space`)
 
@@ -554,7 +583,9 @@ been printed to `Stderr` instead: an unparseable flag, an unknown `--init`
 shell, an MCP transport failure, the setup abort, the stream refusal described
 below, a management subcommand's non-zero code and a TUI error are all
 indistinguishable to the caller. The code is `1` for every one of those except
-an unparseable flag, which is `2`. `app.Main(os.Args) int` is the same
+two: an unparseable flag is `2`, and a CLI session that refused a tool call
+because stdin could not approve it is `app.ExitCodeApprovalNoInput` (`3`), which
+is separable precisely so a caller can act on it. `app.Main(os.Args) int` is the same
 entrypoint shaped for a `main` function: it installs nib's SIGINT/SIGTERM
 handling and takes no options, which is all nib's own `main.go` needs. That
 handling covers the modes that take a context; the management subcommands below

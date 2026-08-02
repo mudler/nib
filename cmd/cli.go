@@ -22,6 +22,16 @@ import (
 	"github.com/mudler/nib/types"
 )
 
+// ErrApprovalNoInput ends a CLI session that had to refuse a tool call because
+// stdin was closed and nothing could approve it.
+//
+// It exists to be told apart from a session that simply ran out of input, which
+// is a success. Under the piped one-shot idiom "I answered you" and "I refused
+// to act" would otherwise both be exit 0 with stdout discarded, which is the
+// same false signal, pointing the other way, as the EOF that used to be a
+// failure. app maps it to its own exit code.
+var ErrApprovalNoInput = errors.New("tool call denied: stdin closed, nothing could approve it")
+
 // resolveCLIInput maps a CLI input line to a slash Action, mirroring the TUI.
 func resolveCLIInput(input string, cfg types.Config) slash.Action {
 	return slash.Resolve(input, cfg.Commands, cfg.Skills, cfg.Agents)
@@ -193,9 +203,16 @@ func RunCLI(ctx context.Context, cfg types.Config, streams Streams, shellJobs *w
 
 	// stdinClosed records that a read hit EOF. Both readers of this session
 	// consult it: the prompt loop, to stop, and the approval callback, to deny
-	// rather than ask a stream that cannot answer. It is atomic because the
-	// callbacks run on the agent's goroutine, not the loop's.
-	var stdinClosed atomic.Bool
+	// rather than ask a stream that cannot answer.
+	//
+	// deniedNoInput records that the denial actually happened, which is what
+	// separates "the question was answered and the input ran out", a success,
+	// from "something wanted approval and there was nobody to give it", which
+	// has to be visible to a script that reads only the exit code.
+	//
+	// Both are atomic because the callbacks run on the agent's goroutine, not
+	// the loop's.
+	var stdinClosed, deniedNoInput atomic.Bool
 
 	callbacks := chat.Callbacks{
 		OnStatus: func(status string) {
@@ -223,7 +240,8 @@ func RunCLI(ctx context.Context, cfg types.Config, streams Streams, shellJobs *w
 			// Nothing can answer a prompt once stdin has closed, so record the
 			// call and deny it instead of printing a question at a dead stream.
 			if stdinClosed.Load() {
-				fmt.Fprintln(out, g+theme.Error.Render(theme.Cross+" "+theme.CLIDeniedNoInput))
+				deniedNoInput.Store(true)
+				fmt.Fprintln(out, theme.Error.Render(theme.Cross+" "+theme.CLIDeniedNoInput))
 				return chat.ToolCallResponse{Approved: false}
 			}
 
@@ -244,11 +262,25 @@ func RunCLI(ctx context.Context, cfg types.Config, streams Streams, shellJobs *w
 			// This is EOF and cancellation only. The empty line a human types
 			// at a live terminal is a different thing, a deliberate keypress,
 			// and it still means what it always meant.
+			//
+			// Note the asymmetry with the prompt loop below, which goes out of
+			// its way to honor a last line that arrives without a trailing
+			// newline, because bufio hands that text back alongside the EOF.
+			// Here that same text is dropped: `printf 'do X\ny'` denies rather
+			// than approving on the "y". The two readers differ because the
+			// consequences do. A truncated last line reaching the loop is a
+			// garbled question; a truncated last line reaching this switch is
+			// consent, and any text the keywords do not match approves through
+			// the default arm, so "ye" from a half-written pipe would run the
+			// command. Text that arrives with the EOF that ended the stream
+			// cannot be told apart from text that was cut off, so it is not
+			// treated as an answer.
 			if readErr != nil {
 				if errors.Is(readErr, io.EOF) {
 					// Gone for good: nothing later in this session can be
 					// answered either, so end it rather than prompting on.
 					stdinClosed.Store(true)
+					deniedNoInput.Store(true)
 					fmt.Fprintln(out, theme.Error.Render(theme.Cross+" "+theme.CLIDeniedNoInput))
 				} else {
 					fmt.Fprintln(out, theme.Error.Render(theme.Cross+" "+theme.CLIDeniedNoAnswer))
@@ -364,7 +396,9 @@ func RunCLI(ctx context.Context, cfg types.Config, streams Streams, shellJobs *w
 	// nib --cli` has to answer and exit 0, and an interactive Ctrl-D is the
 	// same EOF and ends the session the same way. Only EOF; any other read
 	// error is still reported, so a stdin that is genuinely broken does not
-	// look like a session the user finished.
+	// look like a session the user finished. A session that had to refuse a
+	// tool call along the way ends with ErrApprovalNoInput instead, because
+	// that is not a success either.
 	//
 	// It is a flag checked at the top of the loop rather than an immediate
 	// return because a last line arriving without a trailing newline
@@ -372,13 +406,22 @@ func RunCLI(ctx context.Context, cfg types.Config, streams Streams, shellJobs *w
 	// EOF. Letting the body run for it and stopping on the next trip is what
 	// keeps that line from being dropped.
 	for {
-		if stdinClosed.Load() {
-			return nil
-		}
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		default:
+			// Inside the default arm, not above the select: a ready ctx.Done()
+			// always wins over default, so cancellation is answered first. An
+			// EOF followed by a Ctrl+C is still a Ctrl+C, and reporting it as
+			// the clean end of input would invert the very distinction the EOF
+			// handling exists to keep.
+			if stdinClosed.Load() {
+				if deniedNoInput.Load() {
+					return ErrApprovalNoInput
+				}
+				return nil
+			}
+
 			fmt.Fprint(out, theme.Prompt.Render(theme.PromptGlyph)+" ")
 
 			text, err := readStringCancellable(ctx, reader)

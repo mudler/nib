@@ -107,10 +107,12 @@ func TestPipedApprovalDoesNotRunTheToolOnEOF(t *testing.T) {
 	srv := fakeToolCallingLLM(t, "touch "+marker)
 
 	err, out := runApprovalSession(t, approvalConfig(srv.URL), strings.NewReader("please create the file\n"))
-	if err != nil {
-		t.Fatalf("RunCLI = %v, want nil", err)
-	}
 	mustNotExist(t, marker, out)
+	// Refusing to act is not a success. A script piping a prompt in with
+	// stdout discarded has nothing else to go on.
+	if !errors.Is(err, ErrApprovalNoInput) {
+		t.Fatalf("RunCLI = %v, want ErrApprovalNoInput", err)
+	}
 	if !strings.Contains(out, theme.CLIDeniedNoInput) {
 		t.Fatalf("the transcript does not record why it was denied:\n%s", out)
 	}
@@ -126,8 +128,8 @@ func TestApprovalStopsPromptingOnceStdinIsClosed(t *testing.T) {
 	srv := fakeToolCallingLLM(t, "touch "+first, "touch "+second)
 
 	err, out := runApprovalSession(t, approvalConfig(srv.URL), strings.NewReader("please create the files\n"))
-	if err != nil {
-		t.Fatalf("RunCLI = %v, want nil", err)
+	if !errors.Is(err, ErrApprovalNoInput) {
+		t.Fatalf("RunCLI = %v, want ErrApprovalNoInput", err)
 	}
 	mustNotExist(t, first, out)
 	mustNotExist(t, second, out)
@@ -189,5 +191,24 @@ func TestApprovalDeniesWhenTheReadFails(t *testing.T) {
 	mustNotExist(t, marker, out)
 	if !errors.Is(err, boom) {
 		t.Fatalf("RunCLI = %v, want %v", err, boom)
+	}
+}
+
+// The asymmetry with the prompt loop, pinned. An answer that arrives together
+// with the EOF that ended the stream (`printf 'do X\ny'`, no trailing newline)
+// is not treated as an answer here, though the loop goes out of its way to
+// honor exactly that shape for a question. Text handed back with the EOF cannot
+// be told apart from text that was cut off, and at this prompt anything the
+// keywords do not match approves through the free-text arm, so a half-written
+// pipe would run the command. Fail closed and let the caller add the newline.
+func TestApprovalIgnoresAnAnswerThatArrivesWithTheEOF(t *testing.T) {
+	marker := filepath.Join(t.TempDir(), "executed")
+	srv := fakeToolCallingLLM(t, "touch "+marker)
+
+	// No trailing newline after the "y".
+	err, out := runApprovalSession(t, approvalConfig(srv.URL), strings.NewReader("please create the file\ny"))
+	mustNotExist(t, marker, out)
+	if !errors.Is(err, ErrApprovalNoInput) {
+		t.Fatalf("RunCLI = %v, want ErrApprovalNoInput", err)
 	}
 }

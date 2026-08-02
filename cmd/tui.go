@@ -82,13 +82,10 @@ func RunTUI(ctx context.Context, cfg types.Config, height int, streams Streams, 
 	fmt.Fprint(ttyOut, "\x1b[G") // Move to beginning of line
 	fmt.Fprint(ttyOut, "\x1b[J") // Clear from cursor to end of screen
 
+	// Every non-nil runErr maps to a non-nil result, so past this point the
+	// program quit rather than being killed and the model has a final state.
 	if err := decideTUIExit(runErr, ctx.Err()); err != nil {
 		return err
-	}
-	if runErr != nil {
-		// Killed rather than quit, so the model never reached a final state
-		// worth capturing: there is no selected command to hand the shell.
-		return nil
 	}
 
 	// Output any command to shell if needed (this goes to stdout for shell
