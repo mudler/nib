@@ -144,6 +144,11 @@ type Callbacks struct {
 	// OnCompactDone is called after the conversation is compacted, with the
 	// approximate token counts before and after. Optional.
 	OnCompactDone func(before, after int)
+	// OnPruneDone is called when tool-output pruning stubs results it had not
+	// stubbed before, with how many results were replaced on this pass and the
+	// approximate tokens that freed. It fires on the transition, not on every
+	// LLM call: a call that re-applies existing stubs is silent. Optional.
+	OnPruneDone func(results, freed int)
 	// OnParked is called when the live run parks: the assistant has produced a
 	// reply but cogito keeps the loop alive because background work (sub-agents
 	// or shell jobs) is still pending or because the user may inject a follow-up.

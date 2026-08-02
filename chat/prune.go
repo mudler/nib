@@ -188,6 +188,78 @@ func pruneToolOutputs(msgs []openai.ChatCompletionMessage, cfg types.ToolOutputP
 	return out, newly, freed
 }
 
+// pruneMessages is the cogito.WithMessagesManipulator body: it rewrites the
+// messages about to be sent, and records what it stubbed so the next call makes
+// the same decisions.
+//
+// It runs on the turn goroutine but the state is guarded anyway — the
+// manipulator is called from inside cogito's loop, and nothing here should
+// assume which goroutine that is.
+func (s *Session) pruneMessages(msgs []openai.ChatCompletionMessage) []openai.ChatCompletionMessage {
+	s.prunedMu.Lock()
+	if s.prunedIDs == nil {
+		s.prunedIDs = map[string]bool{}
+	}
+	out, newly, freed := pruneToolOutputs(msgs, effectivePruning(s.pruning), s.prunedIDs)
+	for _, id := range newly {
+		s.prunedIDs[id] = true
+	}
+	forgetAbsentIDs(s.prunedIDs, msgs)
+	s.prunedMu.Unlock()
+
+	// Fired outside the lock, like OnCompactDone: this is host UI code running
+	// on nib's goroutine, and a callback that reaches back into the session must
+	// not be able to deadlock the turn.
+	if len(newly) > 0 && s.callbacks.OnPruneDone != nil {
+		s.callbacks.OnPruneDone(len(newly), freed)
+	}
+	return out
+}
+
+// effectivePruning returns cfg with a low-water mark that cannot exceed the high
+// -water mark.
+//
+// A config with low above high is not a stricter policy, it is an inert one: the
+// sweep starts when the total reaches the high mark and then immediately finds
+// itself already under the low mark, so crossing the mark prunes nothing at all
+// — and keeps crossing it on every subsequent call. Clamping is applied here,
+// where a config becomes a live policy, rather than in config defaulting,
+// because NewSession takes a types.Config from embedders too and never sees
+// config.Load's defaulting.
+func effectivePruning(cfg types.ToolOutputPruningConfig) types.ToolOutputPruningConfig {
+	if cfg.LowWaterTokens > cfg.HighWaterTokens {
+		cfg.LowWaterTokens = cfg.HighWaterTokens
+	}
+	return cfg
+}
+
+// forgetAbsentIDs drops stubbed ids whose tool result is no longer in the
+// conversation.
+//
+// Without this the set only ever grows: compaction rewrites history and removes
+// whole exchanges, and their ids would then sit in the map for the life of the
+// session, describing messages that no longer exist. Forgetting them cannot
+// un-stub anything, because a result that is gone cannot come back — cogito
+// hands the manipulator the whole fragment on every call, and the sub-agent
+// option set deliberately does not carry the manipulator, so a short sub-agent
+// conversation can never be mistaken for a shrunken main one.
+func forgetAbsentIDs(ids map[string]bool, msgs []openai.ChatCompletionMessage) {
+	if len(ids) == 0 {
+		return
+	}
+	present := make(map[string]bool, len(msgs))
+	for _, m := range msgs {
+		if m.Role == "tool" && m.ToolCallID != "" {
+			present[m.ToolCallID] = true
+		}
+	}
+	for id := range ids {
+		if !present[id] {
+			delete(ids, id)
+		}
+	}
+}
+
 // tokensOf is the byte/4 estimate compaction already uses, applied to one body.
 func tokensOf(s string) int { return len(s) / 4 }
 
