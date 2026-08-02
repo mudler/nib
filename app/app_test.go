@@ -262,3 +262,18 @@ func TestOptionsSkipBareEnvReachesTheConfigLoad(t *testing.T) {
 		t.Fatalf("stderr = %q, want the no-model abort", errOut.String())
 	}
 }
+
+// Options.Overrides must reach config.LoadWith. The model is the observable
+// end of it: an overridden model satisfies the setup gate on its own, exactly
+// as a seeded one does, which is only true if the field was threaded through.
+func TestOptionsOverridesReachTheConfigLoad(t *testing.T) {
+	var errOut bytes.Buffer
+	o := skipSetupOptions(t, io.Discard, &errOut)
+	o.Overrides = types.Config{Model: "overridden-model", BaseURL: "http://override.invalid/v1"}
+
+	runCtx(cancelledContext(t), o)
+
+	if strings.Contains(errOut.String(), "no model configured") {
+		t.Fatalf("Options.Overrides never reached the config load: %q", errOut.String())
+	}
+}

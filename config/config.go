@@ -146,6 +146,29 @@ type LoadOptions struct {
 	// selects standalone nib's XDG resolution). See applySeeds for exactly what
 	// "empty" means for maps, slices and booleans.
 	Defaults types.Config
+	// Overrides are Defaults' mirror image: they sit ABOVE the config file and
+	// above the environment block, so whatever an embedder sets here is the
+	// final word for that field. This is the channel for a value the embedder
+	// resolved on the user's behalf and that a config file must not silently
+	// undo, a CLI flag above all: `--endpoint` seeded through Defaults is
+	// accepted and then ignored the moment the file carries a base_url, which
+	// is the default state once anything has written one.
+	//
+	// The same reflective merge as Defaults, so every field of types.Config is
+	// overridable, with the SAME single carve-out: Overrides.BaseDir is ignored,
+	// because LoadOptions.BaseDir remains the one knob for the root.
+	//
+	// The zero-value merge cuts the other way here, and it is the one thing an
+	// embedder has to plan around. A zero value is indistinguishable from
+	// "unset", so an override only ever raises a field: an override of "" cannot
+	// blank a model the file sets, an override of 0 cannot zero an iteration
+	// count, and an override of FALSE CANNOT BEAT A `true:` IN THE FILE. There
+	// is no exception, Browser.AllowPrivateURLs included, so an embedder that
+	// must force a bool off cannot do it through this channel; it has to own the
+	// file, or point BaseDir at a root it controls. Presence tracking would need
+	// a decoder that records which keys were written, which is not what a
+	// types.Config-typed field can express.
+	Overrides types.Config
 	// SkipBareEnv suppresses the bare MODEL / API_KEY / BASE_URL environment
 	// variables. Embedders that expose their own prefixed variables set this so
 	// a MODEL meant for some other tool cannot retarget the agent.
@@ -164,7 +187,7 @@ func LoadWith(o LoadOptions) types.Config {
 	// Seed the gaps the file left. This runs before the env block and before
 	// withDefaults, which is what makes the precedence read, lowest to highest:
 	// nib's built-in defaults, the embedder's seeds, the config file, the
-	// environment.
+	// environment, the embedder's overrides.
 	applySeeds(&cfg, o.Defaults)
 
 	// Override with environment variables if set. An embedder that publishes its
@@ -181,6 +204,12 @@ func LoadWith(o LoadOptions) types.Config {
 			cfg.BaseURL = baseURL
 		}
 	}
+
+	// Last word: the embedder's overrides go on top of the file and of the block
+	// above, which is what makes a host's CLI flag a flag rather than a wish.
+	// Anything left unset here falls through to whatever the rungs below
+	// resolved, so a zero Overrides is exactly today's load.
+	applyOverrides(&cfg, o.Overrides)
 
 	cfg = withDefaults(cfg)
 
@@ -257,6 +286,45 @@ func applySeeds(cfg *types.Config, defaults types.Config) {
 		// Only reachable for a nil or non-struct argument, neither of which the
 		// single call site can produce. Report rather than drop it silently.
 		fmt.Fprintf(os.Stderr, "nib: config defaults: %v\n", err)
+	}
+}
+
+// applyOverrides is applySeeds in reverse: every non-zero field of the
+// embedder's overrides replaces what the file and the environment resolved.
+//
+// It reuses the same reflective merge for the same reason, so the two channels
+// cover exactly the same fields and neither can quietly fall behind a field
+// added to types.Config later. TestOverrideEveryFieldOfConfig is the guard that
+// says so, and it is the mirror of TestDefaultsSeedEveryFieldOfConfig.
+//
+// The container rules carry over unchanged in shape, only reversed in who wins:
+//
+//   - Scalars and structs: recursive, per leaf field. An override of
+//     agent_options.iterations leaves the file's max_attempts alone.
+//   - Maps: merged per key. An overridden key wins, a key only the file has
+//     survives. cfg's map is nib's own either way, never the caller's.
+//   - Slices: all or nothing. A non-empty override replaces the file's list
+//     whole; an empty one leaves it. Cloned first, because mergo adopts the
+//     SOURCE slice by reference under WithOverride and skill.Apply /
+//     plugin.Apply then append to cfg.Hooks, cfg.Skills and cfg.Commands, which
+//     would write into the embedder's backing array.
+//   - Booleans and every other zero value: skipped. This is the asymmetry an
+//     embedder has to plan around. Under Defaults a seeded true beats a file's
+//     `false:`; here an overridden false CANNOT beat a file's `true:`, because
+//     nothing in a types.Config-typed field distinguishes "set to the zero
+//     value" from "not set". So an override can only ever raise a field: it
+//     cannot blank a model, zero an iteration count, or switch
+//     Browser.AllowPrivateURLs back off. An embedder that must force one of
+//     those has to own the config file rather than reach over it.
+//
+// The BaseDir carve-out needs no code here: LoadWith assigns cfg.BaseDir from
+// LoadOptions.BaseDir after this runs, unconditionally, which is what keeps the
+// root to a single knob for both channels.
+func applyOverrides(cfg *types.Config, overrides types.Config) {
+	if err := mergo.Merge(cfg, cloneSliceFields(overrides), mergo.WithOverride); err != nil {
+		// Only reachable for a nil or non-struct argument, neither of which the
+		// single call site can produce. Report rather than drop it silently.
+		fmt.Fprintf(os.Stderr, "nib: config overrides: %v\n", err)
 	}
 }
 

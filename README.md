@@ -554,13 +554,16 @@ import (
 	"github.com/mudler/nib/types"
 )
 
-func runAgent(ctx context.Context, args []string) error {
+func runAgent(ctx context.Context, args []string, modelFlag string) error {
 	return app.Run(ctx, app.Options{
 		Args:        args,           // the arguments after your subcommand
 		ProgramName: "myprog agent", // see below for where it reaches
 		BaseDir:     "/path/to/state",
 		Defaults: types.Config{ // seeds fields the config file leaves empty
 			BaseURL: "http://127.0.0.1:8080/v1",
+		},
+		Overrides: types.Config{ // beats the config file: for your own flags
+			Model: modelFlag,
 		},
 		SkipSetup:   true, // you resolve the model yourself
 		SkipBareEnv: true, // ignore bare MODEL / API_KEY / BASE_URL
@@ -571,6 +574,50 @@ func runAgent(ctx context.Context, args []string) error {
 Every option's zero value reproduces standalone nib, so an embedder opts in to
 each difference. `BaseDir` is the root for `config.yaml`, `plugins/` and
 `skills/`, keeping embedded state out of a separately installed nib's.
+
+### Defaults and Overrides
+
+There are two config channels, and which one a value belongs in comes down to a
+single question: should the user's config file be able to change it?
+
+Precedence, lowest to highest:
+
+| rung | who sets it |
+|------|-------------|
+| nib's built-in defaults | nib |
+| `Options.Defaults` | the embedder, as a starting point |
+| `config.yaml` | the user |
+| `MODEL` / `API_KEY` / `BASE_URL` | the user's shell, unless `SkipBareEnv` |
+| `Options.Overrides` | the embedder, as the last word |
+
+`Defaults` is for values the user is meant to be able to change: a sensible
+endpoint for a first run, a house prompt, a set of sub-agents. It fills what the
+file left empty and loses to anything the user writes.
+
+`Overrides` is for values the embedder resolved on the user's behalf and that
+the file must not silently undo. **Your own CLI flags belong here.** Routed
+through `Defaults`, an `--endpoint` or `--model` flag is accepted and then
+ignored the moment the file carries a `base_url` or a `model`, which is the
+normal state rather than an edge case: anything that writes the file once makes
+the flag dead from the next run on.
+
+Both channels merge every field of `types.Config`, not a hand-picked subset, and
+both share the same single carve-out: `BaseDir` is ignored in each, because
+`Options.BaseDir` is the only knob for the root. Nested structs merge per leaf
+field, maps merge per key, and slices are all or nothing.
+
+Neither merge can tell "set to the zero value" from "not set", so each is
+one-way. A seeded `true` beats a `false:` in the file, and an overridden `false`
+**cannot** beat a `true:` in the file. An override only ever raises a field: it
+cannot blank a model, zero an iteration count, or switch
+`browser.allow_private_urls` back off. To force one of those, own the config
+file under a `BaseDir` you control rather than reaching over it.
+
+Two fields still sit above `Overrides`, by design rather than by omission. nib's
+own `--trace-dir` and `--yolo`, and their `NIB_TRACE_DIR` and `NIB_YOLO` twins,
+are resolved after the config load and keep winning for `TraceDir` and
+`ApprovalMode`: they are the end user's direct instruction to nib, and an
+embedder that does not want them filters them out of `Args`.
 
 `app.Run` never calls `os.Exit`, and it takes cancellation from the context you
 pass rather than installing its own signal handling. Cancelling that context

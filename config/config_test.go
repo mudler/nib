@@ -375,9 +375,11 @@ func TestDefaultsSliceSeedsAreNotAliased(t *testing.T) {
 	}
 }
 
-// seedCarveOuts names the fields LoadOptions.Defaults deliberately does not
-// seed. There is exactly one, and it should stay that way; the reasoning and
-// the enforcement live in TestDefaultsBaseDirIsNotSeedable.
+// seedCarveOuts names the fields the embedder's two config channels,
+// LoadOptions.Defaults and LoadOptions.Overrides, deliberately do not carry.
+// There is exactly one, it is the same one for both, and it should stay that
+// way; the reasoning and the enforcement live in TestDefaultsBaseDirIsNotSeedable
+// and TestOverridesBaseDirIsNotOverridable.
 var seedCarveOuts = map[string]string{
 	"BaseDir": "the root has a single knob, LoadOptions.BaseDir",
 }
@@ -545,44 +547,64 @@ func TestUnseededBoolsStayFalse(t *testing.T) {
 // test looks at.
 func fillNonZero(t *testing.T, v reflect.Value) {
 	t.Helper()
+	fillVariant{str: "seeded", b: true, i: 7, f: 0.5}.into(t, v)
+}
+
+// fillVariant is fillNonZero with the leaf values chosen by the caller. The
+// override rot guard needs TWO distinguishable fills, one for the config file
+// and one for the overrides, so that "the override landed" can be told apart
+// from "both layers happened to agree".
+//
+// b is the one that has to be chosen rather than inherited: a merge cannot tell
+// false from unset, so the lower of the two layers must be filled with false or
+// every bool reads as a failure to override.
+type fillVariant struct {
+	str string
+	b   bool
+	i   int64
+	f   float64
+}
+
+func (fv fillVariant) into(t *testing.T, v reflect.Value) {
+	t.Helper()
 	switch v.Kind() {
 	case reflect.String:
-		v.SetString("seeded")
+		v.SetString(fv.str)
 	case reflect.Bool:
-		v.SetBool(true)
+		v.SetBool(fv.b)
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		v.SetInt(7)
+		v.SetInt(fv.i)
 	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-		v.SetUint(7)
+		v.SetUint(uint64(fv.i))
 	case reflect.Float32, reflect.Float64:
-		v.SetFloat(0.5)
+		v.SetFloat(fv.f)
 	case reflect.Slice:
 		s := reflect.MakeSlice(v.Type(), 1, 1)
-		fillNonZero(t, s.Index(0))
+		fv.into(t, s.Index(0))
 		v.Set(s)
 	case reflect.Map:
 		m := reflect.MakeMap(v.Type())
 		key := reflect.New(v.Type().Key()).Elem()
-		fillNonZero(t, key)
+		fv.into(t, key)
 		val := reflect.New(v.Type().Elem()).Elem()
-		fillNonZero(t, val)
+		fv.into(t, val)
 		m.SetMapIndex(key, val)
 		v.Set(m)
 	case reflect.Struct:
 		for i := range v.NumField() {
 			if f := v.Field(i); f.CanSet() {
-				fillNonZero(t, f)
+				fv.into(t, f)
 			}
 		}
 	case reflect.Ptr:
 		p := reflect.New(v.Type().Elem())
-		fillNonZero(t, p.Elem())
+		fv.into(t, p.Elem())
 		v.Set(p)
 	case reflect.Interface:
 		// Nothing sensible to synthesize; leave it. types.Config has none today,
 		// and the caller's IsZero check would flag one that appeared.
 	default:
-		t.Fatalf("fillNonZero: unhandled kind %s", v.Kind())
+		t.Fatalf("fillVariant: unhandled kind %s", v.Kind())
 	}
 }
 

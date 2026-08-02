@@ -89,6 +89,28 @@ type Options struct {
 	// slices and booleans, including that a seeded true beats an explicit
 	// `false:` in the config file for every bool.
 	Defaults types.Config
+	// Overrides are the other half of Defaults: they sit ABOVE the config file
+	// and above the bare environment variables, so an embedder can hand nib a
+	// value the user's config file must not undo. A CLI flag is the case this
+	// exists for. Routed through Defaults, `--endpoint` is accepted and then
+	// discarded whenever the file already carries a base_url, which is the
+	// normal state rather than an edge case, since anything that writes the file
+	// once makes the flag dead from the next run on.
+	//
+	// Every field of types.Config is overridable except BaseDir, ignored for the
+	// same reason it is ignored in Defaults. See config.LoadOptions.Overrides for
+	// the merge rules, and in particular for the one asymmetry: an override can
+	// only raise a field, never blank one, so an override of false CANNOT beat a
+	// `true:` in the config file.
+	//
+	// Two fields stay above it, by design rather than by omission. nib's own
+	// --trace-dir and --yolo, and their NIB_TRACE_DIR and NIB_YOLO twins, are
+	// resolved after the config load and still win for TraceDir and
+	// ApprovalMode: those are the end user's direct instruction to nib, and an
+	// embedder that does not want them filters them out of Args. Neither
+	// weakens the flag case above, since the config file cannot set TraceDir at
+	// all (it is runtime-only) and --yolo only ever forces "auto".
+	Overrides types.Config
 	// SkipSetup suppresses the first-run model wizard. Embedders that resolve
 	// the model themselves set this. It suppresses the whole gate, so an
 	// explicit --setup in Args becomes a silent no-op rather than an error.
@@ -296,6 +318,7 @@ func runCtx(ctx context.Context, o Options) int {
 	cfg := config.LoadWith(config.LoadOptions{
 		BaseDir:     o.BaseDir,
 		Defaults:    o.Defaults,
+		Overrides:   o.Overrides,
 		SkipBareEnv: o.SkipBareEnv,
 	})
 
