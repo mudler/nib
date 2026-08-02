@@ -146,7 +146,9 @@ type Session struct {
 
 	// traceDir is where usage.json is written on Close. Empty = tracing off, so
 	// an untraced session leaves nothing behind. Kept separate from tracer
-	// because the file is written after the recorder is closed, not through it.
+	// because usage.json is written beside the transcript rather than through
+	// the recorder: it shares no state with it, and holding the directory here
+	// keeps the report reachable independently of the recorder's lifetime.
 	traceDir string
 }
 
@@ -1551,6 +1553,12 @@ func (s *Session) Close() error {
 	// A warning, not a returned error, and deliberately unlike the hard failure
 	// in NewSession: the session is already over, so there is nothing left to
 	// refuse — failing here would only turn a lost report into a lost shutdown.
+	//
+	// Usage() snapshots under its own lock, so the numbers are always
+	// self-consistent, but a Close that races a still-running turn (a second
+	// Ctrl+C in the TUI goes straight here) will miss whatever that turn folds
+	// in afterwards: the file is a floor on the spend and never an
+	// overstatement, matching SessionUsage's documented contract.
 	if s.traceDir != "" {
 		if err := trace.WriteUsage(s.traceDir, s.Usage()); err != nil {
 			xlog.Warn("trace: failed to write usage.json", "dir", s.traceDir, "error", err)

@@ -42,8 +42,15 @@ func TestCloseWritesUsageJSON(t *testing.T) {
 
 // Nothing was asked for, so nothing is written — an untraced session must not
 // litter the working directory.
+//
+// t.Chdir is what gives this test teeth: without the `if s.traceDir != ""`
+// guard, filepath.Join("", "usage.json") is a bare relative path and Close
+// writes into the process's working directory — which, for `go test`, is the
+// package source dir. Asserting on an unrelated temp dir could never catch
+// that; running IN the temp dir does.
 func TestCloseWritesNoUsageJSONWithoutTraceDir(t *testing.T) {
 	dir := t.TempDir()
+	t.Chdir(dir)
 	sess, err := NewSession(context.Background(), types.Config{Model: "test-model"}, Callbacks{})
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
