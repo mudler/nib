@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/mudler/nib/internal/proc"
 )
 
 // bgMaxOutput caps the captured output per stream for a shell job, so a chatty
@@ -165,7 +167,7 @@ func (m *bgJobManager) launch(parent context.Context, script string, foreground 
 
 	// Both must be set before Start: Start captures Cancel and WaitDelay when it
 	// arms the context watchdog.
-	configureJobProcess(cmd)
+	proc.Group(cmd)
 	cmd.WaitDelay = bgJobWaitDelay
 
 	if err := cmd.Start(); err != nil {
