@@ -64,4 +64,11 @@ func TestNoEmojiInRenderHelpers(t *testing.T) {
 	if containsEmoji(comp) {
 		t.Fatalf("renderCompletion output contains emoji: %q", comp)
 	}
+
+	// Tool-output pruning notice, both the plural and the singular reading.
+	for _, n := range []string{prunedNotice(3, 12400), prunedNotice(1, 900)} {
+		if containsEmoji(n) {
+			t.Fatalf("prunedNotice output contains emoji: %q", n)
+		}
+	}
 }

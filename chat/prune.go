@@ -243,6 +243,15 @@ func effectivePruning(cfg types.ToolOutputPruningConfig) types.ToolOutputPruning
 // hands the manipulator the whole fragment on every call, and the sub-agent
 // option set deliberately does not carry the manipulator, so a short sub-agent
 // conversation can never be mistaken for a shrunken main one.
+//
+// That "whole fragment" holds only while nib leaves cogito's autoPlan,
+// auto-improve and reviewer paths off. Each of them (plan.go:259, plan.go:470,
+// reviewer.go:29, autoimprove.go:121) forwards the caller's opts — the
+// manipulator among them — to ExecuteTools over a DERIVED sub-fragment. nib sets
+// none of those options today; enabling one would run this function against a
+// subtask fragment, flush the stubbed set, and un-stub everything on the way
+// back to the main conversation, breaking monotonicity. Gate the manipulator on
+// the main fragment before turning any of them on.
 func forgetAbsentIDs(ids map[string]bool, msgs []openai.ChatCompletionMessage) {
 	if len(ids) == 0 {
 		return

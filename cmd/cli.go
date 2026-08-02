@@ -333,6 +333,9 @@ func RunCLI(ctx context.Context, cfg types.Config, streams Streams, shellJobs *w
 		OnCompactDone: func(before, after int) {
 			fmt.Fprintln(out, theme.Subtle.Render(compactNotice(before, after)))
 		},
+		OnPruneDone: func(results, freed int) {
+			fmt.Fprintln(out, theme.Subtle.Render(pruneNotice(results, freed)))
+		},
 		OnError: func(err error) {
 			spin.stop()
 			fmt.Fprintln(errOut, theme.Error.Render(theme.Cross+" "+err.Error()))
@@ -556,6 +559,20 @@ func RunCLI(ctx context.Context, cfg types.Config, streams Streams, shellJobs *w
 			}
 		}
 	}
+}
+
+// pruneNotice formats the one-line summary shown when tool output is pruned.
+//
+// The saving is rendered with HumanTokensOrZero rather than HumanTokens: a
+// stale read is stubbed however small it was, so a pass can free nothing
+// measurable, and HumanTokens renders 0 as "" — leaving the sentence a hole
+// where its number belongs.
+func pruneNotice(results, freed int) string {
+	noun := "results"
+	if results == 1 {
+		noun = "result"
+	}
+	return fmt.Sprintf("pruned %d stale tool %s — freed %s tokens", results, noun, chat.HumanTokensOrZero(freed))
 }
 
 // compactNotice formats the one-line summary shown after a conversation is compacted.
