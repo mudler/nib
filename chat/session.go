@@ -143,6 +143,11 @@ type Session struct {
 	usage sessionUsage
 
 	tracer *trace.Recorder // non-nil when session tracing is enabled
+
+	// traceDir is where usage.json is written on Close. Empty = tracing off, so
+	// an untraced session leaves nothing behind. Kept separate from tracer
+	// because the file is written after the recorder is closed, not through it.
+	traceDir string
 }
 
 // PrefixWarm reports whether this session has already issued a request that
@@ -338,6 +343,7 @@ func NewSession(ctx context.Context, cfg types.Config, callbacks Callbacks, tran
 		cfgServers:          map[string]types.MCPServer{},
 		configurator:        manage.NewIn(cfg.BaseDir),
 		tracer:              tracer,
+		traceDir:            cfg.TraceDir,
 	}
 	// Resume/rehydration: seed a prior conversation so the very next SendMessage
 	// continues with full memory of it, behaving identically to a session that
@@ -1537,6 +1543,18 @@ func (s *Session) Close() error {
 	}
 	for _, c := range s.cfgClients {
 		_ = c.Close()
+	}
+	// The durable half of the exit summary. In tmux-widget mode the pane
+	// vanishes before anyone can read the printed line, and a benchmark harness
+	// wants to parse this rather than scrape a terminal.
+	//
+	// A warning, not a returned error, and deliberately unlike the hard failure
+	// in NewSession: the session is already over, so there is nothing left to
+	// refuse — failing here would only turn a lost report into a lost shutdown.
+	if s.traceDir != "" {
+		if err := trace.WriteUsage(s.traceDir, s.Usage()); err != nil {
+			xlog.Warn("trace: failed to write usage.json", "dir", s.traceDir, "error", err)
+		}
 	}
 	// s.tracer is nil when tracing is disabled; Close is nil-safe.
 	if err := s.tracer.Close(); err != nil && firstErr == nil {
