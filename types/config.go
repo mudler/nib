@@ -57,6 +57,16 @@ type ToolOutputPruningConfig struct {
 	// HighWaterTokens is the total tool-output size at which the oldest-first
 	// sweep starts. 0 disables size pruning entirely, leaving the stale-read
 	// rule in force. Unset (whole block absent) → default 24000.
+	//
+	// Because the block is defaulted as a whole, a lone `high_water_tokens: 0`
+	// is byte-identical to an absent block and gets 24000 back. To actually
+	// switch size pruning off, pair it with a non-zero sibling that marks the
+	// block present — `disabled: false` and `low_water_tokens: 0` do not, since
+	// they are zero values too:
+	//
+	//	tool_output_pruning:
+	//	  high_water_tokens: 0
+	//	  low_water_tokens: 8000
 	HighWaterTokens int `yaml:"high_water_tokens"`
 	// LowWaterTokens is the size the sweep prunes down to. Pruning deeply and
 	// rarely beats pruning shallowly and constantly: each sweep buys many
