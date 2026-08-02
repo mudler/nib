@@ -1,10 +1,16 @@
 package cmd
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/mudler/nib/types"
+)
 
 // defaultProgramName is the name every emitted script falls back to, matching
-// app.Options.name().
-const defaultProgramName = "nib"
+// app.Options.name(). Aliased rather than spelled again: the same fallback has
+// to hold for the printed messages and for the system prompt, so there is one
+// definition of it.
+const defaultProgramName = types.DefaultProgramName
 
 // GetInitScript returns the shell integration script for the given shell,
 // wired to invoke programName. An empty programName means "nib", so the zero
