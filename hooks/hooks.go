@@ -7,12 +7,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"regexp"
 	"strings"
 	"time"
 
+	"github.com/mudler/nib/internal/proc"
 	"github.com/mudler/nib/types"
 )
 
@@ -104,9 +106,26 @@ func runHook(ctx context.Context, h types.HookConfig, stdin []byte, timeout time
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
+
+	// Run the hook in its own process group so a timeout kills whatever it
+	// spawned. Without this, cancelling reaches only the shell: a hook that
+	// backgrounded a child left that child running forever, still holding the
+	// output pipes that made the timeout slow in the first place.
+	proc.Group(cmd)
+	// The backstop for what a group kill cannot reach — a hook that daemonizes
+	// with setsid() escapes the group and could otherwise hold Run open
+	// indefinitely, stalling the tool call this hook is gating.
 	cmd.WaitDelay = 2 * time.Second
 
 	err := cmd.Run()
+	if waitDelayOnSuccess(cmd, err) {
+		// The hook itself exited cleanly; WaitDelay fired only because
+		// something it spawned still held the inherited output pipes open.
+		// Treating that as a failure would Block the user's tool call on a hook
+		// that approved it — the worst outcome for a mechanism whose whole job
+		// is deciding allow or deny.
+		err = nil
+	}
 
 	var dec Decision
 	_ = json.Unmarshal(bytes.TrimSpace(stdout.Bytes()), &dec)
@@ -122,6 +141,15 @@ func runHook(ctx context.Context, h types.HookConfig, stdin []byte, timeout time
 		}
 	}
 	return dec
+}
+
+// waitDelayOnSuccess reports whether err is the WaitDelay backstop firing on a
+// hook that itself exited successfully — i.e. only a lingering child kept the
+// output pipes open. exec.ErrWaitDelay is not an *exec.ExitError, so without
+// this check it falls through to the generic "any error blocks" branch.
+func waitDelayOnSuccess(cmd *exec.Cmd, err error) bool {
+	return errors.Is(err, exec.ErrWaitDelay) &&
+		cmd.ProcessState != nil && cmd.ProcessState.ExitCode() == 0
 }
 
 // CombineToolDecisions reduces PreToolUse decisions: any block / explicit
