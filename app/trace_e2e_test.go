@@ -65,14 +65,19 @@ func TestTracedCLIRunWritesTranscriptAndUsage(t *testing.T) {
 	if err := json.Unmarshal(data, &u); err != nil {
 		t.Fatalf("usage.json is not valid JSON: %v", err)
 	}
-	// Non-zero, not merely parseable: a file full of zeroes is what a counter
-	// that never sees a call writes, and it is indistinguishable from a correct
-	// report of a session that did nothing.
-	if u.TotalTokens == 0 {
-		t.Fatalf("a completed turn reported no tokens; the counter is not wired to the run: %s", data)
+	// The server's exact numbers, not merely non-zero ones. Non-zero would
+	// already catch a counter that never sees a call, but pinning the values
+	// proves the extra thing this test exists for: that the figures travelled
+	// from the response's `usage` block through cogito into the report, rather
+	// than being estimated locally from the text.
+	if u.PromptTokens != fakePromptTokens || u.CompletionTokens != fakeCompletionTokens || u.TotalTokens != fakeTotalTokens {
+		t.Fatalf("usage.json does not carry the server's reported spend (want %d/%d/%d): %s",
+			fakePromptTokens, fakeCompletionTokens, fakeTotalTokens, data)
 	}
-	if u.Turns == 0 {
-		t.Fatalf("a completed turn was not counted: %s", data)
+	// One user message, one turn. Sub-agent and compaction calls would add
+	// tokens without adding turns, and neither happens here.
+	if u.Turns != 1 {
+		t.Fatalf("turns = %d, want 1 for a single completed exchange: %s", u.Turns, data)
 	}
 
 	// The summary goes to stderr in CLI mode, never stdout: stdout carries the
@@ -84,6 +89,16 @@ func TestTracedCLIRunWritesTranscriptAndUsage(t *testing.T) {
 		t.Fatalf("no summary on stderr: %q", errOut.String())
 	}
 }
+
+// What the fake server charges for its one answer, and the answer itself. Named
+// because the assertions pin these exact values: that is what separates "the
+// numbers reached the report" from "some numbers reached the report".
+const (
+	fakePromptTokens     = 120
+	fakeCompletionTokens = 8
+	fakeTotalTokens      = 128
+	fakeAnswer           = "done"
+)
 
 // fakeUsageReportingLLM answers one non-streaming chat completion and reports
 // what it charged for it.
@@ -104,13 +119,13 @@ func fakeUsageReportingLLM(t *testing.T) *httptest.Server {
 			"model":   "m",
 			"choices": []map[string]any{{
 				"index":         0,
-				"message":       map[string]any{"role": "assistant", "content": "done"},
+				"message":       map[string]any{"role": "assistant", "content": fakeAnswer},
 				"finish_reason": "stop",
 			}},
 			"usage": map[string]any{
-				"prompt_tokens":     120,
-				"completion_tokens": 8,
-				"total_tokens":      128,
+				"prompt_tokens":     fakePromptTokens,
+				"completion_tokens": fakeCompletionTokens,
+				"total_tokens":      fakeTotalTokens,
 			},
 		})
 	}))
@@ -120,8 +135,15 @@ func fakeUsageReportingLLM(t *testing.T) *httptest.Server {
 
 // assertRecordedAChatCompletion fails unless the transcript holds at least one
 // well-formed NDJSON record for a chat completion that carries both the request
-// and the response. Blank lines are tolerated; a malformed one is not, since a
-// transcript a consumer cannot parse line by line is a broken transcript.
+// and the answer the fake server gave. Blank lines are tolerated; a malformed
+// one is not, since a transcript a consumer cannot parse line by line is a
+// broken transcript.
+//
+// A record carrying an error is NOT a failure on its own. cogito retries, so a
+// call that failed once and succeeded on the next attempt leaves an error line
+// beside a good one, and a run like that is fine. Those errors are collected
+// and reported only as context for the real assertion below, which is whether
+// any call was successfully recorded at all.
 func assertRecordedAChatCompletion(t *testing.T, path string) {
 	t.Helper()
 	f, err := os.Open(path)
@@ -131,6 +153,7 @@ func assertRecordedAChatCompletion(t *testing.T, path string) {
 	defer f.Close()
 
 	var found int
+	var recordedErrors []string
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024) // a request carries the whole history
 	for line := 1; sc.Scan(); line++ {
@@ -154,15 +177,20 @@ func assertRecordedAChatCompletion(t *testing.T, path string) {
 			t.Fatalf("%s line %d is not valid NDJSON: %v\n%s", path, line, err, raw)
 		}
 		if rec.Error != "" {
-			t.Fatalf("the recorded call failed, so nothing was answered: %s", rec.Error)
+			recordedErrors = append(recordedErrors, rec.Error)
 		}
-		if rec.Method != "chat_completion" || len(rec.Request) == 0 || rec.Response == nil {
+		// hasRequest, not len(rec.Request) != 0: Record.Request has no omitempty,
+		// so a nil request serializes as the four bytes `null` and would sail
+		// through a length check.
+		hasRequest := len(rec.Request) > 0 && !bytes.Equal(rec.Request, []byte("null"))
+		if rec.Method != "chat_completion" || !hasRequest || rec.Response == nil {
 			continue
 		}
-		// The answer itself, not just a choices array: a record whose response
-		// came back empty would mean the wrapper recorded the call without ever
-		// seeing what the model said.
-		if len(rec.Response.Choices) > 0 && rec.Response.Choices[0].Message.Content != "" {
+		// The answer itself, pinned to what the server actually said. A record
+		// whose response came back empty would mean the wrapper recorded the
+		// call without ever seeing the reply; one carrying different text would
+		// mean it recorded something other than this call.
+		if len(rec.Response.Choices) > 0 && rec.Response.Choices[0].Message.Content == fakeAnswer {
 			found++
 		}
 	}
@@ -172,6 +200,9 @@ func assertRecordedAChatCompletion(t *testing.T, path string) {
 	if found == 0 {
 		// Preflight leaves an empty file behind, so this is the state an
 		// untraced run produces too — which is why existence proves nothing.
-		t.Fatalf("%s holds no recorded chat completion, so the run was not actually traced", path)
+		// Any recorded errors go in the message: when the recorder IS wired and
+		// every call failed, they are the explanation.
+		t.Fatalf("%s holds no recorded chat completion carrying %q, so the run was not actually traced. recorded errors: %v",
+			path, fakeAnswer, recordedErrors)
 	}
 }
