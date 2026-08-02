@@ -138,6 +138,10 @@ type Session struct {
 	// deliberately avoids holding runMu across its network call.
 	prefixWarm atomic.Bool
 
+	// usage is this session's running token total. See chat/usage.go for why it
+	// carries its own lock rather than sharing historyMu.
+	usage sessionUsage
+
 	tracer *trace.Recorder // non-nil when session tracing is enabled
 }
 
@@ -1159,6 +1163,18 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 		}
 
 		response = newFragment.LastMessage().Content
+
+		// Each ExecuteTools run reports its own cumulative usage, so the whole
+		// tool loop is counted rather than just the final call. The goal
+		// stop-gate can run this loop more than once per SendMessage, which is
+		// why the turn is counted after the loop and the tokens here.
+		//
+		// Status is a pointer and a fragment that never reached a backend leaves
+		// it nil, so this guards rather than assuming a run always populated it.
+		if newFragment.Status != nil {
+			s.addUsage(newFragment.Status.CumulativeUsage)
+		}
+
 		s.historyMu.Lock()
 		s.fragment = newFragment
 		s.messages = append(s.messages, openai.ChatCompletionMessage{
@@ -1221,6 +1237,13 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 			s.callbacks.OnCompactDone(cb, ca)
 		}
 	}
+
+	// One turn per completed SendMessage, counted after the goal loop rather
+	// than inside it: a goal that took five ExecuteTools runs is still one
+	// exchange the user asked for. The error paths above return before here, so
+	// an interrupted or failed turn adds no turn — its tokens are still counted,
+	// because the backend was still paid for them.
+	s.countTurn()
 
 	return response, nil
 }
