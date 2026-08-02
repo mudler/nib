@@ -247,6 +247,12 @@ func (c *Config) GetPrompt() string {
 		}
 	}
 
+	// Tool-usage guidance goes to every session, including ones whose config
+	// replaced the default prompt. See toolGuidance for why it lives here
+	// rather than in config.defaultPrompt.
+	b.WriteString("\n\n")
+	b.WriteString(toolGuidance)
+
 	for _, f := range c.PromptFragments {
 		if strings.TrimSpace(f) == "" {
 			continue
