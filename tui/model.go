@@ -2036,9 +2036,18 @@ func (m Model) footerBadges(helpWidth int) string {
 }
 
 // quit tears down the session and exits.
+//
+// The usage refresh comes BEFORE Close, and is not decoration. Close writes
+// usage.json from the session's live counter, while RunTUI prints the exit
+// summary from this cached field, so skipping the refresh lets the two disagree
+// about the same run: a second Ctrl+C during the first turn left usage.json
+// holding the real spend and the terminal printing nothing at all, because
+// FormatSessionSummary renders "" for zero. Reading first makes both surfaces
+// quote the same snapshot.
 func (m Model) quit() (tea.Model, tea.Cmd) {
 	m.quitting = true
 	if m.session != nil {
+		m.sessionUsage = m.session.Usage()
 		m.session.Close()
 	}
 	m.cancel()

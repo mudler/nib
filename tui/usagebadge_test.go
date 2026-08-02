@@ -178,6 +178,33 @@ func TestResponseMsgRefreshesSessionUsage(t *testing.T) {
 	}
 }
 
+// Three surfaces report one run: the footer, the exit summary and usage.json.
+// quit() closes the session, which writes usage.json from the LIVE counter,
+// while RunTUI prints the summary from the model's cached field — so a quit
+// that does not refresh that field lets them disagree. The reported case is a
+// second Ctrl+C during the first turn: usage.json holds the real spend and the
+// terminal prints nothing, because the summary is "" for zero.
+//
+// Deliberately never assigning sessionUsage here: this model has spent tokens
+// and has a stale (zero) cache, exactly like the interrupted first turn.
+func TestQuitRefreshesUsageBeforeClosingTheSession(t *testing.T) {
+	m := newQueueTestModel()
+	m.session = newSpentSession(t)
+	m.cancel = func() {}
+
+	next, _ := m.quit()
+	nm := next.(Model)
+
+	if nm.SessionUsage() != m.session.Usage() {
+		t.Fatalf("SessionUsage() = %+v, want the session's own snapshot %+v — "+
+			"the summary and usage.json would disagree about the same run",
+			nm.SessionUsage(), m.session.Usage())
+	}
+	if chat.FormatSessionSummary(nm.SessionUsage()) == "" {
+		t.Fatal("the exit summary is empty for a session that spent tokens")
+	}
+}
+
 // RunTUI reads the spend off the final model to print the exit summary, and it
 // only has the exported accessor to read it with. An accessor that returned a
 // zero value would silently turn the summary off.
