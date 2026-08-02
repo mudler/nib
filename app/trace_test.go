@@ -44,6 +44,12 @@ func TestUnwritableTraceDirExitsNonZero(t *testing.T) {
 
 // The env var is the form the reporter used, and it must behave identically to
 // the flag.
+//
+// It also carries the ProgramName assertion. The diagnostic is prefixed with
+// o.name(), not a literal "nib", because an embedder reaches this code as a
+// SUBCOMMAND of its own binary: a user told "nib: cannot write trace to ..."
+// has no nib to go and look at. Nothing else pins that, so a regression to a
+// hardcoded prefix would pass CI in silence.
 func TestUnwritableTraceDirFromEnvExitsNonZero(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("root ignores directory permissions")
@@ -60,6 +66,7 @@ func TestUnwritableTraceDirFromEnvExitsNonZero(t *testing.T) {
 		BaseDir:     t.TempDir(),
 		Args:        []string{"--cli"},
 		Defaults:    types.Config{Model: "m", BaseURL: "http://127.0.0.1:1/v1"},
+		ProgramName: "myprog agent",
 		SkipSetup:   true,
 		SkipBareEnv: true,
 		Stdin:       strings.NewReader(""),
@@ -68,6 +75,9 @@ func TestUnwritableTraceDirFromEnvExitsNonZero(t *testing.T) {
 	}
 	if code := runCtx(context.Background(), o); code != 1 {
 		t.Fatalf("exit code = %d, want 1", code)
+	}
+	if !strings.HasPrefix(errOut.String(), "myprog agent: cannot write trace to") {
+		t.Fatalf("the refusal must name the embedder's own command, got %q", errOut.String())
 	}
 }
 
