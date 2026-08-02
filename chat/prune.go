@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path/filepath"
 
+	"github.com/mudler/nib/types"
 	openai "github.com/sashabaranov/go-openai"
 )
 
@@ -116,4 +117,134 @@ func prunedStub(name, path, detail string) string {
 	default:
 		return fmt.Sprintf("[%s — output dropped to save context; re-read if needed]", name)
 	}
+}
+
+// pruneToolOutputs returns a copy of msgs with eligible tool results replaced by
+// stubs, the ids newly stubbed on this call, and the estimated tokens freed.
+//
+// already is the set of ids stubbed on previous calls. Passing it back in is
+// what makes the policy MONOTONIC: a result never un-stubs, so the prompt
+// prefix changes only at a prune rather than on every call. A rule that
+// re-derived its boundary each time would invalidate the server's prefix cache
+// on every request, and would very likely cost more than the tokens it saved.
+//
+// msgs is never written through — the caller's slice belongs to cogito, and
+// behind it to the session's fragment, which pruning must not touch.
+func pruneToolOutputs(msgs []openai.ChatCompletionMessage, cfg types.ToolOutputPruningConfig, already map[string]bool) ([]openai.ChatCompletionMessage, []string, int) {
+	out := make([]openai.ChatCompletionMessage, len(msgs))
+	copy(out, msgs)
+	if cfg.Disabled {
+		return out, nil, 0
+	}
+
+	calls := indexToolCalls(msgs)
+	protected := trailingToolRun(msgs)
+
+	// Everything that should end up stubbed on this call.
+	target := make(map[string]bool, len(already))
+	for id := range already {
+		target[id] = true
+	}
+	if !cfg.DisableStaleReads {
+		for id := range staleReadIDs(msgs, calls) {
+			if !protected[id] {
+				target[id] = true
+			}
+		}
+	}
+	if cfg.HighWaterTokens > 0 {
+		for _, id := range sweepToLowWater(msgs, cfg, target, protected) {
+			target[id] = true
+		}
+	}
+
+	var newly []string
+	freed := 0
+	for i := range out {
+		if out[i].Role != "tool" || !target[out[i].ToolCallID] {
+			continue
+		}
+		info := calls[out[i].ToolCallID]
+		// Compaction can drop the assistant message that issued a call while its
+		// result survives, leaving no name to render. The sweep has no reason to
+		// skip such a result — it is large like any other — but the stub is text
+		// the model reads, so it must still name something.
+		if info.name == "" {
+			info.name = "tool"
+		}
+		stub := prunedStub(info.name, info.path, "")
+		if out[i].Content == stub {
+			continue // already a stub in this copy
+		}
+		if !already[out[i].ToolCallID] {
+			newly = append(newly, out[i].ToolCallID)
+			freed += tokensOf(out[i].Content) - tokensOf(stub)
+		}
+		out[i].Content = stub
+	}
+	if freed < 0 {
+		freed = 0
+	}
+	return out, newly, freed
+}
+
+// tokensOf is the byte/4 estimate compaction already uses, applied to one body.
+func tokensOf(s string) int { return len(s) / 4 }
+
+// trailingToolRun returns the ids of the contiguous run of tool results at the
+// END of msgs. Those are the results the model is about to reason over, so they
+// are never stubbed.
+//
+// This does not break monotonicity: as the conversation grows they stop being
+// trailing and become eligible, which is a kept->stubbed transition — the only
+// direction the policy ever moves.
+func trailingToolRun(msgs []openai.ChatCompletionMessage) map[string]bool {
+	protected := map[string]bool{}
+	for i := len(msgs) - 1; i >= 0; i-- {
+		if msgs[i].Role != "tool" {
+			break
+		}
+		if msgs[i].ToolCallID != "" {
+			protected[msgs[i].ToolCallID] = true
+		}
+	}
+	return protected
+}
+
+// sweepToLowWater picks the oldest eligible results to stub until the total
+// tool-output size drops below cfg.LowWaterTokens, returning their ids in
+// oldest-first order.
+//
+// It stops when nothing eligible is left rather than violating MinResultTokens:
+// size pruning is best-effort and never guarantees a ceiling.
+func sweepToLowWater(msgs []openai.ChatCompletionMessage, cfg types.ToolOutputPruningConfig, target, protected map[string]bool) []string {
+	total := 0
+	for _, m := range msgs {
+		if m.Role == "tool" && !target[m.ToolCallID] {
+			total += tokensOf(m.Content)
+		}
+	}
+	if total < cfg.HighWaterTokens {
+		return nil
+	}
+
+	var picked []string
+	for _, m := range msgs {
+		if total < cfg.LowWaterTokens {
+			break
+		}
+		if m.Role != "tool" || m.ToolCallID == "" {
+			continue
+		}
+		if target[m.ToolCallID] || protected[m.ToolCallID] {
+			continue
+		}
+		size := tokensOf(m.Content)
+		if size < cfg.MinResultTokens {
+			continue
+		}
+		picked = append(picked, m.ToolCallID)
+		total -= size
+	}
+	return picked
 }

@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/mudler/nib/types"
 	openai "github.com/sashabaranov/go-openai"
 )
 
@@ -257,5 +258,300 @@ func TestPrunedStubNamesWhatWasDroppedAndHowToGetItBack(t *testing.T) {
 		if (r >= 0x1F000 && r <= 0x1FAFF) || (r >= 0x2600 && r <= 0x27BF) {
 			t.Fatalf("stub contains emoji: %q", got)
 		}
+	}
+}
+
+// bigResult builds a tool result whose estimated size is roughly tokens*4 bytes.
+func bigResult(id string, tokens int) openai.ChatCompletionMessage {
+	body := make([]byte, tokens*4)
+	for i := range body {
+		body[i] = 'x'
+	}
+	return resultMsg(id, string(body))
+}
+
+// Below the high-water mark nothing is touched: short sessions must not pay a
+// prefix-cache re-prefill for a saving they do not need.
+func TestPruneLeavesEverythingAloneBelowHighWater(t *testing.T) {
+	msgs := []openai.ChatCompletionMessage{
+		callMsg("c1", "read", `{"path":"a.go"}`),
+		bigResult("c1", 500),
+		{Role: "user", Content: "next"},
+	}
+	cfg := types.ToolOutputPruningConfig{HighWaterTokens: 24000, LowWaterTokens: 8000, MinResultTokens: 200}
+
+	out, newly, freed := pruneToolOutputs(msgs, cfg, map[string]bool{})
+
+	if len(newly) != 0 || freed != 0 {
+		t.Fatalf("pruned below high water: newly=%v freed=%d", newly, freed)
+	}
+	if out[1].Content != msgs[1].Content {
+		t.Fatal("content was modified below the high-water mark")
+	}
+}
+
+// Crossing the mark sweeps oldest-first until under the LOW mark, not merely
+// under the high one. Pruning deeply and rarely is what keeps the prefix cache
+// useful between sweeps.
+func TestPruneSweepsToLowWaterOldestFirst(t *testing.T) {
+	msgs := []openai.ChatCompletionMessage{
+		callMsg("c1", "read", `{"path":"a.go"}`), bigResult("c1", 5000),
+		callMsg("c2", "read", `{"path":"b.go"}`), bigResult("c2", 5000),
+		callMsg("c3", "read", `{"path":"c.go"}`), bigResult("c3", 5000),
+		{Role: "user", Content: "keep going"},
+	}
+	cfg := types.ToolOutputPruningConfig{HighWaterTokens: 12000, LowWaterTokens: 6000, MinResultTokens: 200}
+
+	out, newly, freed := pruneToolOutputs(msgs, cfg, map[string]bool{})
+
+	if len(newly) != 2 {
+		t.Fatalf("newly stubbed = %v, want the two oldest results", newly)
+	}
+	if newly[0] != "c1" || newly[1] != "c2" {
+		t.Fatalf("swept out of order: %v, want [c1 c2]", newly)
+	}
+	if freed <= 0 {
+		t.Fatalf("freed = %d, want a positive token count", freed)
+	}
+	if out[5].Content != msgs[5].Content {
+		t.Fatal("the newest result should survive a sweep to low water")
+	}
+}
+
+// THE property the whole cache argument rests on. Feed the output back in and
+// nothing new is stubbed: the boundary does not move on every call.
+func TestPruneIsMonotonic(t *testing.T) {
+	msgs := []openai.ChatCompletionMessage{
+		callMsg("c1", "read", `{"path":"a.go"}`), bigResult("c1", 5000),
+		callMsg("c2", "read", `{"path":"b.go"}`), bigResult("c2", 5000),
+		callMsg("c3", "read", `{"path":"c.go"}`), bigResult("c3", 5000),
+		{Role: "user", Content: "keep going"},
+	}
+	cfg := types.ToolOutputPruningConfig{HighWaterTokens: 12000, LowWaterTokens: 6000, MinResultTokens: 200}
+
+	already := map[string]bool{}
+	_, newly, _ := pruneToolOutputs(msgs, cfg, already)
+	for _, id := range newly {
+		already[id] = true
+	}
+
+	// Same input, same state: a second call must stub nothing further.
+	out2, newly2, freed2 := pruneToolOutputs(msgs, cfg, already)
+	if len(newly2) != 0 || freed2 != 0 {
+		t.Fatalf("second call stubbed more: newly=%v freed=%d — the boundary moves every call and the prefix cache is dead", newly2, freed2)
+	}
+	// And the previously stubbed results are still stubbed in the output.
+	if out2[1].Content == msgs[1].Content {
+		t.Fatal("a previously stubbed result came back unstubbed: pruning is not monotonic")
+	}
+
+	// The check above is necessary but far too weak on its own: with msgs
+	// unchanged, a policy that ignored `already` entirely would re-derive the
+	// very same {c1,c2} and still report nothing newly stubbed, because `already`
+	// also gates the newly/freed accounting. The property only becomes observable
+	// once the conversation GROWS, which it does on every single turn.
+	//
+	// Seeding target from `already` is what excludes stubbed bodies from the
+	// sweep's running total, and that is the hysteresis: c3+c4 is under the high
+	// water mark, so no sweep runs and the boundary holds. Counting the stubbed
+	// bodies at full size instead would put every later turn back over the mark
+	// and walk the boundary one result deeper each call — a prefix-cache
+	// invalidation on every request, which is the cost this feature exists to avoid.
+	grown := append(append([]openai.ChatCompletionMessage{}, msgs...),
+		callMsg("c4", "read", `{"path":"d.go"}`), bigResult("c4", 2000),
+		openai.ChatCompletionMessage{Role: "user", Content: "more"},
+	)
+
+	out3, newly3, freed3 := pruneToolOutputs(grown, cfg, already)
+	if len(newly3) != 0 || freed3 != 0 {
+		t.Fatalf("the boundary moved as the conversation grew: newly=%v freed=%d — a sweep that re-derives from full-size stubbed bodies re-prunes on every turn and the prefix cache is dead", newly3, freed3)
+	}
+	if out3[5].Content != grown[5].Content || out3[8].Content != grown[8].Content {
+		t.Fatal("an unstubbed result was stubbed without being reported in newly")
+	}
+	if out3[1].Content == grown[1].Content || out3[3].Content == grown[3].Content {
+		t.Fatal("a previously stubbed result came back unstubbed as the conversation grew")
+	}
+}
+
+// The trailing run of tool results is what the model is about to reason over.
+func TestPruneNeverTouchesTheTrailingToolResults(t *testing.T) {
+	msgs := []openai.ChatCompletionMessage{
+		callMsg("c1", "read", `{"path":"a.go"}`), bigResult("c1", 9000),
+		callMsg("c2", "read", `{"path":"b.go"}`), bigResult("c2", 9000),
+	}
+	cfg := types.ToolOutputPruningConfig{HighWaterTokens: 1000, LowWaterTokens: 1, MinResultTokens: 1}
+
+	out, newly, _ := pruneToolOutputs(msgs, cfg, map[string]bool{})
+
+	for _, id := range newly {
+		if id == "c2" {
+			t.Fatal("stubbed the trailing result the model is about to read")
+		}
+	}
+	if out[3].Content != msgs[3].Content {
+		t.Fatal("trailing tool result was modified")
+	}
+}
+
+// Small results are not worth a cache invalidation.
+func TestPruneRespectsTheMinimumResultSize(t *testing.T) {
+	msgs := []openai.ChatCompletionMessage{
+		callMsg("c1", "read", `{"path":"a.go"}`), bigResult("c1", 50),
+		callMsg("c2", "read", `{"path":"b.go"}`), bigResult("c2", 50),
+		{Role: "user", Content: "next"},
+	}
+	cfg := types.ToolOutputPruningConfig{HighWaterTokens: 10, LowWaterTokens: 1, MinResultTokens: 200}
+
+	_, newly, _ := pruneToolOutputs(msgs, cfg, map[string]bool{})
+	if len(newly) != 0 {
+		t.Fatalf("stubbed results below the floor: %v", newly)
+	}
+}
+
+// The floor can make the low-water mark unreachable. Best-effort, not a ceiling
+// guarantee — and it must stop rather than violate the floor.
+func TestPruneStopsAtTheFloorEvenIfLowWaterIsUnreachable(t *testing.T) {
+	msgs := []openai.ChatCompletionMessage{
+		callMsg("c1", "read", `{"path":"a.go"}`), bigResult("c1", 100),
+		callMsg("c2", "read", `{"path":"b.go"}`), bigResult("c2", 100),
+		{Role: "user", Content: "next"},
+	}
+	cfg := types.ToolOutputPruningConfig{HighWaterTokens: 50, LowWaterTokens: 1, MinResultTokens: 200}
+
+	_, newly, _ := pruneToolOutputs(msgs, cfg, map[string]bool{})
+	if len(newly) != 0 {
+		t.Fatalf("violated the floor chasing low water: %v", newly)
+	}
+}
+
+// A stale read is stubbed regardless of size: the rule is about correctness.
+func TestPruneStubsAStaleReadBelowHighWater(t *testing.T) {
+	msgs := []openai.ChatCompletionMessage{
+		callMsg("c1", "read", `{"path":"a.go"}`), bigResult("c1", 300),
+		callMsg("c2", "edit", `{"path":"a.go","old":"x","new":"y"}`), resultMsg("c2", "ok"),
+		{Role: "user", Content: "next"},
+	}
+	cfg := types.ToolOutputPruningConfig{HighWaterTokens: 24000, LowWaterTokens: 8000, MinResultTokens: 200}
+
+	_, newly, _ := pruneToolOutputs(msgs, cfg, map[string]bool{})
+	if len(newly) != 1 || newly[0] != "c1" {
+		t.Fatalf("newly = %v, want the stale read c1 even though we are under high water", newly)
+	}
+}
+
+func TestPruneDisabledDoesNothing(t *testing.T) {
+	msgs := []openai.ChatCompletionMessage{
+		callMsg("c1", "read", `{"path":"a.go"}`), bigResult("c1", 9000),
+		callMsg("c2", "edit", `{"path":"a.go","old":"x","new":"y"}`), resultMsg("c2", "ok"),
+		{Role: "user", Content: "next"},
+	}
+	cfg := types.ToolOutputPruningConfig{Disabled: true, HighWaterTokens: 10, LowWaterTokens: 1, MinResultTokens: 1}
+
+	_, newly, freed := pruneToolOutputs(msgs, cfg, map[string]bool{})
+	if len(newly) != 0 || freed != 0 {
+		t.Fatalf("disabled pruning still pruned: newly=%v freed=%d", newly, freed)
+	}
+}
+
+func TestPruneDisableStaleReadsLeavesSizePruningOn(t *testing.T) {
+	msgs := []openai.ChatCompletionMessage{
+		callMsg("c1", "read", `{"path":"a.go"}`), bigResult("c1", 300),
+		callMsg("c2", "edit", `{"path":"a.go","old":"x","new":"y"}`), resultMsg("c2", "ok"),
+		{Role: "user", Content: "next"},
+	}
+	cfg := types.ToolOutputPruningConfig{DisableStaleReads: true, HighWaterTokens: 24000, LowWaterTokens: 8000, MinResultTokens: 200}
+
+	_, newly, _ := pruneToolOutputs(msgs, cfg, map[string]bool{})
+	if len(newly) != 0 {
+		t.Fatalf("stale-read rule fired while disabled: %v", newly)
+	}
+}
+
+// high_water_tokens: 0 is the documented way to keep the correctness rule while
+// turning size pruning off.
+func TestPruneZeroHighWaterDisablesOnlyTheSweep(t *testing.T) {
+	msgs := []openai.ChatCompletionMessage{
+		callMsg("c1", "read", `{"path":"a.go"}`), bigResult("c1", 9000),
+		callMsg("c2", "read", `{"path":"b.go"}`), bigResult("c2", 9000),
+		callMsg("c3", "edit", `{"path":"a.go","old":"x","new":"y"}`), resultMsg("c3", "ok"),
+		{Role: "user", Content: "next"},
+	}
+	cfg := types.ToolOutputPruningConfig{HighWaterTokens: 0, LowWaterTokens: 8000, MinResultTokens: 200}
+
+	_, newly, _ := pruneToolOutputs(msgs, cfg, map[string]bool{})
+	if len(newly) != 1 || newly[0] != "c1" {
+		t.Fatalf("newly = %v, want only the stale read: the sweep is off but correctness is not", newly)
+	}
+}
+
+// The invariant that keeps the next API request valid.
+func TestPrunePreservesMessageCountRolesAndToolCallIDs(t *testing.T) {
+	msgs := []openai.ChatCompletionMessage{
+		callMsg("c1", "read", `{"path":"a.go"}`), bigResult("c1", 9000),
+		callMsg("c2", "read", `{"path":"b.go"}`), bigResult("c2", 9000),
+		{Role: "user", Content: "next"},
+	}
+	cfg := types.ToolOutputPruningConfig{HighWaterTokens: 1000, LowWaterTokens: 1, MinResultTokens: 1}
+
+	out, _, _ := pruneToolOutputs(msgs, cfg, map[string]bool{})
+
+	if len(out) != len(msgs) {
+		t.Fatalf("message count changed %d -> %d: an orphaned tool_calls message makes the next request invalid", len(msgs), len(out))
+	}
+	for i := range msgs {
+		if out[i].Role != msgs[i].Role {
+			t.Fatalf("message %d role changed %q -> %q", i, msgs[i].Role, out[i].Role)
+		}
+		if out[i].ToolCallID != msgs[i].ToolCallID {
+			t.Fatalf("message %d ToolCallID changed %q -> %q", i, msgs[i].ToolCallID, out[i].ToolCallID)
+		}
+		if len(out[i].ToolCalls) != len(msgs[i].ToolCalls) {
+			t.Fatalf("message %d tool calls changed", i)
+		}
+	}
+}
+
+// The manipulator gets the slice cogito is about to send. Writing through it
+// would corrupt the caller's fragment, which pruning must never touch.
+func TestPruneDoesNotMutateTheInput(t *testing.T) {
+	msgs := []openai.ChatCompletionMessage{
+		callMsg("c1", "read", `{"path":"a.go"}`), bigResult("c1", 9000),
+		callMsg("c2", "read", `{"path":"b.go"}`), bigResult("c2", 9000),
+		{Role: "user", Content: "next"},
+	}
+	before := msgs[1].Content
+	cfg := types.ToolOutputPruningConfig{HighWaterTokens: 1000, LowWaterTokens: 1, MinResultTokens: 1}
+
+	_, _, _ = pruneToolOutputs(msgs, cfg, map[string]bool{})
+
+	if msgs[1].Content != before {
+		t.Fatal("pruneToolOutputs wrote through to the caller's slice")
+	}
+}
+
+// Compaction can drop the assistant message that issued a call while its result
+// survives. Task 2 already proved staleReadIDs skips such an orphan, but the
+// SWEEP has no reason to skip it — it is a large tool result like any other. The
+// stub it gets is text the model reads, so it must still name something.
+func TestPruneStubsAnOrphanedResultReadably(t *testing.T) {
+	msgs := []openai.ChatCompletionMessage{
+		// No assistant message ever issued "orphan".
+		bigResult("orphan", 5000),
+		callMsg("c1", "read", `{"path":"a.go"}`), bigResult("c1", 5000),
+		{Role: "user", Content: "next"},
+	}
+	cfg := types.ToolOutputPruningConfig{HighWaterTokens: 6000, LowWaterTokens: 1, MinResultTokens: 200}
+
+	out, newly, _ := pruneToolOutputs(msgs, cfg, map[string]bool{})
+
+	if len(newly) == 0 || newly[0] != "orphan" {
+		t.Fatalf("newly = %v, want the orphan swept like any other oversized result", newly)
+	}
+	if strings.Contains(out[0].Content, "[ ") || strings.Contains(out[0].Content, "[—") {
+		t.Fatalf("orphan stub has an empty tool name: %q", out[0].Content)
+	}
+	if !strings.Contains(out[0].Content, "tool") {
+		t.Fatalf("orphan stub names nothing the model can act on: %q", out[0].Content)
 	}
 }
