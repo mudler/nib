@@ -214,3 +214,154 @@ func TestInterruptedTurnKeepsTokensButNotTurn(t *testing.T) {
 		t.Fatalf("Turns = %d, want 0 — an interrupted turn is not a completed exchange", got.Turns)
 	}
 }
+
+// Sub-agent tokens are spend on the same bill, so they belong in the session
+// total even though they were burned by a different fragment.
+func TestAgentUsageFullReturnsBothDirections(t *testing.T) {
+	st := &cogito.Status{
+		CumulativeUsage: cogito.LLMUsage{PromptTokens: 80, CompletionTokens: 9, TotalTokens: 89},
+	}
+	frag := cogito.NewEmptyFragment()
+	frag.Status = st
+
+	tools, u := agentUsageFull(&cogito.AgentState{Fragment: &frag})
+	if u.PromptTokens != 80 || u.CompletionTokens != 9 || u.TotalTokens != 89 {
+		t.Fatalf("usage = %+v, want 80/9/89", u)
+	}
+	_ = tools
+}
+
+// A failed agent never gets a fragment. Reading through it must not panic.
+func TestAgentUsageFullIsNilSafe(t *testing.T) {
+	if _, u := agentUsageFull(nil); u != (cogito.LLMUsage{}) {
+		t.Fatalf("nil agent produced usage %+v", u)
+	}
+	if _, u := agentUsageFull(&cogito.AgentState{}); u != (cogito.LLMUsage{}) {
+		t.Fatalf("agent without a fragment produced usage %+v", u)
+	}
+}
+
+// The old two-return helper still exists, because emitAgentEvent's AgentEvent
+// and its tests use exactly that shape.
+func TestAgentUsageStillReportsTotalTokens(t *testing.T) {
+	st := &cogito.Status{CumulativeUsage: cogito.LLMUsage{TotalTokens: 42}}
+	frag := cogito.NewEmptyFragment()
+	frag.Status = st
+
+	if _, tokens := agentUsage(&cogito.AgentState{Fragment: &frag}); tokens != 42 {
+		t.Fatalf("agentUsage tokens = %d, want 42", tokens)
+	}
+}
+
+// The wiring: emitAgentEvent is the one place every finished sub-agent passes
+// through, so proving the helper is not enough — the event path must feed the
+// counter, and must not mistake a sub-agent run for a user turn.
+func TestAgentEventFoldsUsageIntoTheSession(t *testing.T) {
+	s := &Session{}
+	st := &cogito.Status{
+		CumulativeUsage: cogito.LLMUsage{PromptTokens: 80, CompletionTokens: 9, TotalTokens: 89},
+	}
+	frag := cogito.NewEmptyFragment()
+	frag.Status = st
+
+	s.emitAgentEvent(&cogito.AgentState{
+		ID:       "a1",
+		Status:   cogito.AgentStatusCompleted,
+		Fragment: &frag,
+	})
+
+	got := s.Usage()
+	if got.TotalTokens != 89 {
+		t.Fatalf("TotalTokens = %d, want 89: the sub-agent event did not reach the counter", got.TotalTokens)
+	}
+	if got.Turns != 0 {
+		t.Fatalf("Turns = %d, want 0: a sub-agent run is not a user turn", got.Turns)
+	}
+}
+
+// A failed agent still burned tokens before it failed, and the user was billed
+// for them. Skipping failures would make the flakiest runs look the cheapest.
+func TestFailedAgentStillContributesItsSpend(t *testing.T) {
+	s := &Session{}
+	st := &cogito.Status{CumulativeUsage: cogito.LLMUsage{TotalTokens: 31}}
+	frag := cogito.NewEmptyFragment()
+	frag.Status = st
+
+	s.emitAgentEvent(&cogito.AgentState{
+		ID:       "a2",
+		Status:   cogito.AgentStatusFailed,
+		Fragment: &frag,
+	})
+
+	if got := s.Usage().TotalTokens; got != 31 {
+		t.Fatalf("TotalTokens = %d, want 31: a failed agent's spend was dropped", got)
+	}
+}
+
+// The spawn callback fires with Status=running, when nothing has been spent and
+// the fragment is still nil. Counting there would add zero today, but would
+// double-count the moment cogito starts populating a running agent's fragment.
+func TestRunningAgentEventAddsNothing(t *testing.T) {
+	s := &Session{}
+	st := &cogito.Status{CumulativeUsage: cogito.LLMUsage{TotalTokens: 500}}
+	frag := cogito.NewEmptyFragment()
+	frag.Status = st
+
+	s.emitAgentEvent(&cogito.AgentState{
+		ID:       "a3",
+		Status:   cogito.AgentStatusRunning,
+		Fragment: &frag,
+	})
+
+	if got := s.Usage(); got != (SessionUsage{}) {
+		t.Fatalf("usage = %+v, want zero: a still-running agent has no final figure to fold in", got)
+	}
+}
+
+// summarizingLLM answers Ask with a summary and reports what that call cost,
+// which is the figure compaction has been spending invisibly.
+type summarizingLLM struct{}
+
+func (summarizingLLM) CreateChatCompletion(ctx context.Context, req openai.ChatCompletionRequest) (cogito.LLMReply, cogito.LLMUsage, error) {
+	return cogito.LLMReply{}, cogito.LLMUsage{}, nil
+}
+
+func (summarizingLLM) Ask(ctx context.Context, f cogito.Fragment) (cogito.Fragment, error) {
+	out := f.AddMessage("assistant", "a summary of earlier turns")
+	if out.Status != nil {
+		out.Status.LastUsage = cogito.LLMUsage{PromptTokens: 60, CompletionTokens: 6, TotalTokens: 66}
+	}
+	return out, nil
+}
+
+// Compaction spends tokens on a summary the user never asked for, at the moment
+// the session is already large. Invisible spend is the thing being fixed.
+func TestCompactionUsageCountsTowardTheSession(t *testing.T) {
+	s := &Session{
+		ctx: context.Background(),
+		llm: summarizingLLM{},
+		fragment: cogito.NewFragment(
+			openai.ChatCompletionMessage{Role: "user", Content: "u1"},
+			openai.ChatCompletionMessage{Role: "assistant", Content: "a1"},
+			openai.ChatCompletionMessage{Role: "user", Content: "u2"},
+			openai.ChatCompletionMessage{Role: "assistant", Content: "a2"},
+		),
+		compaction: types.CompactionConfig{KeepRecent: 2},
+	}
+
+	before, after, err := s.compactHistory(context.Background())
+	if err != nil {
+		t.Fatalf("compactHistory: %v", err)
+	}
+	if before == after {
+		t.Fatal("nothing was compacted, so the summary call never happened")
+	}
+
+	got := s.Usage()
+	if got.TotalTokens != 66 {
+		t.Fatalf("TotalTokens = %d, want 66: the compaction summary call was not counted", got.TotalTokens)
+	}
+	if got.Turns != 0 {
+		t.Fatalf("Turns = %d, want 0: compaction is not a user turn", got.Turns)
+	}
+}

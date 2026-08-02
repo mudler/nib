@@ -155,6 +155,20 @@ func (s *Session) compactHistory(ctx context.Context) (before, after int, err er
 	if aerr != nil {
 		return before, before, fmt.Errorf("compaction summary failed: %w", aerr)
 	}
+	// Compaction is not free, and it fires exactly when a session has already
+	// grown expensive — so leaving it out would understate the runs that cost
+	// the most.
+	//
+	// LastUsage, not CumulativeUsage: Ask is a single call on a throwaway
+	// fragment that no ExecuteTools run ever stamped, so CumulativeUsage is
+	// zero here and reading it would count nothing at all.
+	//
+	// Counted before the success checks below on purpose: a summary that comes
+	// back empty was still generated and still billed, and the early return
+	// that rejects it must not also erase the spend.
+	if res.Status != nil {
+		s.addUsage(res.Status.LastUsage)
+	}
 	last := res.LastMessage()
 	if last == nil || strings.TrimSpace(last.Content) == "" {
 		return before, before, fmt.Errorf("compaction produced an empty summary")

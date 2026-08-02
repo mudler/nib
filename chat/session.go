@@ -525,7 +525,20 @@ func (s *Session) emitAgentEvent(a *cogito.AgentState) {
 		s.agentStart[a.ID] = time.Now()
 		s.agentMu.Unlock()
 	case AgentStatusCompleted, AgentStatusFailed:
-		ev.ToolCount, ev.TotalTokens = agentUsage(a)
+		var au cogito.LLMUsage
+		ev.ToolCount, au = agentUsageFull(a)
+		ev.TotalTokens = au.TotalTokens
+		// Sub-agent tokens are spent on the same bill as the main loop, so the
+		// session total owns them too. A failed agent contributes whatever it
+		// burned before failing, which is the honest figure.
+		//
+		// Counting here rather than in the main loop is what makes this correct
+		// exactly once: cogito hands sub-agents the UNWRAPPED parent LLM (see
+		// prepareAgentTools, which captures agentLLM before ExecuteTools wraps
+		// it in a counting LLM), so a sub-agent's spend never lands in the
+		// parent run's CumulativeUsage that SendMessage adds. Without this the
+		// tokens are invisible; adding it in both places would double them.
+		s.addUsage(au)
 		s.agentMu.Lock()
 		if start, ok := s.agentStart[a.ID]; ok {
 			ev.Elapsed = time.Since(start)
@@ -546,14 +559,25 @@ func (s *Session) emitAgentEvent(a *cogito.AgentState) {
 	}
 }
 
-// agentUsage extracts a finished sub-agent's executed-tool count and cumulative
-// token usage from its fragment. Safe against a nil fragment/status (e.g. a
-// failed agent, whose Fragment is never set).
-func agentUsage(a *cogito.AgentState) (toolCount, tokens int) {
+// agentUsageFull extracts a finished sub-agent's executed-tool count and full
+// cumulative token usage. Safe against a nil agent, fragment or status — a
+// failed agent never gets a fragment.
+//
+// The full LLMUsage (not just the total) exists because the session counter
+// tracks prompt and completion tokens separately: folding a sub-agent in with
+// only its total would leave the two component figures silently short of it.
+func agentUsageFull(a *cogito.AgentState) (toolCount int, usage cogito.LLMUsage) {
 	if a == nil || a.Fragment == nil || a.Fragment.Status == nil {
-		return 0, 0
+		return 0, cogito.LLMUsage{}
 	}
-	return len(a.Fragment.Status.ToolsCalled), a.Fragment.Status.CumulativeUsage.TotalTokens
+	return len(a.Fragment.Status.ToolsCalled), a.Fragment.Status.CumulativeUsage
+}
+
+// agentUsage is the total-only view agentUsageFull backs, kept because
+// AgentEvent carries a single TotalTokens figure for display.
+func agentUsage(a *cogito.AgentState) (toolCount, tokens int) {
+	n, u := agentUsageFull(a)
+	return n, u.TotalTokens
 }
 
 func (s *Session) ClearHistory() {
