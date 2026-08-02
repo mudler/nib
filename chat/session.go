@@ -529,8 +529,7 @@ func (s *Session) emitAgentEvent(a *cogito.AgentState) {
 		ev.ToolCount, au = agentUsageFull(a)
 		ev.TotalTokens = au.TotalTokens
 		// Sub-agent tokens are spent on the same bill as the main loop, so the
-		// session total owns them too. A failed agent contributes whatever it
-		// burned before failing, which is the honest figure.
+		// session total owns them too.
 		//
 		// Counting here rather than in the main loop is what makes this correct
 		// exactly once: cogito hands sub-agents the UNWRAPPED parent LLM (see
@@ -538,6 +537,18 @@ func (s *Session) emitAgentEvent(a *cogito.AgentState) {
 		// it in a counting LLM), so a sub-agent's spend never lands in the
 		// parent run's CumulativeUsage that SendMessage adds. Without this the
 		// tokens are invisible; adding it in both places would double them.
+		//
+		// The failed branch is counted deliberately, but today it contributes
+		// exactly zero, and this is the one place that is easy to misread:
+		// cogito assigns agent.Fragment only on the success branch and drops
+		// the fragment on error, so for a real failure agentUsageFull reads
+		// through a nil fragment and returns an empty LLMUsage (which is why
+		// its doc says a failed agent never gets one). The call stays because
+		// the intent is honest — tokens burned before a failure were still
+		// billed — and it starts reporting the moment cogito preserves a failed
+		// agent's fragment, with no change needed here. Until then a failed
+		// sub-agent's spend is under-reported, which is the safe direction for
+		// a figure a benchmark harness reads: too low never invents spend.
 		s.addUsage(au)
 		s.agentMu.Lock()
 		if start, ok := s.agentStart[a.ID]; ok {

@@ -2,6 +2,7 @@ package chat
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 
@@ -279,8 +280,15 @@ func TestAgentEventFoldsUsageIntoTheSession(t *testing.T) {
 	}
 }
 
-// A failed agent still burned tokens before it failed, and the user was billed
-// for them. Skipping failures would make the flakiest runs look the cheapest.
+// The failed branch counts rather than skips, so a failure can never be cheaper
+// than what it burned.
+//
+// Read this as a test of the switch, NOT as evidence about production failures.
+// The state it builds — Failed WITH a populated fragment — is a shape cogito
+// never produces: cogito assigns agent.Fragment only on the success branch, so
+// a real failed agent arrives here with no fragment and contributes zero. The
+// branch is pinned anyway because the moment cogito starts preserving that
+// fragment, this is what makes the spend show up without another code change.
 func TestFailedAgentStillContributesItsSpend(t *testing.T) {
 	s := &Session{}
 	st := &cogito.Status{CumulativeUsage: cogito.LLMUsage{TotalTokens: 31}}
@@ -363,5 +371,53 @@ func TestCompactionUsageCountsTowardTheSession(t *testing.T) {
 	}
 	if got.Turns != 0 {
 		t.Fatalf("Turns = %d, want 0: compaction is not a user turn", got.Turns)
+	}
+}
+
+// failingSummaryLLM models a compaction call the backend served and billed and
+// that then failed — a truncated response, a mid-stream disconnect. It reports
+// the usage on the returned fragment before returning the error, which is the
+// only shape in which a client can hand back spend it already incurred.
+type failingSummaryLLM struct{}
+
+func (failingSummaryLLM) CreateChatCompletion(ctx context.Context, req openai.ChatCompletionRequest) (cogito.LLMReply, cogito.LLMUsage, error) {
+	return cogito.LLMReply{}, cogito.LLMUsage{}, nil
+}
+
+func (failingSummaryLLM) Ask(ctx context.Context, f cogito.Fragment) (cogito.Fragment, error) {
+	if f.Status != nil {
+		f.Status.LastUsage = cogito.LLMUsage{PromptTokens: 40, CompletionTokens: 4, TotalTokens: 44}
+	}
+	return f, errors.New("backend hung up after answering")
+}
+
+// A compaction call that reached the backend and then errored was still billed.
+// Counting only the successful ones would let the failure mode that costs most
+// — a big session, a big summary prompt, a dropped connection — cost nothing on
+// paper, and would leave compaction the single path where paid-for tokens
+// vanish while interrupted turns keep theirs.
+func TestFailedCompactionStillCountsWhatItBurned(t *testing.T) {
+	s := &Session{
+		ctx: context.Background(),
+		llm: failingSummaryLLM{},
+		fragment: cogito.NewFragment(
+			openai.ChatCompletionMessage{Role: "user", Content: "u1"},
+			openai.ChatCompletionMessage{Role: "assistant", Content: "a1"},
+			openai.ChatCompletionMessage{Role: "user", Content: "u2"},
+			openai.ChatCompletionMessage{Role: "assistant", Content: "a2"},
+		),
+		compaction: types.CompactionConfig{KeepRecent: 2},
+	}
+
+	if _, _, err := s.compactHistory(context.Background()); err == nil {
+		t.Fatal("compactHistory succeeded; the failure was not exercised")
+	}
+
+	got := s.Usage()
+	if got.TotalTokens != 44 {
+		t.Fatalf("TotalTokens = %d, want 44: a billed compaction call was dropped because it errored", got.TotalTokens)
+	}
+	if got.Turns != 0 {
+		t.Fatalf("Turns = %d, want 0: a failed compaction is not a user turn", got.Turns)
 	}
 }

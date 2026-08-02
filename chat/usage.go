@@ -6,9 +6,17 @@ import (
 	"github.com/mudler/cogito"
 )
 
-// SessionUsage is a snapshot of everything a session has spent: every LLM call
-// it made, including sub-agents and compaction summaries, plus the number of
-// user turns those calls served.
+// SessionUsage is a snapshot of what a session has spent: the LLM calls it
+// made, including sub-agents and compaction summaries, plus the number of user
+// turns those calls served.
+//
+// Two known gaps, both of which under-report rather than invent spend, so a
+// figure here is a floor and never an overstatement:
+//   - Streaming. cogito reads streamed usage from StreamEvent.Usage on the done
+//     event and its bundled clients never populate it, so a session that sets
+//     Callbacks.OnStream counts zero. nib's CLI and TUI do not set it.
+//   - A failed sub-agent. cogito keeps a sub-agent's fragment only on success,
+//     so whatever a failure burned before dying has nowhere to be read from.
 //
 // The JSON tags are load-bearing: the usage.json written beside a trace is read
 // by benchmark harnesses, so the field names are a contract, not decoration.

@@ -152,9 +152,6 @@ func (s *Session) compactHistory(ctx context.Context) (before, after int, err er
 	prompt := compactInstruction + "\n\n--- CONVERSATION ---\n" + headContent
 	llm, _ := s.currentLLM()
 	res, aerr := llm.Ask(ctx, cogito.NewFragment().AddMessage(cogito.UserMessageRole, prompt))
-	if aerr != nil {
-		return before, before, fmt.Errorf("compaction summary failed: %w", aerr)
-	}
 	// Compaction is not free, and it fires exactly when a session has already
 	// grown expensive — so leaving it out would understate the runs that cost
 	// the most.
@@ -163,11 +160,19 @@ func (s *Session) compactHistory(ctx context.Context) (before, after int, err er
 	// fragment that no ExecuteTools run ever stamped, so CumulativeUsage is
 	// zero here and reading it would count nothing at all.
 	//
-	// Counted before the success checks below on purpose: a summary that comes
-	// back empty was still generated and still billed, and the early return
-	// that rejects it must not also erase the spend.
+	// Counted before BOTH exits below on purpose. What the backend served it
+	// billed, whether the summary then came back empty or the call came back an
+	// error, and a rejected summary must not also erase the spend — the same
+	// rule the interrupted-turn path in SendMessage follows. Placing this after
+	// either early return would make compaction the one path where paid-for
+	// tokens vanish, precisely on the sessions that spend the most. Clients
+	// that discard the fragment on error simply leave Status nil and add
+	// nothing, so the guard is what keeps this honest rather than optimistic.
 	if res.Status != nil {
 		s.addUsage(res.Status.LastUsage)
+	}
+	if aerr != nil {
+		return before, before, fmt.Errorf("compaction summary failed: %w", aerr)
 	}
 	last := res.LastMessage()
 	if last == nil || strings.TrimSpace(last.Content) == "" {
