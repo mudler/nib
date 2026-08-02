@@ -155,6 +155,43 @@ func (s *spinner) stop() {
 	<-s.doneChan
 }
 
+// pause clears a live spinner so a mid-run notice can be printed on a clean
+// line, and returns the func that puts the spinner back exactly as it was.
+//
+// The stop()/start(verb) pair the older callbacks use is wrong for a notice
+// that arrives unbidden, for two reasons. It restarts a spinner that may never
+// have been running — compaction fires after OnResponse has already stopped
+// one, and a start() there leaves a spinner animating over the next prompt
+// forever. And it stomps the verb: a callback that knows why it interrupted
+// (a tool result means thinking resumes) may name the verb, but a notice that
+// merely reports what the session did to itself has no business changing what
+// the user was told the session is busy with.
+//
+// In non-TTY mode nothing is drawn in place, so there is no half-drawn line to
+// clear; pausing there would only make the next start() reprint the status
+// after every notice. Hence the early no-op.
+func (s *spinner) pause() (resume func()) {
+	if !s.tty {
+		return func() {}
+	}
+	s.mu.Lock()
+	active, msg := s.active, s.message
+	s.mu.Unlock()
+	if !active {
+		return func() {}
+	}
+	s.stop()
+	return func() { s.start(msg) }
+}
+
+// writeNotice prints a one-line notice that arrives mid-run, on a line of its
+// own, without disturbing the spinner it interrupts.
+func writeNotice(out io.Writer, spin *spinner, line string) {
+	resume := spin.pause()
+	fmt.Fprintln(out, line)
+	resume()
+}
+
 // readStringCancellable reads a line from the reader, but can be cancelled via context
 func readStringCancellable(ctx context.Context, reader *bufio.Reader) (string, error) {
 	type result struct {
@@ -330,11 +367,15 @@ func RunCLI(ctx context.Context, cfg types.Config, streams Streams, shellJobs *w
 			}
 			spin.start(theme.Status(theme.VerbWorking, 0))
 		},
+		// Both notices fire from the agent's goroutine while the spinner may be
+		// mid-frame, so they go through writeNotice rather than Fprintln: an
+		// 80ms redraw and a bare print share the line otherwise, and the user
+		// reads "⠋ working…pruned 2 tool results".
 		OnCompactDone: func(before, after int) {
-			fmt.Fprintln(out, theme.Subtle.Render(compactNotice(before, after)))
+			writeNotice(out, spin, theme.Subtle.Render(compactNotice(before, after)))
 		},
 		OnPruneDone: func(results, freed int) {
-			fmt.Fprintln(out, theme.Subtle.Render(pruneNotice(results, freed)))
+			writeNotice(out, spin, theme.Subtle.Render(pruneNotice(results, freed)))
 		},
 		OnError: func(err error) {
 			spin.stop()
