@@ -88,22 +88,22 @@ func TestFindCatalogMeta(t *testing.T) {
 
 func TestRunSource_AddListRemove(t *testing.T) {
 	base := t.TempDir()
-	if code := runSource(base, []string{"add", "https://acme.dev/index.json"}); code != 0 {
+	if code := runSource("", base, []string{"add", "https://acme.dev/index.json"}); code != 0 {
 		t.Fatalf("source add exit=%d", code)
 	}
 	if _, err := os.Stat(filepath.Join(base, "sources.yaml")); err != nil {
 		t.Fatalf("add did not persist: %v", err)
 	}
-	if code := runSource(base, []string{"disable", "acme.dev"}); code != 0 {
+	if code := runSource("", base, []string{"disable", "acme.dev"}); code != 0 {
 		t.Fatalf("source disable exit=%d", code)
 	}
-	if code := runSource(base, []string{"remove", "acme.dev"}); code != 0 {
+	if code := runSource("", base, []string{"remove", "acme.dev"}); code != 0 {
 		t.Fatalf("source remove exit=%d", code)
 	}
-	if code := runSource(base, []string{"remove", "bundled"}); code == 0 {
+	if code := runSource("", base, []string{"remove", "bundled"}); code == 0 {
 		t.Fatal("removing bundled must fail with a nonzero exit")
 	}
-	if code := runSource(base, []string{"bogus"}); code == 0 {
+	if code := runSource("", base, []string{"bogus"}); code == 0 {
 		t.Fatal("unknown source subcommand must fail")
 	}
 }

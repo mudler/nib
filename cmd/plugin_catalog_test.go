@@ -21,7 +21,7 @@ func TestPluginBrowseFilter(t *testing.T) {
 func TestPluginSourceShared(t *testing.T) {
 	// `plugin source` shares sources.yaml with `skill source`.
 	base := t.TempDir()
-	if code := runSource(base, []string{"add", "https://acme.dev/index.json"}); code != 0 {
+	if code := runSource("", base, []string{"add", "https://acme.dev/index.json"}); code != 0 {
 		t.Fatalf("plugin source add exit=%d", code)
 	}
 	sources, _ := catalog.LoadSources(base)

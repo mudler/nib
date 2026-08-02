@@ -652,11 +652,17 @@ name is derived from it by reducing it to an identifier, so `local-ai chat`
 defines `__local_ai_chat_widget`. An empty `ProgramName` still emits standalone
 nib's script byte for byte.
 
-The rest of nib still says `nib`: the management subcommands' usage strings
-(`usage: nib plugin ...` and its `skill` and `mcp` equivalents), and the
-`nib: ...` diagnostics that config loading and plugin/skill discovery write
-straight to `os.Stderr` on every run. Threading the name through those is
-follow-up work.
+The management subcommands are renamed too, but only where they tell the user
+what to **type**: the `usage: ...` lines of `plugin`, `skill` and `mcp`, and the
+hints that end an install, such as `Enable later: local-ai chat plugin enable
+foo` and `verify now with: local-ai chat mcp test bar`. A non-interactive
+`plugin install` without `--yes` reaches that enable hint every time, so naming
+a binary the user does not have is a dead end rather than a cosmetic slip.
+
+The rest of nib still says `nib`, because it is prose that names the tool rather
+than a command to run: the CLI and TUI branding, the "next nib session" half of
+the `mcp add` confirmation, and the `nib: ...` diagnostics that config loading
+and plugin/skill discovery write straight to `os.Stderr` on every run.
 
 **The management subcommands do not honor injected streams.** Every `plugin`
 and `skill` subcommand, and every `nib mcp` subcommand that manages configured

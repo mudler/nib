@@ -88,7 +88,7 @@ func TestRunPluginCommandUsesInjectedBaseDir(t *testing.T) {
 	root := t.TempDir()
 	seedPlugin(t, root, "demo")
 
-	if code := RunPluginCommand(root, []string{"enable", "demo"}); code != 0 {
+	if code := RunPluginCommand("", root, []string{"enable", "demo"}); code != 0 {
 		t.Fatalf("plugin enable exit = %d, want 0", code)
 	}
 	reg, err := plugin.LoadRegistry(root)
@@ -108,7 +108,7 @@ func TestRunPluginCommandSourceUsesInjectedBaseDir(t *testing.T) {
 	defaultRoot := isolatedHome(t)
 	root := t.TempDir()
 
-	if code := RunPluginCommand(root, []string{"source", "add", "https://example.invalid/skills.yaml"}); code != 0 {
+	if code := RunPluginCommand("", root, []string{"source", "add", "https://example.invalid/skills.yaml"}); code != 0 {
 		t.Fatalf("plugin source add exit = %d, want 0", code)
 	}
 	if _, err := os.Stat(filepath.Join(root, "sources.yaml")); err != nil {
@@ -123,7 +123,7 @@ func TestRunSkillCommandUsesInjectedBaseDir(t *testing.T) {
 	root := t.TempDir()
 	seedSkillPack(t, root, "pack")
 
-	if code := RunSkillCommand(root, []string{"enable", "pack"}); code != 0 {
+	if code := RunSkillCommand("", root, []string{"enable", "pack"}); code != 0 {
 		t.Fatalf("skill enable exit = %d, want 0", code)
 	}
 	reg, err := skill.LoadRegistry(root)
@@ -143,7 +143,7 @@ func TestRunMCPCommandUsesInjectedBaseDir(t *testing.T) {
 	defaultRoot := isolatedHome(t)
 	root := t.TempDir()
 
-	if code := RunMCPCommand(root, []string{"add", "demo", "--", "demo-mcp"}); code != 0 {
+	if code := RunMCPCommand("", root, []string{"add", "demo", "--", "demo-mcp"}); code != 0 {
 		t.Fatalf("mcp add exit = %d, want 0", code)
 	}
 	data, err := os.ReadFile(filepath.Join(root, "config.yaml"))
@@ -244,7 +244,7 @@ func twoCatalogs(t *testing.T) (root, defaultRoot string) {
 func TestRunPluginCommandSearchReadsInjectedCatalog(t *testing.T) {
 	root, _ := twoCatalogs(t)
 	out := captureStdout(t, func() {
-		if code := RunPluginCommand(root, []string{"search", "catalog"}); code != 0 {
+		if code := RunPluginCommand("", root, []string{"search", "catalog"}); code != 0 {
 			t.Errorf("plugin search exit = %d, want 0", code)
 		}
 	})
@@ -260,7 +260,7 @@ func TestRunPluginCommandSearchReadsInjectedCatalog(t *testing.T) {
 func TestRunSkillCommandBrowseReadsInjectedCatalog(t *testing.T) {
 	root, _ := twoCatalogs(t)
 	out := captureStdout(t, func() {
-		if code := RunSkillCommand(root, []string{"browse"}); code != 0 {
+		if code := RunSkillCommand("", root, []string{"browse"}); code != 0 {
 			t.Errorf("skill browse exit = %d, want 0", code)
 		}
 	})
@@ -279,7 +279,7 @@ func TestRunSkillCommandBrowseReadsInjectedCatalog(t *testing.T) {
 func TestRunPluginCommandCatalogInstallUsesInjectedRoot(t *testing.T) {
 	root, defaultRoot := twoCatalogs(t)
 	captureStdout(t, func() {
-		if code := RunPluginCommand(root, []string{"install", "--yes", "injected-plug"}); code != 0 {
+		if code := RunPluginCommand("", root, []string{"install", "--yes", "injected-plug"}); code != 0 {
 			t.Errorf("plugin install exit = %d, want 0", code)
 		}
 	})
@@ -299,7 +299,7 @@ func TestRunPluginCommandCatalogInstallUsesInjectedRoot(t *testing.T) {
 func TestRunSkillCommandCatalogInstallUsesInjectedRoot(t *testing.T) {
 	root, defaultRoot := twoCatalogs(t)
 	captureStdout(t, func() {
-		if code := RunSkillCommand(root, []string{"install", "--yes", "injected-skill"}); code != 0 {
+		if code := RunSkillCommand("", root, []string{"install", "--yes", "injected-skill"}); code != 0 {
 			t.Errorf("skill install exit = %d, want 0", code)
 		}
 	})

@@ -25,45 +25,51 @@ var confirmFn = func(prompt string) bool {
 
 // RunPluginCommand dispatches `nib plugin <sub> ...` and returns an exit code.
 // baseDir overrides the config/plugins/skills root; empty means nib's default.
-func RunPluginCommand(baseDir string, args []string) int {
+//
+// programName is what the user types to reach this dispatcher, so every usage
+// line and every "run this later" hint names something that actually exists on
+// their machine. Empty means "nib", which keeps standalone output unchanged;
+// an embedder passes its own several-word form ("local-ai chat").
+func RunPluginCommand(programName, baseDir string, args []string) int {
+	prog := runnableName(programName)
 	if len(args) == 0 {
-		pluginUsage()
+		pluginUsage(prog)
 		return 1
 	}
 	root := plugin.BaseDirIn(baseDir)
 	mgr := plugin.NewManager(root)
 	switch args[0] {
 	case "install":
-		return pluginInstall(mgr, root, args[1:])
+		return pluginInstall(prog, mgr, root, args[1:])
 	case "browse":
 		return runBrowse(root, catalog.KindPlugin)
 	case "search":
 		if len(args) < 2 {
-			fmt.Fprintln(os.Stderr, "usage: nib plugin search <query>")
+			fmt.Fprintf(os.Stderr, "usage: %s plugin search <query>\n", prog)
 			return 1
 		}
 		return runSearch(root, catalog.KindPlugin, strings.Join(args[1:], " "))
 	case "source":
-		return runSource(root, args[1:])
+		return runSource(prog, root, args[1:])
 	case "list":
 		return pluginList(mgr)
 	case "update":
-		return pluginByName(args, "update", mgr.Update)
+		return pluginByName(prog, args, "update", mgr.Update)
 	case "remove":
-		return pluginByName(args, "remove", mgr.Remove)
+		return pluginByName(prog, args, "remove", mgr.Remove)
 	case "enable":
-		return pluginSetEnabled(mgr, args[1:], true)
+		return pluginSetEnabled(prog, mgr, args[1:], true)
 	case "disable":
-		return pluginSetEnabled(mgr, args[1:], false)
+		return pluginSetEnabled(prog, mgr, args[1:], false)
 	default:
 		fmt.Fprintf(os.Stderr, "unknown plugin command: %s\n", args[0])
-		pluginUsage()
+		pluginUsage(prog)
 		return 1
 	}
 }
 
-func pluginUsage() {
-	fmt.Fprintln(os.Stderr, "usage: nib plugin <install|browse|search|source|list|update|enable|disable|remove> ...")
+func pluginUsage(prog string) {
+	fmt.Fprintf(os.Stderr, "usage: %s plugin <install|browse|search|source|list|update|enable|disable|remove> ...\n", prog)
 }
 
 // parseInstallArgs parses `[--ref REF] [--yes] <git-url>` with flags allowed
@@ -94,10 +100,10 @@ func parseInstallArgs(args []string) (url, ref string, yes bool, err error) {
 
 // pluginInstall installs from a git URL, a local dir, a .zip, or a catalog
 // name. root is the already-resolved config base the catalog is read from.
-func pluginInstall(mgr *plugin.Manager, root string, args []string) int {
+func pluginInstall(prog string, mgr *plugin.Manager, root string, args []string) int {
 	src, ref, yes, err := parseInstallArgs(args)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "usage: nib plugin install [--ref REF] [--yes] <git-url|local-path|zip|catalog-name>")
+		fmt.Fprintf(os.Stderr, "usage: %s plugin install [--ref REF] [--yes] <git-url|local-path|zip|catalog-name>\n", prog)
 		return 1
 	}
 
@@ -108,14 +114,14 @@ func pluginInstall(mgr *plugin.Manager, root string, args []string) int {
 			fmt.Fprintf(os.Stderr, "install failed: %v\n", ierr)
 			return 1
 		}
-		return reportAndMaybeEnablePlugin(mgr, m, yes)
+		return reportAndMaybeEnablePlugin(prog, mgr, m, yes)
 	}
 
 	// A bare name that is neither a git URL/remote nor an existing local dir
 	// (and not the .zip handled above) is treated as a catalog plugin to
 	// resolve and install DISABLED.
 	if !looksLikeGitSource(src) {
-		return pluginCatalogInstall(mgr, root, src, yes)
+		return pluginCatalogInstall(prog, mgr, root, src, yes)
 	}
 
 	m, err := mgr.Install(src, ref, internal.Version)
@@ -123,7 +129,7 @@ func pluginInstall(mgr *plugin.Manager, root string, args []string) int {
 		fmt.Fprintf(os.Stderr, "install failed: %v\n", err)
 		return 1
 	}
-	return reportAndMaybeEnablePlugin(mgr, m, yes)
+	return reportAndMaybeEnablePlugin(prog, mgr, m, yes)
 }
 
 // pluginLocalImport handles a .zip plugin archive; returns handled=false for
@@ -147,7 +153,7 @@ func pluginLocalImport(mgr *plugin.Manager, src, nibVersion string) (plugin.Mani
 // pluginCatalogInstall resolves a catalog plugin Meta by name, installs it
 // (DISABLED, like every install), reloads its manifest, and runs the shared
 // plugin report/consent tail. Symmetric to skillCatalogInstall.
-func pluginCatalogInstall(mgr *plugin.Manager, baseDir, name string, yes bool) int {
+func pluginCatalogInstall(prog string, mgr *plugin.Manager, baseDir, name string, yes bool) int {
 	metas, err := mergeCatalog(baseDir)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "install failed: %v\n", err)
@@ -169,14 +175,14 @@ func pluginCatalogInstall(mgr *plugin.Manager, baseDir, name string, yes bool) i
 		fmt.Fprintf(os.Stderr, "install failed: %v\n", err)
 		return 1
 	}
-	return reportAndMaybeEnablePlugin(mgr, mani, yes)
+	return reportAndMaybeEnablePlugin(prog, mgr, mani, yes)
 }
 
 // reportAndMaybeEnablePlugin prints the install summary, then either enables the
 // plugin (on --yes or an interactive confirm) or leaves it disabled. It returns
 // the process exit code. Imported plugins always land disabled; this is the only
 // enable path.
-func reportAndMaybeEnablePlugin(mgr *plugin.Manager, m plugin.Manifest, yes bool) int {
+func reportAndMaybeEnablePlugin(prog string, mgr *plugin.Manager, m plugin.Manifest, yes bool) int {
 	fmt.Printf("Installed %q v%s — %s\n", m.Name, m.Version, m.Description)
 	fmt.Printf("Contributes: %d MCP server(s), %d sub-agent(s)\n", len(m.MCPServers), len(m.Agents))
 
@@ -188,7 +194,7 @@ func reportAndMaybeEnablePlugin(mgr *plugin.Manager, m plugin.Manifest, yes bool
 		fmt.Printf("Plugin %q enabled.\n", m.Name)
 		return 0
 	}
-	fmt.Printf("Plugin %q installed but left disabled. Enable later: nib plugin enable %s\n", m.Name, m.Name)
+	fmt.Printf("Plugin %q installed but left disabled. Enable later: %s plugin enable %s\n", m.Name, prog, m.Name)
 	return 0
 }
 
@@ -212,9 +218,9 @@ func pluginList(mgr *plugin.Manager) int {
 	return 0
 }
 
-func pluginByName(args []string, verb string, fn func(string) error) int {
+func pluginByName(prog string, args []string, verb string, fn func(string) error) int {
 	if len(args) < 2 {
-		fmt.Fprintf(os.Stderr, "usage: nib plugin %s <name>\n", verb)
+		fmt.Fprintf(os.Stderr, "usage: %s plugin %s <name>\n", prog, verb)
 		return 1
 	}
 	if err := fn(args[1]); err != nil {
@@ -225,9 +231,9 @@ func pluginByName(args []string, verb string, fn func(string) error) int {
 	return 0
 }
 
-func pluginSetEnabled(mgr *plugin.Manager, args []string, enabled bool) int {
+func pluginSetEnabled(prog string, mgr *plugin.Manager, args []string, enabled bool) int {
 	if len(args) < 1 {
-		fmt.Fprintln(os.Stderr, "usage: nib plugin enable|disable <name>")
+		fmt.Fprintf(os.Stderr, "usage: %s plugin enable|disable <name>\n", prog)
 		return 1
 	}
 	if err := mgr.SetEnabled(args[0], enabled); err != nil {

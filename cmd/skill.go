@@ -17,45 +17,51 @@ import (
 
 // RunSkillCommand dispatches `nib skill <sub> ...` and returns an exit code.
 // baseDir overrides the config/plugins/skills root; empty means nib's default.
-func RunSkillCommand(baseDir string, args []string) int {
+//
+// programName is what the user types to reach this dispatcher, so every usage
+// line and every "run this later" hint names something that actually exists on
+// their machine. Empty means "nib", which keeps standalone output unchanged;
+// an embedder passes its own several-word form ("local-ai chat").
+func RunSkillCommand(programName, baseDir string, args []string) int {
+	prog := runnableName(programName)
 	if len(args) == 0 {
-		skillUsage()
+		skillUsage(prog)
 		return 1
 	}
 	root := plugin.BaseDirIn(baseDir)
 	mgr := skill.NewManager(root)
 	switch args[0] {
 	case "install":
-		return skillInstall(mgr, root, args[1:])
+		return skillInstall(prog, mgr, root, args[1:])
 	case "browse":
 		return runBrowse(root, catalog.KindSkill)
 	case "search":
 		if len(args) < 2 {
-			fmt.Fprintln(os.Stderr, "usage: nib skill search <query>")
+			fmt.Fprintf(os.Stderr, "usage: %s skill search <query>\n", prog)
 			return 1
 		}
 		return runSearch(root, catalog.KindSkill, strings.Join(args[1:], " "))
 	case "source":
-		return runSource(root, args[1:])
+		return runSource(prog, root, args[1:])
 	case "list":
 		return skillList(mgr)
 	case "update":
-		return skillUpdate(mgr, args)
+		return skillUpdate(prog, mgr, args)
 	case "remove":
-		return skillByName(args, "remove", mgr.Remove)
+		return skillByName(prog, args, "remove", mgr.Remove)
 	case "enable":
-		return skillSetEnabled(mgr, args[1:], true)
+		return skillSetEnabled(prog, mgr, args[1:], true)
 	case "disable":
-		return skillSetEnabled(mgr, args[1:], false)
+		return skillSetEnabled(prog, mgr, args[1:], false)
 	default:
 		fmt.Fprintf(os.Stderr, "unknown skill command: %s\n", args[0])
-		skillUsage()
+		skillUsage(prog)
 		return 1
 	}
 }
 
-func skillUsage() {
-	fmt.Fprintln(os.Stderr, "usage: nib skill <install|browse|search|source|list|update|enable|disable|remove> ...")
+func skillUsage(prog string) {
+	fmt.Fprintf(os.Stderr, "usage: %s skill <install|browse|search|source|list|update|enable|disable|remove> ...\n", prog)
 }
 
 // parseSkillInstallArgs parses `[--ref REF] [--link] [--yes] <git-url|local-path>`
@@ -89,10 +95,10 @@ func parseSkillInstallArgs(args []string) (src, ref string, yes, link bool, err 
 // skillInstall installs from a git URL, a local dir, a .zip, a SKILL.md URL, or
 // a catalog name. root is the already-resolved config base the catalog is read
 // from.
-func skillInstall(mgr *skill.Manager, root string, args []string) int {
+func skillInstall(prog string, mgr *skill.Manager, root string, args []string) int {
 	src, ref, yes, link, err := parseSkillInstallArgs(args)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "usage: nib skill install [--ref REF] [--link] [--yes] <git-url|local-path|zip|url|catalog-name>")
+		fmt.Fprintf(os.Stderr, "usage: %s skill install [--ref REF] [--link] [--yes] <git-url|local-path|zip|url|catalog-name>\n", prog)
 		return 1
 	}
 
@@ -104,14 +110,14 @@ func skillInstall(mgr *skill.Manager, root string, args []string) int {
 				fmt.Fprintf(os.Stderr, "install failed: %v\n", ierr)
 				return 1
 			}
-			return reportAndMaybeEnable(mgr, name, skills, "Installed", yes)
+			return reportAndMaybeEnable(prog, mgr, name, skills, "Installed", yes)
 		}
 	}
 
 	// A bare name that is neither a git URL/dir nor a handled local import
 	// (zip/SKILL.md URL) is treated as a catalog entry to resolve and install.
 	if !link && !looksLikeGitSource(src) {
-		return skillCatalogInstall(mgr, root, src, yes)
+		return skillCatalogInstall(prog, mgr, root, src, yes)
 	}
 
 	name, skills, err := mgr.Install(src, ref, link)
@@ -124,7 +130,7 @@ func skillInstall(mgr *skill.Manager, root string, args []string) int {
 	if link {
 		how = "Linked"
 	}
-	return reportAndMaybeEnable(mgr, name, skills, how, yes)
+	return reportAndMaybeEnable(prog, mgr, name, skills, how, yes)
 }
 
 // looksLikeGitSource reports whether src is a git URL, an scp-style git remote,
@@ -141,7 +147,7 @@ func looksLikeGitSource(src string) bool {
 
 // skillCatalogInstall resolves a catalog skill Meta by name, installs it
 // (DISABLED, like every install), and runs the shared report/consent tail.
-func skillCatalogInstall(mgr *skill.Manager, baseDir, name string, yes bool) int {
+func skillCatalogInstall(prog string, mgr *skill.Manager, baseDir, name string, yes bool) int {
 	metas, err := mergeCatalog(baseDir)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "install failed: %v\n", err)
@@ -158,14 +164,14 @@ func skillCatalogInstall(mgr *skill.Manager, baseDir, name string, yes bool) int
 		return 1
 	}
 	skills, _ := mgr.Skills(installed)
-	return reportAndMaybeEnable(mgr, installed, skills, "Installed", yes)
+	return reportAndMaybeEnable(prog, mgr, installed, skills, "Installed", yes)
 }
 
 // reportAndMaybeEnable prints the install summary, then either enables the pack
 // (on --yes or an interactive confirm) or leaves it disabled. It returns the
 // process exit code. Imported packs always land disabled; this is the only
 // enable path.
-func reportAndMaybeEnable(mgr *skill.Manager, name string, skills []types.Skill, how string, yes bool) int {
+func reportAndMaybeEnable(prog string, mgr *skill.Manager, name string, skills []types.Skill, how string, yes bool) int {
 	fmt.Printf("%s skill pack %q — %d skill(s):\n", how, name, len(skills))
 	for _, s := range skills {
 		fmt.Printf("  - %s: %s\n", s.Name, s.Description)
@@ -179,7 +185,7 @@ func reportAndMaybeEnable(mgr *skill.Manager, name string, skills []types.Skill,
 		fmt.Printf("Skill pack %q enabled.\n", name)
 		return 0
 	}
-	fmt.Printf("Skill pack %q installed but left disabled. Enable later: nib skill enable %s\n", name, name)
+	fmt.Printf("Skill pack %q installed but left disabled. Enable later: %s skill enable %s\n", name, prog, name)
 	return 0
 }
 
@@ -261,9 +267,9 @@ func skillList(mgr *skill.Manager) int {
 	return 0
 }
 
-func skillUpdate(mgr *skill.Manager, args []string) int {
+func skillUpdate(prog string, mgr *skill.Manager, args []string) int {
 	if len(args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: nib skill update <name>")
+		fmt.Fprintf(os.Stderr, "usage: %s skill update <name>\n", prog)
 		return 1
 	}
 	name := args[1]
@@ -279,9 +285,9 @@ func skillUpdate(mgr *skill.Manager, args []string) int {
 	return 0
 }
 
-func skillByName(args []string, verb string, fn func(string) error) int {
+func skillByName(prog string, args []string, verb string, fn func(string) error) int {
 	if len(args) < 2 {
-		fmt.Fprintf(os.Stderr, "usage: nib skill %s <name>\n", verb)
+		fmt.Fprintf(os.Stderr, "usage: %s skill %s <name>\n", prog, verb)
 		return 1
 	}
 	if err := fn(args[1]); err != nil {
@@ -292,9 +298,9 @@ func skillByName(args []string, verb string, fn func(string) error) int {
 	return 0
 }
 
-func skillSetEnabled(mgr *skill.Manager, args []string, enabled bool) int {
+func skillSetEnabled(prog string, mgr *skill.Manager, args []string, enabled bool) int {
 	if len(args) < 1 {
-		fmt.Fprintln(os.Stderr, "usage: nib skill enable|disable <name>")
+		fmt.Fprintf(os.Stderr, "usage: %s skill enable|disable <name>\n", prog)
 		return 1
 	}
 	if err := mgr.SetEnabled(args[0], enabled); err != nil {

@@ -96,25 +96,25 @@ func TestRunPluginCommandLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if code := RunPluginCommand("", []string{"list"}); code != 0 {
+	if code := RunPluginCommand("", "", []string{"list"}); code != 0 {
 		t.Fatalf("list exit = %d", code)
 	}
-	if code := RunPluginCommand("", []string{"enable", "demo"}); code != 0 {
+	if code := RunPluginCommand("", "", []string{"enable", "demo"}); code != 0 {
 		t.Fatalf("enable exit = %d", code)
 	}
-	if code := RunPluginCommand("", []string{"enable", "missing"}); code == 0 {
+	if code := RunPluginCommand("", "", []string{"enable", "missing"}); code == 0 {
 		t.Fatal("enable missing should fail")
 	}
-	if code := RunPluginCommand("", []string{"disable", "demo"}); code != 0 {
+	if code := RunPluginCommand("", "", []string{"disable", "demo"}); code != 0 {
 		t.Fatalf("disable exit = %d", code)
 	}
-	if code := RunPluginCommand("", []string{"remove", "demo"}); code != 0 {
+	if code := RunPluginCommand("", "", []string{"remove", "demo"}); code != 0 {
 		t.Fatalf("remove exit = %d", code)
 	}
-	if code := RunPluginCommand("", []string{"bogus"}); code == 0 {
+	if code := RunPluginCommand("", "", []string{"bogus"}); code == 0 {
 		t.Fatal("unknown subcommand should fail")
 	}
-	if code := RunPluginCommand("", nil); code == 0 {
+	if code := RunPluginCommand("", "", nil); code == 0 {
 		t.Fatal("no subcommand should fail")
 	}
 }

@@ -126,9 +126,9 @@ func runSearch(baseDir string, kind catalog.Kind, q string) int {
 // runSource dispatches `<skill|plugin> source <list|add URL|remove LABEL|
 // enable LABEL|disable LABEL>`. Sources are kind-agnostic and shared between
 // skills and plugins, so this handler is used by both dispatchers.
-func runSource(baseDir string, args []string) int {
+func runSource(prog string, baseDir string, args []string) int {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "usage: nib <skill|plugin> source <list|add URL|remove LABEL|enable LABEL|disable LABEL>")
+		fmt.Fprintf(os.Stderr, "usage: %s <skill|plugin> source <list|add URL|remove LABEL|enable LABEL|disable LABEL>\n", prog)
 		return 1
 	}
 	switch args[0] {
@@ -148,7 +148,7 @@ func runSource(baseDir string, args []string) int {
 		return 0
 	case "add":
 		if len(args) < 2 {
-			fmt.Fprintln(os.Stderr, "usage: nib <skill|plugin> source add <url>")
+			fmt.Fprintf(os.Stderr, "usage: %s <skill|plugin> source add <url>\n", prog)
 			return 1
 		}
 		s, err := catalog.AddSource(baseDir, args[1])
@@ -160,7 +160,7 @@ func runSource(baseDir string, args []string) int {
 		return 0
 	case "remove", "enable", "disable":
 		if len(args) < 2 {
-			fmt.Fprintf(os.Stderr, "usage: nib <skill|plugin> source %s <label>\n", args[0])
+			fmt.Fprintf(os.Stderr, "usage: %s <skill|plugin> source %s <label>\n", prog, args[0])
 			return 1
 		}
 		var err error

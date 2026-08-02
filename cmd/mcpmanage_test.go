@@ -90,10 +90,10 @@ func TestParseAddArgsErrors(t *testing.T) {
 func TestMCPTestMissingServer(t *testing.T) {
 	dir := t.TempDir()
 	cfgr := manage.NewIn(dir)
-	if code := mcpTest(cfgr, []string{"nope"}); code == 0 {
+	if code := mcpTest("", cfgr, []string{"nope"}); code == 0 {
 		t.Fatalf("expected nonzero exit for missing server")
 	}
-	if code := mcpTest(cfgr, nil); code == 0 {
+	if code := mcpTest("", cfgr, nil); code == 0 {
 		t.Fatalf("expected nonzero exit for missing name")
 	}
 }
@@ -188,22 +188,22 @@ func TestMCPSetEnabledTogglesAndErrors(t *testing.T) {
 	if err := cfgr.AddMCPServer("s", types.MCPServer{Command: "cmd"}); err != nil {
 		t.Fatalf("AddMCPServer: %v", err)
 	}
-	if code := mcpSetEnabled(cfgr, []string{"s"}, false); code != 0 {
+	if code := mcpSetEnabled("", cfgr, []string{"s"}, false); code != 0 {
 		t.Fatalf("disable exit=%d", code)
 	}
 	if got, _ := cfgr.GetMCPServer("s"); !got.Disabled {
 		t.Fatal("expected server disabled after disable")
 	}
-	if code := mcpSetEnabled(cfgr, []string{"s"}, true); code != 0 {
+	if code := mcpSetEnabled("", cfgr, []string{"s"}, true); code != 0 {
 		t.Fatalf("enable exit=%d", code)
 	}
 	if got, _ := cfgr.GetMCPServer("s"); got.Disabled {
 		t.Fatal("expected server enabled after enable")
 	}
-	if code := mcpSetEnabled(cfgr, nil, true); code == 0 {
+	if code := mcpSetEnabled("", cfgr, nil, true); code == 0 {
 		t.Fatal("expected nonzero exit for missing name")
 	}
-	if code := mcpSetEnabled(cfgr, []string{"nope"}, false); code == 0 {
+	if code := mcpSetEnabled("", cfgr, []string{"nope"}, false); code == 0 {
 		t.Fatal("expected nonzero exit for unknown server")
 	}
 }

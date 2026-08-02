@@ -40,12 +40,19 @@ type Options struct {
 	// in command position, and the widget's function name is derived from it by
 	// reducing it to an identifier.
 	//
-	// It reaches nothing beyond that, so parts of an embedded nib still say
-	// "nib" whatever this is set to: the management subcommands' usage strings
-	// ("usage: nib plugin ..." and its skill and mcp equivalents), and the
-	// "nib: ..." diagnostics that config loading and plugin/skill discovery
-	// write straight to os.Stderr on every run. Threading the name through
-	// those is follow-up work.
+	// It renames the management subcommands too, but only the strings that tell
+	// the user what to TYPE: the `usage: ...` lines of `plugin`, `skill` and
+	// `mcp`, and the hints that end an install ("Enable later: local-ai chat
+	// plugin enable foo", "verify now with: local-ai chat mcp test bar"). Those
+	// are instructions, and the enable hint in particular is reached on every
+	// non-interactive `plugin install` without --yes, so pointing it at a binary
+	// the user does not have leaves them with no way forward.
+	//
+	// What it still does not reach is prose that merely names the tool, which
+	// says "nib" whatever this is set to: the CLI and TUI branding, the "next
+	// nib session" half of the mcp add confirmation, and the "nib: ..."
+	// diagnostics that config loading and plugin/skill discovery write straight
+	// to os.Stderr on every run.
 	ProgramName string
 	// BaseDir overrides the config, plugins, and skills root. Empty means
 	// nib's default XDG resolution.
@@ -251,13 +258,13 @@ func dispatchManage(o Options) (code int, handled bool) {
 	args := o.Args
 	switch {
 	case len(args) >= 1 && args[0] == "plugin":
-		return cmd.RunPluginCommand(o.BaseDir, args[1:]), true
+		return cmd.RunPluginCommand(o.name(), o.BaseDir, args[1:]), true
 	case len(args) >= 1 && args[0] == "skill":
-		return cmd.RunSkillCommand(o.BaseDir, args[1:]), true
+		return cmd.RunSkillCommand(o.name(), o.BaseDir, args[1:]), true
 	// Bare `nib mcp` / --http / --stdio still serve, so only the management
 	// verbs match here.
 	case len(args) >= 2 && args[0] == "mcp" && cmd.IsMCPManageSubcommand(args[1]):
-		return cmd.RunMCPCommand(o.BaseDir, args[1:]), true
+		return cmd.RunMCPCommand(o.name(), o.BaseDir, args[1:]), true
 	}
 	return 0, false
 }

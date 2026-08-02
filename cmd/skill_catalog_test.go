@@ -25,7 +25,7 @@ func TestLooksLikeGitSource(t *testing.T) {
 func TestRunSkillCommand_SourceList(t *testing.T) {
 	// `skill source list` must not error out of the box (bundled always present).
 	// Runs against the real BaseDir but only reads config; exit 0 is the contract.
-	if code := runSource(t.TempDir(), []string{"list"}); code != 0 {
+	if code := runSource("", t.TempDir(), []string{"list"}); code != 0 {
 		t.Fatalf("source list exit=%d", code)
 	}
 }

@@ -22,34 +22,40 @@ var mcpManageSubcommands = map[string]bool{"add": true, "list": true, "remove": 
 // (as opposed to the server-serving forms: bare, --http, --stdio, --addr).
 func IsMCPManageSubcommand(s string) bool { return mcpManageSubcommands[s] }
 
-func mcpUsage() {
-	fmt.Fprintln(os.Stderr, "usage: nib mcp <add|list|remove|test|enable|disable> ...")
+func mcpUsage(prog string) {
+	fmt.Fprintf(os.Stderr, "usage: %s mcp <add|list|remove|test|enable|disable> ...\n", prog)
 }
 
 // RunMCPCommand dispatches `nib mcp <sub> ...` and returns an exit code.
 // baseDir overrides the config/plugins/skills root; empty means nib's default.
-func RunMCPCommand(baseDir string, args []string) int {
+//
+// programName is what the user types to reach this dispatcher, so every usage
+// line and every "run this later" hint names something that actually exists on
+// their machine. Empty means "nib", which keeps standalone output unchanged;
+// an embedder passes its own several-word form ("local-ai chat").
+func RunMCPCommand(programName, baseDir string, args []string) int {
+	prog := runnableName(programName)
 	if len(args) == 0 {
-		mcpUsage()
+		mcpUsage(prog)
 		return 1
 	}
 	cfgr := manage.NewIn(baseDir)
 	switch args[0] {
 	case "add":
-		return mcpAdd(cfgr, args[1:])
+		return mcpAdd(prog, cfgr, args[1:])
 	case "list":
 		return mcpList(cfgr)
 	case "remove":
-		return mcpRemove(cfgr, args[1:])
+		return mcpRemove(prog, cfgr, args[1:])
 	case "test":
-		return mcpTest(cfgr, args[1:])
+		return mcpTest(prog, cfgr, args[1:])
 	case "enable":
-		return mcpSetEnabled(cfgr, args[1:], true)
+		return mcpSetEnabled(prog, cfgr, args[1:], true)
 	case "disable":
-		return mcpSetEnabled(cfgr, args[1:], false)
+		return mcpSetEnabled(prog, cfgr, args[1:], false)
 	default:
 		fmt.Fprintf(os.Stderr, "unknown mcp command: %s\n", args[0])
-		mcpUsage()
+		mcpUsage(prog)
 		return 1
 	}
 }
@@ -126,19 +132,19 @@ func parseAddArgs(args []string) (string, types.MCPServer, error) {
 	return name, srv, nil
 }
 
-func mcpAdd(cfgr *manage.Configurator, args []string) int {
+func mcpAdd(prog string, cfgr *manage.Configurator, args []string) int {
 	name, srv, err := parseAddArgs(args)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "%v\n", err)
-		fmt.Fprintln(os.Stderr, "usage: nib mcp add <name> [--env K=V]... -- <command> [args...]")
-		fmt.Fprintln(os.Stderr, "       nib mcp add <name> --url <url> [--transport http|sse] [--token T] [--header K=V]...")
+		fmt.Fprintf(os.Stderr, "usage: %s mcp add <name> [--env K=V]... -- <command> [args...]\n", prog)
+		fmt.Fprintf(os.Stderr, "       %s mcp add <name> --url <url> [--transport http|sse] [--token T] [--header K=V]...\n", prog)
 		return 1
 	}
 	if err := cfgr.AddMCPServer(name, srv); err != nil {
 		fmt.Fprintf(os.Stderr, "add failed: %v\n", err)
 		return 1
 	}
-	fmt.Printf("Added MCP server %q. It will be available on the next nib session (verify now with: nib mcp test %s).\n", name, name)
+	fmt.Printf("Added MCP server %q. It will be available on the next nib session (verify now with: %s mcp test %s).\n", name, prog, name)
 	return 0
 }
 
@@ -174,9 +180,9 @@ func mcpList(cfgr *manage.Configurator) int {
 	return 0
 }
 
-func mcpSetEnabled(cfgr *manage.Configurator, args []string, enabled bool) int {
+func mcpSetEnabled(prog string, cfgr *manage.Configurator, args []string, enabled bool) int {
 	if len(args) < 1 {
-		fmt.Fprintln(os.Stderr, "usage: nib mcp enable|disable <name>")
+		fmt.Fprintf(os.Stderr, "usage: %s mcp enable|disable <name>\n", prog)
 		return 1
 	}
 	if err := cfgr.SetMCPServerEnabled(args[0], enabled); err != nil {
@@ -191,9 +197,9 @@ func mcpSetEnabled(cfgr *manage.Configurator, args []string, enabled bool) int {
 	return 0
 }
 
-func mcpRemove(cfgr *manage.Configurator, args []string) int {
+func mcpRemove(prog string, cfgr *manage.Configurator, args []string) int {
 	if len(args) < 1 {
-		fmt.Fprintln(os.Stderr, "usage: nib mcp remove <name>")
+		fmt.Fprintf(os.Stderr, "usage: %s mcp remove <name>\n", prog)
 		return 1
 	}
 	if err := cfgr.RemoveMCPServer(args[0]); err != nil {
@@ -204,9 +210,9 @@ func mcpRemove(cfgr *manage.Configurator, args []string) int {
 	return 0
 }
 
-func mcpTest(cfgr *manage.Configurator, args []string) int {
+func mcpTest(prog string, cfgr *manage.Configurator, args []string) int {
 	if len(args) < 1 {
-		fmt.Fprintln(os.Stderr, "usage: nib mcp test <name>")
+		fmt.Fprintf(os.Stderr, "usage: %s mcp test <name>\n", prog)
 		return 1
 	}
 	name := args[0]
