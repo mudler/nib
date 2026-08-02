@@ -60,10 +60,17 @@ var invalidatingTools = map[string]bool{"edit": true, "write": true}
 // costs a prefix-cache re-prefill exactly at the moment the content stopped
 // being trustworthy, which is the right moment to pay.
 func staleReadIDs(msgs []openai.ChatCompletionMessage, calls map[string]toolCallInfo) map[string]bool {
-	// Last index at which each path was modified. The seen check matters
-	// because a modification in the very first message has idx 0, which is
-	// indistinguishable from a missing entry's zero value — without it that
-	// edit would silently drop out of the index.
+	// Last index at which each path was modified.
+	//
+	// The seen check is deliberate, and it is NOT dead weight even though no
+	// test can currently fail without it. A missing map entry reads back as 0,
+	// indistinguishable from a real modification at index 0, so the plainer
+	// `info.idx > modifiedAt[p]` silently declines to record an edit in the
+	// very first message. That happens to be unobservable while idx comes from
+	// indexToolCalls: staleness below requires at > info.idx with info.idx >= 0,
+	// so a modification at index 0 can never invalidate anything anyway. The
+	// check is what stops that accident from becoming load-bearing the moment a
+	// caller supplies indices on any other basis.
 	modifiedAt := make(map[string]int)
 	for _, info := range calls {
 		if !invalidatingTools[info.name] || info.path == "" {
