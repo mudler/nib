@@ -369,6 +369,18 @@ func RunCLI(ctx context.Context, cfg types.Config, streams Streams, shellJobs *w
 		return err
 	}
 	defer session.Close()
+	// Registered after the Close defer so it runs BEFORE it (defers are LIFO)
+	// and the session is still readable. A defer rather than a line at each
+	// return: RunCLI has several exit paths and the summary belongs on all of
+	// them.
+	//
+	// errOut, not out: stdout carries the transcript a caller may be piping, and
+	// the summary would land in the middle of it.
+	defer func() {
+		if s := chat.FormatSessionSummary(session.Usage()); s != "" {
+			fmt.Fprintln(errOut, theme.Help.Render(s))
+		}
+	}()
 	if shellJobs != nil {
 		// Keep a run parked while a background shell job is still running and
 		// inject its completion notice, so bash_background work isn't orphaned.

@@ -6,11 +6,11 @@ import (
 	"github.com/mudler/cogito"
 )
 
-func TestAgentUsage(t *testing.T) {
+func TestAgentUsageFullToolCountAndTotal(t *testing.T) {
 	t.Run("nil fragment", func(t *testing.T) {
-		tc, tok := agentUsage(&cogito.AgentState{})
-		if tc != 0 || tok != 0 {
-			t.Fatalf("got (%d, %d), want (0, 0)", tc, tok)
+		tc, u := agentUsageFull(&cogito.AgentState{})
+		if tc != 0 || u.TotalTokens != 0 {
+			t.Fatalf("got (%d, %d), want (0, 0)", tc, u.TotalTokens)
 		}
 	})
 
@@ -23,9 +23,9 @@ func TestAgentUsage(t *testing.T) {
 				},
 			},
 		}
-		tc, tok := agentUsage(a)
-		if tc != 3 || tok != 12400 {
-			t.Fatalf("got (%d, %d), want (3, 12400)", tc, tok)
+		tc, u := agentUsageFull(a)
+		if tc != 3 || u.TotalTokens != 12400 {
+			t.Fatalf("got (%d, %d), want (3, 12400)", tc, u.TotalTokens)
 		}
 	})
 }

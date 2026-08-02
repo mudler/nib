@@ -102,6 +102,18 @@ type Callbacks struct {
 	// happens. Setting it opts the session into cogito's streaming path; the
 	// existing step-boundary callbacks (OnReasoning/OnStatus/OnToolResult) still
 	// fire afterwards. Optional — leave nil for the non-streaming path.
+	//
+	// Caveat worth knowing before you opt in: it currently zeroes token
+	// accounting. cogito accumulates streaming usage from StreamEvent.Usage on
+	// the done event, and its bundled clients never populate that field, so
+	// Session.Usage reports 0 tokens for every streamed turn. nib's own CLI and
+	// TUI do not set this, so the shipped binary is unaffected; an embedder that
+	// sets it trades the token counter for live deltas until cogito's clients
+	// request usage from the API.
+	//
+	// This is the only under-count an embedder opts into, not the only one the
+	// counter has: SessionUsage's doc carries the known list, and all of them
+	// under-report rather than invent spend.
 	OnStream   func(ev StreamEvent)
 	OnToolCall func(req ToolCallRequest) ToolCallResponse
 	// OnStepContent is called with the assistant text that accompanied a tool

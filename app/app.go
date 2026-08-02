@@ -19,6 +19,7 @@ import (
 	"github.com/mudler/nib/internal"
 	"github.com/mudler/nib/mcp"
 	"github.com/mudler/nib/setup"
+	"github.com/mudler/nib/trace"
 	"github.com/mudler/nib/types"
 	"github.com/mudler/xlog"
 	"golang.org/x/term"
@@ -335,7 +336,7 @@ func runCtx(ctx context.Context, o Options) int {
 	tuiFlag := fs.Bool("tui", false, "Start the full-screen TUI directly (no tmux popup)")
 	cliFlag := fs.Bool("cli", false, "Run in plain CLI mode instead of the TUI")
 	setupFlag := fs.Bool("setup", false, "Run the interactive model setup wizard")
-	traceDirFlag := fs.String("trace-dir", "", "Write a session LLM trace (NDJSON) to this directory; also via NIB_TRACE_DIR")
+	traceDirFlag := fs.String("trace-dir", "", "Write a session LLM trace (NDJSON) and token totals (usage.json) to this directory; also via NIB_TRACE_DIR")
 	yoloFlag := fs.Bool("yolo", false, "Auto-approve every tool call without prompting; also via NIB_YOLO")
 	if err := fs.Parse(args); err != nil {
 		// ContinueOnError hands back ErrHelp for -h/--help, which the global
@@ -381,6 +382,18 @@ func runCtx(ctx context.Context, o Options) int {
 		cfg.TraceDir = *traceDirFlag
 	} else if env := os.Getenv("NIB_TRACE_DIR"); env != "" {
 		cfg.TraceDir = env
+	}
+
+	// Tracing was asked for explicitly, so it either works or the run stops.
+	// Checked here, before StartTransports, so a failure spawns no MCP
+	// subprocesses — and because this is the only place that can exit cleanly
+	// in every mode: the TUI builds its session inside a tea.Cmd, where this
+	// error would instead surface as a banner over an already-running UI.
+	if cfg.TraceDir != "" {
+		if err := trace.Preflight(cfg.TraceDir); err != nil {
+			fmt.Fprintf(o.stderr(), "%s: %v\n", o.name(), err)
+			return 1
+		}
 	}
 
 	// "yolo" mode auto-approves every tool call. The flag or env var force
@@ -482,7 +495,7 @@ func runCtx(ctx context.Context, o Options) int {
 		height := parseHeight(h)
 		useTmux := *tmuxFlag || (cmd.IsInTmux() && !*noTmuxFlag)
 		if useTmux && cmd.IsInTmux() {
-			if err := cmd.RunTmuxSplit(o.name(), *heightFlag); err != nil {
+			if err := cmd.RunTmuxSplit(o.name(), *heightFlag, cfg.TraceDir); err != nil {
 				fmt.Fprintf(o.stderr(), "Error: %v\n", err)
 				return 1
 			}

@@ -138,7 +138,18 @@ type Session struct {
 	// deliberately avoids holding runMu across its network call.
 	prefixWarm atomic.Bool
 
+	// usage is this session's running token total. See chat/usage.go for why it
+	// carries its own lock rather than sharing historyMu.
+	usage sessionUsage
+
 	tracer *trace.Recorder // non-nil when session tracing is enabled
+
+	// traceDir is where usage.json is written on Close. Empty = tracing off, so
+	// an untraced session leaves nothing behind. Kept separate from tracer
+	// because usage.json is written beside the transcript rather than through
+	// the recorder: it shares no state with it, and holding the directory here
+	// keeps the report reachable independently of the recorder's lifetime.
+	traceDir string
 }
 
 // PrefixWarm reports whether this session has already issued a request that
@@ -251,7 +262,13 @@ func toCogitoDefinitions(cfgs []types.AgentTypeConfig) []cogito.AgentDefinition 
 	return defs
 }
 
-// NewSession creates a new chat session
+// NewSession creates a new chat session.
+//
+// If cfg.TraceDir is set and the recorder cannot be opened, NewSession fails
+// rather than returning a session that quietly records nothing — a caller that
+// asked for a trace should not have to discover later that it never got one.
+// app.Run preflights the directory, so in practice only embedders calling this
+// directly reach the failure.
 func NewSession(ctx context.Context, cfg types.Config, callbacks Callbacks, transports ...mcp.Transport) (*Session, error) {
 	// LocalAIClient, not OpenAIClient: LocalAI (and vLLM) put reasoning/thinking
 	// text in a "reasoning" response field, which go-openai's SDK — and so
@@ -263,16 +280,21 @@ func NewSession(ctx context.Context, cfg types.Config, callbacks Callbacks, tran
 	var llm cogito.LLM = llmClient
 
 	// Session tracing: wrap the LLM so every call is appended to the transcript.
-	// A recorder failure must never prevent the session from starting.
+	// Tracing is only ever on because someone asked for it, so a recorder that
+	// cannot open is a failure rather than a downgrade. This used to be an
+	// xlog.Warn, which the default "error" log level discarded — the session
+	// then ran untraced and said nothing, which is exactly what was reported.
+	// app.Run preflights this so the usual failure never reaches here; what is
+	// left is the dir vanishing between check and open, and embedders calling
+	// NewSession directly.
 	var tracer *trace.Recorder
 	if cfg.TraceDir != "" {
 		rec, err := trace.NewRecorder(cfg.TraceDir)
 		if err != nil {
-			xlog.Warn("trace: disabled, failed to open recorder", "dir", cfg.TraceDir, "error", err)
-		} else {
-			tracer = rec
-			llm = trace.NewRecordingLLM(llm, rec, cfg.Model, "")
+			return nil, fmt.Errorf("cannot write trace to %s: %w", cfg.TraceDir, err)
 		}
+		tracer = rec
+		llm = trace.NewRecordingLLM(llm, rec, cfg.Model, "")
 	}
 
 	agentManager := cogito.NewAgentManager()
@@ -323,6 +345,7 @@ func NewSession(ctx context.Context, cfg types.Config, callbacks Callbacks, tran
 		cfgServers:          map[string]types.MCPServer{},
 		configurator:        manage.NewIn(cfg.BaseDir),
 		tracer:              tracer,
+		traceDir:            cfg.TraceDir,
 	}
 	// Resume/rehydration: seed a prior conversation so the very next SendMessage
 	// continues with full memory of it, behaving identically to a session that
@@ -510,7 +533,31 @@ func (s *Session) emitAgentEvent(a *cogito.AgentState) {
 		s.agentStart[a.ID] = time.Now()
 		s.agentMu.Unlock()
 	case AgentStatusCompleted, AgentStatusFailed:
-		ev.ToolCount, ev.TotalTokens = agentUsage(a)
+		var au cogito.LLMUsage
+		ev.ToolCount, au = agentUsageFull(a)
+		ev.TotalTokens = au.TotalTokens
+		// Sub-agent tokens are spent on the same bill as the main loop, so the
+		// session total owns them too.
+		//
+		// Counting here rather than in the main loop is what makes this correct
+		// exactly once: cogito hands sub-agents the UNWRAPPED parent LLM (see
+		// prepareAgentTools, which captures agentLLM before ExecuteTools wraps
+		// it in a counting LLM), so a sub-agent's spend never lands in the
+		// parent run's CumulativeUsage that SendMessage adds. Without this the
+		// tokens are invisible; adding it in both places would double them.
+		//
+		// The failed branch is counted deliberately, but today it contributes
+		// exactly zero, and this is the one place that is easy to misread:
+		// cogito assigns agent.Fragment only on the success branch and drops
+		// the fragment on error, so for a real failure agentUsageFull reads
+		// through a nil fragment and returns an empty LLMUsage (which is why
+		// its doc says a failed agent never gets one). The call stays because
+		// the intent is honest — tokens burned before a failure were still
+		// billed — and it starts reporting the moment cogito preserves a failed
+		// agent's fragment, with no change needed here. Until then a failed
+		// sub-agent's spend is under-reported, which is the safe direction for
+		// a figure a benchmark harness reads: too low never invents spend.
+		s.addUsage(au)
 		s.agentMu.Lock()
 		if start, ok := s.agentStart[a.ID]; ok {
 			ev.Elapsed = time.Since(start)
@@ -531,14 +578,18 @@ func (s *Session) emitAgentEvent(a *cogito.AgentState) {
 	}
 }
 
-// agentUsage extracts a finished sub-agent's executed-tool count and cumulative
-// token usage from its fragment. Safe against a nil fragment/status (e.g. a
-// failed agent, whose Fragment is never set).
-func agentUsage(a *cogito.AgentState) (toolCount, tokens int) {
+// agentUsageFull extracts a finished sub-agent's executed-tool count and full
+// cumulative token usage. Safe against a nil agent, fragment or status — a
+// failed agent never gets a fragment.
+//
+// The full LLMUsage (not just the total) exists because the session counter
+// tracks prompt and completion tokens separately: folding a sub-agent in with
+// only its total would leave the two component figures silently short of it.
+func agentUsageFull(a *cogito.AgentState) (toolCount int, usage cogito.LLMUsage) {
 	if a == nil || a.Fragment == nil || a.Fragment.Status == nil {
-		return 0, 0
+		return 0, cogito.LLMUsage{}
 	}
-	return len(a.Fragment.Status.ToolsCalled), a.Fragment.Status.CumulativeUsage.TotalTokens
+	return len(a.Fragment.Status.ToolsCalled), a.Fragment.Status.CumulativeUsage
 }
 
 func (s *Session) ClearHistory() {
@@ -1125,6 +1176,22 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 			if turnCtx.Err() != nil {
 				s.ClearGoal()
 			}
+			// The tokens this run already burned are real and already billed,
+			// so record them before bailing. cogito stamps CumulativeUsage in a
+			// defer onto the fragment it returns, including on its error paths,
+			// so an interrupt that lands after several tool-loop calls arrives
+			// here with the whole spend in hand. Dropping it would let a user
+			// erase thousands of paid-for tokens by pressing Ctrl+C — in a
+			// counter that exists to account for spend, and in the usage.json a
+			// benchmark harness reads.
+			//
+			// The turn deliberately is NOT counted here: the user never got the
+			// exchange they asked for. Tokens and turns diverge on this path,
+			// which is the point of keeping them separate counters.
+			if newFragment.Status != nil {
+				s.addUsage(newFragment.Status.CumulativeUsage)
+			}
+
 			err = humanizeError(err)
 			if s.callbacks.OnError != nil {
 				s.callbacks.OnError(err)
@@ -1148,6 +1215,18 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 		}
 
 		response = newFragment.LastMessage().Content
+
+		// Each ExecuteTools run reports its own cumulative usage, so the whole
+		// tool loop is counted rather than just the final call. The goal
+		// stop-gate can run this loop more than once per SendMessage, which is
+		// why the turn is counted after the loop and the tokens here.
+		//
+		// Status is a pointer and a fragment that never reached a backend leaves
+		// it nil, so this guards rather than assuming a run always populated it.
+		if newFragment.Status != nil {
+			s.addUsage(newFragment.Status.CumulativeUsage)
+		}
+
 		s.historyMu.Lock()
 		s.fragment = newFragment
 		s.messages = append(s.messages, openai.ChatCompletionMessage{
@@ -1210,6 +1289,17 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 			s.callbacks.OnCompactDone(cb, ca)
 		}
 	}
+
+	// One turn per completed SendMessage, counted after the goal loop rather
+	// than inside it: a goal that took five ExecuteTools runs is still one
+	// exchange the user asked for.
+	//
+	// Tokens are counted on every run — including the interrupted and failed
+	// ones, which return above and add their spend there — while Turns counts
+	// only exchanges that completed. So an interrupted session can hold tokens
+	// with a lower turn count, and that asymmetry is deliberate: the backend
+	// was paid either way, but the user only got the answers it finished.
+	s.countTurn()
 
 	return response, nil
 }
@@ -1448,6 +1538,24 @@ func (s *Session) Close() error {
 	}
 	for _, c := range s.cfgClients {
 		_ = c.Close()
+	}
+	// The durable half of the exit summary. In tmux-widget mode the pane
+	// vanishes before anyone can read the printed line, and a benchmark harness
+	// wants to parse this rather than scrape a terminal.
+	//
+	// A warning, not a returned error, and deliberately unlike the hard failure
+	// in NewSession: the session is already over, so there is nothing left to
+	// refuse — failing here would only turn a lost report into a lost shutdown.
+	//
+	// Usage() snapshots under its own lock, so the numbers are always
+	// self-consistent, but a Close that races a still-running turn (a second
+	// Ctrl+C in the TUI goes straight here) will miss whatever that turn folds
+	// in afterwards: the file is a floor on the spend and never an
+	// overstatement, matching SessionUsage's documented contract.
+	if s.traceDir != "" {
+		if err := trace.WriteUsage(s.traceDir, s.Usage()); err != nil {
+			xlog.Warn("trace: failed to write usage.json", "dir", s.traceDir, "error", err)
+		}
 	}
 	// s.tracer is nil when tracing is disabled; Close is nil-safe.
 	if err := s.tracer.Close(); err != nil && firstErr == nil {

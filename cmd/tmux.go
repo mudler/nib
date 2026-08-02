@@ -30,7 +30,14 @@ func IsInTmux() bool {
 // internal identifiers, never shown and never typed: the prefix goes to
 // os.CreateTemp and the channel is that file's basename, so both are unique per
 // invocation and neither is affected by a program name of any shape.
-func RunTmuxSplit(programName, height string) error {
+//
+// traceDir is the already-resolved trace directory ("" for no tracing), and it
+// has to be passed rather than inherited: `tmux split-window` hands the new
+// pane the tmux SERVER's environment, not this process's, so NIB_TRACE_DIR
+// exported in the user's shell does not survive the pane boundary. It is
+// forwarded as an explicit --trace-dir flag instead. The caller has already
+// preflighted it, so nothing here re-checks that the directory is writable.
+func RunTmuxSplit(programName, height, traceDir string) error {
 	// Get current working directory
 	dir, err := os.Getwd()
 	if err != nil {
@@ -55,7 +62,7 @@ func RunTmuxSplit(programName, height string) error {
 	defer os.Remove(outPath)
 	channel := "nib-" + filepath.Base(outPath)
 
-	inner := tmuxInnerCommand(programName, executable, height, outPath, channel)
+	inner := tmuxInnerCommand(programName, executable, height, traceDir, outPath, channel)
 
 	// -v vertical split (pane below), -l height, -c working dir. Focus moves to
 	// the new pane so the user interacts with nib.
@@ -89,9 +96,21 @@ func RunTmuxSplit(programName, height string) error {
 //
 // An empty executable means os.Executable() failed and the program name is the
 // only thing left to go on.
-func tmuxInnerCommand(programName, executable, height, outPath, channel string) string {
-	return fmt.Sprintf("%s --height %s --no-tmux > %s; tmux wait-for -S %s",
-		tmuxSelfInvocation(programName, executable), height, shellQuote(outPath), shellQuote(channel))
+func tmuxInnerCommand(programName, executable, height, traceDir, outPath, channel string) string {
+	// The trace dir travels as a flag rather than through the environment
+	// because `tmux split-window` gives the pane the tmux server's environment,
+	// not this process's: NIB_TRACE_DIR set in the user's shell never reaches
+	// it. Empty means no tracing, and must add nothing — the standalone command
+	// line is pinned byte for byte by TestTmuxInnerCommandStandaloneIsUnchanged.
+	//
+	// Quoted as ONE word, unlike the invocation above: this is a single path
+	// argument, so a dir with a space in it has to stay a single argument.
+	trace := ""
+	if traceDir != "" {
+		trace = " --trace-dir " + shellQuote(traceDir)
+	}
+	return fmt.Sprintf("%s --height %s --no-tmux%s > %s; tmux wait-for -S %s",
+		tmuxSelfInvocation(programName, executable), height, trace, shellQuote(outPath), shellQuote(channel))
 }
 
 // tmuxSelfInvocation renders how the pane re-enters THIS program.
