@@ -36,6 +36,37 @@ type CompactionConfig struct {
 	KeepRecent int `yaml:"keep_recent"`
 }
 
+// ToolOutputPruningConfig controls replacing stale or oversized tool results
+// with a short stub in the messages sent to the model. It never changes the
+// conversation nib stores.
+//
+// The booleans are negative-sense on purpose, like CompactionConfig.Disabled: an
+// unset Go bool is false, so a positively-named `stale_reads: true` would mean
+// that omitting the key DISABLES the rule — the opposite of the intended
+// default.
+//
+// Every field must stay comparable (bool/int): config defaulting decides the
+// block is absent by comparing it against the zero struct, which stops
+// compiling the moment a slice or map field is added here.
+type ToolOutputPruningConfig struct {
+	// Disabled turns OFF both rules. Zero value (false) = pruning ON.
+	Disabled bool `yaml:"disabled"`
+	// DisableStaleReads turns off only the rule that stubs a read whose file a
+	// later edit or write changed. Zero value (false) = that rule ON.
+	DisableStaleReads bool `yaml:"disable_stale_reads"`
+	// HighWaterTokens is the total tool-output size at which the oldest-first
+	// sweep starts. 0 disables size pruning entirely, leaving the stale-read
+	// rule in force. Unset (whole block absent) → default 24000.
+	HighWaterTokens int `yaml:"high_water_tokens"`
+	// LowWaterTokens is the size the sweep prunes down to. Pruning deeply and
+	// rarely beats pruning shallowly and constantly: each sweep buys many
+	// subsequent calls at full prefix-cache reuse. Unset → default 8000.
+	LowWaterTokens int `yaml:"low_water_tokens"`
+	// MinResultTokens is the floor below which a result is never stubbed, since
+	// there is nothing to reclaim. Unset → default 200.
+	MinResultTokens int `yaml:"min_result_tokens"`
+}
+
 // AgentTypeConfig is a wiz-facing sub-agent type. It maps 1:1 to a
 // cogito.AgentDefinition. Zero-valued numeric fields mean "inherit".
 type AgentTypeConfig struct {
@@ -110,7 +141,10 @@ type Config struct {
 	MCPServers      map[string]MCPServer `yaml:"mcp_servers"`
 	AgentOptions    AgentOptions         `yaml:"agent_options"`
 	Compaction      CompactionConfig     `yaml:"compaction"`
-	Agents          []AgentTypeConfig    `yaml:"agents"`
+	// ToolOutputPruning shrinks what old tool results cost in the request
+	// without touching the stored conversation.
+	ToolOutputPruning ToolOutputPruningConfig `yaml:"tool_output_pruning"`
+	Agents            []AgentTypeConfig       `yaml:"agents"`
 
 	PromptFragments []string `yaml:"prompt_fragments"`
 	Skills          []Skill  `yaml:"skills"`
