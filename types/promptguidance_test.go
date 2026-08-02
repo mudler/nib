@@ -44,7 +44,7 @@ func TestToolGuidanceCoversTheReportedFailureModes(t *testing.T) {
 		{"whole file by default", "traces showed the model reading slices via sed instead of whole files"},
 		{"Do not re-read a file", "traces showed repeated re-reads of files already in context"},
 		{"out of date", "a read is stale once the file has been edited"},
-		{"Do not use cat, sed, head, tail, ls, find or shell grep for these", "the literal symptom in issue #53: traces showed `sed -n '95,115p'` where a read call belonged"},
+		{"Do not use cat, sed, head, tail or shell grep for these", "the literal symptom in issue #53: traces showed `sed -n '95,115p'` where a read call belonged"},
 	}
 	for _, tc := range cases {
 		if !strings.Contains(got, tc.phrase) {
@@ -97,5 +97,76 @@ func TestToolGuidanceAppearsWithoutSkills(t *testing.T) {
 	c := &Config{Prompt: "BASE"}
 	if !strings.Contains(c.GetPrompt(), "whole file by default") {
 		t.Fatalf("guidance should not depend on skills being configured:\n%s", c.GetPrompt())
+	}
+}
+
+// editFile (mcp/filesystem.go) REFUSES when the old string occurs more than
+// once — "old string appears %d times in file, use all=true" — it never
+// replaces the first of several. Guidance promising first-match semantics makes
+// the model send a bare identifier as `old` and burn a turn on the error.
+func TestToolGuidanceStatesTheRealEditContract(t *testing.T) {
+	got := (&Config{Prompt: "BASE"}).GetPrompt()
+
+	for _, want := range []string{"appears exactly once", "all=true"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("edit guidance missing %q; the tool requires a unique old string:\n%s", want, got)
+		}
+	}
+	// The old wording, and any revival of it, claims a contract the tool does
+	// not implement.
+	if strings.Contains(got, "replaces one exact occurrence") {
+		t.Fatalf("guidance claims first-occurrence replacement; editFile errors out instead:\n%s", got)
+	}
+	// write marks the file seen too (fileSystem.write), so demanding a read
+	// after a write would cost a call the tool never asked for.
+	if !strings.Contains(got, "read or written the file first") {
+		t.Fatalf("a written file is editable without re-reading it:\n%s", got)
+	}
+}
+
+// readFile applies no size cap: limit=0 returns every line. A model told to
+// never request ranges will read a 20k-line lockfile whole and blow the context
+// window of exactly the small local models this text is written for.
+func TestToolGuidanceLeavesAnEscapeHatchForHugeFiles(t *testing.T) {
+	got := (&Config{Prompt: "BASE"}).GetPrompt()
+
+	if !strings.Contains(got, "whole file by default") {
+		t.Fatalf("whole-file reads must stay the default:\n%s", got)
+	}
+	if !strings.Contains(got, "offset and limit") {
+		t.Fatalf("guidance must name offset and limit as the way out for oversized files:\n%s", got)
+	}
+}
+
+// grepFiles caps results at maxMatches = 50 and reports Count as the number
+// RETURNED, so truncation is invisible: a model that greps a common symbol sees
+// 50 hits and concludes it has every call site.
+func TestToolGuidanceWarnsGrepTruncates(t *testing.T) {
+	got := (&Config{Prompt: "BASE"}).GetPrompt()
+
+	if !strings.Contains(got, "at most 50 matches") {
+		t.Fatalf("guidance must state grep's 50-match cap:\n%s", got)
+	}
+	if !strings.Contains(got, "may be incomplete") {
+		t.Fatalf("the cap only matters if the model knows a full result may be truncated:\n%s", got)
+	}
+}
+
+// globFiles filters directories out of its results, so no dedicated tool lists
+// a directory or reveals subdirectories. Banning ls and find would leave the
+// model with no sanctioned way to see what a tree contains.
+func TestToolGuidanceDoesNotBanDirectoryListing(t *testing.T) {
+	got := (&Config{Prompt: "BASE"}).GetPrompt()
+
+	start := strings.Index(got, "Do not use ")
+	if start < 0 {
+		t.Fatalf("the shell-ban sentence is gone entirely:\n%s", got)
+	}
+	ban := got[start:]
+	ban = ban[:strings.Index(ban, "\n")]
+	for _, cmd := range []string{"ls", "find"} {
+		if strings.Contains(ban, " "+cmd+",") || strings.Contains(ban, " "+cmd+" ") {
+			t.Fatalf("%q is banned but glob never lists directories, so nothing replaces it: %q", cmd, ban)
+		}
 	}
 }
