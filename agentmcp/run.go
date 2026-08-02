@@ -15,6 +15,10 @@ import (
 // the shared background-shell registry (the same one StartTransports gave the
 // bash server); wiring it lets `bash_background` jobs keep a converse run parked
 // and push their completion as a nib/reply notification. It may be nil.
+//
+// A cfg.TraceDir that cannot be opened fails the call outright: this path has
+// no console to warn on, so serving untraced would hide the problem until
+// someone went looking for a transcript that was never written.
 func Run(ctx context.Context, cfg types.Config, opts Options, shellJobs *wizmcp.ShellJobs, transports ...mcp.Transport) error {
 	r := newRouter()
 	pol := newPolicy(cfg)

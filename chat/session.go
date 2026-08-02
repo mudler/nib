@@ -251,7 +251,13 @@ func toCogitoDefinitions(cfgs []types.AgentTypeConfig) []cogito.AgentDefinition 
 	return defs
 }
 
-// NewSession creates a new chat session
+// NewSession creates a new chat session.
+//
+// If cfg.TraceDir is set and the recorder cannot be opened, NewSession fails
+// rather than returning a session that quietly records nothing — a caller that
+// asked for a trace should not have to discover later that it never got one.
+// app.Run preflights the directory, so in practice only embedders calling this
+// directly reach the failure.
 func NewSession(ctx context.Context, cfg types.Config, callbacks Callbacks, transports ...mcp.Transport) (*Session, error) {
 	// LocalAIClient, not OpenAIClient: LocalAI (and vLLM) put reasoning/thinking
 	// text in a "reasoning" response field, which go-openai's SDK — and so
