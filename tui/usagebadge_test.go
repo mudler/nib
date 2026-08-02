@@ -150,3 +150,21 @@ func TestResponseMsgRefreshesSessionUsage(t *testing.T) {
 		t.Fatal("the badge is blank on a model that has spent tokens")
 	}
 }
+
+// RunTUI reads the spend off the final model to print the exit summary, and it
+// only has the exported accessor to read it with. An accessor that returned a
+// zero value would silently turn the summary off.
+func TestSessionUsageAccessorReportsWhatTheModelHolds(t *testing.T) {
+	m := newQueueTestModel()
+	m.session = newSpentSession(t)
+	m.loading = true
+
+	next, _ := m.Update(responseMsg{content: "done"})
+	nm := next.(Model)
+	if got := nm.SessionUsage(); got != nm.sessionUsage {
+		t.Fatalf("SessionUsage() = %+v, want the model's own field %+v", got, nm.sessionUsage)
+	}
+	if nm.SessionUsage().TotalTokens == 0 {
+		t.Fatal("SessionUsage() reports nothing spent, so the exit summary would never print")
+	}
+}

@@ -1937,6 +1937,10 @@ func (m Model) Output() string {
 	return m.output
 }
 
+// SessionUsage reports what the session spent, for the exit summary RunTUI
+// prints once the program has stopped rendering.
+func (m Model) SessionUsage() chat.SessionUsage { return m.sessionUsage }
+
 // isWorking reports whether a turn or sub-agent is currently running, or the
 // run is parked (alive, waiting on the injection channel). A parked run is still
 // in flight, so the first Ctrl+C should interrupt it rather than quit.

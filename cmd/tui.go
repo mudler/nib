@@ -12,6 +12,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/mudler/nib/chat"
 	wizmcp "github.com/mudler/nib/mcp"
 	"github.com/mudler/nib/tui"
 	"github.com/mudler/nib/types"
@@ -81,6 +82,16 @@ func RunTUI(ctx context.Context, cfg types.Config, height int, streams Streams, 
 	// Clear the space we used (move to start and clear to end of screen)
 	fmt.Fprint(ttyOut, "\x1b[G") // Move to beginning of line
 	fmt.Fprint(ttyOut, "\x1b[J") // Clear from cursor to end of screen
+
+	// ttyOut, never stdout: stdout is the shell-capture stream (see below), so a
+	// summary there would be inserted into the user's command line. The TUI runs
+	// without an alt screen, so this lands in scrollback normally. Printed before
+	// the exit check because the tokens were spent either way.
+	if m, ok := finalModel.(tui.Model); ok {
+		if s := chat.FormatSessionSummary(m.SessionUsage()); s != "" {
+			fmt.Fprintln(ttyOut, s)
+		}
+	}
 
 	// Every non-nil runErr maps to a non-nil result, so past this point the
 	// program quit rather than being killed and the model has a final state.
