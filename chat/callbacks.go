@@ -110,6 +110,10 @@ type Callbacks struct {
 	// TUI do not set this, so the shipped binary is unaffected; an embedder that
 	// sets it trades the token counter for live deltas until cogito's clients
 	// request usage from the API.
+	//
+	// This is the only under-count an embedder opts into, not the only one the
+	// counter has: SessionUsage's doc carries the known list, and all of them
+	// under-report rather than invent spend.
 	OnStream   func(ev StreamEvent)
 	OnToolCall func(req ToolCallRequest) ToolCallResponse
 	// OnStepContent is called with the assistant text that accompanied a tool
