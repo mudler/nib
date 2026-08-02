@@ -120,6 +120,10 @@ type Model struct {
 	// Updated after each turn and after compaction; 0 hides the badge.
 	contextTokens int
 
+	// sessionUsage is what the session has spent so far, shown in the footer
+	// beside the context badge. Refreshed wherever contextTokens is.
+	sessionUsage chat.SessionUsage
+
 	// Animation state
 	statusPhase int
 
@@ -731,6 +735,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.lastParkedReply = ""
 		if m.session != nil {
 			m.contextTokens = m.session.ContextTokens()
+			m.sessionUsage = m.session.Usage()
 			// Follow-ups released into the ended run that it never consumed:
 			// the model never saw them, so re-dispatch them ahead of the queue.
 			m.redispatch = append(m.redispatch, m.session.TakeUndelivered()...)
@@ -769,6 +774,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			if m.session != nil {
 				m.contextTokens = m.session.ContextTokens()
+				m.sessionUsage = m.session.Usage()
 			}
 			m.textarea.Focus()
 			// Parked == the agent is idle waiting; release the next queued
@@ -805,6 +811,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.messages = append(m.messages, ChatMessage{Role: "agent", Content: compactNotice(msg.before, msg.after)})
 			m.contextTokens = msg.after
+			// The context shrank; the spend did not. Re-read the session's own
+			// counter rather than deriving anything from msg.
+			if m.session != nil {
+				m.sessionUsage = m.session.Usage()
+			}
 		}
 		m.updateViewport()
 		if cmd := m.flushQueueAsTurn(); cmd != nil {
@@ -817,6 +828,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case compactNoticeMsg:
 		m.messages = append(m.messages, ChatMessage{Role: "agent", Content: compactNotice(msg[0], msg[1])})
 		m.contextTokens = msg[1]
+		// Auto-compaction only shrinks the context: the summarising call itself
+		// costs tokens, so take the session's total rather than msg's numbers.
+		if m.session != nil {
+			m.sessionUsage = m.session.Usage()
+		}
 		m.updateViewport()
 		return m, m.listenCompact()
 
@@ -1836,7 +1852,7 @@ func (m Model) View() string {
 	}
 	sb.WriteString("\n")
 	help := theme.Help.Render(m.helpLine())
-	if badge := m.contextBadge(); badge != "" {
+	if badge := m.footerBadges(lipgloss.Width(help)); badge != "" {
 		gap := m.width - lipgloss.Width(help) - lipgloss.Width(badge)
 		if gap < 1 {
 			gap = 1
@@ -1966,6 +1982,48 @@ func (m Model) contextBadge() string {
 		return ctxBadgeWarn.Render(label)
 	}
 	return theme.Meta.Render(label)
+}
+
+// usageBadge renders the session's cumulative token spend for the bottom bar,
+// e.g. "session 312k in / 18.4k out". Returns "" before anything is spent, the
+// same way contextBadge does.
+//
+// Plain words rather than arrows: it matches contextBadge's phrasing and the
+// calm editorial voice TestNoEmojiInRenderHelpers guards.
+func (m Model) usageBadge() string {
+	in, out := m.sessionUsage.PromptTokens, m.sessionUsage.CompletionTokens
+	if in <= 0 && out <= 0 {
+		return ""
+	}
+	return theme.Meta.Render(fmt.Sprintf("session %s in / %s out",
+		chat.HumanTokens(in), chat.HumanTokens(out)))
+}
+
+// footerBadges renders the right-aligned bottom-bar badges for a help line of
+// helpWidth columns.
+//
+// When both do not fit, the usage badge is dropped WHOLE — never truncated,
+// never abbreviated. The context badge earns the space because it predicts
+// auto-compaction and is therefore actionable, while the session total is
+// informational and still reaches the user through the exit summary and
+// usage.json. Narrow terminals are the common case here, not an edge case:
+// nib is routinely run through ttyd in a browser.
+func (m Model) footerBadges(helpWidth int) string {
+	ctx, usage := m.contextBadge(), m.usageBadge()
+	if usage == "" {
+		return ctx
+	}
+	if ctx == "" {
+		if helpWidth+lipgloss.Width(usage)+1 > m.width {
+			return ""
+		}
+		return usage
+	}
+	both := usage + "  " + ctx
+	if helpWidth+lipgloss.Width(both)+1 > m.width {
+		return ctx
+	}
+	return both
 }
 
 // quit tears down the session and exits.
