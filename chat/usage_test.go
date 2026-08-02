@@ -3,7 +3,6 @@ package chat
 import (
 	"context"
 	"errors"
-	"sync"
 	"testing"
 
 	"github.com/mudler/cogito"
@@ -77,18 +76,12 @@ func TestAddUsageIgnoresEmptyReports(t *testing.T) {
 // usageLLM answers with a plain tool-free reply like captureLLM, but reports
 // non-zero token usage — captureLLM returns an empty LLMUsage, which would make
 // this test pass vacuously.
-type usageLLM struct {
-	mu sync.Mutex
-	n  int
-}
+type usageLLM struct{}
 
 func (u *usageLLM) CreateChatCompletion(ctx context.Context, req openai.ChatCompletionRequest) (cogito.LLMReply, cogito.LLMUsage, error) {
 	if err := ctx.Err(); err != nil {
 		return cogito.LLMReply{}, cogito.LLMUsage{}, err
 	}
-	u.mu.Lock()
-	u.n++
-	u.mu.Unlock()
 	return cogito.LLMReply{
 		ChatCompletionResponse: openai.ChatCompletionResponse{
 			Choices: []openai.ChatCompletionChoice{{
@@ -172,8 +165,6 @@ func TestSendMessageAccumulatesAcrossTurns(t *testing.T) {
 // instead would prove nothing: cogito's counting wrapper only records usage
 // when the call succeeded, so a first call that errors has no spend to lose.
 type interruptedLLM struct {
-	mu      sync.Mutex
-	n       int
 	session *Session
 }
 
@@ -181,9 +172,6 @@ func (u *interruptedLLM) CreateChatCompletion(ctx context.Context, req openai.Ch
 	if err := ctx.Err(); err != nil {
 		return cogito.LLMReply{}, cogito.LLMUsage{}, err
 	}
-	u.mu.Lock()
-	u.n++
-	u.mu.Unlock()
 
 	// The user hits Ctrl+C after the backend already answered and billed.
 	u.session.Interrupt()
@@ -225,11 +213,15 @@ func TestAgentUsageFullReturnsBothDirections(t *testing.T) {
 	frag := cogito.NewEmptyFragment()
 	frag.Status = st
 
+	frag.Status.ToolsCalled = make(cogito.Tools, 2)
+
 	tools, u := agentUsageFull(&cogito.AgentState{Fragment: &frag})
 	if u.PromptTokens != 80 || u.CompletionTokens != 9 || u.TotalTokens != 89 {
 		t.Fatalf("usage = %+v, want 80/9/89", u)
 	}
-	_ = tools
+	if tools != 2 {
+		t.Fatalf("tool count = %d, want 2", tools)
+	}
 }
 
 // A failed agent never gets a fragment. Reading through it must not panic.
@@ -239,18 +231,6 @@ func TestAgentUsageFullIsNilSafe(t *testing.T) {
 	}
 	if _, u := agentUsageFull(&cogito.AgentState{}); u != (cogito.LLMUsage{}) {
 		t.Fatalf("agent without a fragment produced usage %+v", u)
-	}
-}
-
-// The old two-return helper still exists, because emitAgentEvent's AgentEvent
-// and its tests use exactly that shape.
-func TestAgentUsageStillReportsTotalTokens(t *testing.T) {
-	st := &cogito.Status{CumulativeUsage: cogito.LLMUsage{TotalTokens: 42}}
-	frag := cogito.NewEmptyFragment()
-	frag.Status = st
-
-	if _, tokens := agentUsage(&cogito.AgentState{Fragment: &frag}); tokens != 42 {
-		t.Fatalf("agentUsage tokens = %d, want 42", tokens)
 	}
 }
 

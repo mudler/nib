@@ -592,13 +592,6 @@ func agentUsageFull(a *cogito.AgentState) (toolCount int, usage cogito.LLMUsage)
 	return len(a.Fragment.Status.ToolsCalled), a.Fragment.Status.CumulativeUsage
 }
 
-// agentUsage is the total-only view agentUsageFull backs, kept because
-// AgentEvent carries a single TotalTokens figure for display.
-func agentUsage(a *cogito.AgentState) (toolCount, tokens int) {
-	n, u := agentUsageFull(a)
-	return n, u.TotalTokens
-}
-
 func (s *Session) ClearHistory() {
 	s.historyMu.Lock()
 	s.messages = []openai.ChatCompletionMessage{}
