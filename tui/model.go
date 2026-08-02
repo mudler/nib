@@ -1997,9 +1997,14 @@ func prunedNotice(results, freed int) string {
 	return fmt.Sprintf("pruned %d tool %s — freed %s tokens", results, noun, chat.HumanTokensOrZero(freed))
 }
 
-// compactNotice formats a one-line compaction summary for the transcript.
+// compactNotice formats a one-line compaction summary for the transcript. It
+// repeats cmd.compactNotice's wording — tui cannot import cmd, because cmd
+// builds the TUI — including the "~" and "(estimated)" markers: the figures are
+// byte/4 estimates, not the backend's reported usage, and an unmarked number
+// reads as measured.
 func compactNotice(before, after int) string {
-	return fmt.Sprintf("📦 Compacted conversation — %s → %s tokens", chat.HumanTokens(before), chat.HumanTokens(after))
+	return fmt.Sprintf("Compacted conversation — ~%s → ~%s tokens (estimated)",
+		chat.HumanTokens(before), chat.HumanTokens(after))
 }
 
 // ctxBadgeWarn highlights the context badge once usage nears the auto-compaction

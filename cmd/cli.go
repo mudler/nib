@@ -580,9 +580,18 @@ func pruneNotice(results, freed int) string {
 	return fmt.Sprintf("pruned %d tool %s — freed %s tokens", results, noun, chat.HumanTokensOrZero(freed))
 }
 
-// compactNotice formats the one-line summary shown after a conversation is compacted.
+// compactNotice formats the one-line summary shown after a conversation is
+// compacted. The figures are byte/4 estimates rather than the backend's
+// reported usage, so they are marked approximate — an unmarked number reads as
+// measured, and a user cannot tell the difference.
+//
+// Marked rather than replaced with real usage: the "after" side has never been
+// sent to a backend when this prints, so no reported figure for it exists to
+// use. Session.Usage() answers a different question (what the session spent),
+// not what the conversation now weighs.
 func compactNotice(before, after int) string {
-	return fmt.Sprintf("📦 Compacted conversation — %s → %s tokens", chat.HumanTokens(before), chat.HumanTokens(after))
+	return fmt.Sprintf("Compacted conversation — ~%s → ~%s tokens (estimated)",
+		chat.HumanTokens(before), chat.HumanTokens(after))
 }
 
 func help(out io.Writer) {

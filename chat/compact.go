@@ -97,6 +97,18 @@ func formatTokenCount(n int) string {
 	return s + "k"
 }
 
+// compactedNotice is the line inserted into the visible transcript when older
+// turns are summarized. It has no emoji: it renders in the TUI exactly like a
+// render helper, and the calm no-emoji voice tui.TestNoEmojiInRenderHelpers
+// guards applies to it even though that test cannot see it from here. Its own
+// guard is TestCompactionTranscriptNoticeHasNoEmoji, in this package.
+//
+// It counts messages, not tokens, so unlike the CLI and TUI compaction notices
+// it has nothing approximate to mark: len() of a slice is exact.
+func compactedNotice(removed int) string {
+	return fmt.Sprintf("Compacted %d earlier messages", removed)
+}
+
 // HumanTokens formats a token count compactly (e.g. 47200 → "47.2k").
 func HumanTokens(n int) string {
 	return formatTokenCount(n)
@@ -198,7 +210,7 @@ func (s *Session) compactHistory(ctx context.Context) (before, after int, err er
 	}
 	newMessages := append([]openai.ChatCompletionMessage{{
 		Role:    "assistant",
-		Content: fmt.Sprintf("📦 Compacted %d earlier messages", removed),
+		Content: compactedNotice(removed),
 	}}, displayTail...)
 
 	s.historyMu.Lock()

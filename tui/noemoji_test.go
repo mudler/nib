@@ -71,4 +71,18 @@ func TestNoEmojiInRenderHelpers(t *testing.T) {
 			t.Fatalf("prunedNotice output contains emoji: %q", n)
 		}
 	}
+
+	// Compaction notice. It sat outside this sweep for months and carried an
+	// emoji the whole time, which is what a guard listing its subjects one by
+	// one costs when a helper is added and nobody remembers to list it.
+	if n := compactNotice(47200, 12100); containsEmoji(n) {
+		t.Fatalf("compactNotice output contains emoji: %q", n)
+	}
+
+	// The sibling notice that package chat writes into the transcript — which
+	// this model renders verbatim — is guarded on its own side, by
+	// chat.TestCompactionTranscriptNoticeHasNoEmoji. The rule is about what a
+	// user sees, and a user sees both; reaching that one from here would mean
+	// exporting a chat function that exists only for this test, so each package
+	// guards the strings it writes.
 }
