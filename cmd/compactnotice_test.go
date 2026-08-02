@@ -22,4 +22,10 @@ func TestCompactNoticeHasNoEmojiAndDoesNotClaimMeasurement(t *testing.T) {
 	if !strings.Contains(got, "47.2k") || !strings.Contains(got, "12.1k") {
 		t.Fatalf("notice dropped its before/after figures: %q", got)
 	}
+	// A zero has to render as "0" on either side, like pruneNotice's saving
+	// does: chat.HumanTokens renders 0 as the empty string, which would print
+	// "~ → ~ tokens" — a sentence with a hole where its numbers belong.
+	if z := compactNotice(0, 0); !strings.Contains(z, "~0 → ~0 tokens") {
+		t.Fatalf("a zero figure vanished from the notice: %q", z)
+	}
 }

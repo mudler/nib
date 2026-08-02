@@ -630,9 +630,15 @@ func pruneNotice(results, freed int) string {
 // sent to a backend when this prints, so no reported figure for it exists to
 // use. Session.Usage() answers a different question (what the session spent),
 // not what the conversation now weighs.
+//
+// Both figures use HumanTokensOrZero, like pruneNotice above: HumanTokens
+// renders 0 as "", which would print "~ → ~ tokens". A zero "after" cannot
+// occur (compaction always leaves a summary), and a zero "before" needs a
+// conversation under four bytes — but nothing in the signature says so, and the
+// neighbouring notice should not disagree with this one about how a zero reads.
 func compactNotice(before, after int) string {
 	return fmt.Sprintf("Compacted conversation — ~%s → ~%s tokens (estimated)",
-		chat.HumanTokens(before), chat.HumanTokens(after))
+		chat.HumanTokensOrZero(before), chat.HumanTokensOrZero(after))
 }
 
 func help(out io.Writer) {

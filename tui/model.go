@@ -2001,10 +2001,12 @@ func prunedNotice(results, freed int) string {
 // repeats cmd.compactNotice's wording — tui cannot import cmd, because cmd
 // builds the TUI — including the "~" and "(estimated)" markers: the figures are
 // byte/4 estimates, not the backend's reported usage, and an unmarked number
-// reads as measured.
+// reads as measured. Both figures use HumanTokensOrZero for the same reason
+// pruneNotice above does: HumanTokens renders 0 as "", which would print
+// "~ → ~ tokens" — a hole where the number belongs.
 func compactNotice(before, after int) string {
 	return fmt.Sprintf("Compacted conversation — ~%s → ~%s tokens (estimated)",
-		chat.HumanTokens(before), chat.HumanTokens(after))
+		chat.HumanTokensOrZero(before), chat.HumanTokensOrZero(after))
 }
 
 // ctxBadgeWarn highlights the context badge once usage nears the auto-compaction
