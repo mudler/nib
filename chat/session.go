@@ -263,16 +263,21 @@ func NewSession(ctx context.Context, cfg types.Config, callbacks Callbacks, tran
 	var llm cogito.LLM = llmClient
 
 	// Session tracing: wrap the LLM so every call is appended to the transcript.
-	// A recorder failure must never prevent the session from starting.
+	// Tracing is only ever on because someone asked for it, so a recorder that
+	// cannot open is a failure rather than a downgrade. This used to be an
+	// xlog.Warn, which the default "error" log level discarded — the session
+	// then ran untraced and said nothing, which is exactly what was reported.
+	// app.Run preflights this so the usual failure never reaches here; what is
+	// left is the dir vanishing between check and open, and embedders calling
+	// NewSession directly.
 	var tracer *trace.Recorder
 	if cfg.TraceDir != "" {
 		rec, err := trace.NewRecorder(cfg.TraceDir)
 		if err != nil {
-			xlog.Warn("trace: disabled, failed to open recorder", "dir", cfg.TraceDir, "error", err)
-		} else {
-			tracer = rec
-			llm = trace.NewRecordingLLM(llm, rec, cfg.Model, "")
+			return nil, fmt.Errorf("cannot write trace to %s: %w", cfg.TraceDir, err)
 		}
+		tracer = rec
+		llm = trace.NewRecordingLLM(llm, rec, cfg.Model, "")
 	}
 
 	agentManager := cogito.NewAgentManager()
