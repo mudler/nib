@@ -652,17 +652,46 @@ name is derived from it by reducing it to an identifier, so `local-ai chat`
 defines `__local_ai_chat_widget`. An empty `ProgramName` still emits standalone
 nib's script byte for byte.
 
-The management subcommands are renamed too, but only where they tell the user
-what to **type**: the `usage: ...` lines of `plugin`, `skill` and `mcp`, and the
-hints that end an install, such as `Enable later: local-ai chat plugin enable
-foo` and `verify now with: local-ai chat mcp test bar`. A non-interactive
-`plugin install` without `--yes` reaches that enable hint every time, so naming
-a binary the user does not have is a dead end rather than a cosmetic slip.
+The rule for the rest is one line: **if a string names a command that someone is
+expected to run, `ProgramName` renames it; if it merely names the tool, it does
+not.**
 
-The rest of nib still says `nib`, because it is prose that names the tool rather
-than a command to run: the CLI and TUI branding, the "next nib session" half of
-the `mcp add` confirmation, and the `nib: ...` diagnostics that config loading
-and plugin/skill discovery write straight to `os.Stderr` on every run.
+Renamed:
+
+- **The tmux split.** Inside tmux, `Ctrl+Space` lands in a split pane, and that
+  pane has to re-enter *this* program. That means the host binary **plus its
+  subcommand**, not the executable path alone, so without this an embedded nib
+  spawns your default command instead of the agent.
+- **The management subcommands' instructions**: the `usage: ...` lines of
+  `plugin`, `skill` and `mcp`, and the hints that follow an install, such as
+  `Enable later: local-ai chat plugin enable foo` and `verify now with:
+  local-ai chat mcp test bar`. A non-interactive `plugin install` without
+  `--yes` reaches that enable hint every time.
+- **The skill installer's suggestions**, which surface through those same
+  subcommands: "use `local-ai chat skill update x`" on a duplicate pack, and
+  "did you mean `local-ai chat plugin install`?" on a source with no
+  `SKILL.md`. The catalog install path included.
+- **The system prompt.** nib tells the model how a user can register MCP servers
+  from the command line, and the model relays that as advice in its own words.
+  Named wrong, your assistant confidently tells your users to run a binary they
+  do not have, and unlike a usage line there is no cue anywhere that the tool
+  goes by another name here.
+
+Not renamed, deliberately, so these still say `nib`:
+
+- The CLI and TUI branding, and the setup wizard's header. They name the tool;
+  they are not commands.
+- Prose in terminal output that names the tool rather than instructing:
+  specifically the "available on the next nib session" clause of the `mcp add`
+  confirmation, whose `verify now with:` half **is** renamed. The surrounding
+  output makes the referent obvious. The equivalent sentence in the system
+  prompt, which has no such context, *is* renamed.
+- The `nib: ...` diagnostics that config loading and plugin/skill discovery
+  write straight to `os.Stderr` on every run.
+- Internal identifiers that are never shown and never typed: the MCP server's
+  implementation name and its `nib/reply` notification method, the
+  `nib-plugin.yaml` manifest filename, the `~/.config/nib` state root, and the
+  tmux temp-file prefix and wait-for channel.
 
 **The management subcommands do not honor injected streams.** Every `plugin`
 and `skill` subcommand, and every `nib mcp` subcommand that manages configured

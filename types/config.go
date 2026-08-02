@@ -164,6 +164,20 @@ type Config struct {
 	// config.WritablePathIn for the config file) rather than using it raw.
 	// Runtime-only: never read from or written to YAML.
 	BaseDir string `yaml:"-"`
+	// ProgramName is what the user types to reach this program, e.g. "nib" or an
+	// embedder's "local-ai chat". Empty means "nib".
+	//
+	// It rides on Config for one reason: the system prompt is rendered from
+	// Config, and that prompt tells the MODEL how the user can register MCP
+	// servers from the command line. Named wrong, the model repeats the wrong
+	// command as advice, in its own words, whenever it seems relevant, and the
+	// user has no cue that the tool is called something else here.
+	//
+	// Runtime-only, exactly like TraceDir: set by the embedder through
+	// app.Options.ProgramName, never read from or written to YAML, so no config
+	// file can rename the program out from under the binary that is running.
+	// A user template can still read it as {{.Config.ProgramName}}.
+	ProgramName string `yaml:"-"`
 	// Computer is the opt-in desktop-control capability (cua-driver). Runtime-only.
 	Computer ComputerConfig `yaml:"-"`
 	// Browser is the opt-in browser-automation capability (chromedp-driven).
@@ -257,11 +271,24 @@ func (c *Config) GetPrompt() string {
 		b.WriteString(".")
 	}
 
+	// Everything in this paragraph is advice the model will relay in its own
+	// words, so the program name goes into ALL of it, the closing sentence
+	// included, rather than only into the backticked commands. Terminal output
+	// can get away with a half-renamed sentence because the surrounding branding
+	// tells the reader that "nib" and the command they typed are the same thing;
+	// a system prompt has no such context, and a model told "the next nib
+	// session" will tell an embedder's user to restart something they have never
+	// heard of.
+	//
+	// Appended AFTER the template above is executed, so the name is inert text:
+	// it cannot break the template, and template syntax inside it is carried
+	// through verbatim rather than evaluated.
+	prog := ProgramNameOr(c.ProgramName)
 	b.WriteString("\n\nYou can register additional MCP servers from the command line: ")
-	b.WriteString("`nib mcp add <name> -- <command> [args...]` for a local server, or ")
-	b.WriteString("`nib mcp add <name> --url <url> [--transport http|sse]` for a remote one; ")
-	b.WriteString("`nib mcp list` and `nib mcp test <name>` show and verify them. ")
-	b.WriteString("Servers added this way become available on the next nib session.")
+	fmt.Fprintf(&b, "`%s mcp add <name> -- <command> [args...]` for a local server, or ", prog)
+	fmt.Fprintf(&b, "`%s mcp add <name> --url <url> [--transport http|sse]` for a remote one; ", prog)
+	fmt.Fprintf(&b, "`%s mcp list` and `%s mcp test <name>` show and verify them. ", prog, prog)
+	fmt.Fprintf(&b, "Servers added this way become available on the next %s session.", prog)
 
 	return b.String()
 }

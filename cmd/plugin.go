@@ -164,7 +164,7 @@ func pluginCatalogInstall(prog string, mgr *plugin.Manager, baseDir, name string
 		fmt.Fprintf(os.Stderr, "install failed: %v\n", err)
 		return 1
 	}
-	installed, err := catalog.NewClient().Install(context.Background(), m, baseDir, internal.Version)
+	installed, err := catalog.NewClientFor(prog).Install(context.Background(), m, baseDir, internal.Version)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "install failed: %v\n", err)
 		return 1

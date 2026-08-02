@@ -28,7 +28,7 @@ func (c *Client) Install(ctx context.Context, m Meta, baseDir, nibVersion string
 	source := m.sourceLocator()
 	switch m.Kind {
 	case KindSkill:
-		name, _, err := skill.NewManager(baseDir).InstallDir(dir, m.Name, source)
+		name, _, err := skill.NewManagerFor(baseDir, c.ProgramName).InstallDir(dir, m.Name, source)
 		return name, err
 	case KindPlugin:
 		mani, err := plugin.NewManager(baseDir).InstallDir(dir, nibVersion, source)

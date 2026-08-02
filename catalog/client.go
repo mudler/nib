@@ -19,15 +19,27 @@ type Client struct {
 	// Branches is the ordered list of default branches to try for github
 	// index-first resolution and crawl.
 	Branches []string
+	// ProgramName is what the user types to reach this program. It reaches only
+	// Install, and only so the managers it delegates to can suggest a next
+	// command the user can actually run. Empty means "nib".
+	ProgramName string
 }
 
 // NewClient returns a Client with production GitHub endpoints and a 30s timeout.
-func NewClient() *Client {
+// Install failures suggest next commands as `nib ...`; an embedder wants
+// NewClientFor instead.
+func NewClient() *Client { return NewClientFor("") }
+
+// NewClientFor is NewClient for a program the user reaches under another name,
+// e.g. "local-ai chat". Empty programName means "nib", so NewClient stays
+// exactly what it was.
+func NewClientFor(programName string) *Client {
 	return &Client{
-		HTTP:     &http.Client{Timeout: 30 * time.Second},
-		RawBase:  "https://raw.githubusercontent.com",
-		APIBase:  "https://api.github.com",
-		Branches: []string{"main", "master"},
+		HTTP:        &http.Client{Timeout: 30 * time.Second},
+		RawBase:     "https://raw.githubusercontent.com",
+		APIBase:     "https://api.github.com",
+		Branches:    []string{"main", "master"},
+		ProgramName: programName,
 	}
 }
 

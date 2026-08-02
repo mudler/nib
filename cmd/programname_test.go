@@ -227,3 +227,85 @@ func writeSkillDir(t *testing.T, name string) string {
 	}
 	return dir
 }
+
+// skill.Manager builds its own suggestions, so the name has to reach the skill
+// package too. A second install of the same pack is the common way to see it.
+func TestSkillDuplicateHintUsesTheProgramName(t *testing.T) {
+	base := t.TempDir()
+	src := writeSkillDir(t, "dupe-skill")
+	declineConsent(t)
+
+	captureOutput(t, func() { RunSkillCommand("local-ai chat", base, []string{"install", src}) })
+	_, stderr := captureOutput(t, func() {
+		if code := RunSkillCommand("local-ai chat", base, []string{"install", src}); code == 0 {
+			t.Error("a duplicate install should fail")
+		}
+	})
+	if !strings.Contains(stderr, "`local-ai chat skill update dupe-skill`") ||
+		!strings.Contains(stderr, "`local-ai chat skill remove dupe-skill`") {
+		t.Fatalf("the duplicate-pack suggestion does not name the embedding program: %q", stderr)
+	}
+	if strings.Contains(stderr, "nib skill") {
+		t.Fatalf("the suggestion still points at a binary the user does not have: %q", stderr)
+	}
+}
+
+// The catalog install path builds its OWN skill.Manager inside catalog.Client,
+// so it is a second place the name has to reach. Missing it would leave exactly
+// this branch printing "nib" while the direct branch printed the right name.
+func TestSkillCatalogDuplicateHintUsesTheProgramName(t *testing.T) {
+	root, _ := twoCatalogs(t)
+	declineConsent(t)
+
+	captureOutput(t, func() { RunSkillCommand("local-ai chat", root, []string{"install", "--yes", "injected-skill"}) })
+	_, stderr := captureOutput(t, func() {
+		if code := RunSkillCommand("local-ai chat", root, []string{"install", "--yes", "injected-skill"}); code == 0 {
+			t.Error("a duplicate catalog install should fail")
+		}
+	})
+	if !strings.Contains(stderr, "`local-ai chat skill update injected-skill`") {
+		t.Fatalf("the catalog path's suggestion does not name the embedding program: %q", stderr)
+	}
+	if strings.Contains(stderr, "nib skill") {
+		t.Fatalf("the catalog path still points at nib: %q", stderr)
+	}
+}
+
+// The other suggestion skill.Manager makes: a source with no SKILL.md is
+// probably a plugin, and it says so by naming a command.
+func TestSkillWrongKindHintUsesTheProgramName(t *testing.T) {
+	base := t.TempDir()
+	empty := t.TempDir() // a directory with no SKILL.md anywhere in it
+
+	_, stderr := captureOutput(t, func() {
+		if code := RunSkillCommand("local-ai chat", base, []string{"install", empty}); code == 0 {
+			t.Error("installing a pack with no SKILL.md should fail")
+		}
+	})
+	if !strings.Contains(stderr, "`local-ai chat plugin install`") {
+		t.Fatalf("the wrong-kind suggestion does not name the embedding program: %q", stderr)
+	}
+	if strings.Contains(stderr, "nib plugin install") {
+		t.Fatalf("the wrong-kind suggestion still points at nib: %q", stderr)
+	}
+}
+
+// Standalone control for all three skill suggestions: an empty program name
+// must render exactly what it rendered before, which is "nib".
+func TestSkillHintsDefaultToNib(t *testing.T) {
+	base := t.TempDir()
+	src := writeSkillDir(t, "dupe-skill")
+	empty := t.TempDir()
+	declineConsent(t)
+
+	captureOutput(t, func() { RunSkillCommand("", base, []string{"install", src}) })
+	_, dupe := captureOutput(t, func() { RunSkillCommand("", base, []string{"install", src}) })
+	if !strings.Contains(dupe, "`nib skill update dupe-skill`") ||
+		!strings.Contains(dupe, "`nib skill remove dupe-skill`") {
+		t.Fatalf("standalone duplicate suggestion changed: %q", dupe)
+	}
+	_, kind := captureOutput(t, func() { RunSkillCommand("", base, []string{"install", empty}) })
+	if !strings.Contains(kind, "`nib plugin install`") {
+		t.Fatalf("standalone wrong-kind suggestion changed: %q", kind)
+	}
+}

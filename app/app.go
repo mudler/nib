@@ -40,19 +40,48 @@ type Options struct {
 	// in command position, and the widget's function name is derived from it by
 	// reducing it to an identifier.
 	//
-	// It renames the management subcommands too, but only the strings that tell
-	// the user what to TYPE: the `usage: ...` lines of `plugin`, `skill` and
-	// `mcp`, and the hints that end an install ("Enable later: local-ai chat
-	// plugin enable foo", "verify now with: local-ai chat mcp test bar"). Those
-	// are instructions, and the enable hint in particular is reached on every
-	// non-interactive `plugin install` without --yes, so pointing it at a binary
-	// the user does not have leaves them with no way forward.
+	// The rule for everything below is one line: if a string names a command
+	// that someone is expected to RUN, this renames it; if it merely names the
+	// tool, it does not.
 	//
-	// What it still does not reach is prose that merely names the tool, which
-	// says "nib" whatever this is set to: the CLI and TUI branding, the "next
-	// nib session" half of the mcp add confirmation, and the "nib: ..."
-	// diagnostics that config loading and plugin/skill discovery write straight
-	// to os.Stderr on every run.
+	// Renamed, beyond the messages and scripts above:
+	//
+	//   - The tmux split. Inside tmux the Ctrl+Space widget lands in a split
+	//     pane, and the pane has to re-enter THIS program. That is the host
+	//     binary plus its subcommand, not the executable path alone, so an
+	//     embedded nib without this spawns the host's default command instead.
+	//   - The management subcommands' instructions: the `usage: ...` lines of
+	//     `plugin`, `skill` and `mcp`, and the hints that follow an install
+	//     ("Enable later: local-ai chat plugin enable foo", "verify now with:
+	//     local-ai chat mcp test bar"). The enable hint is reached on every
+	//     non-interactive `plugin install` without --yes.
+	//   - The skill installer's suggestions, which reach the user through those
+	//     same subcommands: "use `local-ai chat skill update x`" on a duplicate
+	//     pack, and "did you mean `local-ai chat plugin install`?" on a source
+	//     with no SKILL.md. The catalog install path included.
+	//   - The SYSTEM PROMPT paragraph about registering MCP servers. This is the
+	//     one the model relays: it paraphrases the advice in its own words at
+	//     whatever moment seems relevant, and unlike a usage line the user gets
+	//     no cue that the tool is called something else here. It travels via
+	//     types.Config.ProgramName, which this field populates during the load
+	//     and always wins over a value arriving through Defaults or Overrides.
+	//
+	// NOT renamed, deliberately, so these still say "nib" whatever this is set
+	// to:
+	//
+	//   - The CLI and TUI branding (theme.BrandName, the banner, the setup
+	//     wizard's header). It names the tool; it is not a command.
+	//   - Prose in terminal output that names the tool rather than instructing,
+	//     specifically the "available on the next nib session" clause of the mcp
+	//     add confirmation, whose "verify now with:" half IS renamed. The
+	//     surrounding output makes the referent obvious; the system prompt,
+	//     which has no such context, renames the equivalent sentence.
+	//   - The "nib: ..." diagnostics that config loading and plugin/skill
+	//     discovery write straight to os.Stderr on every run.
+	//   - Internal identifiers that are never shown or typed: the MCP server's
+	//     implementation name and its nib/reply notification method, the
+	//     nib-plugin.yaml manifest filename, the ~/.config/nib state root, and
+	//     the tmux temp-file prefix and wait-for channel.
 	ProgramName string
 	// BaseDir overrides the config, plugins, and skills root. Empty means
 	// nib's default XDG resolution.
@@ -328,6 +357,14 @@ func runCtx(ctx context.Context, o Options) int {
 		Overrides:   o.Overrides,
 		SkipBareEnv: o.SkipBareEnv,
 	})
+
+	// The name travels with the config because the system prompt is rendered
+	// from it, and that prompt tells the model what the user can type. Assigned
+	// unconditionally, the same way BaseDir is: Options.ProgramName is the one
+	// knob, so a name arriving through Defaults or Overrides cannot disagree
+	// with the name --version, the init scripts and the management subcommands
+	// are already using.
+	cfg.ProgramName = o.name()
 
 	// Tracing is runtime-only: the flag wins, otherwise fall back to the env var.
 	if *traceDirFlag != "" {

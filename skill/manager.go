@@ -11,10 +11,28 @@ import (
 )
 
 // Manager performs skill-pack install/update/remove against a base directory.
-type Manager struct{ baseDir string }
+type Manager struct {
+	baseDir string
+	// programName is what the user types to reach this program, used only in
+	// the error messages that suggest a next command. Empty means "nib".
+	programName string
+}
 
 // NewManager returns a Manager rooted at baseDir (use plugin.BaseDir() in prod).
-func NewManager(baseDir string) *Manager { return &Manager{baseDir: baseDir} }
+// Its errors suggest next commands as `nib ...`; an embedder wants
+// NewManagerFor instead.
+func NewManager(baseDir string) *Manager { return NewManagerFor(baseDir, "") }
+
+// NewManagerFor is NewManager for a program the user reaches under another
+// name, e.g. "local-ai chat". Install failures suggest a next command, and a
+// suggestion naming a binary the user does not have is a dead end. Empty
+// programName means "nib", so NewManager stays exactly what it was.
+func NewManagerFor(baseDir, programName string) *Manager {
+	return &Manager{baseDir: baseDir, programName: programName}
+}
+
+// prog is the name this Manager's messages tell the user to type.
+func (mgr *Manager) prog() string { return types.ProgramNameOr(mgr.programName) }
 
 // deriveName turns a git URL or local path into a pack name: the last path
 // segment, minus any trailing slash and ".git" suffix.
@@ -89,14 +107,14 @@ func (mgr *Manager) place(tmp, name, sourceURL, ref string) (string, []types.Ski
 		return "", nil, err
 	}
 	if len(skills) == 0 {
-		return "", nil, fmt.Errorf("no SKILL.md found under %s (did you mean `nib plugin install`?)", sourceURL)
+		return "", nil, fmt.Errorf("no SKILL.md found under %s (did you mean `%s plugin install`?)", sourceURL, mgr.prog())
 	}
 	reg, err := LoadRegistry(mgr.baseDir)
 	if err != nil {
 		return "", nil, err
 	}
 	if reg.Find(name) != nil {
-		return "", nil, fmt.Errorf("skill pack %q already installed (use `nib skill update %s` or `nib skill remove %s`)", name, name, name)
+		return "", nil, fmt.Errorf("skill pack %q already installed (use `%s skill update %s` or `%s skill remove %s`)", name, mgr.prog(), name, mgr.prog(), name)
 	}
 	dest := filepath.Join(SkillsDir(mgr.baseDir), name)
 	if err := os.RemoveAll(dest); err != nil {
@@ -172,7 +190,7 @@ func (mgr *Manager) installLink(src, name string) (string, []types.Skill, error)
 		return "", nil, err
 	}
 	if reg.Find(name) != nil {
-		return "", nil, fmt.Errorf("skill pack %q already installed (use `nib skill update %s` or `nib skill remove %s`)", name, name, name)
+		return "", nil, fmt.Errorf("skill pack %q already installed (use `%s skill update %s` or `%s skill remove %s`)", name, mgr.prog(), name, mgr.prog(), name)
 	}
 	if err := os.MkdirAll(SkillsDir(mgr.baseDir), 0o755); err != nil {
 		return "", nil, err

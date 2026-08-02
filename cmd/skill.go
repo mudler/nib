@@ -29,7 +29,7 @@ func RunSkillCommand(programName, baseDir string, args []string) int {
 		return 1
 	}
 	root := plugin.BaseDirIn(baseDir)
-	mgr := skill.NewManager(root)
+	mgr := skill.NewManagerFor(root, prog)
 	switch args[0] {
 	case "install":
 		return skillInstall(prog, mgr, root, args[1:])
@@ -158,7 +158,7 @@ func skillCatalogInstall(prog string, mgr *skill.Manager, baseDir, name string, 
 		fmt.Fprintf(os.Stderr, "install failed: %v\n", err)
 		return 1
 	}
-	installed, err := catalog.NewClient().Install(context.Background(), m, baseDir, "")
+	installed, err := catalog.NewClientFor(prog).Install(context.Background(), m, baseDir, "")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "install failed: %v\n", err)
 		return 1
