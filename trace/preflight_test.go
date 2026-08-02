@@ -47,6 +47,23 @@ func TestPreflightAcceptsExistingTranscript(t *testing.T) {
 	}
 }
 
+// The other half of the contract: a writable directory is not enough, the
+// transcript inside it has to be openable too. Standing a directory in the
+// transcript's place is the sharpest way to say that, since O_WRONLY on a
+// directory fails as EISDIR for every user including root.
+//
+// Without this case the probe could be deleted outright and the rest of the
+// suite would stay green.
+func TestPreflightRejectsUnopenableTranscript(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, fileName), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := Preflight(dir); err == nil {
+		t.Fatal("Preflight accepted a dir whose transcript cannot be opened; the session would start with tracing silently off")
+	}
+}
+
 // Probing must not truncate a transcript an earlier run wrote.
 func TestPreflightPreservesExistingContent(t *testing.T) {
 	dir := t.TempDir()
