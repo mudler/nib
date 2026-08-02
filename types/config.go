@@ -143,8 +143,10 @@ type Config struct {
 	// replacing, the built-in set.
 	ReadOnlyCommands []string `yaml:"read_only_commands"`
 	// TraceDir, when non-empty, enables session tracing: each LLM call's raw
-	// request/response is appended to <TraceDir>/trace.ndjson. Set at runtime
-	// from the --trace-dir flag or NIB_TRACE_DIR env, not from the YAML config.
+	// request/response is appended to <TraceDir>/trace.ndjson, and the session's
+	// token totals are written to <TraceDir>/usage.json when it closes. Set at
+	// runtime from the --trace-dir flag or NIB_TRACE_DIR env, not from the YAML
+	// config.
 	TraceDir string `yaml:"-"`
 	// InitialHistory seeds a new session with a prior conversation so the very
 	// next SendMessage continues with full memory of it (resume/rehydration).

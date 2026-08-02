@@ -336,7 +336,7 @@ func runCtx(ctx context.Context, o Options) int {
 	tuiFlag := fs.Bool("tui", false, "Start the full-screen TUI directly (no tmux popup)")
 	cliFlag := fs.Bool("cli", false, "Run in plain CLI mode instead of the TUI")
 	setupFlag := fs.Bool("setup", false, "Run the interactive model setup wizard")
-	traceDirFlag := fs.String("trace-dir", "", "Write a session LLM trace (NDJSON) to this directory; also via NIB_TRACE_DIR")
+	traceDirFlag := fs.String("trace-dir", "", "Write a session LLM trace (NDJSON) and token totals (usage.json) to this directory; also via NIB_TRACE_DIR")
 	yoloFlag := fs.Bool("yolo", false, "Auto-approve every tool call without prompting; also via NIB_YOLO")
 	if err := fs.Parse(args); err != nil {
 		// ContinueOnError hands back ErrHelp for -h/--help, which the global

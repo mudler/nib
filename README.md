@@ -625,9 +625,13 @@ environment, which is what separates them from the bare `MODEL` / `API_KEY` /
 > silently downgrades it to `auto`, which approves every tool call without
 > prompting. Filtering `Args` does not help, because this one arrives through
 > the environment: to prevent it, control the child process environment and do
-> not pass `NIB_YOLO` through. `NIB_TRACE_DIR` has no equivalent hazard, since
-> the config file cannot set `TraceDir` at all and the variable only retargets
-> where a trace is written.
+> not pass `NIB_YOLO` through. `NIB_TRACE_DIR` escalates nothing — the config
+> file cannot set `TraceDir` at all — but it is not inert either. A trace is an
+> explicit request, so `app.Run` checks the directory before starting anything
+> and returns `ExitError{1}` when it cannot be written, rather than running on
+> and quietly producing no transcript. An inherited `NIB_TRACE_DIR` pointing
+> somewhere unwritable therefore fails the whole run, not just the tracing, and
+> `--trace-dir` behaves the same way.
 
 `app.Run` never calls `os.Exit`, and it takes cancellation from the context you
 pass rather than installing its own signal handling. Cancelling that context
