@@ -19,6 +19,7 @@ import (
 	"github.com/mudler/nib/internal"
 	"github.com/mudler/nib/mcp"
 	"github.com/mudler/nib/setup"
+	"github.com/mudler/nib/trace"
 	"github.com/mudler/nib/types"
 	"github.com/mudler/xlog"
 	"golang.org/x/term"
@@ -381,6 +382,18 @@ func runCtx(ctx context.Context, o Options) int {
 		cfg.TraceDir = *traceDirFlag
 	} else if env := os.Getenv("NIB_TRACE_DIR"); env != "" {
 		cfg.TraceDir = env
+	}
+
+	// Tracing was asked for explicitly, so it either works or the run stops.
+	// Checked here, before StartTransports, so a failure spawns no MCP
+	// subprocesses — and because this is the only place that can exit cleanly
+	// in every mode: the TUI builds its session inside a tea.Cmd, where this
+	// error would instead surface as a banner over an already-running UI.
+	if cfg.TraceDir != "" {
+		if err := trace.Preflight(cfg.TraceDir); err != nil {
+			fmt.Fprintf(o.stderr(), "%s: %v\n", o.name(), err)
+			return 1
+		}
 	}
 
 	// "yolo" mode auto-approves every tool call. The flag or env var force
