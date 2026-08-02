@@ -44,6 +44,7 @@ func TestToolGuidanceCoversTheReportedFailureModes(t *testing.T) {
 		{"whole file by default", "traces showed the model reading slices via sed instead of whole files"},
 		{"Do not re-read a file", "traces showed repeated re-reads of files already in context"},
 		{"out of date", "a read is stale once the file has been edited"},
+		{"Do not use cat, sed, head, tail, ls, find or shell grep for these", "the literal symptom in issue #53: traces showed `sed -n '95,115p'` where a read call belonged"},
 	}
 	for _, tc := range cases {
 		if !strings.Contains(got, tc.phrase) {
@@ -72,6 +73,22 @@ func TestToolGuidanceOrderedAfterSkillsBeforeFragments(t *testing.T) {
 	}
 	if !(skills < guidance && guidance < fragment) {
 		t.Fatalf("wrong order: skills=%d guidance=%d fragment=%d\n%s", skills, guidance, fragment, got)
+	}
+}
+
+// The act-don't-narrate instruction used to live in config.defaultPrompt, which
+// a custom `prompt:` replaces wholesale. Issue #53 reported the model announcing
+// actions instead of taking them, from a deployment with a custom prompt — i.e.
+// one that never received this line.
+func TestActDontNarrateSurvivesACustomPrompt(t *testing.T) {
+	c := &Config{Prompt: "CUSTOM PROMPT"}
+	got := c.GetPrompt()
+
+	if !strings.Contains(got, "Always act by CALLING the available tools") {
+		t.Fatalf("act-don't-narrate instruction missing from a custom-prompt session:\n%s", got)
+	}
+	if !strings.Contains(got, "describing an action does not perform it") {
+		t.Fatalf("the consequence clause is what makes the instruction land; it is missing:\n%s", got)
 	}
 }
 

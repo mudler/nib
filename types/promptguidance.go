@@ -13,10 +13,17 @@ package types
 // Placed before prompt_fragments so a user's own fragment, which comes later,
 // can still countermand any of it.
 //
+// The leading act-don't-narrate sentence moved here from config.defaultPrompt
+// for the same reason the rest of this text lives here: issue #53 reported a
+// model announcing actions instead of taking them, from a deployment whose
+// custom prompt had replaced the template that carried the instruction.
+//
 // This is prose the model reads, not documentation. Keep it as flowing
 // sentences: bullet lists and headings measurably shift how weaker local
 // models weight instructions, and this text exists for weak local models.
-const toolGuidance = `Prefer the dedicated tools over shell equivalents: read, write and edit for files, glob to find files by name, grep to search file contents. Do not use cat, sed, head, tail, ls, find or shell grep for these — the dedicated tools are faster and return structured output.
+const toolGuidance = `IMPORTANT: Always act by CALLING the available tools. Never narrate or describe a tool action (like reading files or "exploring") without actually invoking the corresponding tool — describing an action does not perform it.
+
+Prefer the dedicated tools over shell equivalents: read, write and edit for files, glob to find files by name, grep to search file contents. Do not use cat, sed, head, tail, ls, find or shell grep for these — the dedicated tools are faster and return structured output.
 
 read returns the whole file by default. Read a file once, in full, rather than requesting line ranges and re-reading it. Do not re-read a file you have already read in this conversation unless you have changed it.
 
