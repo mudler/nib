@@ -84,7 +84,9 @@ func TestSessionPruneMessagesForgetsIDsCompactionDropped(t *testing.T) {
 		{Role: "user", Content: "next"},
 	}
 	s.pruneMessages(msgs)
-	if !s.prunedIDs["c1"] || !s.prunedIDs["c2"] {
+	_, has1 := s.prunedIDs["c1"]
+	_, has2 := s.prunedIDs["c2"]
+	if !has1 || !has2 {
 		t.Fatalf("expected both results stubbed, got %v", s.prunedIDs)
 	}
 
@@ -96,10 +98,10 @@ func TestSessionPruneMessagesForgetsIDsCompactionDropped(t *testing.T) {
 	}
 	out := s.pruneMessages(compacted)
 
-	if s.prunedIDs["c1"] {
+	if _, kept := s.prunedIDs["c1"]; kept {
 		t.Fatal("stubbed-id set retained an id whose result compaction removed")
 	}
-	if !s.prunedIDs["c2"] {
+	if _, kept := s.prunedIDs["c2"]; !kept {
 		t.Fatal("stubbed-id set forgot an id that is still in the conversation")
 	}
 	if out[2].Content == compacted[2].Content {

@@ -105,32 +105,74 @@ func staleReadIDs(msgs []openai.ChatCompletionMessage, calls map[string]toolCall
 	return stale
 }
 
+// The clauses a stub can carry in place of the body it replaced.
+//
+// The stub is the ONLY channel telling the model why content it can see it once
+// had is gone, and the two reasons ask for different behaviour. A body dropped
+// for budget was still accurate when it went, so a model that remembers it is
+// not wrong. A body dropped because a later edit invalidated it is the opposite
+// case: remembering it is precisely the failure the rule exists to prevent, and
+// "we evicted this to save context" invites exactly that.
+//
+// Both are fixed phrases carrying no figures. The stub's text must be a
+// function of the reason alone, so that recording the reason once is enough to
+// reproduce the same text byte for byte on every later call — see
+// pruneToolOutputs on why that matters.
+const (
+	detailBudget = "output dropped to save context"
+	detailStale  = "output dropped after a later edit"
+)
+
 // prunedStub renders the placeholder that replaces a dropped tool result. It
-// names the tool and the path so the model can tell WHAT it lost, and says how
-// to get it back, so losing it is recoverable rather than merely confusing.
+// names the tool and the path so the model can tell WHAT it lost, gives the
+// reason it went, and says how to get it back, so losing it is recoverable
+// rather than merely confusing.
+//
+// An empty detail renders the budget wording: a caller with no reason to give
+// still produces a complete sentence rather than a gap.
 func prunedStub(name, path, detail string) string {
-	switch {
-	case path != "" && detail != "":
-		return fmt.Sprintf("[%s %s — %s dropped to save context; re-read for current contents]", name, path, detail)
-	case path != "":
-		return fmt.Sprintf("[%s %s — output dropped to save context; re-read for current contents]", name, path)
-	default:
-		return fmt.Sprintf("[%s — output dropped to save context; re-read if needed]", name)
+	if detail == "" {
+		detail = detailBudget
 	}
+	if path != "" {
+		return fmt.Sprintf("[%s %s — %s; re-read for current contents]", name, path, detail)
+	}
+	return fmt.Sprintf("[%s — %s; re-read if needed]", name, detail)
+}
+
+// stubbedResult is one tool result this call newly replaced with a stub: its id
+// and the clause its stub carries.
+//
+// The clause travels with the id because the caller has to STORE it, not merely
+// display it. Why a result was dropped is not re-derivable later: a result
+// swept for budget becomes a stale read the moment the model edits the file it
+// had read, and re-deriving the clause would then rewrite a stub already
+// sitting in the prompt. Recording the reason at the transition and keeping it
+// is what makes the stub's text immutable.
+type stubbedResult struct {
+	id     string
+	detail string
 }
 
 // pruneToolOutputs returns a copy of msgs with eligible tool results replaced by
 // stubs, the ids newly stubbed on this call, and the estimated tokens freed.
 //
-// already is the set of ids stubbed on previous calls. Passing it back in is
-// what makes the policy MONOTONIC: a result never un-stubs, so the prompt
-// prefix changes only at a prune rather than on every call. A rule that
-// re-derived its boundary each time would invalidate the server's prefix cache
-// on every request, and would very likely cost more than the tokens it saved.
+// already maps each id stubbed on previous calls to the clause its stub
+// carries. Passing it back in is what makes the policy MONOTONIC: a result
+// never un-stubs, so the prompt prefix changes only at a prune rather than on
+// every call. A rule that re-derived its boundary each time would invalidate
+// the server's prefix cache on every request, and would very likely cost more
+// than the tokens it saved.
+//
+// It carries the clause rather than a bare membership flag because monotonicity
+// is a property of the TEXT, not only of the set. Rewriting a stub's wording
+// moves the prefix exactly as un-stubbing would, so an id keeps the clause it
+// was first stubbed with even when the reason it would be picked for today has
+// changed.
 //
 // msgs is never written through — the caller's slice belongs to cogito, and
 // behind it to the session's fragment, which pruning must not touch.
-func pruneToolOutputs(msgs []openai.ChatCompletionMessage, cfg types.ToolOutputPruningConfig, already map[string]bool) ([]openai.ChatCompletionMessage, []string, int) {
+func pruneToolOutputs(msgs []openai.ChatCompletionMessage, cfg types.ToolOutputPruningConfig, already map[string]string) ([]openai.ChatCompletionMessage, []stubbedResult, int) {
 	out := make([]openai.ChatCompletionMessage, len(msgs))
 	copy(out, msgs)
 	if cfg.Disabled {
@@ -140,28 +182,39 @@ func pruneToolOutputs(msgs []openai.ChatCompletionMessage, cfg types.ToolOutputP
 	calls := indexToolCalls(msgs)
 	protected := trailingToolRun(msgs)
 
-	// Everything that should end up stubbed on this call.
-	target := make(map[string]bool, len(already))
-	for id := range already {
-		target[id] = true
+	// Everything that should end up stubbed on this call, mapped to the clause
+	// its stub renders.
+	target := make(map[string]string, len(already))
+	for id, detail := range already {
+		target[id] = detail
 	}
 	if !cfg.DisableStaleReads {
 		for id := range staleReadIDs(msgs, calls) {
-			if !protected[id] {
-				target[id] = true
+			// An id already in target keeps the clause it was first stubbed
+			// with; only a result being stubbed for the first time gets today's
+			// reason.
+			if _, done := target[id]; done || protected[id] {
+				continue
 			}
+			target[id] = detailStale
 		}
 	}
 	if cfg.HighWaterTokens > 0 {
+		// sweepToLowWater passes over everything already in target, so this
+		// never overwrites a stale read's clause with the budget one.
 		for _, id := range sweepToLowWater(msgs, cfg, target, protected) {
-			target[id] = true
+			target[id] = detailBudget
 		}
 	}
 
-	var newly []string
+	var newly []stubbedResult
 	freed := 0
 	for i := range out {
-		if out[i].Role != "tool" || !target[out[i].ToolCallID] {
+		if out[i].Role != "tool" {
+			continue
+		}
+		detail, ok := target[out[i].ToolCallID]
+		if !ok {
 			continue
 		}
 		info := calls[out[i].ToolCallID]
@@ -172,12 +225,12 @@ func pruneToolOutputs(msgs []openai.ChatCompletionMessage, cfg types.ToolOutputP
 		if info.name == "" {
 			info.name = "tool"
 		}
-		stub := prunedStub(info.name, info.path, "")
+		stub := prunedStub(info.name, info.path, detail)
 		if out[i].Content == stub {
 			continue // already a stub in this copy
 		}
-		if !already[out[i].ToolCallID] {
-			newly = append(newly, out[i].ToolCallID)
+		if _, seen := already[out[i].ToolCallID]; !seen {
+			newly = append(newly, stubbedResult{id: out[i].ToolCallID, detail: detail})
 			freed += tokensOf(out[i].Content) - tokensOf(stub)
 		}
 		out[i].Content = stub
@@ -198,11 +251,11 @@ func pruneToolOutputs(msgs []openai.ChatCompletionMessage, cfg types.ToolOutputP
 func (s *Session) pruneMessages(msgs []openai.ChatCompletionMessage) []openai.ChatCompletionMessage {
 	s.prunedMu.Lock()
 	if s.prunedIDs == nil {
-		s.prunedIDs = map[string]bool{}
+		s.prunedIDs = map[string]string{}
 	}
 	out, newly, freed := pruneToolOutputs(msgs, effectivePruning(s.pruning), s.prunedIDs)
-	for _, id := range newly {
-		s.prunedIDs[id] = true
+	for _, n := range newly {
+		s.prunedIDs[n.id] = n.detail
 	}
 	forgetAbsentIDs(s.prunedIDs, msgs)
 	s.prunedMu.Unlock()
@@ -252,7 +305,7 @@ func effectivePruning(cfg types.ToolOutputPruningConfig) types.ToolOutputPruning
 // subtask fragment, flush the stubbed set, and un-stub everything on the way
 // back to the main conversation, breaking monotonicity. Gate the manipulator on
 // the main fragment before turning any of them on.
-func forgetAbsentIDs(ids map[string]bool, msgs []openai.ChatCompletionMessage) {
+func forgetAbsentIDs(ids map[string]string, msgs []openai.ChatCompletionMessage) {
 	if len(ids) == 0 {
 		return
 	}
@@ -298,10 +351,13 @@ func trailingToolRun(msgs []openai.ChatCompletionMessage) map[string]bool {
 //
 // It stops when nothing eligible is left rather than violating MinResultTokens:
 // size pruning is best-effort and never guarantees a ceiling.
-func sweepToLowWater(msgs []openai.ChatCompletionMessage, cfg types.ToolOutputPruningConfig, target, protected map[string]bool) []string {
+func sweepToLowWater(msgs []openai.ChatCompletionMessage, cfg types.ToolOutputPruningConfig, target map[string]string, protected map[string]bool) []string {
 	total := 0
 	for _, m := range msgs {
-		if m.Role == "tool" && !target[m.ToolCallID] {
+		if m.Role != "tool" {
+			continue
+		}
+		if _, done := target[m.ToolCallID]; !done {
 			total += tokensOf(m.Content)
 		}
 	}
@@ -317,7 +373,7 @@ func sweepToLowWater(msgs []openai.ChatCompletionMessage, cfg types.ToolOutputPr
 		if m.Role != "tool" || m.ToolCallID == "" {
 			continue
 		}
-		if target[m.ToolCallID] || protected[m.ToolCallID] {
+		if _, done := target[m.ToolCallID]; done || protected[m.ToolCallID] {
 			continue
 		}
 		size := tokensOf(m.Content)

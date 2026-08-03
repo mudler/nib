@@ -248,7 +248,7 @@ func TestStaleReadIDsSkipsAResultWithNoMatchingCall(t *testing.T) {
 }
 
 func TestPrunedStubNamesWhatWasDroppedAndHowToGetItBack(t *testing.T) {
-	got := prunedStub("read", "parser.go", "250 lines")
+	got := prunedStub("read", "parser.go", "250 lines dropped after a later edit")
 	for _, want := range []string{"read", "parser.go", "250 lines", "re-read"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("stub %q is missing %q", got, want)
@@ -280,7 +280,7 @@ func TestPruneLeavesEverythingAloneBelowHighWater(t *testing.T) {
 	}
 	cfg := types.ToolOutputPruningConfig{HighWaterTokens: 24000, LowWaterTokens: 8000, MinResultTokens: 200}
 
-	out, newly, freed := pruneToolOutputs(msgs, cfg, map[string]bool{})
+	out, newly, freed := pruneToolOutputs(msgs, cfg, map[string]string{})
 
 	if len(newly) != 0 || freed != 0 {
 		t.Fatalf("pruned below high water: newly=%v freed=%d", newly, freed)
@@ -302,12 +302,12 @@ func TestPruneSweepsToLowWaterOldestFirst(t *testing.T) {
 	}
 	cfg := types.ToolOutputPruningConfig{HighWaterTokens: 12000, LowWaterTokens: 6000, MinResultTokens: 200}
 
-	out, newly, freed := pruneToolOutputs(msgs, cfg, map[string]bool{})
+	out, newly, freed := pruneToolOutputs(msgs, cfg, map[string]string{})
 
 	if len(newly) != 2 {
 		t.Fatalf("newly stubbed = %v, want the two oldest results", newly)
 	}
-	if newly[0] != "c1" || newly[1] != "c2" {
+	if newly[0].id != "c1" || newly[1].id != "c2" {
 		t.Fatalf("swept out of order: %v, want [c1 c2]", newly)
 	}
 	// freed is not merely positive, it is a specific number: Task 5 renders it in
@@ -341,10 +341,10 @@ func TestPruneIsMonotonic(t *testing.T) {
 	}
 	cfg := types.ToolOutputPruningConfig{HighWaterTokens: 12000, LowWaterTokens: 6000, MinResultTokens: 200}
 
-	already := map[string]bool{}
+	already := map[string]string{}
 	_, newly, _ := pruneToolOutputs(msgs, cfg, already)
-	for _, id := range newly {
-		already[id] = true
+	for _, n := range newly {
+		already[n.id] = n.detail
 	}
 
 	// Same input, same state: a second call must stub nothing further.
@@ -394,10 +394,10 @@ func TestPruneNeverTouchesTheTrailingToolResults(t *testing.T) {
 	}
 	cfg := types.ToolOutputPruningConfig{HighWaterTokens: 1000, LowWaterTokens: 1, MinResultTokens: 1}
 
-	out, newly, _ := pruneToolOutputs(msgs, cfg, map[string]bool{})
+	out, newly, _ := pruneToolOutputs(msgs, cfg, map[string]string{})
 
-	for _, id := range newly {
-		if id == "c2" {
+	for _, n := range newly {
+		if n.id == "c2" {
 			t.Fatal("stubbed the trailing result the model is about to read")
 		}
 	}
@@ -415,7 +415,7 @@ func TestPruneRespectsTheMinimumResultSize(t *testing.T) {
 	}
 	cfg := types.ToolOutputPruningConfig{HighWaterTokens: 10, LowWaterTokens: 1, MinResultTokens: 200}
 
-	_, newly, _ := pruneToolOutputs(msgs, cfg, map[string]bool{})
+	_, newly, _ := pruneToolOutputs(msgs, cfg, map[string]string{})
 	if len(newly) != 0 {
 		t.Fatalf("stubbed results below the floor: %v", newly)
 	}
@@ -431,7 +431,7 @@ func TestPruneStopsAtTheFloorEvenIfLowWaterIsUnreachable(t *testing.T) {
 	}
 	cfg := types.ToolOutputPruningConfig{HighWaterTokens: 50, LowWaterTokens: 1, MinResultTokens: 200}
 
-	_, newly, _ := pruneToolOutputs(msgs, cfg, map[string]bool{})
+	_, newly, _ := pruneToolOutputs(msgs, cfg, map[string]string{})
 	if len(newly) != 0 {
 		t.Fatalf("violated the floor chasing low water: %v", newly)
 	}
@@ -446,9 +446,100 @@ func TestPruneStubsAStaleReadBelowHighWater(t *testing.T) {
 	}
 	cfg := types.ToolOutputPruningConfig{HighWaterTokens: 24000, LowWaterTokens: 8000, MinResultTokens: 200}
 
-	_, newly, _ := pruneToolOutputs(msgs, cfg, map[string]bool{})
-	if len(newly) != 1 || newly[0] != "c1" {
+	_, newly, _ := pruneToolOutputs(msgs, cfg, map[string]string{})
+	if len(newly) != 1 || newly[0].id != "c1" {
 		t.Fatalf("newly = %v, want the stale read c1 even though we are under high water", newly)
+	}
+}
+
+// The stub is the only channel that tells the model why a body it can see it
+// once had is gone, and the two reasons ask for opposite things. "Dropped to
+// save context" says the content was fine and merely expensive, which invites
+// the model to work from its memory of it. For a read a later edit invalidated
+// that is exactly the failure the rule exists to prevent: the stored content is
+// WRONG and the model has to go back to disk.
+func TestPruneStubGivesTheStaleReadReasonAndTheSweepTheBudgetOne(t *testing.T) {
+	msgs := []openai.ChatCompletionMessage{
+		callMsg("c1", "read", `{"path":"a.go"}`), bigResult("c1", 300),
+		callMsg("c2", "read", `{"path":"b.go"}`), bigResult("c2", 9000),
+		callMsg("c3", "edit", `{"path":"a.go","old":"x","new":"y"}`), resultMsg("c3", "ok"),
+		{Role: "user", Content: "next"},
+	}
+	// Both rules fire on this fixture: c1 goes because the edit invalidated it,
+	// c2 goes because the sweep needs the room.
+	cfg := types.ToolOutputPruningConfig{HighWaterTokens: 1000, LowWaterTokens: 1, MinResultTokens: 200}
+
+	out, newly, _ := pruneToolOutputs(msgs, cfg, map[string]string{})
+
+	if len(newly) != 2 {
+		t.Fatalf("newly = %v, want the stale read and the swept result", newly)
+	}
+	stale, swept := out[1].Content, out[3].Content
+	if !strings.Contains(stale, "after a later edit") {
+		t.Fatalf("the stale read's stub does not say the file changed under it: %q", stale)
+	}
+	if strings.Contains(stale, "to save context") {
+		t.Fatalf("the stale read's stub blames the budget for a correctness eviction: %q", stale)
+	}
+	if !strings.Contains(swept, "to save context") {
+		t.Fatalf("the swept result's stub lost the budget reason: %q", swept)
+	}
+	// The sweep picks the oldest LARGE results on size alone. Nothing about them
+	// changed on disk, and telling the model otherwise would make it re-read
+	// files that are still exactly as it left them.
+	if strings.Contains(swept, "after a later edit") {
+		t.Fatalf("the swept result's stub claims an edit the sweep knows nothing about: %q", swept)
+	}
+	// Whatever the reason, the way back is the same and must still be there.
+	for _, s := range []string{stale, swept} {
+		if !strings.Contains(s, "re-read") {
+			t.Fatalf("stub does not say how to get the content back: %q", s)
+		}
+	}
+}
+
+// Monotonicity is a property of the TEXT, not only of the set of stubbed ids: a
+// stub whose wording changed between calls would move the prompt prefix exactly
+// as un-stubbing it would, and the prefix cache cannot tell the two apart.
+//
+// The reason a result was dropped is not stable under a growing conversation —
+// a result swept for budget becomes a stale read the moment the model edits the
+// file it had read — so the clause has to be recorded at the transition and
+// kept, not re-derived. This fixture makes that exact thing happen.
+func TestPruneKeepsAStubsWordingFixedOnceWritten(t *testing.T) {
+	msgs := []openai.ChatCompletionMessage{
+		callMsg("c1", "read", `{"path":"a.go"}`), bigResult("c1", 5000),
+		{Role: "user", Content: "next"},
+	}
+	cfg := types.ToolOutputPruningConfig{HighWaterTokens: 1000, LowWaterTokens: 1, MinResultTokens: 200}
+
+	already := map[string]string{}
+	out, newly, _ := pruneToolOutputs(msgs, cfg, already)
+	if len(newly) != 1 {
+		t.Fatalf("newly = %v, want the swept read: the fixture proves nothing otherwise", newly)
+	}
+	for _, n := range newly {
+		already[n.id] = n.detail
+	}
+	if !strings.Contains(out[1].Content, "to save context") {
+		t.Fatalf("c1 was not swept for budget, so the test cannot show the reason changing: %q", out[1].Content)
+	}
+
+	// The model now edits the file it read. c1 is a stale read from this turn on.
+	grown := append(append([]openai.ChatCompletionMessage{}, msgs...),
+		callMsg("c2", "edit", `{"path":"a.go","old":"x","new":"y"}`), resultMsg("c2", "ok"),
+		openai.ChatCompletionMessage{Role: "user", Content: "more"},
+	)
+	if !staleReadIDs(grown, indexToolCalls(grown))["c1"] {
+		t.Fatal("c1 is not stale in the grown fixture: the test is not exercising the conflict")
+	}
+
+	out2, newly2, freed2 := pruneToolOutputs(grown, cfg, already)
+	if out2[1].Content != out[1].Content {
+		t.Fatalf("a stub was reworded on a later call: %q -> %q — the prefix moves and the cache is dead", out[1].Content, out2[1].Content)
+	}
+	if len(newly2) != 0 || freed2 != 0 {
+		t.Fatalf("an already-stubbed result was reported stubbed again: newly=%v freed=%d", newly2, freed2)
 	}
 }
 
@@ -460,7 +551,7 @@ func TestPruneDisabledDoesNothing(t *testing.T) {
 	}
 	cfg := types.ToolOutputPruningConfig{Disabled: true, HighWaterTokens: 10, LowWaterTokens: 1, MinResultTokens: 1}
 
-	_, newly, freed := pruneToolOutputs(msgs, cfg, map[string]bool{})
+	_, newly, freed := pruneToolOutputs(msgs, cfg, map[string]string{})
 	if len(newly) != 0 || freed != 0 {
 		t.Fatalf("disabled pruning still pruned: newly=%v freed=%d", newly, freed)
 	}
@@ -474,7 +565,7 @@ func TestPruneDisableStaleReadsLeavesSizePruningOn(t *testing.T) {
 	}
 	cfg := types.ToolOutputPruningConfig{DisableStaleReads: true, HighWaterTokens: 24000, LowWaterTokens: 8000, MinResultTokens: 200}
 
-	_, newly, _ := pruneToolOutputs(msgs, cfg, map[string]bool{})
+	_, newly, _ := pruneToolOutputs(msgs, cfg, map[string]string{})
 	if len(newly) != 0 {
 		t.Fatalf("stale-read rule fired while disabled: %v", newly)
 	}
@@ -491,8 +582,8 @@ func TestPruneZeroHighWaterDisablesOnlyTheSweep(t *testing.T) {
 	}
 	cfg := types.ToolOutputPruningConfig{HighWaterTokens: 0, LowWaterTokens: 8000, MinResultTokens: 200}
 
-	_, newly, _ := pruneToolOutputs(msgs, cfg, map[string]bool{})
-	if len(newly) != 1 || newly[0] != "c1" {
+	_, newly, _ := pruneToolOutputs(msgs, cfg, map[string]string{})
+	if len(newly) != 1 || newly[0].id != "c1" {
 		t.Fatalf("newly = %v, want only the stale read: the sweep is off but correctness is not", newly)
 	}
 }
@@ -506,7 +597,7 @@ func TestPrunePreservesMessageCountRolesAndToolCallIDs(t *testing.T) {
 	}
 	cfg := types.ToolOutputPruningConfig{HighWaterTokens: 1000, LowWaterTokens: 1, MinResultTokens: 1}
 
-	out, _, _ := pruneToolOutputs(msgs, cfg, map[string]bool{})
+	out, _, _ := pruneToolOutputs(msgs, cfg, map[string]string{})
 
 	if len(out) != len(msgs) {
 		t.Fatalf("message count changed %d -> %d: an orphaned tool_calls message makes the next request invalid", len(msgs), len(out))
@@ -535,7 +626,7 @@ func TestPruneDoesNotMutateTheInput(t *testing.T) {
 	before := msgs[1].Content
 	cfg := types.ToolOutputPruningConfig{HighWaterTokens: 1000, LowWaterTokens: 1, MinResultTokens: 1}
 
-	_, _, _ = pruneToolOutputs(msgs, cfg, map[string]bool{})
+	_, _, _ = pruneToolOutputs(msgs, cfg, map[string]string{})
 
 	if msgs[1].Content != before {
 		t.Fatal("pruneToolOutputs wrote through to the caller's slice")
@@ -555,9 +646,9 @@ func TestPruneStubsAnOrphanedResultReadably(t *testing.T) {
 	}
 	cfg := types.ToolOutputPruningConfig{HighWaterTokens: 6000, LowWaterTokens: 1, MinResultTokens: 200}
 
-	out, newly, _ := pruneToolOutputs(msgs, cfg, map[string]bool{})
+	out, newly, _ := pruneToolOutputs(msgs, cfg, map[string]string{})
 
-	if len(newly) == 0 || newly[0] != "orphan" {
+	if len(newly) == 0 || newly[0].id != "orphan" {
 		t.Fatalf("newly = %v, want the orphan swept like any other oversized result", newly)
 	}
 	if strings.Contains(out[0].Content, "[ ") || strings.Contains(out[0].Content, "[—") {
@@ -581,9 +672,9 @@ func TestPruneSkipsASmallResultWithoutStallingTheSweep(t *testing.T) {
 	}
 	cfg := types.ToolOutputPruningConfig{HighWaterTokens: 1000, LowWaterTokens: 1, MinResultTokens: 200}
 
-	out, newly, _ := pruneToolOutputs(msgs, cfg, map[string]bool{})
+	out, newly, _ := pruneToolOutputs(msgs, cfg, map[string]string{})
 
-	if len(newly) != 1 || newly[0] != "c2" {
+	if len(newly) != 1 || newly[0].id != "c2" {
 		t.Fatalf("newly = %v, want [c2]: a small old result must not stop the sweep reaching a large newer one", newly)
 	}
 	if out[1].Content != msgs[1].Content {
@@ -614,7 +705,7 @@ func TestPruneKeepsAStubbedResultStubbedInsideTheTrailingRun(t *testing.T) {
 	// isolates the `already` seeding.
 	cfg := types.ToolOutputPruningConfig{HighWaterTokens: 24000, LowWaterTokens: 8000, MinResultTokens: 200}
 
-	already := map[string]bool{"c1": true}
+	already := map[string]string{"c1": detailBudget}
 
 	out, newly, freed := pruneToolOutputs(msgs, cfg, already)
 

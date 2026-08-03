@@ -148,10 +148,16 @@ type Session struct {
 	prunedMu sync.Mutex
 	// pruning is the tool-output pruning policy for this session.
 	pruning types.ToolOutputPruningConfig
-	// prunedIDs is the set of tool_call_ids already replaced by a stub. It is
-	// what makes pruning monotonic across calls, and it is why a prune notice
-	// fires on a transition rather than on every LLM call.
-	prunedIDs map[string]bool
+	// prunedIDs maps each tool_call_id already replaced by a stub to the clause
+	// that stub carries. It is what makes pruning monotonic across calls, and it
+	// is why a prune notice fires on a transition rather than on every LLM call.
+	//
+	// The clause is stored rather than re-derived because the reason a result
+	// was dropped can change under the policy's feet — a result swept for budget
+	// becomes a stale read as soon as the model edits the file it had read — and
+	// a stub whose wording changed between calls would move the prompt prefix
+	// just as un-stubbing it would.
+	prunedIDs map[string]string
 
 	tracer *trace.Recorder // non-nil when session tracing is enabled
 
