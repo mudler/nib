@@ -169,8 +169,10 @@ func TestSessionSendMessagePrunesOnTheWire(t *testing.T) {
 // manipulated fragment handed back by cogito and stored, would silently destroy
 // the content the transcript, ExportHistory and compaction still need.
 //
-// This one passes whether or not the manipulator is installed, by design: it
-// pins that pruning is harmless, not that it happened.
+// It pins that pruning is harmless, not that it works — but it is not neutral
+// about whether pruning ran: the guard below fails the test outright when
+// nothing was stubbed this turn, because an untouched history proves nothing
+// when nothing touched it.
 func TestSessionPruningDoesNotAlterStoredHistory(t *testing.T) {
 	rec := &pruneRecorder{}
 	const marker = "SENTINEL_FILE_CONTENTS"

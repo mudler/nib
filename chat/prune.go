@@ -170,6 +170,19 @@ type stubbedResult struct {
 // was first stubbed with even when the reason it would be picked for today has
 // changed.
 //
+// Disabled is the ONE deliberate exception to that monotonicity, and it is
+// worth stating because everything else here is built to make un-stubbing
+// impossible. Returning before the stubbing loop hands back the untouched
+// bodies, so a mid-session Reload that turns pruning off un-stubs the whole
+// conversation in one step. That is the point: switching the feature off must
+// actually switch it off, not leave a session serving stubs for content it
+// still holds. It is safe because it costs only what any prefix change costs —
+// one re-prefill — and it cannot lose anything, since the bodies come back from
+// the caller's own slice rather than from anything pruning stored. `already`
+// deliberately survives the early return, so re-enabling restores exactly the
+// stubs that were there before, with their original clauses, rather than
+// re-deriving a fresh boundary.
+//
 // msgs is never written through — the caller's slice belongs to cogito, and
 // behind it to the session's fragment, which pruning must not touch.
 func pruneToolOutputs(msgs []openai.ChatCompletionMessage, cfg types.ToolOutputPruningConfig, already map[string]string) ([]openai.ChatCompletionMessage, []stubbedResult, int) {
