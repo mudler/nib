@@ -55,3 +55,22 @@ func TestPruneNoticeFillsAZeroSaving(t *testing.T) {
 		t.Fatalf("notice has a hole where a count should be: %q", got)
 	}
 }
+
+// The saving is chat.tokensOf's byte/4 estimate, exactly like the compaction
+// notice's figures — so it is marked the same way. An unmarked number reads as
+// measured, and a user cannot tell the difference between the two notices'
+// numbers when only one of them admits to guessing.
+func TestPruneNoticeMarksItsSavingAsAnEstimate(t *testing.T) {
+	got := pruneNotice(3, 12400)
+	if !strings.Contains(got, "~12.4k") {
+		t.Fatalf("notice presents an estimated saving as a measurement: %q", got)
+	}
+	if !strings.Contains(got, "(estimated)") {
+		t.Fatalf("notice is missing the marker compactNotice uses: %q", got)
+	}
+	// The marker belongs to the token figure alone: the number of results is
+	// counted, not estimated, and marking it too would understate what nib knows.
+	if strings.Contains(got, "~3") {
+		t.Fatalf("notice marks the exact result count as approximate: %q", got)
+	}
+}

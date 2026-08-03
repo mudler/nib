@@ -38,6 +38,20 @@ func TestPrunedNoticeWording(t *testing.T) {
 	}
 }
 
+// The saving is the same byte/4 estimate the compaction notice marks, so it
+// carries the same markers. Two notices in the same transcript disagreeing
+// about whether their numbers are measured is worse than either choice.
+func TestPrunedNoticeMarksItsSavingAsAnEstimate(t *testing.T) {
+	got := prunedNotice(3, 12400)
+	if !strings.Contains(got, "~12.4k") || !strings.Contains(got, "(estimated)") {
+		t.Fatalf("notice presents an estimated saving as a measurement: %q", got)
+	}
+	// The count is exact; only the tokens are a guess.
+	if strings.Contains(got, "~3") {
+		t.Fatalf("notice marks the exact result count as approximate: %q", got)
+	}
+}
+
 // A listener nobody starts receives nothing. The prune notice reaches the
 // transcript only if sessionReadyMsg issues listenPrune alongside the other
 // listeners, and no wiring test would otherwise notice its absence.

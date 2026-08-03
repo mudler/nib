@@ -613,12 +613,18 @@ func RunCLI(ctx context.Context, cfg types.Config, streams Streams, shellJobs *w
 // stale read is stubbed however small it was, so a pass can free nothing
 // measurable, and HumanTokens renders 0 as "" — leaving the sentence a hole
 // where its number belongs.
+//
+// It is marked approximate for the same reason compactNotice below is, and in
+// the same words: the figure is chat.tokensOf's byte/4 estimate of the bodies
+// it replaced, not a backend-reported saving, and an unmarked number reads as
+// measured. The COUNT is exact and carries no marker — only the tokens are a
+// guess.
 func pruneNotice(results, freed int) string {
 	noun := "results"
 	if results == 1 {
 		noun = "result"
 	}
-	return fmt.Sprintf("pruned %d tool %s — freed %s tokens", results, noun, chat.HumanTokensOrZero(freed))
+	return fmt.Sprintf("pruned %d tool %s — freed ~%s tokens (estimated)", results, noun, chat.HumanTokensOrZero(freed))
 }
 
 // compactNotice formats the one-line summary shown after a conversation is

@@ -311,10 +311,10 @@ func TestPruneSweepsToLowWaterOldestFirst(t *testing.T) {
 		t.Fatalf("swept out of order: %v, want [c1 c2]", newly)
 	}
 	// freed is not merely positive, it is a specific number: Task 5 renders it in
-	// a user-facing notice ("freed 12.4k tokens"), so an unverified figure would
-	// become a visible lie. It is the size of what was replaced minus the size of
-	// what replaced it, in the same byte/4 estimate compact.go's estimateTokens
-	// uses. Computed from the fixture and the real stub text so it moves with
+	// a user-facing notice ("freed ~12.4k tokens (estimated)"), so an unverified
+	// figure would become a visible lie. It is the size of what was replaced
+	// minus the size of what replaced it, in the same byte/4 estimate compact.go's
+	// estimateTokens uses. Computed from the fixture and the real stub text so it moves with
 	// them, and spelled out as len()/4 rather than via tokensOf so that a broken
 	// tokensOf cannot cancel itself out on both sides of the comparison.
 	wantFreed := (len(msgs[1].Content)/4 - len(prunedStub("read", "a.go", ""))/4) +

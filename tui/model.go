@@ -1989,12 +1989,17 @@ func (m Model) isWorking() bool {
 // be untrue. The saving uses HumanTokensOrZero: a stale read is stubbed however
 // small it was, so a pass can free nothing measurable and HumanTokens renders
 // 0 as "".
+//
+// It carries the same "~" and "(estimated)" markers as compactNotice below,
+// because the figure is the same byte/4 estimate: an unmarked number reads as
+// measured, and a user cannot tell the difference. The count is exact and stays
+// unmarked.
 func prunedNotice(results, freed int) string {
 	noun := "results"
 	if results == 1 {
 		noun = "result"
 	}
-	return fmt.Sprintf("pruned %d tool %s — freed %s tokens", results, noun, chat.HumanTokensOrZero(freed))
+	return fmt.Sprintf("pruned %d tool %s — freed ~%s tokens (estimated)", results, noun, chat.HumanTokensOrZero(freed))
 }
 
 // compactNotice formats a one-line compaction summary for the transcript. It
