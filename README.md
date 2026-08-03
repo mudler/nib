@@ -373,6 +373,24 @@ model: gpt-4o-mini
 api_key: your-api-key
 base_url: https://api.openai.com/v1
 
+# Optional and disabled by default: enable provenance tracking, LLM span
+# classification/redaction, and stricter approval checks for external data.
+prompt_injection_protection:
+  enabled: true
+
+# Optional classifier backend when prompt-injection protection is enabled.
+# Without this,
+# classification uses the main configured model. Codex retains the ChatGPT
+# OAuth credentials; nib only uses its stdio JSON-RPC protocol. The default
+# command is `codex app-server --stdio`, so `codex` must be available on PATH:
+codex_app_server:
+  enabled: true
+  # command: codex
+  # args: [app-server, --stdio]
+  # model: gpt-5.4
+# On Nix, put Codex on PATH with `nix shell github:numtide/nix-ai-tools#codex`
+# (or add it to the project flake) before starting nib.
+
 # Optional: custom system prompt
 prompt: |
   You are a calm, helpful terminal assistant...
@@ -451,7 +469,8 @@ nib --yolo          # or: NIB_YOLO=1 nib
 ```
 
 While it's active, nib shows it on screen: a `yolo` badge in the TUI header and
-a one-line notice in the CLI banner.
+a one-line notice in the CLI banner. If opt-in prompt-injection protection is
+enabled, its fresh-approval boundary remains active after external content.
 
 ## Tool Approval
 
@@ -491,7 +510,12 @@ In the **CLI** (`--cli`) the prompt is line-based: type `y`, `a`, `all`, `n`, or
 change, then Enter. Read-only calls (reads, searches, safe read-only shell) already skip the
 prompt by default; set `approval_mode: strict` to be prompted for those too. To skip prompting
 entirely, set `approval_mode: auto` / `allowed_tools` in your config, or run with `--yolo`
-(env: `NIB_YOLO=1`) to auto-approve every tool call.
+(env: `NIB_YOLO=1`) to auto-approve ordinary tool calls. When
+`prompt_injection_protection.enabled: true`, web, browser, attachment, and configured MCP
+results are tracked as untrusted external data. A separate, tool-free LLM pass
+identifies exact prompt-injection spans for redaction before they reach the main
+agent; classification failures withhold the external text. Subsequent
+consequential calls require fresh approval even under a broad session/turn grant.
 
 ## MCP Servers
 

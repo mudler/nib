@@ -17,6 +17,8 @@ import (
 	"github.com/chromedp/chromedp"
 	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/mudler/cogito/clients"
+	"github.com/mudler/nib/provenance"
 	"github.com/mudler/nib/types"
 	"github.com/mudler/xlog"
 )
@@ -43,7 +45,8 @@ type browserServer struct {
 	// commands on the same browser context. Held for the duration of each
 	// handler's chromedp.Run sequence (acquired after the browser/live ctx is
 	// already resolved, so it's never held across ensureBrowser).
-	actionMu sync.Mutex
+	actionMu   sync.Mutex
+	classifier provenance.Classifier
 }
 
 func newBrowserServer(cfg types.BrowserConfig) *browserServer {
@@ -153,8 +156,18 @@ type BrowserInput struct {
 // BrowserOutput is the structured result returned to the model for every
 // browser_* tool that produces (or refreshes) a snapshot.
 type BrowserOutput struct {
-	Snapshot     string `json:"snapshot,omitempty"`
-	ElementCount int    `json:"element_count,omitempty"`
+	Snapshot         string `json:"snapshot,omitempty"`
+	ElementCount     int    `json:"element_count,omitempty"`
+	SourceID         string `json:"source_id,omitempty"`
+	RedactedFindings int    `json:"redacted_findings,omitempty"`
+}
+
+func (b *browserServer) protectedOutput(ctx context.Context, snapshot string, count int) BrowserOutput {
+	if b.classifier == nil {
+		return BrowserOutput{Snapshot: snapshot, ElementCount: count}
+	}
+	e := protectExternal(ctx, b.classifier, "browser", "active-page", snapshot)
+	return BrowserOutput{Snapshot: e.ModelText(), ElementCount: count, SourceID: e.ID, RedactedFindings: len(e.Findings)}
 }
 
 // timeoutAwareError rewrites a context-deadline error from a per-call,
@@ -180,7 +193,8 @@ func snapshotAfterAction(b *browserServer, actx context.Context, verb string) (*
 	if err != nil {
 		return textResult(verb + "\npost-action snapshot failed; call browser_snapshot"), BrowserOutput{}
 	}
-	return textResult(verb + "\n" + text), BrowserOutput{Snapshot: text, ElementCount: n}
+	out := b.protectedOutput(actx, text, n)
+	return textResult(verb + "\n" + out.Snapshot), out
 }
 
 // snapshotNow captures the current page's accessibility tree, renders it to
@@ -257,7 +271,8 @@ func (b *browserServer) browserNavigate(ctx context.Context, _ *mcp.CallToolRequ
 	if err != nil {
 		return nil, BrowserOutput{}, timeoutAwareError(err)
 	}
-	return textResult(text), BrowserOutput{Snapshot: text, ElementCount: n}, nil
+	out := b.protectedOutput(actx, text, n)
+	return textResult(out.Snapshot), out, nil
 }
 
 // browserSnapshot re-reads the accessibility tree of the currently open page
@@ -276,7 +291,8 @@ func (b *browserServer) browserSnapshot(ctx context.Context, _ *mcp.CallToolRequ
 	if err != nil {
 		return nil, BrowserOutput{}, timeoutAwareError(err)
 	}
-	return textResult(text), BrowserOutput{Snapshot: text, ElementCount: n}, nil
+	out := b.protectedOutput(actx, text, n)
+	return textResult(out.Snapshot), out, nil
 }
 
 // browserClick resolves in.Ref against the last snapshot's ref map, clicks
@@ -492,6 +508,10 @@ func browserInputSchema() (*jsonschema.Schema, error) {
 // Blocks until ctx is done, at which point the browser is torn down.
 func StartBrowserMCPServer(ctx context.Context, transport mcp.Transport, cfg types.Config) error {
 	bs := newBrowserServer(cfg.Browser)
+	classifierLLM := clients.NewLocalAILLM(cfg.Model, cfg.APIKey, cfg.BaseURL)
+	classifierLLM.SetMetadata(cfg.Metadata)
+	classifierLLM.SetReasoningEffort(cfg.ReasoningEffort)
+	bs.classifier = provenance.ClassifierForConfig(cfg, classifierLLM)
 	go func() {
 		<-ctx.Done()
 		bs.close()

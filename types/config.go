@@ -88,6 +88,15 @@ type Config struct {
 	Model   string `yaml:"model"`
 	APIKey  string `yaml:"api_key"`
 	BaseURL string `yaml:"base_url"`
+	// PromptInjectionProtection controls provenance tracking, LLM classification,
+	// redaction, and approval hardening for untrusted external data. It is
+	// disabled by default to preserve existing behavior.
+	PromptInjectionProtection PromptInjectionProtectionConfig `yaml:"prompt_injection_protection,omitempty"`
+	// CodexAppServer optionally routes security-classifier LLM calls through a
+	// local Codex app-server. This permits use of an existing ChatGPT login
+	// without exposing its OAuth credentials to nib. The default executable is
+	// "codex" and must be available on PATH.
+	CodexAppServer CodexAppServerConfig `yaml:"codex_app_server,omitempty"`
 	// Specialist models for attachment handling. Empty ⇒ LocalAI auto-selects
 	// by usecase (FLAG_TRANSCRIPT / FLAG_VISION).
 	TranscribeModel string `yaml:"transcribe_model,omitempty" json:"transcribe_model,omitempty"`
@@ -184,6 +193,20 @@ type Config struct {
 	Computer ComputerConfig `yaml:"-"`
 	// Browser is the opt-in browser-automation capability (chromedp-driven).
 	Browser BrowserConfig `yaml:"browser,omitempty"`
+}
+
+type PromptInjectionProtectionConfig struct {
+	Enabled bool `yaml:"enabled,omitempty"`
+}
+
+// CodexAppServerConfig describes a Codex app-server subprocess. When enabled,
+// it is used for prompt-injection classification; the main chat model remains
+// configured by model/api_key/base_url.
+type CodexAppServerConfig struct {
+	Enabled bool     `yaml:"enabled,omitempty"`
+	Command string   `yaml:"command,omitempty"`
+	Args    []string `yaml:"args,omitempty"`
+	Model   string   `yaml:"model,omitempty"`
 }
 
 // ComputerConfig configures the built-in computer_use MCP server. When Enabled,
