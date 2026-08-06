@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/mudler/cogito/clients"
+	"github.com/mudler/nib/provenance"
 	"github.com/mudler/nib/types"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -18,11 +19,13 @@ func StartWebMCPServer(ctx context.Context, transport mcp.Transport, cfg types.C
 		Version: "v1.0.0",
 	}, nil)
 
+	llm := clients.NewOpenAILLMWithOptions(cfg.Model, cfg.APIKey, cfg.BaseURL, clients.OpenAIOptions{
+		Metadata:        cfg.Metadata,
+		ReasoningEffort: cfg.ReasoningEffort,
+	})
 	ws := &webServer{
-		llm: clients.NewOpenAILLMWithOptions(cfg.Model, cfg.APIKey, cfg.BaseURL, clients.OpenAIOptions{
-			Metadata:        cfg.Metadata,
-			ReasoningEffort: cfg.ReasoningEffort,
-		}),
+		llm:        llm,
+		classifier: provenance.ClassifierForConfig(cfg, llm),
 	}
 
 	mcp.AddTool(server, &mcp.Tool{
@@ -33,7 +36,7 @@ func StartWebMCPServer(ctx context.Context, transport mcp.Transport, cfg types.C
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "web_search",
 		Description: "Search the web via DuckDuckGo. Returns up to max_results (default 5) structured results with title, url, and snippet.",
-	}, searchWeb)
+	}, ws.search)
 
 	return server.Run(ctx, transport)
 }
