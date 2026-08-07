@@ -863,7 +863,15 @@ func StartComputerMCPServer(ctx context.Context, transport mcp.Transport, cfg ty
 		return err
 	}
 	defer runtime.Close()
+	return startComputerMCPServer(ctx, transport, cfg, runtime)
+}
 
+func startComputerMCPServer(
+	ctx context.Context,
+	transport mcp.Transport,
+	cfg types.Config,
+	runtime *cuaRuntime,
+) error {
 	computerCfg := cfg.Computer
 	computerCfg.SessionID = runtime.SessionID()
 	cs := newComputerServer(runtime, computerCfg)

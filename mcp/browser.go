@@ -487,10 +487,41 @@ func browserInputSchema() (*jsonschema.Schema, error) {
 	return s, nil
 }
 
-// StartBrowserMCPServer starts a headed-Chrome-backed MCP server exposing the
-// browser_* tools (navigate, snapshot, click, type, press, scroll, vision).
-// Blocks until ctx is done, at which point the browser is torn down.
+// StartBrowserMCPServer starts the configured browser MCP server. Chromedp is
+// the default backend; the Cua compatibility path owns its runtime here until
+// the Cua browser server is implemented. It blocks until ctx is done for a
+// running backend.
 func StartBrowserMCPServer(ctx context.Context, transport mcp.Transport, cfg types.Config) error {
+	if err := validateBrowserConfig(cfg.Browser); err != nil {
+		return err
+	}
+	backend, _ := browserBackend(cfg.Browser)
+	if backend == "chromedp" {
+		return startBrowserMCPServer(ctx, transport, cfg, nil)
+	}
+
+	runtime, err := newCUARuntime(ctx, cfg, true)
+	if err != nil {
+		return err
+	}
+	defer runtime.Close()
+	return startBrowserMCPServer(ctx, transport, cfg, runtime)
+}
+
+func startBrowserMCPServer(
+	ctx context.Context,
+	transport mcp.Transport,
+	cfg types.Config,
+	runtime *cuaRuntime,
+) error {
+	backend, err := browserBackend(cfg.Browser)
+	if err != nil {
+		return err
+	}
+	if backend == "cua" {
+		return errors.New("Cua browser backend is not implemented")
+	}
+
 	bs := newBrowserServer(cfg.Browser)
 	go func() {
 		<-ctx.Done()
