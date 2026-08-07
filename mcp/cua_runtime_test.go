@@ -119,7 +119,8 @@ func TestCUARuntimeHelperProcess(t *testing.T) {
 				os.Exit(5)
 			}
 			if (mode == "hung-start" && params.Name == "start_session") ||
-				(mode == "hung-end" && params.Name == "end_session") {
+				(mode == "hung-end" && params.Name == "end_session") ||
+				(mode == "hung-call" && params.Name == "hung_action") {
 				continue
 			}
 			result = map[string]any{
@@ -216,6 +217,37 @@ func TestCUARuntimeCloseReapsChildWhenEndSessionHangs(t *testing.T) {
 		killCUARuntimeHelper(pidPath)
 		<-closed
 		t.Fatal("Close blocked after end_session ignored cancellation")
+	}
+	if !waitForCUARuntimeMarker(markerPath, time.Second) {
+		t.Fatal("Close returned without reaping the Cua child")
+	}
+}
+
+func TestCUARuntimeCloseReapsChildAfterEarlierCallCancellation(t *testing.T) {
+	cfg, markerPath, pidPath := helperCUARuntimeConfig(t, "hung-call")
+	t.Cleanup(func() { cleanupCUARuntimeHelper(markerPath, pidPath) })
+	runtime, err := newCUARuntime(context.Background(), cfg, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	callCtx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	if _, err := runtime.CallTool(callCtx, &mcp.CallToolParams{Name: "hung_action"}); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("hung action error = %v, want deadline exceeded", err)
+	}
+
+	closed := make(chan error, 1)
+	go func() { closed <- runtime.Close() }()
+	select {
+	case err := <-closed:
+		if err != nil {
+			t.Fatalf("Close() error = %v, want successful end_session and bounded connection close", err)
+		}
+	case <-time.After(2 * time.Second):
+		killCUARuntimeHelper(pidPath)
+		<-closed
+		t.Fatal("Close blocked on an earlier canceled call after end_session succeeded")
 	}
 	if !waitForCUARuntimeMarker(markerPath, time.Second) {
 		t.Fatal("Close returned without reaping the Cua child")

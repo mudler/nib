@@ -341,9 +341,7 @@ func (r *cuaRuntime) forceCloseConnection() error {
 func (r *cuaRuntime) Close() error {
 	r.closeOnce.Do(func() {
 		r.closeErr = r.endSession()
-		if errors.Is(r.closeErr, context.Canceled) || errors.Is(r.closeErr, context.DeadlineExceeded) {
-			r.closeErr = errors.Join(r.closeErr, r.forceCloseConnection())
-		}
+		r.closeErr = errors.Join(r.closeErr, r.forceCloseConnection())
 
 		if r.connCancel != nil {
 			r.connCancel()
