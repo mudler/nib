@@ -1,29 +1,34 @@
 package mcp
 
 import (
+	"bufio"
 	"context"
+	"encoding/json"
+	"errors"
+	"os"
 	"reflect"
 	"regexp"
+	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/mudler/nib/types"
 )
 
 func runtimeBrowserToolNames() []string {
-	return []string{
-		"start_session", "end_session", "health_report", "set_config",
-		"list_apps", "list_windows", "launch_app", "kill_app", "press_key",
-		"get_browser_state", "browser_prepare", "browser_navigate", "browser_click",
-		"browser_type", "browser_pointer", "browser_dialog",
-		"browser_set_input_files", "browser_download",
-	}
+	return slices.Clone(cuaBrowserRequiredTools)
 }
 
 func TestCUARuntimeStartsAndEndsOneDeclaredSession(t *testing.T) {
+	expectedMaxImageDimension := float64(1568)
+	if runtime.GOOS == "linux" {
+		expectedMaxImageDimension = 0
+	}
 	ctx := context.Background()
 	fake := startFakeCUA(t, ctx, "0.19.0", runtimeBrowserToolNames(), nil)
 	runtime, err := newCUARuntimeFromClient(ctx, fake.Session, types.Config{
@@ -36,7 +41,7 @@ func TestCUARuntimeStartsAndEndsOneDeclaredSession(t *testing.T) {
 
 	wantBeforeClose := []fakeCUACall{
 		{Name: "start_session", Args: map[string]any{"session": "run-7", "capture_scope": "window"}},
-		{Name: "set_config", Args: map[string]any{"capture_scope": "window", "max_image_dimension": float64(0)}},
+		{Name: "set_config", Args: map[string]any{"capture_scope": "window", "max_image_dimension": expectedMaxImageDimension}},
 		{Name: "health_report", Args: map[string]any{}},
 	}
 	if calls := fake.Calls(); !reflect.DeepEqual(calls, wantBeforeClose) {
@@ -54,6 +59,207 @@ func TestCUARuntimeStartsAndEndsOneDeclaredSession(t *testing.T) {
 	)
 	if calls := fake.Calls(); !reflect.DeepEqual(calls, wantCalls) {
 		t.Fatalf("lifecycle calls = %#v, want %#v", calls, wantCalls)
+	}
+}
+
+const (
+	cuaHelperModeEnv   = "NIB_CUA_RUNTIME_HELPER_MODE"
+	cuaHelperMarkerEnv = "NIB_CUA_RUNTIME_HELPER_MARKER"
+	cuaHelperPIDEnv    = "NIB_CUA_RUNTIME_HELPER_PID"
+)
+
+func TestCUARuntimeHelperProcess(t *testing.T) {
+	mode := os.Getenv(cuaHelperModeEnv)
+	if mode == "" {
+		return
+	}
+	if err := os.WriteFile(os.Getenv(cuaHelperPIDEnv), []byte(strconv.Itoa(os.Getpid())), 0o600); err != nil {
+		os.Exit(2)
+	}
+
+	scanner := bufio.NewScanner(os.Stdin)
+	encoder := json.NewEncoder(os.Stdout)
+	for scanner.Scan() {
+		var request struct {
+			JSONRPC string          `json:"jsonrpc"`
+			ID      json.RawMessage `json:"id"`
+			Method  string          `json:"method"`
+			Params  json.RawMessage `json:"params"`
+		}
+		if err := json.Unmarshal(scanner.Bytes(), &request); err != nil {
+			os.Exit(3)
+		}
+		if len(request.ID) == 0 {
+			continue
+		}
+
+		var result any
+		switch request.Method {
+		case "initialize":
+			var params struct {
+				ProtocolVersion string `json:"protocolVersion"`
+			}
+			if err := json.Unmarshal(request.Params, &params); err != nil {
+				os.Exit(4)
+			}
+			protocolVersion := params.ProtocolVersion
+			if mode == "unsupported-protocol" {
+				protocolVersion = "unsupported-test-version"
+			}
+			result = map[string]any{
+				"protocolVersion": protocolVersion,
+				"capabilities":    map[string]any{"tools": map[string]any{}},
+				"serverInfo":      map[string]any{"name": "cua-helper", "version": "0.19.0"},
+			}
+		case "tools/call":
+			var params struct {
+				Name string `json:"name"`
+			}
+			if err := json.Unmarshal(request.Params, &params); err != nil {
+				os.Exit(5)
+			}
+			if (mode == "hung-start" && params.Name == "start_session") ||
+				(mode == "hung-end" && params.Name == "end_session") {
+				continue
+			}
+			result = map[string]any{
+				"content":           []any{},
+				"structuredContent": map[string]any{"status": "ok"},
+			}
+		default:
+			result = map[string]any{}
+		}
+		if err := encoder.Encode(map[string]any{
+			"jsonrpc": "2.0",
+			"id":      request.ID,
+			"result":  result,
+		}); err != nil {
+			os.Exit(6)
+		}
+	}
+
+	if err := os.WriteFile(os.Getenv(cuaHelperMarkerEnv), []byte("reaped"), 0o600); err != nil {
+		os.Exit(7)
+	}
+	os.Exit(0)
+}
+
+func helperCUARuntimeConfig(t *testing.T, mode string) (types.Config, string, string) {
+	t.Helper()
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	markerPath := dir + "/reaped"
+	pidPath := dir + "/pid"
+	return types.Config{CUA: types.CUAConfig{
+		Command: executable,
+		Args:    []string{"-test.run=^TestCUARuntimeHelperProcess$"},
+		Env: map[string]string{
+			cuaHelperModeEnv:   mode,
+			cuaHelperMarkerEnv: markerPath,
+			cuaHelperPIDEnv:    pidPath,
+		},
+	}}, markerPath, pidPath
+}
+
+func killCUARuntimeHelper(pidPath string) {
+	pidBytes, err := os.ReadFile(pidPath)
+	if err != nil {
+		return
+	}
+	pid, err := strconv.Atoi(string(pidBytes))
+	if err != nil {
+		return
+	}
+	process, err := os.FindProcess(pid)
+	if err == nil {
+		_ = process.Kill()
+	}
+}
+
+func cleanupCUARuntimeHelper(markerPath, pidPath string) {
+	if _, err := os.Stat(markerPath); err == nil {
+		return
+	}
+	killCUARuntimeHelper(pidPath)
+}
+
+func waitForCUARuntimeMarker(path string, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(path); err == nil {
+			return true
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	return false
+}
+
+func TestCUARuntimeCloseReapsChildWhenEndSessionHangs(t *testing.T) {
+	cfg, markerPath, pidPath := helperCUARuntimeConfig(t, "hung-end")
+	t.Cleanup(func() { cleanupCUARuntimeHelper(markerPath, pidPath) })
+	runtime, err := newCUARuntime(context.Background(), cfg, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	closed := make(chan error, 1)
+	go func() { closed <- runtime.Close() }()
+	select {
+	case err := <-closed:
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("Close() error = %v, want end_session deadline", err)
+		}
+	case <-time.After(7 * time.Second):
+		killCUARuntimeHelper(pidPath)
+		<-closed
+		t.Fatal("Close blocked after end_session ignored cancellation")
+	}
+	if !waitForCUARuntimeMarker(markerPath, time.Second) {
+		t.Fatal("Close returned without reaping the Cua child")
+	}
+}
+
+func TestCUARuntimeStartupCancellationReapsChild(t *testing.T) {
+	cfg, markerPath, pidPath := helperCUARuntimeConfig(t, "hung-start")
+	t.Cleanup(func() { cleanupCUARuntimeHelper(markerPath, pidPath) })
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	type result struct {
+		runtime *cuaRuntime
+		err     error
+	}
+	started := make(chan result, 1)
+	go func() {
+		runtime, err := newCUARuntime(ctx, cfg, false)
+		started <- result{runtime: runtime, err: err}
+	}()
+	select {
+	case got := <-started:
+		if got.runtime != nil || !errors.Is(got.err, context.DeadlineExceeded) {
+			t.Fatalf("newCUARuntime() = (%v, %v), want nil, deadline exceeded", got.runtime, got.err)
+		}
+	case <-time.After(2 * time.Second):
+		killCUARuntimeHelper(pidPath)
+		<-started
+		t.Fatal("newCUARuntime blocked while closing a canceled start_session")
+	}
+	if !waitForCUARuntimeMarker(markerPath, time.Second) {
+		t.Fatal("startup cancellation returned without reaping the Cua child")
+	}
+}
+
+func TestCUARuntimeProtocolErrorReapsChild(t *testing.T) {
+	cfg, markerPath, pidPath := helperCUARuntimeConfig(t, "unsupported-protocol")
+	t.Cleanup(func() { cleanupCUARuntimeHelper(markerPath, pidPath) })
+	if runtime, err := newCUARuntime(context.Background(), cfg, false); runtime != nil || err == nil {
+		t.Fatalf("newCUARuntime() = (%v, %v), want protocol negotiation error", runtime, err)
+	}
+	if !waitForCUARuntimeMarker(markerPath, time.Second) {
+		t.Fatal("protocol negotiation error leaked the Cua child")
 	}
 }
 

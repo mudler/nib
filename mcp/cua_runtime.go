@@ -34,9 +34,45 @@ type cuaClient interface {
 type cuaRuntime struct {
 	client     cuaClient
 	sessionID  string
+	connection *cuaOwnedTransport
 	connCancel context.CancelFunc
 	closeOnce  sync.Once
 	closeErr   error
+}
+
+// cuaOwnedTransport retains the raw MCP connection created by a transport.
+// ClientSession.Close waits for in-flight JSON-RPC calls, so shutdown paths
+// must be able to break the underlying stream first when a peer ignores request
+// cancellation. closeRequested handles cancellation racing with Connect.
+type cuaOwnedTransport struct {
+	transport mcp.Transport
+
+	mu             sync.Mutex
+	connection     mcp.Connection
+	closeRequested bool
+}
+
+func (t *cuaOwnedTransport) Connect(ctx context.Context) (mcp.Connection, error) {
+	connection, err := t.transport.Connect(ctx)
+	t.mu.Lock()
+	t.connection = connection
+	closeRequested := t.closeRequested
+	t.mu.Unlock()
+	if closeRequested && connection != nil {
+		_ = connection.Close()
+	}
+	return connection, err
+}
+
+func (t *cuaOwnedTransport) Close() error {
+	t.mu.Lock()
+	t.closeRequested = true
+	connection := t.connection
+	t.mu.Unlock()
+	if connection == nil {
+		return nil
+	}
+	return connection.Close()
 }
 
 var cuaBrowserRequiredTools = []string{
@@ -60,49 +96,69 @@ func newCUARuntime(ctx context.Context, cfg types.Config, requireBrowser bool) (
 	child.Stderr = os.Stderr
 
 	connCtx, connCancel := context.WithCancel(context.Background())
-	stopStartupCancel := context.AfterFunc(ctx, connCancel)
+	ownedTransport := &cuaOwnedTransport{transport: &mcp.CommandTransport{Command: child}}
+	stopStartupCancel := context.AfterFunc(ctx, func() {
+		connCancel()
+		_ = ownedTransport.Close()
+	})
 	driverClient := mcp.NewClient(&mcp.Implementation{Name: "nib-cua", Version: "v1.0.0"}, nil)
-	driverSession, err := driverClient.Connect(connCtx, &mcp.CommandTransport{Command: child}, nil)
+	driverSession, err := driverClient.Connect(connCtx, ownedTransport, nil)
 	startupStillActive := stopStartupCancel()
 	if err != nil {
 		connCancel()
-		return nil, fmt.Errorf("connect cua-driver (%s): %w", resolved.Command, err)
+		return nil, errors.Join(
+			fmt.Errorf("connect cua-driver (%s): %w", resolved.Command, err),
+			ownedTransport.Close(),
+		)
 	}
 	if !startupStillActive && ctx.Err() != nil {
 		connCancel()
+		forceCloseErr := ownedTransport.Close()
 		closeErr := driverSession.Close()
-		return nil, errors.Join(fmt.Errorf("connect cua-driver (%s): %w", resolved.Command, ctx.Err()), closeErr)
+		return nil, errors.Join(
+			fmt.Errorf("connect cua-driver (%s): %w", resolved.Command, ctx.Err()),
+			forceCloseErr,
+			closeErr,
+		)
 	}
 
-	runtime, err := newCUARuntimeFromClient(ctx, driverSession, cfg, requireBrowser)
+	runtime, err := newCUARuntimeFromOwnedClient(ctx, driverSession, cfg, requireBrowser, ownedTransport, connCancel)
 	if err != nil {
-		connCancel()
 		return nil, err
 	}
-	runtime.connCancel = connCancel
 	return runtime, nil
 }
 
 func newCUARuntimeFromClient(ctx context.Context, client cuaClient, cfg types.Config, requireBrowser bool) (*cuaRuntime, error) {
+	return newCUARuntimeFromOwnedClient(ctx, client, cfg, requireBrowser, nil, nil)
+}
+
+func newCUARuntimeFromOwnedClient(
+	ctx context.Context,
+	client cuaClient,
+	cfg types.Config,
+	requireBrowser bool,
+	connection *cuaOwnedTransport,
+	connCancel context.CancelFunc,
+) (*cuaRuntime, error) {
+	r := &cuaRuntime{client: client, connection: connection, connCancel: connCancel}
 	resolved := resolveCUAConfig(cfg)
 	sessionID := resolved.SessionID
 	if sessionID == "" {
 		var err error
 		sessionID, err = mintCUASessionID()
 		if err != nil {
-			if closeErr := client.Close(); closeErr != nil {
-				return nil, errors.Join(err, fmt.Errorf("close cua-driver after session ID failure: %w", closeErr))
-			}
-			return nil, err
+			return nil, r.closeAfterStartupError(err, false)
 		}
 	}
+	r.sessionID = sessionID
 	if sessionID == "default" {
-		return nil, closeCUAClientOnError(client, errors.New("cua browser sessions require a non-default declared session ID"))
+		return nil, r.closeAfterStartupError(errors.New("cua browser sessions require a non-default declared session ID"), false)
 	}
 
 	if requireBrowser {
 		if err := validateCUABrowserClient(ctx, client); err != nil {
-			return nil, closeCUAClientOnError(client, err)
+			return nil, r.closeAfterStartupError(err, false)
 		}
 	}
 
@@ -114,13 +170,12 @@ func newCUARuntimeFromClient(ctx context.Context, client cuaClient, cfg types.Co
 		},
 	})
 	if err != nil {
-		return nil, closeCUAClientOnError(client, fmt.Errorf("start cua-driver session %q: %w", sessionID, err))
+		return nil, r.closeAfterStartupError(fmt.Errorf("start cua-driver session %q: %w", sessionID, err), false)
 	}
 	if startResult == nil || startResult.IsError || cuaResultRefused(startResult) {
-		return nil, closeCUAClientOnError(client, cuaToolResultError("start_session", startResult))
+		return nil, r.closeAfterStartupError(cuaToolResultError("start_session", startResult), false)
 	}
 
-	r := &cuaRuntime{client: client, sessionID: sessionID}
 	if cfg.Computer.Enabled {
 		// Retina screenshots can overflow a model context, so cap the longest
 		// side where the driver's RGB resize path is safe. Linux remains uncapped
@@ -205,13 +260,6 @@ func mintCUASessionID() (string, error) {
 	return "nib-" + hex.EncodeToString(random), nil
 }
 
-func closeCUAClientOnError(client cuaClient, cause error) error {
-	if err := client.Close(); err != nil {
-		return errors.Join(cause, fmt.Errorf("close cua-driver after startup failure: %w", err))
-	}
-	return cause
-}
-
 func cuaToolResultError(name string, result *mcp.CallToolResult) error {
 	if result == nil {
 		return fmt.Errorf("cua-driver %s returned an empty response", name)
@@ -248,18 +296,53 @@ func (r *cuaRuntime) SessionID() string {
 	return r.sessionID
 }
 
+func (r *cuaRuntime) closeAfterStartupError(cause error, sessionStarted bool) error {
+	var endErr error
+	if sessionStarted {
+		endErr = r.endSession()
+	}
+	forceCloseErr := r.forceCloseConnection()
+	if r.connCancel != nil {
+		r.connCancel()
+	}
+	clientCloseErr := r.client.Close()
+	if clientCloseErr != nil {
+		clientCloseErr = fmt.Errorf("close cua-driver after startup failure: %w", clientCloseErr)
+	}
+	return errors.Join(cause, endErr, forceCloseErr, clientCloseErr)
+}
+
+func (r *cuaRuntime) endSession() error {
+	closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	endResult, err := r.client.CallTool(closeCtx, &mcp.CallToolParams{
+		Name:      "end_session",
+		Arguments: map[string]any{"session": r.sessionID},
+	})
+	if err != nil {
+		return fmt.Errorf("end cua-driver session %q: %w", r.sessionID, err)
+	}
+	if endResult == nil || endResult.IsError || cuaResultRefused(endResult) {
+		return cuaToolResultError("end_session", endResult)
+	}
+	return nil
+}
+
+func (r *cuaRuntime) forceCloseConnection() error {
+	if r.connection == nil {
+		return nil
+	}
+	if err := r.connection.Close(); err != nil {
+		return fmt.Errorf("force-close cua-driver connection: %w", err)
+	}
+	return nil
+}
+
 func (r *cuaRuntime) Close() error {
 	r.closeOnce.Do(func() {
-		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		endResult, endErr := r.client.CallTool(closeCtx, &mcp.CallToolParams{
-			Name:      "end_session",
-			Arguments: map[string]any{"session": r.sessionID},
-		})
-		cancel()
-		if endErr != nil {
-			r.closeErr = fmt.Errorf("end cua-driver session %q: %w", r.sessionID, endErr)
-		} else if endResult == nil || endResult.IsError || cuaResultRefused(endResult) {
-			r.closeErr = cuaToolResultError("end_session", endResult)
+		r.closeErr = r.endSession()
+		if errors.Is(r.closeErr, context.Canceled) || errors.Is(r.closeErr, context.DeadlineExceeded) {
+			r.closeErr = errors.Join(r.closeErr, r.forceCloseConnection())
 		}
 
 		if r.connCancel != nil {
