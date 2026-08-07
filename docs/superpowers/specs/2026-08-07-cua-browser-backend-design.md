@@ -1,7 +1,7 @@
 # Cua browser backend
 
 **Date:** 2026-08-07
-**Status:** Approved design; implementation plan pending
+**Status:** Approved design; implementation plan in `docs/superpowers/plans/2026-08-07-cua-browser-backend.md`
 
 ## Problem
 
