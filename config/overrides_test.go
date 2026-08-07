@@ -266,6 +266,80 @@ func TestOverrideSlicesReplaceWholeAndAreNotAliased(t *testing.T) {
 	}
 }
 
+// The Cua and browser YAML tags are load-bearing: a typo silently leaves a
+// field empty. Exercise the real load path so every documented key is pinned.
+func TestCUAConfigAndBrowserBackendLoadFromYAML(t *testing.T) {
+	clearBareEnv(t)
+	dir := t.TempDir()
+	data := []byte("cua:\n" +
+		"  command: /opt/cua-driver\n" +
+		"  args: [mcp, --embedded]\n" +
+		"  env:\n" +
+		"    CUA_SOCKET: /tmp/cua.sock\n" +
+		"  session_id: run-7\n" +
+		"browser:\n" +
+		"  enabled: true\n" +
+		"  backend: cua\n" +
+		"  profile_name: nib-ci\n")
+	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := LoadWith(LoadOptions{BaseDir: dir, SkipBareEnv: true})
+	wantCUA := types.CUAConfig{
+		Command:   "/opt/cua-driver",
+		Args:      []string{"mcp", "--embedded"},
+		Env:       map[string]string{"CUA_SOCKET": "/tmp/cua.sock"},
+		SessionID: "run-7",
+	}
+	if !reflect.DeepEqual(cfg.CUA, wantCUA) {
+		t.Fatalf("CUA = %+v, want %+v", cfg.CUA, wantCUA)
+	}
+	if !cfg.Browser.Enabled || cfg.Browser.Backend != "cua" || cfg.Browser.ProfileName != "nib-ci" {
+		t.Fatalf("Browser = %+v, want enabled Cua backend with nib-ci profile", cfg.Browser)
+	}
+}
+
+// Nested Cua containers obey the same merge contract as the rest of Config:
+// a non-empty override slice replaces the file's slice whole, while maps merge
+// by key. These assertions keep that behavior visible outside the reflective
+// every-field guard below.
+func TestCUAConfigOverrideContainersRespectPrecedence(t *testing.T) {
+	clearBareEnv(t)
+	dir := t.TempDir()
+	data := []byte("cua:\n" +
+		"  args: [from-file, discarded]\n" +
+		"  env:\n" +
+		"    SHARED: from-file\n" +
+		"    FILE_ONLY: retained\n")
+	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := LoadWith(LoadOptions{
+		BaseDir: dir,
+		Overrides: types.Config{CUA: types.CUAConfig{
+			Args: []string{"from-override"},
+			Env: map[string]string{
+				"SHARED":        "from-override",
+				"OVERRIDE_ONLY": "added",
+			},
+		}},
+		SkipBareEnv: true,
+	})
+	if !reflect.DeepEqual(cfg.CUA.Args, []string{"from-override"}) {
+		t.Fatalf("CUA.Args = %v, want the override slice to replace the file slice", cfg.CUA.Args)
+	}
+	wantEnv := map[string]string{
+		"SHARED":        "from-override",
+		"FILE_ONLY":     "retained",
+		"OVERRIDE_ONLY": "added",
+	}
+	if !reflect.DeepEqual(cfg.CUA.Env, wantEnv) {
+		t.Fatalf("CUA.Env = %v, want per-key merge %v", cfg.CUA.Env, wantEnv)
+	}
+}
+
 // The rot guard's other half. TestDefaultsSeedEveryFieldOfConfig proves the
 // merge underneath the file carries every field; this proves the merge ABOVE it
 // does, against the hardest lower layer there is: a config file with a value in
