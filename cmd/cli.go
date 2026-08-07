@@ -155,6 +155,43 @@ func (s *spinner) stop() {
 	<-s.doneChan
 }
 
+// pause clears a live spinner so a mid-run notice can be printed on a clean
+// line, and returns the func that puts the spinner back exactly as it was.
+//
+// The stop()/start(verb) pair the older callbacks use is wrong for a notice
+// that arrives unbidden, for two reasons. It restarts a spinner that may never
+// have been running — compaction fires after OnResponse has already stopped
+// one, and a start() there leaves a spinner animating over the next prompt
+// forever. And it stomps the verb: a callback that knows why it interrupted
+// (a tool result means thinking resumes) may name the verb, but a notice that
+// merely reports what the session did to itself has no business changing what
+// the user was told the session is busy with.
+//
+// In non-TTY mode nothing is drawn in place, so there is no half-drawn line to
+// clear; pausing there would only make the next start() reprint the status
+// after every notice. Hence the early no-op.
+func (s *spinner) pause() (resume func()) {
+	if !s.tty {
+		return func() {}
+	}
+	s.mu.Lock()
+	active, msg := s.active, s.message
+	s.mu.Unlock()
+	if !active {
+		return func() {}
+	}
+	s.stop()
+	return func() { s.start(msg) }
+}
+
+// writeNotice prints a one-line notice that arrives mid-run, on a line of its
+// own, without disturbing the spinner it interrupts.
+func writeNotice(out io.Writer, spin *spinner, line string) {
+	resume := spin.pause()
+	fmt.Fprintln(out, line)
+	resume()
+}
+
 // readStringCancellable reads a line from the reader, but can be cancelled via context
 func readStringCancellable(ctx context.Context, reader *bufio.Reader) (string, error) {
 	type result struct {
@@ -330,8 +367,15 @@ func RunCLI(ctx context.Context, cfg types.Config, streams Streams, shellJobs *w
 			}
 			spin.start(theme.Status(theme.VerbWorking, 0))
 		},
+		// Both notices fire from the agent's goroutine while the spinner may be
+		// mid-frame, so they go through writeNotice rather than Fprintln: an
+		// 80ms redraw and a bare print share the line otherwise, and the user
+		// reads "⠋ working…pruned 2 tool results".
 		OnCompactDone: func(before, after int) {
-			fmt.Fprintln(out, theme.Subtle.Render(compactNotice(before, after)))
+			writeNotice(out, spin, theme.Subtle.Render(compactNotice(before, after)))
+		},
+		OnPruneDone: func(results, freed int) {
+			writeNotice(out, spin, theme.Subtle.Render(pruneNotice(results, freed)))
 		},
 		OnError: func(err error) {
 			spin.stop()
@@ -558,9 +602,49 @@ func RunCLI(ctx context.Context, cfg types.Config, streams Streams, shellJobs *w
 	}
 }
 
-// compactNotice formats the one-line summary shown after a conversation is compacted.
+// pruneNotice formats the one-line summary shown when tool output is pruned.
+//
+// It does not say "stale": the high-water sweep picks the oldest LARGE results
+// purely on size, and nothing about those is stale, so the word would tell the
+// user their still-valid read output had gone bad. The count and the token
+// figure carry everything the notice has to say.
+//
+// The saving is rendered with HumanTokensOrZero rather than HumanTokens: a
+// stale read is stubbed however small it was, so a pass can free nothing
+// measurable, and HumanTokens renders 0 as "" — leaving the sentence a hole
+// where its number belongs.
+//
+// It is marked approximate for the same reason compactNotice below is, and in
+// the same words: the figure is chat.tokensOf's byte/4 estimate of the bodies
+// it replaced, not a backend-reported saving, and an unmarked number reads as
+// measured. The COUNT is exact and carries no marker — only the tokens are a
+// guess.
+func pruneNotice(results, freed int) string {
+	noun := "results"
+	if results == 1 {
+		noun = "result"
+	}
+	return fmt.Sprintf("pruned %d tool %s — freed ~%s tokens (estimated)", results, noun, chat.HumanTokensOrZero(freed))
+}
+
+// compactNotice formats the one-line summary shown after a conversation is
+// compacted. The figures are byte/4 estimates rather than the backend's
+// reported usage, so they are marked approximate — an unmarked number reads as
+// measured, and a user cannot tell the difference.
+//
+// Marked rather than replaced with real usage: the "after" side has never been
+// sent to a backend when this prints, so no reported figure for it exists to
+// use. Session.Usage() answers a different question (what the session spent),
+// not what the conversation now weighs.
+//
+// Both figures use HumanTokensOrZero, like pruneNotice above: HumanTokens
+// renders 0 as "", which would print "~ → ~ tokens". A zero "after" cannot
+// occur (compaction always leaves a summary), and a zero "before" needs a
+// conversation under four bytes — but nothing in the signature says so, and the
+// neighbouring notice should not disagree with this one about how a zero reads.
 func compactNotice(before, after int) string {
-	return fmt.Sprintf("📦 Compacted conversation — %s → %s tokens", chat.HumanTokens(before), chat.HumanTokens(after))
+	return fmt.Sprintf("Compacted conversation — ~%s → ~%s tokens (estimated)",
+		chat.HumanTokensOrZero(before), chat.HumanTokensOrZero(after))
 }
 
 func help(out io.Writer) {

@@ -382,5 +382,18 @@ func withDefaults(cfg types.Config) types.Config {
 	if cfg.Compaction.KeepRecent == 0 {
 		cfg.Compaction.KeepRecent = 8
 	}
+
+	// Tool-output pruning is defaulted as a block, not field by field: a zero
+	// HighWaterTokens is meaningful on its own (it disables size pruning while
+	// leaving the stale-read rule on), so it can only be treated as "unset" when
+	// the whole block is absent. Field-by-field defaulting would make that
+	// documented setting unexpressible.
+	if cfg.ToolOutputPruning == (types.ToolOutputPruningConfig{}) {
+		cfg.ToolOutputPruning = types.ToolOutputPruningConfig{
+			HighWaterTokens: 24000,
+			LowWaterTokens:  8000,
+			MinResultTokens: 200,
+		}
+	}
 	return cfg
 }

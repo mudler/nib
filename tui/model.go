@@ -115,6 +115,7 @@ type Model struct {
 	wakeupChan      chan chat.WakeupRequest
 	parkChan        chan parkEvent // park/resume signals from the live run
 	compactChan     chan [2]int    // {before, after} token counts from auto-compaction
+	pruneChan       chan [2]int    // {results, freedTokens} from tool-output pruning
 
 	// contextTokens is the current conversation size shown in the footer badge.
 	// Updated after each turn and after compaction; 0 hides the badge.
@@ -186,6 +187,9 @@ type compactResultMsg struct {
 
 // compactNoticeMsg is an auto-compaction notice pushed from the session goroutine.
 type compactNoticeMsg [2]int
+
+// pruneNoticeMsg is a tool-output pruning notice pushed from the session goroutine.
+type pruneNoticeMsg [2]int
 
 // parkEvent carries a park/resume signal from the live run. parked=true means
 // the run parked (assistant replied, run still alive); parked=false means an
@@ -279,6 +283,7 @@ func NewModel(ctx context.Context, cfg types.Config, height int, shellJobs *wizm
 		wakeupChan:       make(chan chat.WakeupRequest, 8),
 		parkChan:         make(chan parkEvent, 16),
 		compactChan:      make(chan [2]int, 4),
+		pruneChan:        make(chan [2]int, 4),
 		mdRenderers:      make(map[int]*glamour.TermRenderer),
 		loops:            loop.NewRegistry(),
 		loopsPath:        filepath.Join(".nib", "loops.json"),
@@ -384,6 +389,12 @@ func (m Model) initSession() tea.Cmd {
 			OnCompactDone: func(before, after int) {
 				select {
 				case m.compactChan <- [2]int{before, after}:
+				default:
+				}
+			},
+			OnPruneDone: func(results, freed int) {
+				select {
+				case m.pruneChan <- [2]int{results, freed}:
 				default:
 				}
 			},
@@ -701,7 +712,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.messages = append(m.messages, ChatMessage{Role: "agent", Content: fmt.Sprintf("Reloaded %d durable loop(s).", n)})
 		}
 		// Start listening for callbacks
-		cmds = append(cmds, m.listenStatus(), m.listenReasoning(), m.listenToolRequest(), m.listenToolResult(), m.listenAskRequest(), m.listenAgentEvents(), m.shellTick(), m.loopTick(), m.listenWakeup(), m.listenPark(), m.listenCompact())
+		cmds = append(cmds, m.listenStatus(), m.listenReasoning(), m.listenToolRequest(), m.listenToolResult(), m.listenAskRequest(), m.listenAgentEvents(), m.shellTick(), m.loopTick(), m.listenWakeup(), m.listenPark(), m.listenCompact(), m.listenPrune())
 
 	case responseMsg:
 		// The run returned: it is no longer parked (all background work drained).
@@ -835,6 +846,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.updateViewport()
 		return m, m.listenCompact()
+
+	case pruneNoticeMsg:
+		m.messages = append(m.messages, ChatMessage{Role: "agent", Content: prunedNotice(msg[0], msg[1])})
+		m.updateViewport()
+		return m, m.listenPrune()
 
 	case shellTickMsg:
 		// Periodic refresh so the shell-jobs footer reflects jobs that finish (or
@@ -1245,6 +1261,18 @@ func (m Model) listenCompact() tea.Cmd {
 		select {
 		case v := <-m.compactChan:
 			return compactNoticeMsg(v)
+		case <-m.ctx.Done():
+			return nil
+		}
+	}
+}
+
+// listenPrune waits for a tool-output pruning notice from the session.
+func (m Model) listenPrune() tea.Cmd {
+	return func() tea.Msg {
+		select {
+		case v := <-m.pruneChan:
+			return pruneNoticeMsg(v)
 		case <-m.ctx.Done():
 			return nil
 		}
@@ -1954,9 +1982,36 @@ func (m Model) isWorking() bool {
 	return false
 }
 
-// compactNotice formats a one-line compaction summary for the transcript.
+// prunedNotice formats a one-line tool-output pruning summary for the
+// transcript. It repeats cmd.pruneNotice's wording because tui cannot import
+// cmd (cmd builds the TUI) — including its silence about staleness, since the
+// high-water sweep prunes on size alone and calling those results stale would
+// be untrue. The saving uses HumanTokensOrZero: a stale read is stubbed however
+// small it was, so a pass can free nothing measurable and HumanTokens renders
+// 0 as "".
+//
+// It carries the same "~" and "(estimated)" markers as compactNotice below,
+// because the figure is the same byte/4 estimate: an unmarked number reads as
+// measured, and a user cannot tell the difference. The count is exact and stays
+// unmarked.
+func prunedNotice(results, freed int) string {
+	noun := "results"
+	if results == 1 {
+		noun = "result"
+	}
+	return fmt.Sprintf("pruned %d tool %s — freed ~%s tokens (estimated)", results, noun, chat.HumanTokensOrZero(freed))
+}
+
+// compactNotice formats a one-line compaction summary for the transcript. It
+// repeats cmd.compactNotice's wording — tui cannot import cmd, because cmd
+// builds the TUI — including the "~" and "(estimated)" markers: the figures are
+// byte/4 estimates, not the backend's reported usage, and an unmarked number
+// reads as measured. Both figures use HumanTokensOrZero for the same reason
+// pruneNotice above does: HumanTokens renders 0 as "", which would print
+// "~ → ~ tokens" — a hole where the number belongs.
 func compactNotice(before, after int) string {
-	return fmt.Sprintf("📦 Compacted conversation — %s → %s tokens", chat.HumanTokens(before), chat.HumanTokens(after))
+	return fmt.Sprintf("Compacted conversation — ~%s → ~%s tokens (estimated)",
+		chat.HumanTokensOrZero(before), chat.HumanTokensOrZero(after))
 }
 
 // ctxBadgeWarn highlights the context badge once usage nears the auto-compaction

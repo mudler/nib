@@ -142,6 +142,23 @@ type Session struct {
 	// carries its own lock rather than sharing historyMu.
 	usage sessionUsage
 
+	// prunedMu guards the tool-output pruning state below. The manipulator reads
+	// it from inside cogito's loop, and nothing here should assume which
+	// goroutine that is; Reload writes the policy from the turn goroutine.
+	prunedMu sync.Mutex
+	// pruning is the tool-output pruning policy for this session.
+	pruning types.ToolOutputPruningConfig
+	// prunedIDs maps each tool_call_id already replaced by a stub to the clause
+	// that stub carries. It is what makes pruning monotonic across calls, and it
+	// is why a prune notice fires on a transition rather than on every LLM call.
+	//
+	// The clause is stored rather than re-derived because the reason a result
+	// was dropped can change under the policy's feet — a result swept for budget
+	// becomes a stale read as soon as the model edits the file it had read — and
+	// a stub whose wording changed between calls would move the prompt prefix
+	// just as un-stubbing it would.
+	prunedIDs map[string]string
+
 	tracer *trace.Recorder // non-nil when session tracing is enabled
 
 	// traceDir is where usage.json is written on Close. Empty = tracing off, so
@@ -324,6 +341,7 @@ func NewSession(ctx context.Context, cfg types.Config, callbacks Callbacks, tran
 		inject:              make(chan openai.ChatCompletionMessage, 16),
 		cogitoOptions:       cfg.AgentOptions,
 		compaction:          cfg.Compaction,
+		pruning:             cfg.ToolOutputPruning,
 		allowedTools:        make(map[string]bool),
 		toolAllow:           make(map[string]bool),
 		allowedBashPrefixes: make(map[string]bool),
@@ -1131,6 +1149,11 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 	}
 
 	cogitoOpts = append(cogitoOpts,
+		// Rewrites what goes on the wire, never s.fragment. Installed here
+		// rather than in toolOptions because toolOptions is shared with Warm,
+		// whose contract is that a priming request advertises exactly the tool
+		// schemas a real turn advertises — a message manipulator is neither.
+		cogito.WithMessagesManipulator(s.pruneMessages),
 		cogito.WithAgentManager(s.agentManager),
 		cogito.WithAgentSpawnCallback(func(a *cogito.AgentState) {
 			s.emitAgentEvent(a)
@@ -1482,6 +1505,12 @@ func (s *Session) Reload(cfg types.Config) error {
 		s.systemPrompt = cfg.GetPrompt() + s.loadedSkills
 	}
 	s.compaction = cfg.Compaction
+	// Guarded, unlike its neighbours: the manipulator reads the policy from
+	// inside cogito's loop, so a reload that lands while any part of a turn is
+	// still winding down would otherwise be a data race.
+	s.prunedMu.Lock()
+	s.pruning = cfg.ToolOutputPruning
+	s.prunedMu.Unlock()
 	return nil
 }
 
