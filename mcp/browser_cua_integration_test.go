@@ -27,6 +27,8 @@ import (
 
 const (
 	liveCUABrowserTimeout    = 3 * time.Minute
+	liveCUATabPollTimeout    = 10 * time.Second
+	liveCUATabPollInterval   = 100 * time.Millisecond
 	liveCUAUploadName        = "upload.txt"
 	liveCUADownloadDirectory = "downloads"
 	liveCUAAttachment        = "cua live attachment\n"
@@ -37,6 +39,45 @@ type liveCUABrowserFixture struct {
 	browser   *cuaBrowserServer
 	serverURL string
 	workDir   string
+}
+
+func TestLiveCUATabPollingWaitsForExpectedTitleAndURL(t *testing.T) {
+	const (
+		wantTitle = "Cua second tab"
+		wantURL   = "http://127.0.0.1/second"
+	)
+	states := []BrowserTabsOutput{
+		{BrowserOutcome: BrowserOutcome{Status: "ok"}, Tabs: []BrowserTabOutput{{ID: "@t2", URL: "about:blank"}}},
+		{BrowserOutcome: BrowserOutcome{Status: "ok"}, Tabs: []BrowserTabOutput{{ID: "@t2", Title: wantTitle, URL: "about:blank"}}},
+		{BrowserOutcome: BrowserOutcome{Status: "ok"}, Tabs: []BrowserTabOutput{{ID: "@t2", Title: wantTitle, URL: wantURL}}},
+	}
+	calls := 0
+	got, err := pollLiveCUABrowserTab(t.Context(), time.Nanosecond, wantTitle, wantURL, func(context.Context) (BrowserTabsOutput, error) {
+		state := states[calls]
+		calls++
+		return state, nil
+	})
+	if err != nil {
+		t.Fatalf("pollLiveCUABrowserTab: %v", err)
+	}
+	if got != "@t2" || calls != 3 {
+		t.Fatalf("pollLiveCUABrowserTab = (%q, %d calls), want (@t2, 3 calls)", got, calls)
+	}
+}
+
+func TestLiveCUATabPollingTimeoutIncludesLastState(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	last := BrowserTabsOutput{
+		BrowserOutcome: BrowserOutcome{Status: "ok"},
+		Tabs:           []BrowserTabOutput{{ID: "@t2", Title: "Loading", URL: "about:blank"}},
+	}
+	_, err := pollLiveCUABrowserTab(ctx, time.Nanosecond, "Cua second tab", "http://127.0.0.1/second", func(context.Context) (BrowserTabsOutput, error) {
+		cancel()
+		return last, nil
+	})
+	if err == nil || !strings.Contains(err.Error(), "Loading") || !strings.Contains(err.Error(), "about:blank") {
+		t.Fatalf("pollLiveCUABrowserTab timeout error = %v, want last title and URL diagnostics", err)
+	}
 }
 
 // TestCUABrowserIntegrationPrepareNavigateAndSnapshot proves that the live
@@ -140,12 +181,7 @@ func TestCUABrowserIntegrationPointerAndTabs(t *testing.T) {
 	requireLiveCUAStatus(t, out.BrowserOutcome)
 	requireLiveCUASnapshot(t, out.Snapshot, "scrolled: yes")
 
-	_, tabs, err := fixture.browser.browserTabs(fixture.ctx, nil, BrowserTabsInput{})
-	if err != nil {
-		t.Fatalf("browser_tabs: %v", err)
-	}
-	requireLiveCUAStatus(t, tabs.BrowserOutcome)
-	secondTab := liveCUATabForTitle(t, tabs.Tabs, "Cua second tab")
+	secondTab := fixture.waitForTab(t, "Cua second tab", "/second")
 	_, selected, err := fixture.browser.browserSelectTab(fixture.ctx, nil, BrowserSelectTabInput{TabID: secondTab})
 	if err != nil {
 		t.Fatalf("browser_select_tab: %v", err)
@@ -218,12 +254,7 @@ func TestCUABrowserIntegrationVisionUsesExactTab(t *testing.T) {
 	requireLiveCUAStatus(t, out.BrowserOutcome)
 	requireLiveCUASnapshot(t, out.Snapshot, "tab opened: yes")
 
-	_, tabs, err := fixture.browser.browserTabs(fixture.ctx, nil, BrowserTabsInput{})
-	if err != nil {
-		t.Fatalf("browser_tabs: %v", err)
-	}
-	requireLiveCUAStatus(t, tabs.BrowserOutcome)
-	secondTab := liveCUATabForTitle(t, tabs.Tabs, "Cua second tab")
+	secondTab := fixture.waitForTab(t, "Cua second tab", "/second")
 	_, selected, err := fixture.browser.browserSelectTab(fixture.ctx, nil, BrowserSelectTabInput{TabID: secondTab})
 	if err != nil {
 		t.Fatalf("browser_select_tab: %v", err)
@@ -308,6 +339,72 @@ func (fixture *liveCUABrowserFixture) navigate(t *testing.T, path string) Browse
 	return out
 }
 
+func (fixture *liveCUABrowserFixture) waitForTab(t *testing.T, title, path string) string {
+	t.Helper()
+	pollCtx, cancel := context.WithTimeout(fixture.ctx, liveCUATabPollTimeout)
+	defer cancel()
+	tabID, err := pollLiveCUABrowserTab(
+		pollCtx,
+		liveCUATabPollInterval,
+		title,
+		fixture.serverURL+path,
+		func(ctx context.Context) (BrowserTabsOutput, error) {
+			_, tabs, err := fixture.browser.browserTabs(ctx, nil, BrowserTabsInput{})
+			return tabs, err
+		},
+	)
+	if err != nil {
+		t.Fatalf("wait for browser tab: %v", err)
+	}
+	return tabID
+}
+
+func pollLiveCUABrowserTab(
+	ctx context.Context,
+	interval time.Duration,
+	title string,
+	url string,
+	list func(context.Context) (BrowserTabsOutput, error),
+) (string, error) {
+	var last BrowserTabsOutput
+	for {
+		if err := ctx.Err(); err != nil {
+			return "", liveCUATabPollError(err, title, url, last.Tabs)
+		}
+		tabs, err := list(ctx)
+		if err != nil {
+			return "", fmt.Errorf("poll browser_tabs: %w; last browser tabs: %s", err, renderBrowserTabs(last.Tabs))
+		}
+		last = tabs
+		if tabs.Status != "ok" {
+			return "", fmt.Errorf("poll browser_tabs returned status %q with refusal %#v; last browser tabs: %s", tabs.Status, tabs.Refusal, renderBrowserTabs(tabs.Tabs))
+		}
+		for _, tab := range tabs.Tabs {
+			if tab.Title == title && tab.URL == url {
+				return tab.ID, nil
+			}
+		}
+
+		timer := time.NewTimer(interval)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return "", liveCUATabPollError(ctx.Err(), title, url, last.Tabs)
+		case <-timer.C:
+		}
+	}
+}
+
+func liveCUATabPollError(err error, title, url string, tabs []BrowserTabOutput) error {
+	return fmt.Errorf(
+		"wait for browser tab title %q and URL %q: %w; last browser tabs: %s",
+		title,
+		url,
+		err,
+		renderBrowserTabs(tabs),
+	)
+}
+
 type liveCUADialogCase struct {
 	trigger    string
 	kind       string
@@ -372,17 +469,6 @@ func liveCUARefForName(t *testing.T, snapshot, name string) string {
 		}
 	}
 	t.Fatalf("live snapshot has no compact ref named %q:\n%s", name, snapshot)
-	return ""
-}
-
-func liveCUATabForTitle(t *testing.T, tabs []BrowserTabOutput, title string) string {
-	t.Helper()
-	for _, tab := range tabs {
-		if tab.Title == title {
-			return tab.ID
-		}
-	}
-	t.Fatalf("browser tabs have no title %q: %#v", title, tabs)
 	return ""
 }
 
