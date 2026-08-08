@@ -1453,6 +1453,7 @@ func startCUABrowserMCPServer(
 		Description: "Select a current logical @tN tab without native activation and return its semantic snapshot.",
 	}, bs.browserSelectTab)
 	registerCUABrowserAdvancedTools(server, bs)
+	registerCUABrowserFileTools(server, bs)
 
 	xlog.Info("Cua browser MCP server ready")
 	return server.Run(ctx, transport)
