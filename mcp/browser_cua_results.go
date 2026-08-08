@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -442,65 +443,103 @@ func (state *cuaAliasState) refusalReplacements(args map[string]any) map[string]
 		for raw, alias := range state.tabReverse {
 			replacements[raw] = alias
 		}
-		for alias, element := range state.refs {
-			if element.Raw != "" {
-				replacements[element.Raw] = alias
+		seenRawRefs := make(map[string]struct{}, len(state.refs))
+		for _, alias := range sortedCUAElementAliases(state.refs) {
+			raw := state.refs[alias].Raw
+			if raw == "" {
+				continue
 			}
+			if _, duplicate := seenRawRefs[raw]; duplicate {
+				continue
+			}
+			// A raw capability should identify only one element. If malformed input
+			// duplicates it, the earliest numeric alias wins deterministically.
+			replacements[raw] = alias
+			seenRawRefs[raw] = struct{}{}
 		}
 	}
 	return replacements
 }
 
-func refusalArgumentReplacement(key string) (string, bool) {
-	lowerKey := strings.ToLower(key)
-	switch {
-	case strings.Contains(lowerKey, "continuation"):
-		return "[continuation]", true
-	case strings.Contains(lowerKey, "target"):
-		return "[target]", true
-	case strings.Contains(lowerKey, "tab"):
-		return "[tab]", true
-	case strings.Contains(lowerKey, "ref"):
-		return "[ref]", true
-	case strings.Contains(lowerKey, "endpoint"):
-		return "[endpoint]", true
-	case strings.Contains(lowerKey, "dialog"):
-		return "[dialog]", true
-	case strings.Contains(lowerKey, "download_id"):
-		return "[download]", true
-	case strings.Contains(lowerKey, "session"):
-		return "[session]", true
-	case lowerKey == "files", strings.Contains(lowerKey, "destination_root"):
-		return "[redacted]", true
-	case strings.Contains(lowerKey, "path"), strings.Contains(lowerKey, "url"),
-		strings.Contains(lowerKey, "filename"):
-		return "[redacted]", true
-	default:
-		return "", false
+func sortedCUAElementAliases(refs map[string]cuaElement) []string {
+	aliases := make([]string, 0, len(refs))
+	for alias := range refs {
+		aliases = append(aliases, alias)
 	}
+	sort.Slice(aliases, func(left, right int) bool {
+		leftOrdinal, leftOK := cuaElementAliasOrdinal(aliases[left])
+		rightOrdinal, rightOK := cuaElementAliasOrdinal(aliases[right])
+		if leftOK && rightOK && leftOrdinal != rightOrdinal {
+			return leftOrdinal < rightOrdinal
+		}
+		if leftOK != rightOK {
+			return leftOK
+		}
+		return aliases[left] < aliases[right]
+	})
+	return aliases
+}
+
+func cuaElementAliasOrdinal(alias string) (int, bool) {
+	if !strings.HasPrefix(alias, "@e") {
+		return 0, false
+	}
+	ordinal, err := strconv.Atoi(strings.TrimPrefix(alias, "@e"))
+	return ordinal, err == nil
+}
+
+var sensitiveRefusalArgumentReplacements = map[string]string{
+	"browser_endpoint": "[endpoint]",
+	"continuation":     "[continuation]",
+	"destination_ref":  "[ref]",
+	"destination_root": "[redacted]",
+	"dialog_id":        "[dialog]",
+	"download_id":      "[download]",
+	"endpoint":         "[endpoint]",
+	"executable_path":  "[redacted]",
+	"filename":         "[redacted]",
+	"files":            "[redacted]",
+	"launch_path":      "[redacted]",
+	"origin_ref":       "[ref]",
+	"path":             "[redacted]",
+	"ref":              "[ref]",
+	"scope_ref":        "[ref]",
+	"session":          "[session]",
+	"tab_id":           "[tab]",
+	"target_id":        "[target]",
+	"url":              "[redacted]",
+}
+
+func refusalArgumentReplacement(key string) (string, bool) {
+	replacement, sensitive := sensitiveRefusalArgumentReplacements[strings.ToLower(key)]
+	return replacement, sensitive
 }
 
 func collectSensitiveStrings(value any, replacement string, replacements map[string]string) {
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return
+	}
+	var normalized any
+	if err := json.Unmarshal(encoded, &normalized); err != nil {
+		return
+	}
+	collectNormalizedSensitiveStrings(normalized, replacement, replacements)
+}
+
+func collectNormalizedSensitiveStrings(value any, replacement string, replacements map[string]string) {
 	switch typed := value.(type) {
 	case string:
 		if typed != "" {
 			replacements[typed] = replacement
 		}
-	case []string:
-		for _, item := range typed {
-			collectSensitiveStrings(item, replacement, replacements)
-		}
 	case []any:
 		for _, item := range typed {
-			collectSensitiveStrings(item, replacement, replacements)
-		}
-	case map[string]string:
-		for _, item := range typed {
-			collectSensitiveStrings(item, replacement, replacements)
+			collectNormalizedSensitiveStrings(item, replacement, replacements)
 		}
 	case map[string]any:
 		for _, item := range typed {
-			collectSensitiveStrings(item, replacement, replacements)
+			collectNormalizedSensitiveStrings(item, replacement, replacements)
 		}
 	}
 }

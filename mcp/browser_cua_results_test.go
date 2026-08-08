@@ -638,3 +638,87 @@ func TestCUARefusalRedactsOpaqueArgumentCapabilitiesFromMessageValuesAndKeys(t *
 		t.Fatalf("continuation was not replaced with a safe marker: %s", encoded)
 	}
 }
+
+func TestCUARefusalRedactsSensitiveValuesFromConcreteJSONContainers(t *testing.T) {
+	type fileArguments []map[string][]string
+	type continuationArguments [1]map[string]string
+
+	const (
+		fileSecret         = "/private/typed-container.txt"
+		continuationSecret = "bc-typed-container"
+	)
+	refusal := &cuaRefusal{
+		Code:    "browser_action_unavailable",
+		Message: fileSecret + " " + continuationSecret,
+		Detail: map[string]any{
+			"safe_reason": fileSecret + " " + continuationSecret,
+		},
+	}
+
+	public := newCUAAliasState().publicRefusal(refusal, map[string]any{
+		"files": fileArguments{{"nested": {fileSecret}}},
+		"continuation": continuationArguments{{
+			"nested": continuationSecret,
+		}},
+	})
+	encoded, err := json.Marshal(public)
+	if err != nil {
+		t.Fatalf("marshal public refusal: %v", err)
+	}
+	for _, secret := range []string{fileSecret, continuationSecret} {
+		if strings.Contains(string(encoded), secret) {
+			t.Fatalf("public refusal leaked typed-container value %q: %s", secret, encoded)
+		}
+	}
+	for _, marker := range []string{"[redacted]", "[continuation]"} {
+		if !strings.Contains(string(encoded), marker) {
+			t.Fatalf("public refusal missing %q: %s", marker, encoded)
+		}
+	}
+}
+
+func TestCUARefusalLeavesOrdinaryArgumentValuesPublic(t *testing.T) {
+	const message = "balanced compact buffered"
+	refusal := &cuaRefusal{
+		Code:    "browser_action_unavailable",
+		Message: message,
+		Detail: map[string]any{
+			"safe_reason": message,
+		},
+	}
+
+	public := newCUAAliasState().publicRefusal(refusal, map[string]any{
+		"preferred_mode": "balanced",
+		"table_style":    "compact",
+		"curl_output":    "buffered",
+	})
+	if public.Message != message {
+		t.Fatalf("message = %q, want ordinary argument values unchanged", public.Message)
+	}
+	detail, ok := public.Detail.(map[string]any)
+	if !ok {
+		t.Fatalf("detail type = %T", public.Detail)
+	}
+	if detail["safe_reason"] != message {
+		t.Fatalf("safe_reason = %#v, want %q", detail["safe_reason"], message)
+	}
+}
+
+func TestCUARefusalDuplicateRawRefUsesEarliestAliasDeterministically(t *testing.T) {
+	state := newCUAAliasState()
+	state.refs = map[string]cuaElement{
+		"@e10": {Raw: "p7:duplicate"},
+		"@e2":  {Raw: "p7:duplicate"},
+	}
+	refusal := &cuaRefusal{
+		Code:    "browser_ref_stale",
+		Message: "p7:duplicate",
+	}
+
+	for iteration := 0; iteration < 128; iteration++ {
+		public := state.publicRefusal(refusal, nil)
+		if public.Message != "@e2" {
+			t.Fatalf("iteration %d: message = %q, want earliest alias @e2", iteration, public.Message)
+		}
+	}
+}
