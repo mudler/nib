@@ -3,9 +3,6 @@ package mcp
 import (
 	"context"
 	"fmt"
-	"os"
-	"os/exec"
-	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -33,7 +30,7 @@ type ComputerUseOutput struct {
 }
 
 type computerServer struct {
-	driver *mcp.ClientSession
+	driver cuaCaller
 	cfg    types.ComputerConfig
 	mu     sync.Mutex
 	sticky StickyContext
@@ -89,7 +86,7 @@ func inputFieldsHint(els []ComputerElement) string {
 }
 
 const (
-	settleMaxProbes = 4                     // ~1.2s ceiling
+	settleMaxProbes = 4 // ~1.2s ceiling
 	settleInterval  = 350 * time.Millisecond
 )
 
@@ -154,7 +151,7 @@ func isAppSwitchCombo(keys string) bool {
 		strings.Contains(mods, "option") || strings.Contains(mods, "win") || strings.Contains(mods, "super")
 }
 
-func newComputerServer(driver *mcp.ClientSession, cfg types.ComputerConfig) *computerServer {
+func newComputerServer(driver cuaCaller, cfg types.ComputerConfig) *computerServer {
 	// Startup sets capture_scope=window (see StartComputerMCPServer), so mirror it.
 	return &computerServer{driver: driver, cfg: cfg, sticky: StickyContext{SessionID: cfg.SessionID}, scope: "window"}
 }
@@ -861,56 +858,23 @@ func (c *computerServer) bringToFront(ctx context.Context, pid, windowID int) {
 // StartComputerMCPServer spawns cua-driver as a stdio MCP child and serves the
 // in-process computer_use tool that proxies to it. Blocks until ctx is done.
 func StartComputerMCPServer(ctx context.Context, transport mcp.Transport, cfg types.Config) error {
-	cmdPath := cfg.Computer.Command
-	if cmdPath == "" {
-		cmdPath = os.Getenv("NIB_CUA_DRIVER_CMD")
-	}
-	if cmdPath == "" {
-		cmdPath = "cua-driver"
-	}
-	args := cfg.Computer.Args
-	if len(args) == 0 {
-		args = []string{"mcp"}
-	}
-	child := exec.Command(cmdPath, args...)
-	child.Env = scrubbedDriverEnv(cfg.Computer.Env)
-	driverClient := mcp.NewClient(&mcp.Implementation{Name: "nib-computer", Version: "v1.0.0"}, nil)
-	driverSess, err := driverClient.Connect(ctx, &mcp.CommandTransport{Command: child}, nil)
+	runtime, err := newCUARuntime(ctx, cfg, false)
 	if err != nil {
-		return fmt.Errorf("connect cua-driver (%s): %w", cmdPath, err)
+		return err
 	}
-	defer driverSess.Close()
+	defer runtime.Close()
+	return startComputerMCPServer(ctx, transport, cfg, runtime)
+}
 
-	// Cap the screenshot's longest side. A full-resolution (retina) capture is
-	// huge as vision tokens — a native screen can be ~25k tokens and blow a small
-	// model's context window ("request exceeds the available context size"). 1568
-	// keeps it to ~2k tokens while staying legible for SOM. EXCEPT on Linux: the
-	// driver's resize path fails with "unsupported color type for resize: L8" on
-	// the grayscale frames some Wayland captures produce, so we keep 0 (no resize,
-	// native-size PNG) there; macOS/Windows screenshots are RGB, so the resize is
-	// safe. capture_scope stays window so get_window_state is the capture path.
-	maxImageDim := 1568
-	if runtime.GOOS == "linux" {
-		maxImageDim = 0
-	}
-	if _, e := driverSess.CallTool(ctx, &mcp.CallToolParams{Name: "set_config", Arguments: map[string]any{
-		"capture_scope": "window", "max_image_dimension": maxImageDim,
-	}}); e != nil {
-		xlog.Warn("cua-driver set_config (screenshot dimension cap) failed; captures may overflow the model context", "err", e)
-	}
-
-	// Probe the driver's capabilities once and log them. This tells us — and the
-	// user's exported logs — exactly what the display server supports on this
-	// machine (ax_capability, screen_capture_capability, wayland_backend, input),
-	// which is the difference between "full control", "read-only" (GNOME/KDE
-	// Wayland input is gated off — cua #1982), and "unsupported". Best-effort.
-	if hr, e := driverSess.CallTool(ctx, &mcp.CallToolParams{Name: "health_report"}); e != nil {
-		xlog.Warn("cua-driver health_report failed", "err", e)
-	} else if hr != nil {
-		xlog.Info("cua-driver capabilities", "health", structuredMap(hr), "text", firstText(hr.Content))
-	}
-
-	cs := newComputerServer(driverSess, cfg.Computer)
+func startComputerMCPServer(
+	ctx context.Context,
+	transport mcp.Transport,
+	cfg types.Config,
+	runtime *cuaRuntime,
+) error {
+	computerCfg := cfg.Computer
+	computerCfg.SessionID = runtime.SessionID()
+	cs := newComputerServer(runtime, computerCfg)
 	server := mcp.NewServer(&mcp.Implementation{Name: "computer", Version: "v1.0.0"}, nil)
 	tool := &mcp.Tool{
 		Name: "computer_use",
@@ -941,7 +905,7 @@ func StartComputerMCPServer(ctx context.Context, transport mcp.Transport, cfg ty
 		tool.InputSchema = schema
 	}
 	mcp.AddTool(server, tool, cs.computerUse)
-	xlog.Info("computer_use MCP server ready", "driver", cmdPath)
+	xlog.Info("computer_use MCP server ready", "driver", resolveCUAConfig(cfg).Command)
 	return server.Run(ctx, transport)
 }
 
@@ -970,49 +934,4 @@ func computerInputSchema() (*jsonschema.Schema, error) {
 	setEnum("button", "left", "right", "middle")
 	setEnum("direction", "up", "down", "left", "right")
 	return s, nil
-}
-
-// scrubbedDriverEnv disables cua-driver telemetry and drops provider API keys so
-// the third-party binary never inherits them.
-func scrubbedDriverEnv(extra map[string]string) []string {
-	drop := map[string]bool{"OPENAI_API_KEY": true, "ANTHROPIC_API_KEY": true, "LOCALAI_API_KEY": true}
-	// On a Wayland session, force the driver down its native Wayland path. With
-	// DISPLAY set, cua-driver prefers X11/XWayland for BOTH input and capture —
-	// but XWayland only exposes the driver's own overlay window, and its
-	// root-window screenshot fails ("X11 error ... GetImage") on many
-	// compositors. Dropping DISPLAY/XAUTHORITY makes it capture via
-	// zwlr_screencopy / xdg-desktop-portal and inject via zwlr_virtual_pointer,
-	// which is what actually works on wlroots. A pure-X11 session (no
-	// WAYLAND_DISPLAY) keeps DISPLAY and full X11 support. Override via
-	// cfg.Computer.Env (appended last) if you must pin a transport.
-	wayland := os.Getenv("WAYLAND_DISPLAY") != ""
-	if wayland {
-		drop["DISPLAY"] = true
-		drop["XAUTHORITY"] = true
-		xlog.Info("cua-driver: Wayland session detected — using native Wayland capture/input (DISPLAY dropped so it won't fall back to the broken XWayland X11 path)")
-	}
-	var env []string
-	for _, kv := range os.Environ() {
-		key := kv
-		if i := strings.IndexByte(kv, '='); i >= 0 {
-			key = kv[:i]
-		}
-		if drop[key] {
-			continue
-		}
-		env = append(env, kv)
-	}
-	env = append(env, "CUA_DRIVER_RS_TELEMETRY_ENABLED=0")
-	// Opt into cua-driver's native Wayland backend. Off by default, it runs
-	// X11-only, so on a Wayland session list_windows (which reads the X11
-	// _NET_CLIENT_LIST) sees nothing and every capture fails with "no on-screen
-	// window". Enabled, wlroots compositors (sway/labwc/hyprland) work; on
-	// GNOME/KDE Wayland the driver surfaces its own actionable error (this build
-	// lacks libei/portal input — cua issue #1982) instead of a silent empty list.
-	// Harmless on X11. Callers can still override via cfg.Computer.Env below.
-	env = append(env, "CUA_DRIVER_RS_ENABLE_WAYLAND=1")
-	for k, v := range extra {
-		env = append(env, k+"="+v)
-	}
-	return env
 }

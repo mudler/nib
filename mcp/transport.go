@@ -10,7 +10,41 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
+type cuaRuntimeFactory func(context.Context, types.Config, bool) (*cuaRuntime, error)
+
 func StartTransports(ctx context.Context, cfg types.Config, shellJobs *ShellJobs) ([]mcp.Transport, error) {
+	return startTransports(ctx, cfg, shellJobs, newCUARuntime)
+}
+
+func startTransports(
+	ctx context.Context,
+	cfg types.Config,
+	shellJobs *ShellJobs,
+	makeCUA cuaRuntimeFactory,
+) ([]mcp.Transport, error) {
+	if err := validateBrowserConfig(cfg.Browser); err != nil {
+		return nil, err
+	}
+	backend, _ := browserBackend(cfg.Browser)
+	requireBrowser := cfg.Browser.Enabled && backend == "cua"
+	requireCUA := cfg.Computer.Enabled || requireBrowser
+
+	var runtime *cuaRuntime
+	if requireCUA {
+		var err error
+		runtime, err = makeCUA(ctx, cfg, requireBrowser)
+		if err != nil {
+			return nil, err
+		}
+		sharedRuntime := runtime
+		go func() {
+			<-ctx.Done()
+			if err := sharedRuntime.Close(); err != nil {
+				fmt.Fprintf(os.Stderr, "Cua runtime cleanup error: %v\n", err)
+			}
+		}()
+	}
+
 	if shellJobs == nil {
 		shellJobs = NewShellJobsInDir(cfg.WorkingDir)
 	}
@@ -48,19 +82,19 @@ func StartTransports(ctx context.Context, cfg types.Config, shellJobs *ShellJobs
 	if cfg.Computer.Enabled {
 		computerServerTransport, computerClient := mcp.NewInMemoryTransports()
 		go func() {
-			if err := StartComputerMCPServer(ctx, computerServerTransport, cfg); err != nil {
+			if err := startComputerMCPServer(ctx, computerServerTransport, cfg, runtime); err != nil {
 				fmt.Fprintf(os.Stderr, "computer MCP server error: %v\n", err)
 			}
 		}()
 		transports = append(transports, computerClient)
 	}
 
-	// Start the browser MCP server only when browser automation is armed
-	// (opt-in). It drives a headed, persistent-profile Chrome via chromedp.
+	// Start the selected browser MCP server only when browser automation is
+	// armed (opt-in). Chromedp remains the default backend.
 	if cfg.Browser.Enabled {
 		browserServerTransport, browserClient := mcp.NewInMemoryTransports()
 		go func() {
-			if err := StartBrowserMCPServer(ctx, browserServerTransport, cfg); err != nil {
+			if err := startBrowserMCPServer(ctx, browserServerTransport, cfg, runtime); err != nil {
 				fmt.Fprintf(os.Stderr, "browser MCP server error: %v\n", err)
 			}
 		}()

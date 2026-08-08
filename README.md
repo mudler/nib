@@ -434,6 +434,146 @@ mcp_servers:
       FOO: bar
 ```
 
+### Browser automation backends
+
+Browser automation is opt-in (`browser.enabled` defaults to `false`). Omitting
+`browser.backend`, leaving it empty, or setting it to `chromedp` keeps the
+existing Chromedp backend. Cua is a new explicit backend; it is not a replacement
+for Chromedp and nib never falls back to Chromedp when a requested Cua backend
+cannot start.
+
+```yaml
+cua:
+  command: cua-driver
+  args: [mcp]
+  env: {}
+  session_id: ""
+
+browser:
+  enabled: true
+  backend: cua
+  chrome_path: ""
+  profile_name: nib
+  allow_private_urls: false
+```
+
+The browser settings have these defaults and boundaries:
+
+| setting | behavior |
+|---|---|
+| `enabled` | `false`; no browser tools are started until explicitly enabled |
+| `backend` | empty means `chromedp`; accepted values are `chromedp` and `cua` |
+| `chrome_path` | empty auto-discovers a supported Chrome, Chromium, or Edge; with Cua it selects the source-browser executable |
+| `profile_name` | empty means `nib`; Cua accepts 1–64 ASCII letters, digits, `-`, or `_` and always uses a driver-managed `isolated_named` profile |
+| `allow_private_urls` | `false`; both backends block localhost, private/link-local addresses, `.local`, and other unsafe HTTP(S) targets unless explicitly enabled |
+
+`browser.profile_dir` remains available only to Chromedp. Cua rejects it at
+startup and directs you to `profile_name`; it never attaches to, copies, or
+migrates an existing personal profile. The named Cua profile persists for later
+login reuse, but you must sign in to it separately.
+
+The top-level `cua` block configures the shared driver process. Runtime fields
+are resolved independently: a non-empty `Config.CUA` field wins, otherwise nib
+uses the corresponding deprecated programmatic `Computer.Command`, `Args`,
+`Env`, or `SessionID` field. `command` then falls back to
+`NIB_CUA_DRIVER_CMD`, then `cua-driver`; empty `args` become `[mcp]`. An empty
+`env` adds nothing, while explicit entries are applied after nib scrubs inherited
+OpenAI, Anthropic, and LocalAI API keys and disables driver telemetry. An empty
+`session_id` makes nib mint one non-default ID that stays stable for the runtime
+lifetime; the explicit ID `default` is rejected. When Cua-backed browser and
+`computer_use` are both enabled programmatically, they share exactly one driver
+process and one declared session. The normal config-file/default/override
+precedence still applies first as described in [Defaults and Overrides](#defaults-and-overrides).
+
+#### Cua prerequisites and tools
+
+The Cua browser backend requires all of the following:
+
+- Cua Driver 0.19.0 or newer, available as `cua-driver` or through
+  `cua.command`/`NIB_CUA_DRIVER_CMD`. nib validates the connected version and
+  complete tool contract before exposing transports.
+- A supported Chrome, Chromium, or Edge installation. Set `chrome_path` when
+  auto-discovery does not find it.
+- A usable graphical display and the platform permissions Cua needs for browser
+  preparation and native input.
+
+Compatibility is pinned to the browser contract introduced in Cua Driver
+0.19.0. The required driver tools are `start_session`, `end_session`,
+`health_report`, `set_config`, `list_apps`, `list_windows`, `launch_app`,
+`kill_app`, `press_key`, `get_browser_state`, `browser_prepare`,
+`browser_navigate`, `browser_click`, `browser_type`, `browser_pointer`,
+`browser_dialog`, `browser_set_input_files`, and `browser_download`. A missing,
+older, or incomplete driver is a startup error; there is no automatic backend
+fallback.
+
+Both backends expose the existing seven nib tools: `browser_navigate`,
+`browser_snapshot`, `browser_click`, `browser_type`, `browser_press`,
+`browser_scroll`, and `browser_vision`. Cua additionally exposes six focused
+tools: `browser_tabs`, `browser_select_tab`, `browser_pointer`,
+`browser_dialog`, `browser_set_input_files`, and `browser_download`. These are
+nib-owned schemas, not the raw Cua MCP surface.
+
+The first `browser_navigate` lazily prepares and binds the Cua browser; other
+browser calls before that return guidance to navigate first. Page `@eN` aliases
+are snapshot-scoped, while surviving `@tN` aliases persist across tab refreshes
+for the current target generation. Logical tab selection does not activate a
+native tab, stale capabilities fail closed, and
+mutating calls are not automatically retried. Native key delivery may also be
+refused when the selected tab cannot be proven active. Every mutating browser
+tool still passes through nib's normal approval policy, and Cua's structured
+refusals remain visible instead of being turned into fallback actions.
+
+Uploads and downloads are confined to `Config.WorkingDir`, which is runtime-only
+and defaults to the process working directory when unset. Public tool inputs
+accept relative paths only: no absolute paths, parent traversal, or symlink
+components. Uploads require 1–32 existing regular files. A download destination
+defaults to `.` and must already be a directory; nib does not create it or
+disclose its canonical path. Outer tool approval does not broaden these limits.
+
+At session teardown nib calls `end_session`, closes the MCP connection, and
+reaps the driver child. Cua owns cleanup of its prepared browser process while
+the named profile persists. During initialization nib only terminates a blank
+source browser when launch provenance proves nib created it; a pre-existing
+browser is never closed or modified.
+
+#### Migration, rollback, and troubleshooting
+
+Existing Chromedp users need no migration. To try Cua, install its prerequisites,
+set `browser.backend: cua`, remove any `profile_dir`, and choose a new
+`profile_name` if `nib` is not suitable. Embedders should move deprecated Cua
+process/session values from `Config.Computer` to `Config.CUA`; keep
+`Computer.Enabled` itself when desktop control is wanted. Cookies and logins do
+not move from a Chromedp or personal profile.
+
+To roll back, set `browser.backend: chromedp` (or omit it), stop relying on the
+six Cua-only tools, and restore a Chromedp `profile_dir` if needed. This is an
+explicit configuration change, not a runtime fallback.
+
+Common startup errors are actionable: install a compatible full-featured driver
+when the reported version or tool list is insufficient; set `chrome_path` when
+browser discovery fails; provide `DISPLAY` or `WAYLAND_DISPLAY` on Linux; and
+replace an invalid `profile_name` or Cua-incompatible `profile_dir`. For tool
+errors, call `browser_navigate` before other operations, refresh stale refs with
+`browser_snapshot`/`browser_tabs`, and keep file paths inside the existing
+WorkingDir. Enable `allow_private_urls` only when private-network navigation is
+intentional and trusted.
+
+The normal verification gate is hermetic and does not require Cua or a display:
+
+```bash
+go vet ./...
+go build ./...
+go test -p 1 ./...
+```
+
+The real-browser suite is explicitly opt-in and is not part of ordinary CI. Run
+it only on a host with Cua Driver 0.19.0+, a supported Chromium-family browser,
+and a usable display:
+
+```bash
+go test -tags cuabrowserintegration ./mcp -run CUABrowserIntegration -v
+```
+
 You can also configure the essentials via environment variables:
 
 ```bash

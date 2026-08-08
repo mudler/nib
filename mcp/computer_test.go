@@ -10,62 +10,54 @@ import (
 	"github.com/mudler/nib/types"
 )
 
-// startFakeDriver registers the cua-driver tool surface we rely on and returns a
-// connected client session to it (in-memory, no real binary).
-//
-// NOTE: structured data is returned via the typed handler output (2nd return
-// value), not by setting CallToolResult.StructuredContent directly. In go-sdk
-// v1.0.0 the server always (re)marshals the typed output into StructuredContent,
-// which would otherwise clobber any StructuredContent set on the result.
 func startFakeDriver(t *testing.T, ctx context.Context) *mcp.ClientSession {
 	t.Helper()
-	srvT, cliT := mcp.NewInMemoryTransports()
-	srv := mcp.NewServer(&mcp.Implementation{Name: "fake-cua", Version: "v0"}, nil)
-	mcp.AddTool(srv, &mcp.Tool{Name: "list_windows"}, func(_ context.Context, _ *mcp.CallToolRequest, _ map[string]any) (*mcp.CallToolResult, map[string]any, error) {
-		return &mcp.CallToolResult{}, map[string]any{"windows": []any{map[string]any{"pid": 42, "window_id": 7, "z_index": 0, "app_name": "Finder"}}}, nil
-	})
-	mcp.AddTool(srv, &mcp.Tool{Name: "get_window_state"}, func(_ context.Context, _ *mcp.CallToolRequest, _ map[string]any) (*mcp.CallToolResult, map[string]any, error) {
-		// The real driver returns BOTH a verbose Markdown tree (text) AND the image;
-		// nib must drop the Markdown and keep only its own element list + the image.
-		return &mcp.CallToolResult{
-			Content: []mcp.Content{
-				&mcp.TextContent{Text: "DRIVER_MARKDOWN_TREE: - AXWindow\n  - AXButton OK\n  (…hundreds of nodes…)"},
-				&mcp.ImageContent{MIMEType: "image/png", Data: []byte("\x89PNGfake")},
-			},
-		}, map[string]any{"elements": []any{map[string]any{"element_index": 1, "role": "AXButton", "label": "OK"}}}, nil
-	})
-	mcp.AddTool(srv, &mcp.Tool{Name: "get_desktop_state"}, func(_ context.Context, _ *mcp.CallToolRequest, _ map[string]any) (*mcp.CallToolResult, map[string]any, error) {
-		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.ImageContent{MIMEType: "image/png", Data: []byte("\x89PNGdesktop")}}}, map[string]any{}, nil
-	})
-	mcp.AddTool(srv, &mcp.Tool{Name: "click"}, func(_ context.Context, _ *mcp.CallToolRequest, _ map[string]any) (*mcp.CallToolResult, map[string]any, error) {
-		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "clicked"}}}, map[string]any{}, nil
-	})
-	mcp.AddTool(srv, &mcp.Tool{Name: "double_click"}, func(_ context.Context, _ *mcp.CallToolRequest, _ map[string]any) (*mcp.CallToolResult, map[string]any, error) {
-		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "double-clicked"}}}, map[string]any{}, nil
-	})
-	mcp.AddTool(srv, &mcp.Tool{Name: "type_text"}, func(_ context.Context, _ *mcp.CallToolRequest, _ map[string]any) (*mcp.CallToolResult, map[string]any, error) {
-		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "typed"}}}, map[string]any{}, nil
-	})
-	mcp.AddTool(srv, &mcp.Tool{Name: "press_key"}, func(_ context.Context, _ *mcp.CallToolRequest, _ map[string]any) (*mcp.CallToolResult, map[string]any, error) {
-		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "pressed"}}}, map[string]any{}, nil
-	})
-	mcp.AddTool(srv, &mcp.Tool{Name: "launch_app"}, func(_ context.Context, _ *mcp.CallToolRequest, args map[string]any) (*mcp.CallToolResult, map[string]any, error) {
-		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "launched"}}},
-			map[string]any{"pid": 99, "windows": []any{map[string]any{"window_id": 12}}}, nil
-	})
-	mcp.AddTool(srv, &mcp.Tool{Name: "bring_to_front"}, func(_ context.Context, _ *mcp.CallToolRequest, _ map[string]any) (*mcp.CallToolResult, map[string]any, error) {
-		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "fronted"}}}, map[string]any{}, nil
-	})
-	mcp.AddTool(srv, &mcp.Tool{Name: "kill_app"}, func(_ context.Context, _ *mcp.CallToolRequest, _ map[string]any) (*mcp.CallToolResult, map[string]any, error) {
-		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "killed"}}}, map[string]any{}, nil
-	})
-	go func() { _ = srv.Run(ctx, srvT) }()
-	client := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "v0"}, nil)
-	sess, err := client.Connect(ctx, cliT, nil)
-	if err != nil {
-		t.Fatalf("connect fake driver: %v", err)
+	toolNames := []string{
+		"list_windows", "get_window_state", "get_desktop_state", "click",
+		"double_click", "type_text", "press_key", "launch_app",
+		"bring_to_front", "kill_app",
 	}
-	return sess
+	handlers := map[string]fakeCUAHandler{
+		"list_windows": func(map[string]any) (*mcp.CallToolResult, map[string]any, error) {
+			return &mcp.CallToolResult{}, map[string]any{"windows": []any{map[string]any{"pid": 42, "window_id": 7, "z_index": 0, "app_name": "Finder"}}}, nil
+		},
+		"get_window_state": func(map[string]any) (*mcp.CallToolResult, map[string]any, error) {
+			// The real driver returns BOTH a verbose Markdown tree (text) AND the image;
+			// nib must drop the Markdown and keep only its own element list + the image.
+			return &mcp.CallToolResult{
+				Content: []mcp.Content{
+					&mcp.TextContent{Text: "DRIVER_MARKDOWN_TREE: - AXWindow\n  - AXButton OK\n  (…hundreds of nodes…)"},
+					&mcp.ImageContent{MIMEType: "image/png", Data: []byte("\x89PNGfake")},
+				},
+			}, map[string]any{"elements": []any{map[string]any{"element_index": 1, "role": "AXButton", "label": "OK"}}}, nil
+		},
+		"get_desktop_state": func(map[string]any) (*mcp.CallToolResult, map[string]any, error) {
+			return &mcp.CallToolResult{Content: []mcp.Content{&mcp.ImageContent{MIMEType: "image/png", Data: []byte("\x89PNGdesktop")}}}, map[string]any{}, nil
+		},
+		"click": func(map[string]any) (*mcp.CallToolResult, map[string]any, error) {
+			return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "clicked"}}}, map[string]any{}, nil
+		},
+		"double_click": func(map[string]any) (*mcp.CallToolResult, map[string]any, error) {
+			return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "double-clicked"}}}, map[string]any{}, nil
+		},
+		"type_text": func(map[string]any) (*mcp.CallToolResult, map[string]any, error) {
+			return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "typed"}}}, map[string]any{}, nil
+		},
+		"press_key": func(map[string]any) (*mcp.CallToolResult, map[string]any, error) {
+			return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "pressed"}}}, map[string]any{}, nil
+		},
+		"launch_app": func(map[string]any) (*mcp.CallToolResult, map[string]any, error) {
+			return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "launched"}}},
+				map[string]any{"pid": 99, "windows": []any{map[string]any{"window_id": 12}}}, nil
+		},
+		"bring_to_front": func(map[string]any) (*mcp.CallToolResult, map[string]any, error) {
+			return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "fronted"}}}, map[string]any{}, nil
+		},
+		"kill_app": func(map[string]any) (*mcp.CallToolResult, map[string]any, error) {
+			return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "killed"}}}, map[string]any{}, nil
+		},
+	}
+	return startFakeCUA(t, ctx, "v0", toolNames, handlers).Session
 }
 
 func TestComputerCaptureReturnsElementsAndImage(t *testing.T) {
