@@ -677,6 +677,37 @@ func TestCUARefusalRedactsSensitiveValuesFromConcreteJSONContainers(t *testing.T
 	}
 }
 
+func TestCUARefusalFailsClosedWhenSensitiveArgumentCannotBeNormalized(t *testing.T) {
+	const secret = "/private/unserializable.txt"
+	refusal := &cuaRefusal{
+		Code:    "browser_action_unavailable",
+		Message: "could not upload " + secret,
+		Detail: map[string]any{
+			"safe_reason": "rejected " + secret,
+		},
+	}
+
+	public := newCUAAliasState().publicRefusal(refusal, map[string]any{
+		"files": []any{secret, func() {}},
+	})
+	if public.Code != refusal.Code {
+		t.Fatalf("code = %q, want %q", public.Code, refusal.Code)
+	}
+	if public.Message != "browser action refused" {
+		t.Fatalf("message = %q, want generic fail-closed message", public.Message)
+	}
+	if public.Detail != nil {
+		t.Fatalf("detail = %#v, want no detail after sanitization failure", public.Detail)
+	}
+	encoded, err := json.Marshal(public)
+	if err != nil {
+		t.Fatalf("marshal public refusal: %v", err)
+	}
+	if strings.Contains(string(encoded), secret) {
+		t.Fatalf("public refusal leaked %q after sanitization failure: %s", secret, encoded)
+	}
+}
+
 func TestCUARefusalLeavesOrdinaryArgumentValuesPublic(t *testing.T) {
 	const message = "balanced compact buffered"
 	refusal := &cuaRefusal{

@@ -408,7 +408,13 @@ func (state *cuaAliasState) publicRefusal(refusal *cuaRefusal, args map[string]a
 	if refusal == nil {
 		return nil
 	}
-	replacements := state.refusalReplacements(args)
+	replacements, safe := state.refusalReplacements(args)
+	if !safe {
+		return &BrowserRefusal{
+			Code:    refusal.Code,
+			Message: "browser action refused",
+		}
+	}
 
 	public := &BrowserRefusal{
 		Code:    refusal.Code,
@@ -423,7 +429,7 @@ func (state *cuaAliasState) publicRefusal(refusal *cuaRefusal, args map[string]a
 	return public
 }
 
-func (state *cuaAliasState) refusalReplacements(args map[string]any) map[string]string {
+func (state *cuaAliasState) refusalReplacements(args map[string]any) (map[string]string, bool) {
 	replacements := make(map[string]string)
 	keys := make([]string, 0, len(args))
 	for key := range args {
@@ -432,7 +438,9 @@ func (state *cuaAliasState) refusalReplacements(args map[string]any) map[string]
 	sort.Strings(keys)
 	for _, key := range keys {
 		if replacement, sensitive := refusalArgumentReplacement(key); sensitive {
-			collectSensitiveStrings(args[key], replacement, replacements)
+			if !collectSensitiveStrings(args[key], replacement, replacements) {
+				return nil, false
+			}
 		}
 	}
 
@@ -458,7 +466,7 @@ func (state *cuaAliasState) refusalReplacements(args map[string]any) map[string]
 			seenRawRefs[raw] = struct{}{}
 		}
 	}
-	return replacements
+	return replacements, true
 }
 
 func sortedCUAElementAliases(refs map[string]cuaElement) []string {
@@ -515,16 +523,17 @@ func refusalArgumentReplacement(key string) (string, bool) {
 	return replacement, sensitive
 }
 
-func collectSensitiveStrings(value any, replacement string, replacements map[string]string) {
+func collectSensitiveStrings(value any, replacement string, replacements map[string]string) bool {
 	encoded, err := json.Marshal(value)
 	if err != nil {
-		return
+		return false
 	}
 	var normalized any
 	if err := json.Unmarshal(encoded, &normalized); err != nil {
-		return
+		return false
 	}
 	collectNormalizedSensitiveStrings(normalized, replacement, replacements)
+	return true
 }
 
 func collectNormalizedSensitiveStrings(value any, replacement string, replacements map[string]string) {
