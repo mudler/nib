@@ -342,6 +342,18 @@ func TestCUAResultRejectsTransportProtocolAndMalformedData(t *testing.T) {
 	}
 }
 
+func TestCUAResultUnsupportedStatusErrorDoesNotEchoBackendText(t *testing.T) {
+	const secret = "partial raw-target raw-tab raw-ref backend-secret"
+	var decoded cuaResultEnvelope
+	refusal, err := decodeCUAResult(cuaResultFixture(t, `{"status":"`+secret+`"}`), &decoded)
+	if err == nil || refusal != nil {
+		t.Fatalf("decode returned refusal/error = %#v %v", refusal, err)
+	}
+	if strings.Contains(err.Error(), secret) || strings.Contains(err.Error(), "raw-target") || strings.Contains(err.Error(), "backend-secret") {
+		t.Fatalf("unsupported status error echoed backend text: %v", err)
+	}
+}
+
 func TestCUAAliasTargetChangeInvalidatesEveryCapabilityCache(t *testing.T) {
 	state := newCUAAliasState()
 	if changed := state.observeTarget("bt-old"); changed {

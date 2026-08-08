@@ -142,6 +142,9 @@ func (b *cuaBrowserServer) mutatePointerThenSnapshot(
 	var mutation cuaPointerResult
 	_, refusal, err := b.callResult(ctx, "browser_pointer", args, &mutation)
 	if err != nil {
+		if errors.Is(err, errCUAInvalidStatus) {
+			b.clearTabScopedCapabilities()
+		}
 		return nil, BrowserOutput{}, err
 	}
 	if refusal != nil {
@@ -352,6 +355,9 @@ func (b *cuaBrowserServer) inspectDialog(
 	}
 	result, refusal, usedArgs, err := b.callDialogInspect(ctx, args)
 	if err != nil {
+		if errors.Is(err, errCUAInvalidStatus) {
+			b.clearDialogCapability()
+		}
 		return nil, BrowserDialogOutput{}, err
 	}
 	if refusal != nil {
@@ -452,6 +458,9 @@ func (b *cuaBrowserServer) resolveDialog(
 	var resolution cuaDialogResult
 	_, refusal, err := b.callResult(ctx, "browser_dialog", args, &resolution)
 	if err != nil {
+		if errors.Is(err, errCUAInvalidStatus) {
+			b.clearTabScopedCapabilities()
+		}
 		return nil, BrowserDialogOutput{}, b.publicCallError(err, args)
 	}
 	if refusal != nil {

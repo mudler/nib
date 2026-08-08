@@ -463,6 +463,81 @@ func TestCUABrowserClickRejectsUnknownOrIncapableAliasBeforeCUA(t *testing.T) {
 	}
 }
 
+func TestCUABrowserClickUnknownStatusClearsCapabilitiesWithoutSnapshot(t *testing.T) {
+	const secret = "partial raw-click raw-editable dialog-old backend-secret"
+	server, fake := preparedCUABrowserTestServer(t, map[string]fakeCUAHandler{
+		"browser_click": func(map[string]any) (*mcp.CallToolResult, map[string]any, error) {
+			return cuaOK(map[string]any{"status": secret})
+		},
+		"get_browser_state": func(map[string]any) (*mcp.CallToolResult, map[string]any, error) {
+			return cuaOK(cuaBrowserSnapshot("target-1", "tab-a", "must not snapshot"))
+		},
+	})
+	server.refs["@e1"] = cuaElement{Raw: "raw-click", Actions: map[string]bool{"click": true}}
+	server.lastEditable = "raw-editable"
+	server.dialogID = "dialog-old"
+	server.dialogKind = "alert"
+
+	result, output, err := server.browserClick(context.Background(), nil, BrowserInput{Ref: "@e1"})
+	if err == nil || result != nil || output.Status != "" {
+		t.Fatalf("unknown click status result/output/error = %#v %#v %v", result, output, err)
+	}
+	if got := len(callsNamed(fake.Calls(), "browser_click")); got != 1 {
+		t.Fatalf("click calls = %d, want one", got)
+	}
+	if calls := callsNamed(fake.Calls(), "get_browser_state"); len(calls) != 0 {
+		t.Fatalf("unknown click status was snapshot-verified: %#v", calls)
+	}
+	if len(server.refs) != 0 || server.lastEditable != "" || server.dialogID != "" || server.dialogKind != "" {
+		t.Fatalf("unknown click status retained capabilities: refs=%#v editable=%q dialog=%q/%q",
+			server.refs, server.lastEditable, server.dialogID, server.dialogKind)
+	}
+	if strings.Contains(err.Error(), secret) || strings.Contains(err.Error(), "raw-click") || strings.Contains(err.Error(), "backend-secret") {
+		t.Fatalf("unknown click status leaked backend text: %v", err)
+	}
+}
+
+func TestCUABrowserClickMalformedStatusAlsoClearsCapabilities(t *testing.T) {
+	tests := []struct {
+		name   string
+		status any
+	}{
+		{name: "empty", status: ""},
+		{name: "wrong type", status: float64(7)},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			server, fake := preparedCUABrowserTestServer(t, map[string]fakeCUAHandler{
+				"browser_click": func(map[string]any) (*mcp.CallToolResult, map[string]any, error) {
+					return cuaOK(map[string]any{"status": test.status})
+				},
+				"get_browser_state": func(map[string]any) (*mcp.CallToolResult, map[string]any, error) {
+					return cuaOK(cuaBrowserSnapshot("target-1", "tab-a", "must not snapshot"))
+				},
+			})
+			server.refs["@e1"] = cuaElement{Raw: "raw-click", Actions: map[string]bool{"click": true}}
+			server.lastEditable = "raw-editable"
+			server.dialogID = "dialog-old"
+			server.dialogKind = "alert"
+
+			_, _, err := server.browserClick(context.Background(), nil, BrowserInput{Ref: "@e1"})
+			if err == nil {
+				t.Fatal("malformed click status was accepted")
+			}
+			if got := len(callsNamed(fake.Calls(), "browser_click")); got != 1 {
+				t.Fatalf("click calls = %d, want one", got)
+			}
+			if calls := callsNamed(fake.Calls(), "get_browser_state"); len(calls) != 0 {
+				t.Fatalf("malformed click status was snapshot-verified: %#v", calls)
+			}
+			if len(server.refs) != 0 || server.lastEditable != "" || server.dialogID != "" || server.dialogKind != "" {
+				t.Fatalf("malformed click status retained capabilities: refs=%#v editable=%q dialog=%q/%q",
+					server.refs, server.lastEditable, server.dialogID, server.dialogKind)
+			}
+		})
+	}
+}
+
 func TestCUABrowserTypeMapsInsertAndCachesUniqueFocusedEditable(t *testing.T) {
 	server, fake := preparedCUABrowserTestServer(t, map[string]fakeCUAHandler{
 		"browser_type": func(map[string]any) (*mcp.CallToolResult, map[string]any, error) { return cuaOK(nil) },

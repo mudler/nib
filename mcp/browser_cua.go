@@ -1013,6 +1013,9 @@ func (b *cuaBrowserServer) mutateThenSnapshotEnvelope(
 	var mutation cuaResultEnvelope
 	_, refusal, err := b.callResult(ctx, tool, args, &mutation)
 	if err != nil {
+		if errors.Is(err, errCUAInvalidStatus) {
+			b.clearTabScopedCapabilities()
+		}
 		return nil, BrowserOutput{}, cuaResultEnvelope{}, err
 	}
 	if refusal != nil {

@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"regexp"
 	"sort"
@@ -10,6 +11,8 @@ import (
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 )
+
+var errCUAInvalidStatus = errors.New("cua structured content returned invalid status")
 
 type cuaRefusal struct {
 	Code    string `json:"code"`
@@ -146,10 +149,10 @@ func decodeCUAResult(result *sdkmcp.CallToolResult, dst any) (*cuaRefusal, error
 		Refusal *cuaRefusal `json:"refusal"`
 	}
 	if err := json.Unmarshal(raw, &header); err != nil {
-		return nil, fmt.Errorf("decode cua result status: %w", err)
+		return nil, errCUAInvalidStatus
 	}
 	if header.Status == "" {
-		return nil, fmt.Errorf("cua structured content omitted status")
+		return nil, errCUAInvalidStatus
 	}
 	if header.Status == "refused" {
 		if header.Refusal == nil || header.Refusal.Code == "" || header.Refusal.Message == "" {
@@ -158,7 +161,7 @@ func decodeCUAResult(result *sdkmcp.CallToolResult, dst any) (*cuaRefusal, error
 		return header.Refusal, nil
 	}
 	if header.Status != "ok" {
-		return nil, fmt.Errorf("cua structured content returned unsupported status %q", header.Status)
+		return nil, errCUAInvalidStatus
 	}
 	if dst == nil {
 		return nil, fmt.Errorf("decode cua structured content: nil destination")
