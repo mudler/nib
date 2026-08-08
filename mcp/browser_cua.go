@@ -132,6 +132,9 @@ func (b *cuaBrowserServer) browserNavigate(
 		b.invalidateOnRefusal(refusal)
 		return b.browserRefusalResult(refusal, args)
 	}
+	// A successful navigation invalidates every capability from the prior
+	// document before its returned verification snapshot is trusted.
+	b.clearTabScopedCapabilities()
 	if err := b.validateSelectedSnapshot(envelope); err != nil {
 		return nil, BrowserOutput{}, err
 	}
@@ -751,7 +754,7 @@ func (b *cuaBrowserServer) snapshotInternal(
 		args["include_screenshot"] = true
 	}
 	retryAvailable := allowRetry
-	result, envelope, refusal, err := b.readSnapshotPage(ctx, args, &retryAvailable)
+	result, envelope, refusal, err := b.readSnapshotPage(ctx, args, &retryAvailable, "")
 	if err != nil {
 		return nil, BrowserOutput{}, cuaResultEnvelope{}, err
 	}
@@ -759,6 +762,10 @@ func (b *cuaBrowserServer) snapshotInternal(
 		refusalResult, output, refusalErr := b.browserRefusalResult(refusal, args)
 		return refusalResult, output, cuaResultEnvelope{}, refusalErr
 	}
+	// get_browser_state minted a new snapshot even if later identity or
+	// continuation validation fails. Older element/editable capabilities can
+	// no longer be used safely.
+	b.clearTabScopedCapabilities()
 	if err := b.validateSelectedSnapshot(envelope); err != nil {
 		return nil, BrowserOutput{}, cuaResultEnvelope{}, err
 	}
@@ -781,13 +788,21 @@ func (b *cuaBrowserServer) snapshotInternal(
 		if exactErr != nil {
 			return nil, BrowserOutput{}, cuaResultEnvelope{}, exactErr
 		}
-		_, next, continuationRefusal, continuationErr := b.readSnapshotPage(ctx, continuationArgs, &retryAvailable)
+		_, next, continuationRefusal, continuationErr := b.readSnapshotPage(
+			ctx, continuationArgs, &retryAvailable, aggregate.TargetID,
+		)
 		if continuationErr != nil {
 			return nil, BrowserOutput{}, cuaResultEnvelope{}, continuationErr
 		}
 		if continuationRefusal != nil {
 			refusalResult, output, refusalErr := b.browserRefusalResult(continuationRefusal, continuationArgs)
 			return refusalResult, output, cuaResultEnvelope{}, refusalErr
+		}
+		if err := validateSnapshotContinuation(aggregate, next); err != nil {
+			if next.TargetID != "" && next.TargetID != aggregate.TargetID {
+				b.observeTargetGeneration(next.TargetID)
+			}
+			return nil, BrowserOutput{}, cuaResultEnvelope{}, err
 		}
 		if err := b.validateSelectedSnapshot(next); err != nil {
 			return nil, BrowserOutput{}, cuaResultEnvelope{}, err
@@ -842,6 +857,7 @@ func (b *cuaBrowserServer) readSnapshotPage(
 	ctx context.Context,
 	args map[string]any,
 	retryAvailable *bool,
+	pinnedTarget string,
 ) (*mcp.CallToolResult, cuaResultEnvelope, *cuaRefusal, error) {
 	var envelope cuaResultEnvelope
 	result, refusal, err := b.callResult(ctx, "get_browser_state", args, &envelope)
@@ -860,6 +876,16 @@ func (b *cuaBrowserServer) readSnapshotPage(
 		return nil, cuaResultEnvelope{}, nil, rebindErr
 	} else if rebindRefusal != nil {
 		return nil, cuaResultEnvelope{}, rebindRefusal, nil
+	}
+	if pinnedTarget != "" {
+		b.mu.Lock()
+		reboundTarget := b.targetID
+		b.mu.Unlock()
+		if reboundTarget != pinnedTarget {
+			return nil, cuaResultEnvelope{}, nil, errors.New(
+				"Cua snapshot generation changed during continuation; retry browser_snapshot",
+			)
+		}
 	}
 	retryArgs := make(map[string]any, len(args))
 	for key, value := range args {
@@ -933,16 +959,36 @@ func (b *cuaBrowserServer) validateSelectedSnapshot(envelope cuaResultEnvelope) 
 	}
 	if envelope.TargetID != targetID || envelope.TabID != tabID {
 		if envelope.TargetID != "" && envelope.TargetID != targetID {
-			b.mu.Lock()
-			state := b.aliasStateLocked()
-			state.observeTarget(envelope.TargetID)
-			b.installAliasStateLocked(state)
-			b.mu.Unlock()
+			b.observeTargetGeneration(envelope.TargetID)
 		}
 		return errors.New("Cua semantic snapshot returned a different target or tab")
 	}
 	if envelope.Snapshot.Format != "semantic_v2" {
 		return fmt.Errorf("Cua snapshot format is %q, want semantic_v2", envelope.Snapshot.Format)
+	}
+	if envelope.Snapshot.ID == "" {
+		return errors.New("Cua semantic snapshot omitted snapshot id")
+	}
+	return nil
+}
+
+func (b *cuaBrowserServer) observeTargetGeneration(targetID string) {
+	b.mu.Lock()
+	state := b.aliasStateLocked()
+	state.observeTarget(targetID)
+	b.installAliasStateLocked(state)
+	b.mu.Unlock()
+}
+
+func validateSnapshotContinuation(initial, next cuaResultEnvelope) error {
+	if initial.Snapshot.ID == "" || next.Snapshot.ID == "" || next.Snapshot.ID != initial.Snapshot.ID {
+		return errors.New("Cua snapshot continuation changed snapshot identity")
+	}
+	if next.TargetID != initial.TargetID {
+		return errors.New("Cua snapshot continuation changed target identity")
+	}
+	if next.TabID != initial.TabID {
+		return errors.New("Cua snapshot continuation changed tab identity")
 	}
 	return nil
 }
@@ -973,6 +1019,9 @@ func (b *cuaBrowserServer) mutateThenSnapshotEnvelope(
 		result, output, refusalErr := b.browserRefusalResult(refusal, args)
 		return result, output, cuaResultEnvelope{}, refusalErr
 	}
+	// The mutation completed. Invalidate pre-action capabilities before the
+	// verification read so every verification failure remains fail-closed.
+	b.clearTabScopedCapabilities()
 	result, output, envelope, err := b.snapshotInternal(ctx, false, false, false)
 	if err != nil {
 		return nil, BrowserOutput{}, cuaResultEnvelope{}, fmt.Errorf("%s succeeded but post-action snapshot failed: %w", summary, err)

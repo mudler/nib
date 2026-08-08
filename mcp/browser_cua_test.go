@@ -81,7 +81,7 @@ func cuaBrowserSnapshot(target, tab, outline string, refs ...map[string]any) map
 	}
 	return map[string]any{
 		"mode": "snapshot", "target_id": target, "tab_id": tab,
-		"snapshot": map[string]any{"format": "semantic_v2", "complete": true},
+		"snapshot": map[string]any{"id": "snapshot-1", "format": "semantic_v2", "complete": true},
 		"outline":  outline, "refs": items, "content_refs": []any{},
 	}
 }

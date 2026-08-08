@@ -26,6 +26,30 @@ func (*failingCUAClient) ListTools(context.Context, *mcp.ListToolsParams) (*mcp.
 
 func (*failingCUAClient) Close() error { return nil }
 
+type scriptedActionCUAClient struct {
+	mu    sync.Mutex
+	calls int
+	after func(*mcp.CallToolParams) (*mcp.CallToolResult, error)
+}
+
+func (client *scriptedActionCUAClient) CallTool(_ context.Context, params *mcp.CallToolParams) (*mcp.CallToolResult, error) {
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	client.calls++
+	if client.calls == 1 {
+		return &mcp.CallToolResult{StructuredContent: map[string]any{"status": "ok"}}, nil
+	}
+	return client.after(params)
+}
+
+func (*scriptedActionCUAClient) InitializeResult() *mcp.InitializeResult { return nil }
+
+func (*scriptedActionCUAClient) ListTools(context.Context, *mcp.ListToolsParams) (*mcp.ListToolsResult, error) {
+	return nil, nil
+}
+
+func (*scriptedActionCUAClient) Close() error { return nil }
+
 func preparedCUABrowserTestServer(
 	t *testing.T,
 	handlers map[string]fakeCUAHandler,
@@ -106,6 +130,42 @@ func TestCUABrowserNavigateBlocksUnsafeURLBeforeCUA(t *testing.T) {
 	}
 	if calls := fake.Calls(); len(calls) != 0 {
 		t.Fatalf("blocked URL called Cua: %#v", calls)
+	}
+}
+
+func TestCUABrowserRepeatedNavigateClearsCapabilitiesBeforeSnapshotValidation(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(map[string]any)
+	}{
+		{
+			name: "missing snapshot id",
+			mutate: func(result map[string]any) {
+				delete(result["snapshot"].(map[string]any), "id")
+			},
+		},
+		{name: "different tab", mutate: func(result map[string]any) { result["tab_id"] = "tab-other" }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			server, _ := preparedCUABrowserTestServer(t, map[string]fakeCUAHandler{
+				"browser_navigate": func(map[string]any) (*mcp.CallToolResult, map[string]any, error) {
+					result := cuaBrowserSnapshot("target-1", "tab-a", "new page", cuaBrowserRef("raw-new", "New", "click"))
+					test.mutate(result)
+					return cuaOK(result)
+				},
+			})
+			server.refs["@e1"] = cuaElement{Raw: "old-ref", Actions: map[string]bool{"click": true}}
+			server.lastEditable = "old-editable"
+
+			_, _, err := server.browserNavigate(context.Background(), nil, BrowserInput{URL: "https://example.test/repeated"})
+			if err == nil {
+				t.Fatal("invalid navigation snapshot succeeded")
+			}
+			if len(server.refs) != 0 || server.lastEditable != "" {
+				t.Fatalf("invalid repeated navigation retained capabilities: %#v %q", server.refs, server.lastEditable)
+			}
+		})
 	}
 }
 
@@ -213,6 +273,94 @@ func TestCUABrowserSnapshotFullFalseMakesOneRead(t *testing.T) {
 	}
 	if got := len(callsNamed(fake.Calls(), "get_browser_state")); got != 1 {
 		t.Fatalf("get_browser_state calls = %d, want 1", got)
+	}
+}
+
+func TestCUABrowserSnapshotRejectsMismatchedContinuationIdentity(t *testing.T) {
+	tests := []struct {
+		name         string
+		mutate       func(map[string]any)
+		wantTarget   string
+		wantSelected string
+	}{
+		{
+			name: "snapshot id",
+			mutate: func(result map[string]any) {
+				result["snapshot"].(map[string]any)["id"] = "snapshot-other"
+			}, wantTarget: "target-1", wantSelected: "tab-a",
+		},
+		{name: "target", mutate: func(result map[string]any) { result["target_id"] = "target-other" }, wantTarget: "target-other"},
+		{name: "tab", mutate: func(result map[string]any) { result["tab_id"] = "tab-other" }, wantTarget: "target-1", wantSelected: "tab-a"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			reads := 0
+			server, _ := preparedCUABrowserTestServer(t, map[string]fakeCUAHandler{
+				"get_browser_state": func(map[string]any) (*mcp.CallToolResult, map[string]any, error) {
+					reads++
+					if reads == 1 {
+						result := cuaBrowserSnapshot("target-1", "tab-a", "first", cuaBrowserRef("raw-first", "First", "click"))
+						result["snapshot"].(map[string]any)["complete"] = false
+						result["snapshot"].(map[string]any)["continuation"] = "next"
+						return cuaOK(result)
+					}
+					result := cuaBrowserSnapshot("target-1", "tab-a", "second", cuaBrowserRef("raw-second", "Second", "click"))
+					test.mutate(result)
+					return cuaOK(result)
+				},
+			})
+			server.refs["@e9"] = cuaElement{Raw: "old-ref", Actions: map[string]bool{"click": true}}
+			server.lastEditable = "old-editable"
+
+			_, _, err := server.browserSnapshot(context.Background(), nil, BrowserInput{Full: true})
+			if err == nil || !strings.Contains(err.Error(), "continuation") {
+				t.Fatalf("error = %v, want immutable continuation identity failure", err)
+			}
+			if len(server.refs) != 0 || server.lastEditable != "" {
+				t.Fatalf("mismatched continuation retained capabilities: %#v %q", server.refs, server.lastEditable)
+			}
+			if server.targetID != test.wantTarget || server.selectedTab != test.wantSelected {
+				t.Fatalf("identity mismatch state target=%q selected=%q, want %q/%q", server.targetID, server.selectedTab, test.wantTarget, test.wantSelected)
+			}
+		})
+	}
+}
+
+func TestCUABrowserSnapshotGenerationChangeDuringContinuationFailsClosed(t *testing.T) {
+	reads := 0
+	server, fake := preparedCUABrowserTestServer(t, map[string]fakeCUAHandler{
+		"get_browser_state": func(args map[string]any) (*mcp.CallToolResult, map[string]any, error) {
+			if _, binding := args["pid"]; binding {
+				return cuaOK(cuaBrowserBind("target-2", cuaBrowserTab("tab-b", "B", true)))
+			}
+			reads++
+			switch reads {
+			case 1:
+				result := cuaBrowserSnapshot("target-1", "tab-a", "first", cuaBrowserRef("raw-first", "First", "click"))
+				result["snapshot"].(map[string]any)["complete"] = false
+				result["snapshot"].(map[string]any)["continuation"] = "old-generation-token"
+				return cuaOK(result)
+			case 2:
+				return cuaRefused("browser_binding_stale", "generation stale", nil)
+			default:
+				result := cuaBrowserSnapshot("target-2", "tab-b", "wrong generation", cuaBrowserRef("raw-new", "New", "click"))
+				result["snapshot"].(map[string]any)["id"] = "snapshot-2"
+				return cuaOK(result)
+			}
+		},
+	})
+	server.refs["@e9"] = cuaElement{Raw: "old-ref", Actions: map[string]bool{"click": true}}
+	server.lastEditable = "old-editable"
+
+	_, _, err := server.browserSnapshot(context.Background(), nil, BrowserInput{Full: true})
+	if err == nil || !strings.Contains(err.Error(), "generation changed") {
+		t.Fatalf("error = %v, want generation-change failure; calls=%#v", err, fake.Calls())
+	}
+	if got := len(callsNamed(fake.Calls(), "get_browser_state")); got != 3 {
+		t.Fatalf("state calls = %d, want initial + stale continuation + bind without old-token retry; calls=%#v", got, fake.Calls())
+	}
+	if server.targetID != "target-2" || server.selectedTab != "tab-b" || len(server.refs) != 0 || server.lastEditable != "" {
+		t.Fatalf("state rolled back or retained capabilities: target=%q tab=%q refs=%#v editable=%q", server.targetID, server.selectedTab, server.refs, server.lastEditable)
 	}
 }
 
@@ -682,12 +830,76 @@ func TestCUABrowserMutationReportsPostActionSnapshotFailure(t *testing.T) {
 		},
 	})
 	server.refs["@e1"] = cuaElement{Raw: "raw-click", Actions: map[string]bool{"click": true}}
+	server.lastEditable = "old-editable"
 	_, _, err := server.browserClick(context.Background(), nil, BrowserInput{Ref: "@e1"})
 	if err == nil || !strings.Contains(err.Error(), "post-action snapshot") {
 		t.Fatalf("error = %v", err)
 	}
 	if len(callsNamed(fake.Calls(), "browser_click")) != 1 || len(callsNamed(fake.Calls(), "get_browser_state")) != 1 {
 		t.Fatalf("calls = %#v", fake.Calls())
+	}
+	if len(server.refs) != 0 || server.lastEditable != "" {
+		t.Fatalf("verification protocol error retained capabilities: %#v %q", server.refs, server.lastEditable)
+	}
+}
+
+func TestCUABrowserMutationClearsCapabilitiesBeforeVerificationFailure(t *testing.T) {
+	tests := []struct {
+		name       string
+		after      func(*mcp.CallToolParams) (*mcp.CallToolResult, error)
+		wantStatus string
+		wantError  bool
+	}{
+		{
+			name: "transport error",
+			after: func(*mcp.CallToolParams) (*mcp.CallToolResult, error) {
+				return nil, errors.New("verification transport down")
+			},
+			wantError: true,
+		},
+		{
+			name: "protocol error",
+			after: func(*mcp.CallToolParams) (*mcp.CallToolResult, error) {
+				return &mcp.CallToolResult{IsError: true}, nil
+			},
+			wantError: true,
+		},
+		{
+			name: "structured refusal",
+			after: func(*mcp.CallToolParams) (*mcp.CallToolResult, error) {
+				return &mcp.CallToolResult{StructuredContent: map[string]any{
+					"status": "refused",
+					"refusal": map[string]any{
+						"code": "browser_consent_required", "message": "verification refused",
+					},
+				}}, nil
+			},
+			wantStatus: "refused",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			server, _ := preparedCUABrowserTestServer(t, nil)
+			client := &scriptedActionCUAClient{after: test.after}
+			server.runtime.client = client
+			server.refs["@e1"] = cuaElement{Raw: "raw-click", Actions: map[string]bool{"click": true}}
+			server.lastEditable = "old-editable"
+
+			_, output, err := server.browserClick(context.Background(), nil, BrowserInput{Ref: "@e1"})
+			if test.wantError {
+				if err == nil || !strings.Contains(err.Error(), "post-action snapshot") {
+					t.Fatalf("error = %v, want post-action verification error", err)
+				}
+			} else if err != nil || output.Status != test.wantStatus {
+				t.Fatalf("output/error = %#v %v", output, err)
+			}
+			if client.calls != 2 {
+				t.Fatalf("driver calls = %d, want action + one verification", client.calls)
+			}
+			if len(server.refs) != 0 || server.lastEditable != "" {
+				t.Fatalf("verification failure retained capabilities: %#v %q", server.refs, server.lastEditable)
+			}
+		})
 	}
 }
 
