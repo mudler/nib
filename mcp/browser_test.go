@@ -84,6 +84,21 @@ func TestBrowserVisionRejectsNoPageOpen(t *testing.T) {
 	}
 }
 
+func TestCUABrowserBackendDoesNotFallBackToChromedp(t *testing.T) {
+	err := startBrowserMCPServer(
+		context.Background(),
+		nil,
+		types.Config{Browser: types.BrowserConfig{Backend: "cua"}},
+		nil,
+	)
+	if err == nil {
+		t.Fatal("explicit Cua backend unexpectedly started the Chromedp server")
+	}
+	if !strings.Contains(err.Error(), "Cua browser backend") {
+		t.Fatalf("explicit Cua backend error = %v, want a Cua-specific startup error", err)
+	}
+}
+
 // TestBrowserInputSchemaHasRealEnum mirrors
 // TestComputerInputSchemaHasRealEnums: direction must carry a real JSON
 // Schema enum {up, down} (not just prose in the description) so the engine

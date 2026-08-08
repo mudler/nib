@@ -8,14 +8,12 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/chromedp/cdproto/accessibility"
 	"github.com/chromedp/chromedp"
-	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/mudler/nib/types"
 	"github.com/mudler/xlog"
@@ -136,25 +134,6 @@ func (b *browserServer) close() {
 		b.allocCancel()
 	}
 	b.bctx = nil
-}
-
-// BrowserInput is the shared input shape for every browser_* tool. Only the
-// fields relevant to a given tool are populated by the model for that call.
-type BrowserInput struct {
-	URL       string `json:"url,omitempty" jsonschema:"the URL to open (browser_navigate)"`
-	Ref       string `json:"ref,omitempty" jsonschema:"element ref from the snapshot, e.g. @e5 (browser_click/browser_type)"`
-	Text      string `json:"text,omitempty" jsonschema:"text to type (browser_type)"`
-	Key       string `json:"key,omitempty" jsonschema:"key to press, e.g. Enter, Tab, Escape (browser_press)"`
-	Direction string `json:"direction,omitempty" jsonschema:"up or down (browser_scroll)"`
-	Full      bool   `json:"full,omitempty" jsonschema:"return the full page snapshot, not just interactive elements (browser_snapshot)"`
-	Question  string `json:"question,omitempty" jsonschema:"what to look for in the screenshot (browser_vision)"`
-}
-
-// BrowserOutput is the structured result returned to the model for every
-// browser_* tool that produces (or refreshes) a snapshot.
-type BrowserOutput struct {
-	Snapshot     string `json:"snapshot,omitempty"`
-	ElementCount int    `json:"element_count,omitempty"`
 }
 
 // timeoutAwareError rewrites a context-deadline error from a per-call,
@@ -458,35 +437,6 @@ func textResult(s string) *mcp.CallToolResult {
 	return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: s}}}
 }
 
-// browserInputSchema builds the shared browser_* input schema from
-// BrowserInput (keeping the per-field descriptions from the jsonschema tags)
-// and stamps real enums onto the closed-value fields, direction and key —
-// mirrors computerInputSchema. Called fresh per tool registration (see
-// StartBrowserMCPServer) rather than shared, so the go-sdk can't
-// alias-mutate one schema instance across tools.
-func browserInputSchema() (*jsonschema.Schema, error) {
-	s, err := jsonschema.For[BrowserInput](nil)
-	if err != nil {
-		return nil, err
-	}
-	if p := s.Properties["direction"]; p != nil {
-		p.Enum = []any{"up", "down"}
-	}
-	if p := s.Properties["key"]; p != nil {
-		keys := make([]string, 0, len(pressAllowedKeys))
-		for k := range pressAllowedKeys {
-			keys = append(keys, k)
-		}
-		sort.Strings(keys)
-		enum := make([]any, len(keys))
-		for i, k := range keys {
-			enum[i] = k
-		}
-		p.Enum = enum
-	}
-	return s, nil
-}
-
 // StartBrowserMCPServer starts the configured browser MCP server. Chromedp is
 // the default backend; the Cua compatibility path owns its runtime here until
 // the Cua browser server is implemented. It blocks until ctx is done for a
@@ -508,11 +458,37 @@ func StartBrowserMCPServer(ctx context.Context, transport mcp.Transport, cfg typ
 	return startBrowserMCPServer(ctx, transport, cfg, runtime)
 }
 
+func startChromedpBrowserMCPServer(
+	ctx context.Context,
+	transport mcp.Transport,
+	cfg types.BrowserConfig,
+) error {
+	bs := newBrowserServer(cfg)
+	go func() {
+		<-ctx.Done()
+		bs.close()
+	}()
+
+	server := mcp.NewServer(&mcp.Implementation{Name: "browser", Version: "v1.0.0"}, nil)
+	registerBrowserTools(server, browserToolHandlers{
+		navigate: bs.browserNavigate,
+		snapshot: bs.browserSnapshot,
+		click:    bs.browserClick,
+		typeText: bs.browserType,
+		press:    bs.browserPress,
+		scroll:   bs.browserScroll,
+		vision:   bs.browserVision,
+	})
+
+	xlog.Info("browser MCP server ready")
+	return server.Run(ctx, transport)
+}
+
 func startBrowserMCPServer(
 	ctx context.Context,
 	transport mcp.Transport,
 	cfg types.Config,
-	runtime *cuaRuntime,
+	_ *cuaRuntime,
 ) error {
 	backend, err := browserBackend(cfg.Browser)
 	if err != nil {
@@ -521,61 +497,5 @@ func startBrowserMCPServer(
 	if backend == "cua" {
 		return errors.New("Cua browser backend is not implemented")
 	}
-
-	bs := newBrowserServer(cfg.Browser)
-	go func() {
-		<-ctx.Done()
-		bs.close()
-	}()
-
-	server := mcp.NewServer(&mcp.Implementation{Name: "browser", Version: "v1.0.0"}, nil)
-
-	addBrowserTool := func(name, description string, handler mcp.ToolHandlerFor[BrowserInput, BrowserOutput]) {
-		tool := &mcp.Tool{Name: name, Description: description}
-		// Build a fresh schema per tool registration — sharing one
-		// *jsonschema.Schema pointer across tools risks the go-sdk (or a
-		// caller) mutating one tool's schema and silently affecting all of
-		// them.
-		if schema, err := browserInputSchema(); err != nil {
-			xlog.Warn("browser: could not build enum schema, falling back to inferred", "tool", name, "err", err)
-		} else {
-			tool.InputSchema = schema
-		}
-		mcp.AddTool(server, tool, handler)
-	}
-
-	addBrowserTool("browser_navigate",
-		"Open a URL in a real, headed Chrome browser. ALWAYS call this first for any web task — it loads "+
-			"the page and returns a snapshot of its interactive elements, each tagged with a ref like @e3. "+
-			"For read-only lookups (answering a question, fetching a page's text) prefer web_search/web_fetch "+
-			"instead — this tool is for tasks that require actually driving a page (clicking, typing, logging in).",
-		bs.browserNavigate)
-	addBrowserTool("browser_snapshot",
-		"Re-read the accessibility tree of the currently open page without navigating, returning fresh @eN "+
-			"refs for browser_click/browser_type. Use after an action whose result isn't otherwise clear, or "+
-			"when refs may be stale. Set full=true for the whole-page outline instead of just interactive elements.",
-		bs.browserSnapshot)
-	addBrowserTool("browser_click",
-		"Click the element identified by ref (an @eN id from the last browser_navigate/browser_snapshot/"+
-			"browser_click/browser_type/browser_press/browser_scroll result). Returns a fresh snapshot.",
-		bs.browserClick)
-	addBrowserTool("browser_type",
-		"Focus the element identified by ref (an @eN id from the last snapshot), clear it, and type text into "+
-			"it. Returns a fresh snapshot. Use browser_press with key=Enter afterward to submit, if needed.",
-		bs.browserType)
-	addBrowserTool("browser_press",
-		"Send a single named key (Enter, Tab, Escape, ArrowDown, PageUp, etc.) to whatever currently has focus "+
-			"on the page — there is no ref. Returns a fresh snapshot. Useful to submit a form after browser_type.",
-		bs.browserPress)
-	addBrowserTool("browser_scroll",
-		"Scroll the page viewport up or down by about 90% of its height. direction must be \"up\" or \"down\". "+
-			"Returns a fresh snapshot revealing the newly visible content.",
-		bs.browserScroll)
-	addBrowserTool("browser_vision",
-		"Take a screenshot of the current page for visual inspection — use when the accessibility snapshot "+
-			"isn't enough (CAPTCHAs, visual verification, complex layouts). question says what to look for.",
-		bs.browserVision)
-
-	xlog.Info("browser MCP server ready")
-	return server.Run(ctx, transport)
+	return startChromedpBrowserMCPServer(ctx, transport, cfg.Browser)
 }
