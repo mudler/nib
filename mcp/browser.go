@@ -438,9 +438,8 @@ func textResult(s string) *mcp.CallToolResult {
 }
 
 // StartBrowserMCPServer starts the configured browser MCP server. Chromedp is
-// the default backend; the Cua compatibility path owns its runtime here until
-// the Cua browser server is implemented. It blocks until ctx is done for a
-// running backend.
+// the default backend; a selected Cua backend owns one runtime for this
+// compatibility entry point. It blocks until ctx is done for a running backend.
 func StartBrowserMCPServer(ctx context.Context, transport mcp.Transport, cfg types.Config) error {
 	if err := validateBrowserConfig(cfg.Browser); err != nil {
 		return err
@@ -488,14 +487,14 @@ func startBrowserMCPServer(
 	ctx context.Context,
 	transport mcp.Transport,
 	cfg types.Config,
-	_ *cuaRuntime,
+	runtime *cuaRuntime,
 ) error {
 	backend, err := browserBackend(cfg.Browser)
 	if err != nil {
 		return err
 	}
 	if backend == "cua" {
-		return errors.New("Cua browser backend is not implemented")
+		return startCUABrowserMCPServer(ctx, transport, cfg, runtime)
 	}
 	return startChromedpBrowserMCPServer(ctx, transport, cfg.Browser)
 }
