@@ -407,23 +407,7 @@ func (state *cuaAliasState) publicRefusal(refusal *cuaRefusal, args map[string]a
 	if refusal == nil {
 		return nil
 	}
-	replacements := make(map[string]string)
-	if state != nil {
-		if state.targetID != "" {
-			replacements[state.targetID] = "[target]"
-		}
-		for raw, alias := range state.tabReverse {
-			replacements[raw] = alias
-		}
-		for alias, element := range state.refs {
-			if element.Raw != "" {
-				replacements[element.Raw] = alias
-			}
-		}
-	}
-	for _, key := range []string{"files", "destination_root"} {
-		collectSensitiveStrings(args[key], replacements)
-	}
+	replacements := state.refusalReplacements(args)
 
 	public := &BrowserRefusal{
 		Code:    refusal.Code,
@@ -438,32 +422,105 @@ func (state *cuaAliasState) publicRefusal(refusal *cuaRefusal, args map[string]a
 	return public
 }
 
-func collectSensitiveStrings(value any, replacements map[string]string) {
+func (state *cuaAliasState) refusalReplacements(args map[string]any) map[string]string {
+	replacements := make(map[string]string)
+	keys := make([]string, 0, len(args))
+	for key := range args {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		if replacement, sensitive := refusalArgumentReplacement(key); sensitive {
+			collectSensitiveStrings(args[key], replacement, replacements)
+		}
+	}
+
+	if state != nil {
+		if state.targetID != "" {
+			replacements[state.targetID] = "[target]"
+		}
+		for raw, alias := range state.tabReverse {
+			replacements[raw] = alias
+		}
+		for alias, element := range state.refs {
+			if element.Raw != "" {
+				replacements[element.Raw] = alias
+			}
+		}
+	}
+	return replacements
+}
+
+func refusalArgumentReplacement(key string) (string, bool) {
+	lowerKey := strings.ToLower(key)
+	switch {
+	case strings.Contains(lowerKey, "continuation"):
+		return "[continuation]", true
+	case strings.Contains(lowerKey, "target"):
+		return "[target]", true
+	case strings.Contains(lowerKey, "tab"):
+		return "[tab]", true
+	case strings.Contains(lowerKey, "ref"):
+		return "[ref]", true
+	case strings.Contains(lowerKey, "endpoint"):
+		return "[endpoint]", true
+	case strings.Contains(lowerKey, "dialog"):
+		return "[dialog]", true
+	case strings.Contains(lowerKey, "download_id"):
+		return "[download]", true
+	case strings.Contains(lowerKey, "session"):
+		return "[session]", true
+	case lowerKey == "files", strings.Contains(lowerKey, "destination_root"):
+		return "[redacted]", true
+	case strings.Contains(lowerKey, "path"), strings.Contains(lowerKey, "url"),
+		strings.Contains(lowerKey, "filename"):
+		return "[redacted]", true
+	default:
+		return "", false
+	}
+}
+
+func collectSensitiveStrings(value any, replacement string, replacements map[string]string) {
 	switch typed := value.(type) {
 	case string:
 		if typed != "" {
-			replacements[typed] = "[redacted]"
+			replacements[typed] = replacement
 		}
 	case []string:
 		for _, item := range typed {
-			collectSensitiveStrings(item, replacements)
+			collectSensitiveStrings(item, replacement, replacements)
 		}
 	case []any:
 		for _, item := range typed {
-			collectSensitiveStrings(item, replacements)
+			collectSensitiveStrings(item, replacement, replacements)
+		}
+	case map[string]string:
+		for _, item := range typed {
+			collectSensitiveStrings(item, replacement, replacements)
+		}
+	case map[string]any:
+		for _, item := range typed {
+			collectSensitiveStrings(item, replacement, replacements)
 		}
 	}
 }
 
 var sensitiveRefusalDetailKeys = []string{
 	"target", "tab", "ref", "continuation", "endpoint", "path", "url", "filename",
+	"dialog", "download", "session",
 }
 
 func sanitizeRefusalDetail(value any, replacements map[string]string) any {
 	switch typed := value.(type) {
 	case map[string]any:
 		safe := make(map[string]any, len(typed))
-		for key, item := range typed {
+		keys := make([]string, 0, len(typed))
+		for key := range typed {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			item := typed[key]
 			lowerKey := strings.ToLower(key)
 			sensitive := false
 			for _, fragment := range sensitiveRefusalDetailKeys {
@@ -473,7 +530,10 @@ func sanitizeRefusalDetail(value any, replacements map[string]string) any {
 				}
 			}
 			if !sensitive {
-				safe[key] = sanitizeRefusalDetail(item, replacements)
+				safeKey := applyReplacements(key, replacements)
+				if _, collision := safe[safeKey]; !collision {
+					safe[safeKey] = sanitizeRefusalDetail(item, replacements)
+				}
 			}
 		}
 		return safe

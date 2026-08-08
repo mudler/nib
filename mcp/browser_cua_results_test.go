@@ -165,6 +165,93 @@ func TestCUAResultDecodesScreenshotAndLaterResultFields(t *testing.T) {
 	}
 }
 
+func TestCUAResultKeepsImageContentSeparateFromScreenshotMetadata(t *testing.T) {
+	result := cuaResultFixture(t, `{
+		"status":"ok",
+		"screenshot":{
+			"source":"cdp_tab","scope":"viewport","mime_type":"image/png",
+			"width":2,"height":1,"coordinate_space":"viewport_css_px",
+			"viewport_css_width":1.0,"viewport_css_height":0.5,
+			"pixel_to_css_scale_x":0.5,"pixel_to_css_scale_y":0.5,
+			"tab_activation":"not_requested","window_foregrounding":"not_requested"
+		}
+	}`)
+	result.Content = []sdkmcp.Content{
+		&sdkmcp.ImageContent{MIMEType: "image/png", Data: []byte("literal-png-data")},
+	}
+
+	var got cuaResultEnvelope
+	refusal, err := decodeCUAResult(result, &got)
+	if err != nil || refusal != nil {
+		t.Fatalf("decode = refusal %#v, error %v", refusal, err)
+	}
+	if got.Screenshot == nil || got.Screenshot.Width != 2 || got.Screenshot.ViewportCSSWidth != 1.0 {
+		t.Fatalf("structured screenshot metadata = %#v", got.Screenshot)
+	}
+	if len(result.Content) != 1 {
+		t.Fatalf("content block count = %d, want 1", len(result.Content))
+	}
+	image, ok := result.Content[0].(*sdkmcp.ImageContent)
+	if !ok {
+		t.Fatalf("content type = %T, want *mcp.ImageContent", result.Content[0])
+	}
+	if image.MIMEType != "image/png" || string(image.Data) != "literal-png-data" {
+		t.Fatalf("image content = %#v", image)
+	}
+}
+
+func TestCUAResultDecodeLeavesContentValidationToTheConsumer(t *testing.T) {
+	tests := []struct {
+		name       string
+		content    []sdkmcp.Content
+		wantBlocks int
+	}{
+		{name: "empty content", content: []sdkmcp.Content{}, wantBlocks: 0},
+		{
+			name: "mixed text and image content",
+			content: []sdkmcp.Content{
+				&sdkmcp.TextContent{Text: "driver-owned text is not structured data"},
+				&sdkmcp.ImageContent{MIMEType: "image/png", Data: []byte("png")},
+			},
+			wantBlocks: 2,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result := cuaResultFixture(t, `{
+				"status":"ok",
+				"screenshot":{
+					"mime_type":"image/png","width":1,"height":1,
+					"viewport_css_width":1,"viewport_css_height":1
+				}
+			}`)
+			result.Content = test.content
+
+			var got cuaResultEnvelope
+			refusal, err := decodeCUAResult(result, &got)
+			if err != nil || refusal != nil {
+				t.Fatalf("decode = refusal %#v, error %v", refusal, err)
+			}
+			if got.Screenshot == nil || got.Screenshot.MIMEType != "image/png" {
+				t.Fatalf("structured screenshot metadata = %#v", got.Screenshot)
+			}
+			if len(result.Content) != test.wantBlocks {
+				t.Fatalf("content block count = %d, want %d", len(result.Content), test.wantBlocks)
+			}
+			if test.wantBlocks == 2 {
+				text, textOK := result.Content[0].(*sdkmcp.TextContent)
+				image, imageOK := result.Content[1].(*sdkmcp.ImageContent)
+				if !textOK || text.Text != "driver-owned text is not structured data" {
+					t.Fatalf("text content = %#v", result.Content[0])
+				}
+				if !imageOK || image.MIMEType != "image/png" || string(image.Data) != "png" {
+					t.Fatalf("image content = %#v", result.Content[1])
+				}
+			}
+		})
+	}
+}
+
 func TestCUARefusalIsAFirstClassNonErrorResult(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -499,5 +586,55 @@ func TestCUARefusalPublicConversionRedactsCapabilitiesAndFilesystemValues(t *tes
 	}
 	if _, present := nested["filename"]; present {
 		t.Fatalf("nested filename survived: %#v", nested)
+	}
+}
+
+func TestCUARefusalRedactsOpaqueArgumentCapabilitiesFromMessageValuesAndKeys(t *testing.T) {
+	secrets := map[string]string{
+		"target_id":    "bt-argument-only",
+		"tab_id":       "tab-argument-only",
+		"ref":          "p88:4",
+		"continuation": "bc-argument-only",
+		"endpoint":     "ws://127.0.0.1:9555/devtools/browser/private",
+		"dialog_id":    "dialog-argument-only",
+		"download_id":  "download-argument-only",
+	}
+	refusal := &cuaRefusal{
+		Code: "browser_ref_stale",
+		Message: strings.Join([]string{
+			secrets["target_id"], secrets["tab_id"], secrets["ref"], secrets["continuation"],
+			secrets["endpoint"], secrets["dialog_id"], secrets["download_id"],
+		}, " "),
+		Detail: map[string]any{
+			"safe_reason": strings.Join([]string{
+				secrets["continuation"], secrets["target_id"], secrets["dialog_id"],
+			}, " "),
+			secrets["continuation"]: "opaque token was used as a map key",
+			"nested": map[string]any{
+				secrets["ref"]: secrets["tab_id"],
+			},
+		},
+	}
+
+	public := newCUAAliasState().publicRefusal(refusal, map[string]any{
+		"target_id":    secrets["target_id"],
+		"tab_id":       secrets["tab_id"],
+		"ref":          secrets["ref"],
+		"continuation": secrets["continuation"],
+		"endpoint":     secrets["endpoint"],
+		"dialog_id":    secrets["dialog_id"],
+		"download_id":  secrets["download_id"],
+	})
+	encoded, err := json.Marshal(public)
+	if err != nil {
+		t.Fatalf("marshal public refusal: %v", err)
+	}
+	for name, secret := range secrets {
+		if strings.Contains(string(encoded), secret) {
+			t.Fatalf("public refusal leaked %s %q: %s", name, secret, encoded)
+		}
+	}
+	if !strings.Contains(string(encoded), "[continuation]") {
+		t.Fatalf("continuation was not replaced with a safe marker: %s", encoded)
 	}
 }
