@@ -621,6 +621,13 @@ func TestCUABrowserDownloadUsesExistingCanonicalSubdirectory(t *testing.T) {
 	if output.Bytes != 0 || output.DownloadID == "" {
 		t.Fatalf("zero-byte download output = %#v", output)
 	}
+	encoded, err := json.Marshal(output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(encoded), `"bytes":0`) {
+		t.Fatalf("zero-byte download omitted byte count: %s", encoded)
+	}
 	if strings.Contains(output.Snapshot, "downloads") {
 		t.Fatalf("download snapshot leaked destination basename: %s", output.Snapshot)
 	}

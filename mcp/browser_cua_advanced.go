@@ -142,10 +142,8 @@ func (b *cuaBrowserServer) mutatePointerThenSnapshot(
 	var mutation cuaPointerResult
 	_, refusal, err := b.callResult(ctx, "browser_pointer", args, &mutation)
 	if err != nil {
-		if errors.Is(err, errCUAInvalidStatus) {
-			b.clearTabScopedCapabilities()
-		}
-		return nil, BrowserOutput{}, err
+		b.clearTabScopedCapabilities()
+		return nil, BrowserOutput{}, b.publicCallError(err, args)
 	}
 	if refusal != nil {
 		b.invalidateOnRefusal(refusal)
@@ -160,7 +158,17 @@ func (b *cuaBrowserServer) mutatePointerThenSnapshot(
 	}
 	result, output, _, err := b.snapshotInternal(ctx, false, false, false)
 	if err != nil {
-		return nil, BrowserOutput{}, fmt.Errorf("browser pointer %s succeeded but post-action snapshot failed: %w", action, err)
+		return nil, BrowserOutput{}, fmt.Errorf(
+			"browser pointer %s succeeded but post-action snapshot failed: %w",
+			action,
+			b.publicCallError(err, args),
+		)
+	}
+	if output.Refusal != nil {
+		b.mu.Lock()
+		output.Refusal = b.aliasStateLocked().resanitizePublicRefusal(output.Refusal, args)
+		b.mu.Unlock()
+		result = textResult(output.Refusal.Message)
 	}
 	if output.Status == "ok" {
 		result = textResult(output.Snapshot)
@@ -458,9 +466,7 @@ func (b *cuaBrowserServer) resolveDialog(
 	var resolution cuaDialogResult
 	_, refusal, err := b.callResult(ctx, "browser_dialog", args, &resolution)
 	if err != nil {
-		if errors.Is(err, errCUAInvalidStatus) {
-			b.clearTabScopedCapabilities()
-		}
+		b.clearTabScopedCapabilities()
 		return nil, BrowserDialogOutput{}, b.publicCallError(err, args)
 	}
 	if refusal != nil {

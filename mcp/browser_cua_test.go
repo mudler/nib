@@ -550,6 +550,117 @@ func TestCUABrowserTargetChangeInvalidatesCapabilities(t *testing.T) {
 	}
 }
 
+func TestCUABrowserTabReadsInvalidateRecognizedRefusals(t *testing.T) {
+	tests := []struct {
+		name string
+		code string
+		call func(*cuaBrowserServer) error
+	}{
+		{
+			name: "tabs target change",
+			code: "browser_target_changed",
+			call: func(server *cuaBrowserServer) error {
+				_, _, err := server.browserTabs(context.Background(), nil, BrowserTabsInput{})
+				return err
+			},
+		},
+		{
+			name: "tabs stale tab",
+			code: "browser_tab_stale",
+			call: func(server *cuaBrowserServer) error {
+				_, _, err := server.browserTabs(context.Background(), nil, BrowserTabsInput{})
+				return err
+			},
+		},
+		{
+			name: "select target change",
+			code: "browser_target_changed",
+			call: func(server *cuaBrowserServer) error {
+				_, _, err := server.browserSelectTab(context.Background(), nil, BrowserSelectTabInput{TabID: "@t1"})
+				return err
+			},
+		},
+		{
+			name: "select stale tab",
+			code: "browser_tab_stale",
+			call: func(server *cuaBrowserServer) error {
+				_, _, err := server.browserSelectTab(context.Background(), nil, BrowserSelectTabInput{TabID: "@t1"})
+				return err
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			server, _ := preparedCUABrowserTestServer(t, map[string]fakeCUAHandler{
+				"get_browser_state": func(map[string]any) (*mcp.CallToolResult, map[string]any, error) {
+					return cuaRefused(test.code, "read refused", nil)
+				},
+			})
+			server.refs["@e1"] = cuaElement{Raw: "raw-old", Actions: map[string]bool{"click": true}}
+			server.lastEditable = "raw-editable"
+			server.dialogID = "dialog-old"
+			server.dialogKind = "alert"
+
+			if err := test.call(server); err != nil {
+				t.Fatal(err)
+			}
+			if len(server.refs) != 0 || server.lastEditable != "" || server.dialogID != "" || server.dialogKind != "" {
+				t.Fatalf("recognized refusal retained capabilities: refs=%#v editable=%q dialog=%q/%q",
+					server.refs, server.lastEditable, server.dialogID, server.dialogKind)
+			}
+			if test.code == "browser_target_changed" && server.targetID != "" {
+				t.Fatalf("target-change refusal retained target %q", server.targetID)
+			}
+		})
+	}
+}
+
+func TestCUABrowserChangedTargetInvalidatesBeforeBindingValidation(t *testing.T) {
+	tests := []struct {
+		name string
+		call func(*cuaBrowserServer) error
+	}{
+		{
+			name: "tabs",
+			call: func(server *cuaBrowserServer) error {
+				_, _, err := server.browserTabs(context.Background(), nil, BrowserTabsInput{})
+				return err
+			},
+		},
+		{
+			name: "native key preflight",
+			call: func(server *cuaBrowserServer) error {
+				_, err := server.guardNativeKeyTarget(context.Background())
+				return err
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			malformed := cuaBrowserBind("target-new", cuaBrowserTab("tab-new", "New", true))
+			malformed["binding_quality"] = "fallback"
+			server, _ := preparedCUABrowserTestServer(t, map[string]fakeCUAHandler{
+				"get_browser_state": func(map[string]any) (*mcp.CallToolResult, map[string]any, error) {
+					return cuaOK(malformed)
+				},
+			})
+			server.refs["@e1"] = cuaElement{Raw: "raw-old", Actions: map[string]bool{"click": true}}
+			server.lastEditable = "raw-editable"
+			server.dialogID = "dialog-old"
+			server.dialogKind = "alert"
+
+			if err := test.call(server); err == nil {
+				t.Fatal("malformed changed-target binding succeeded")
+			}
+			if server.targetID != "target-new" || len(server.refs) != 0 || server.lastEditable != "" ||
+				server.dialogID != "" || server.dialogKind != "" {
+				t.Fatalf("changed target was not observed before validation: target=%q refs=%#v editable=%q dialog=%q/%q",
+					server.targetID, server.refs, server.lastEditable, server.dialogID, server.dialogKind)
+			}
+		})
+	}
+}
+
 func TestCUABrowserTabsPreserveAliasesWithoutActivating(t *testing.T) {
 	bindCalls := 0
 	handlers := standardRunningCUAHandlers(
@@ -694,6 +805,50 @@ func TestCUABrowserSelectTabRejectsMismatchedReturnedTabWithoutCommitting(t *tes
 	}
 	if got := server.refs["@e1"].Raw; got != "raw-old" {
 		t.Fatalf("element capabilities changed to %q, want original raw-old", got)
+	}
+}
+
+func TestCUABrowserSelectTabRejectsMalformedSemanticSnapshotWithoutCommitting(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(map[string]any)
+	}{
+		{
+			name: "missing format",
+			mutate: func(snapshot map[string]any) {
+				delete(snapshot["snapshot"].(map[string]any), "format")
+			},
+		},
+		{
+			name: "missing snapshot id",
+			mutate: func(snapshot map[string]any) {
+				delete(snapshot["snapshot"].(map[string]any), "id")
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			server, _ := preparedCUABrowserTestServer(t, map[string]fakeCUAHandler{
+				"get_browser_state": func(map[string]any) (*mcp.CallToolResult, map[string]any, error) {
+					snapshot := cuaBrowserSnapshot("target-1", "tab-b", "new-ref", cuaBrowserRef("raw-new", "New", "click"))
+					test.mutate(snapshot)
+					return cuaOK(snapshot)
+				},
+			})
+			server.tabs["tab-b"] = cuaTab{ID: "tab-b", Title: "B", URL: "https://example.test/b"}
+			server.tabAliases["@t2"] = "tab-b"
+			server.tabReverse["tab-b"] = "@t2"
+			server.nextTabAlias = 2
+			server.refs["@e1"] = cuaElement{Raw: "raw-old", Actions: map[string]bool{"click": true}}
+
+			_, _, err := server.browserSelectTab(context.Background(), nil, BrowserSelectTabInput{TabID: "@t2"})
+			if err == nil {
+				t.Fatal("malformed semantic snapshot was accepted")
+			}
+			if server.selectedTab != "tab-a" || server.refs["@e1"].Raw != "raw-old" {
+				t.Fatalf("malformed selection was committed: selected=%q refs=%#v", server.selectedTab, server.refs)
+			}
+		})
 	}
 }
 

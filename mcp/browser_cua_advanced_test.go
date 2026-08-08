@@ -291,6 +291,24 @@ func TestCUABrowserPointerNeverRetriesAndInvalidatesBeforeVerification(t *testin
 	}
 }
 
+func TestCUABrowserPointerTransportFailureClearsCapabilities(t *testing.T) {
+	server, _ := preparedCUABrowserTestServer(t, nil)
+	server.runtime.client = &failingCUAClient{err: context.DeadlineExceeded}
+	server.refs["@e1"] = cuaElement{Raw: "raw-origin", Actions: map[string]bool{"pointer": true}}
+	server.lastEditable = "raw-editable"
+	server.dialogID = "dialog-old"
+	server.dialogKind = "alert"
+
+	_, _, err := server.browserPointer(context.Background(), nil, BrowserPointerInput{Action: "hover", Ref: "@e1"})
+	if err == nil || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("error = %v, want pointer deadline", err)
+	}
+	if len(server.refs) != 0 || server.lastEditable != "" || server.dialogID != "" || server.dialogKind != "" {
+		t.Fatalf("uncertain pointer retained capabilities: refs=%#v editable=%q dialog=%q/%q",
+			server.refs, server.lastEditable, server.dialogID, server.dialogKind)
+	}
+}
+
 func TestCUABrowserPointerValidatesMutationResultBeforeSnapshot(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -706,6 +724,26 @@ func TestCUABrowserDialogSuccessfulResolutionClearsAllCapabilitiesBeforeValidati
 				t.Fatalf("snapshot calls = %d, want %d", got, wantSnapshots)
 			}
 		})
+	}
+}
+
+func TestCUABrowserDialogResolutionTransportFailureClearsCapabilities(t *testing.T) {
+	server, _ := preparedCUABrowserTestServer(t, nil)
+	server.runtime.client = &failingCUAClient{err: context.DeadlineExceeded}
+	server.refs["@e1"] = cuaElement{Raw: "raw-old", Actions: map[string]bool{"click": true}}
+	server.lastEditable = "raw-editable"
+	server.dialogID = "dialog-1"
+	server.dialogKind = "prompt"
+
+	_, _, err := server.browserDialog(context.Background(), nil, BrowserDialogInput{
+		Action: "accept", DialogID: "dialog-1", PromptText: pointerToString("response"),
+	})
+	if err == nil || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("error = %v, want dialog deadline", err)
+	}
+	if len(server.refs) != 0 || server.lastEditable != "" || server.dialogID != "" || server.dialogKind != "" {
+		t.Fatalf("uncertain dialog resolution retained capabilities: refs=%#v editable=%q dialog=%q/%q",
+			server.refs, server.lastEditable, server.dialogID, server.dialogKind)
 	}
 }
 

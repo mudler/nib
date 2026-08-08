@@ -554,6 +554,7 @@ var sensitiveRefusalArgumentReplacements = map[string]string{
 	"session":          "[session]",
 	"tab_id":           "[tab]",
 	"target_id":        "[target]",
+	"text":             "[redacted]",
 	"url":              "[redacted]",
 }
 

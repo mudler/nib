@@ -49,7 +49,7 @@ type BrowserDownloadInput struct {
 type BrowserDownloadOutput struct {
 	BrowserOutcome
 	DownloadID   string `json:"download_id,omitempty"`
-	Bytes        int64  `json:"bytes,omitempty"`
+	Bytes        int64  `json:"bytes"`
 	Snapshot     string `json:"snapshot,omitempty"`
 	ElementCount int    `json:"element_count,omitempty"`
 }

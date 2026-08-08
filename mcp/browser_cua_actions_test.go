@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"math"
 	"reflect"
@@ -166,6 +167,24 @@ func TestCUABrowserRepeatedNavigateClearsCapabilitiesBeforeSnapshotValidation(t 
 				t.Fatalf("invalid repeated navigation retained capabilities: %#v %q", server.refs, server.lastEditable)
 			}
 		})
+	}
+}
+
+func TestCUABrowserNavigateTransportFailureClearsCapabilities(t *testing.T) {
+	server, _ := preparedCUABrowserTestServer(t, nil)
+	server.runtime.client = &failingCUAClient{err: context.DeadlineExceeded}
+	server.refs["@e1"] = cuaElement{Raw: "raw-old", Actions: map[string]bool{"click": true}}
+	server.lastEditable = "raw-editable"
+	server.dialogID = "dialog-old"
+	server.dialogKind = "alert"
+
+	_, _, err := server.browserNavigate(context.Background(), nil, BrowserInput{URL: "https://example.test/repeated"})
+	if err == nil || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("error = %v, want navigation deadline", err)
+	}
+	if len(server.refs) != 0 || server.lastEditable != "" || server.dialogID != "" || server.dialogKind != "" {
+		t.Fatalf("uncertain navigation retained capabilities: refs=%#v editable=%q dialog=%q/%q",
+			server.refs, server.lastEditable, server.dialogID, server.dialogKind)
 	}
 }
 
@@ -894,6 +913,134 @@ func TestCUABrowserMutationNeverRetries(t *testing.T) {
 	}
 	if len(callsNamed(fake.Calls(), "browser_click")) != 1 || len(callsNamed(fake.Calls(), "get_browser_state")) != 0 {
 		t.Fatalf("mutation retried or rebound: %#v", fake.Calls())
+	}
+}
+
+func TestCUABrowserSharedMutationTransportFailuresClearCapabilities(t *testing.T) {
+	for _, tool := range []string{"browser_click", "browser_type", "press_key"} {
+		t.Run(tool, func(t *testing.T) {
+			server, _ := preparedCUABrowserTestServer(t, nil)
+			server.runtime.client = &failingCUAClient{err: context.DeadlineExceeded}
+			server.refs["@e1"] = cuaElement{Raw: "raw-old", Actions: map[string]bool{"click": true}}
+			server.lastEditable = "raw-editable"
+			server.dialogID = "dialog-old"
+			server.dialogKind = "alert"
+
+			args := exactTestArgs(map[string]any{"ref": "raw-old"})
+			_, _, err := server.mutateThenSnapshot(context.Background(), tool, args, tool)
+			if err == nil || !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("error = %v, want mutation deadline", err)
+			}
+			if len(server.refs) != 0 || server.lastEditable != "" || server.dialogID != "" || server.dialogKind != "" {
+				t.Fatalf("uncertain mutation retained capabilities: refs=%#v editable=%q dialog=%q/%q",
+					server.refs, server.lastEditable, server.dialogID, server.dialogKind)
+			}
+		})
+	}
+}
+
+func TestCUABrowserTypeSanitizesEveryMutationFailurePath(t *testing.T) {
+	const secret = "typed credential 7xQ"
+	const rawRef = "opaque-input-capability"
+	tests := []struct {
+		name          string
+		handler       fakeCUAHandler
+		snapshot      fakeCUAHandler
+		directCallErr bool
+		refused       bool
+	}{
+		{
+			name:          "direct transport",
+			directCallErr: true,
+		},
+		{
+			name: "protocol",
+			handler: func(map[string]any) (*mcp.CallToolResult, map[string]any, error) {
+				return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{
+					&mcp.TextContent{Text: "protocol echoed " + secret + " " + rawRef},
+				}}, nil, nil
+			},
+		},
+		{
+			name:    "refusal",
+			refused: true,
+			handler: func(map[string]any) (*mcp.CallToolResult, map[string]any, error) {
+				return cuaRefused("browser_action_unavailable", "refused "+secret+" "+rawRef, map[string]any{
+					"safe": secret + " " + rawRef,
+				})
+			},
+		},
+		{
+			name: "verification transport",
+			handler: func(map[string]any) (*mcp.CallToolResult, map[string]any, error) {
+				return cuaOK(nil)
+			},
+			snapshot: func(map[string]any) (*mcp.CallToolResult, map[string]any, error) {
+				return nil, nil, errors.New("verification echoed " + secret + " " + rawRef)
+			},
+		},
+		{
+			name: "verification protocol",
+			handler: func(map[string]any) (*mcp.CallToolResult, map[string]any, error) {
+				return cuaOK(nil)
+			},
+			snapshot: func(map[string]any) (*mcp.CallToolResult, map[string]any, error) {
+				return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{
+					&mcp.TextContent{Text: "verification echoed " + secret + " " + rawRef},
+				}}, nil, nil
+			},
+		},
+		{
+			name: "verification refusal",
+			handler: func(map[string]any) (*mcp.CallToolResult, map[string]any, error) {
+				return cuaOK(nil)
+			},
+			snapshot: func(map[string]any) (*mcp.CallToolResult, map[string]any, error) {
+				return cuaRefused("browser_action_unavailable", "verification refused "+secret+" "+rawRef, map[string]any{
+					"safe": secret + " " + rawRef,
+				})
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			server, _ := preparedCUABrowserTestServer(t, map[string]fakeCUAHandler{
+				"browser_type":      test.handler,
+				"get_browser_state": test.snapshot,
+			})
+			if test.directCallErr {
+				server.runtime.client = &failingCUAClient{err: errors.New("transport echoed " + secret + " " + rawRef)}
+			}
+			server.refs["@e1"] = cuaElement{Raw: rawRef, Actions: map[string]bool{"type": true}}
+			server.lastEditable = rawRef
+			server.dialogID = "dialog-old"
+			server.dialogKind = "prompt"
+
+			result, output, err := server.browserType(context.Background(), nil, BrowserInput{Ref: "@e1", Text: secret})
+			public := ""
+			if result != nil {
+				public += firstText(result.Content)
+			}
+			if output.Refusal != nil {
+				public += output.Refusal.Message
+				encoded, marshalErr := json.Marshal(output.Refusal)
+				if marshalErr != nil {
+					t.Fatal(marshalErr)
+				}
+				public += string(encoded)
+			}
+			if err != nil {
+				public += err.Error()
+			}
+			if strings.Contains(public, secret) || strings.Contains(public, rawRef) {
+				t.Fatalf("public mutation failure leaked a secret: %s", public)
+			}
+			if !test.refused && (len(server.refs) != 0 || server.lastEditable != "" ||
+				server.dialogID != "" || server.dialogKind != "") {
+				t.Fatalf("mutation failure retained capabilities: refs=%#v editable=%q dialog=%q/%q",
+					server.refs, server.lastEditable, server.dialogID, server.dialogKind)
+			}
+		})
 	}
 }
 

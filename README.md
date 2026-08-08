@@ -514,9 +514,10 @@ tools: `browser_tabs`, `browser_select_tab`, `browser_pointer`,
 nib-owned schemas, not the raw Cua MCP surface.
 
 The first `browser_navigate` lazily prepares and binds the Cua browser; other
-browser calls before that return guidance to navigate first. Tabs and page
-elements use compact, snapshot-scoped `@tN` and `@eN` capabilities. Logical tab
-selection does not activate a native tab, stale capabilities fail closed, and
+browser calls before that return guidance to navigate first. Page `@eN` aliases
+are snapshot-scoped, while surviving `@tN` aliases persist across tab refreshes
+for the current target generation. Logical tab selection does not activate a
+native tab, stale capabilities fail closed, and
 mutating calls are not automatically retried. Native key delivery may also be
 refused when the selected tab cannot be proven active. Every mutating browser
 tool still passes through nib's normal approval policy, and Cua's structured

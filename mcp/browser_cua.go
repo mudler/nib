@@ -127,7 +127,8 @@ func (b *cuaBrowserServer) browserNavigate(
 	var envelope cuaResultEnvelope
 	refusal, err := b.call(actionCtx, "browser_navigate", args, &envelope)
 	if err != nil {
-		return nil, BrowserOutput{}, err
+		b.clearTabScopedCapabilities()
+		return nil, BrowserOutput{}, b.publicCallError(err, args)
 	}
 	if refusal != nil {
 		b.invalidateOnRefusal(refusal)
@@ -314,7 +315,15 @@ func (b *cuaBrowserServer) browserTabs(
 		return nil, BrowserTabsOutput{}, err
 	}
 	if refusal != nil {
+		b.invalidateOnRefusal(refusal)
 		return b.tabsRefusalResult(refusal, args)
+	}
+	b.mu.Lock()
+	previousTarget := b.targetID
+	b.mu.Unlock()
+	targetChanged := bind.TargetID != "" && bind.TargetID != previousTarget
+	if targetChanged {
+		b.observeTargetGeneration(bind.TargetID)
 	}
 	if err := validateExactBinding(bind); err != nil {
 		return nil, BrowserTabsOutput{}, err
@@ -323,7 +332,7 @@ func (b *cuaBrowserServer) browserTabs(
 	b.mu.Lock()
 	state := b.aliasStateLocked()
 	previousSelected := state.selectedTab
-	targetChanged := state.observeTarget(bind.TargetID)
+	state.observeTarget(bind.TargetID)
 	state.syncTabs(bind.Tabs)
 	selectionChanged := state.selectedTab != previousSelected
 	if targetChanged || state.selectedTab == "" || state.tabs[state.selectedTab].ID == "" {
@@ -379,6 +388,7 @@ func (b *cuaBrowserServer) browserSelectTab(
 		return nil, BrowserOutput{}, err
 	}
 	if refusal != nil {
+		b.invalidateOnRefusal(refusal)
 		return b.browserRefusalResult(refusal, args)
 	}
 	if snapshot.TargetID == "" {
@@ -399,6 +409,12 @@ func (b *cuaBrowserServer) browserSelectTab(
 	}
 	if snapshot.TabID != rawTab {
 		return nil, BrowserOutput{}, errors.New("Cua browser_select_tab returned a snapshot for a different tab")
+	}
+	if snapshot.Snapshot.Format != "semantic_v2" {
+		return nil, BrowserOutput{}, fmt.Errorf("Cua snapshot format is %q, want semantic_v2", snapshot.Snapshot.Format)
+	}
+	if snapshot.Snapshot.ID == "" {
+		return nil, BrowserOutput{}, errors.New("Cua semantic snapshot omitted snapshot id")
 	}
 
 	b.mu.Lock()
@@ -1013,10 +1029,8 @@ func (b *cuaBrowserServer) mutateThenSnapshotEnvelope(
 	var mutation cuaResultEnvelope
 	_, refusal, err := b.callResult(ctx, tool, args, &mutation)
 	if err != nil {
-		if errors.Is(err, errCUAInvalidStatus) {
-			b.clearTabScopedCapabilities()
-		}
-		return nil, BrowserOutput{}, cuaResultEnvelope{}, err
+		b.clearTabScopedCapabilities()
+		return nil, BrowserOutput{}, cuaResultEnvelope{}, b.publicCallError(err, args)
 	}
 	if refusal != nil {
 		b.invalidateOnRefusal(refusal)
@@ -1028,7 +1042,17 @@ func (b *cuaBrowserServer) mutateThenSnapshotEnvelope(
 	b.clearTabScopedCapabilities()
 	result, output, envelope, err := b.snapshotInternal(ctx, false, false, false)
 	if err != nil {
-		return nil, BrowserOutput{}, cuaResultEnvelope{}, fmt.Errorf("%s succeeded but post-action snapshot failed: %w", summary, err)
+		return nil, BrowserOutput{}, cuaResultEnvelope{}, fmt.Errorf(
+			"%s succeeded but post-action snapshot failed: %w",
+			summary,
+			b.publicCallError(err, args),
+		)
+	}
+	if output.Refusal != nil {
+		b.mu.Lock()
+		output.Refusal = b.aliasStateLocked().resanitizePublicRefusal(output.Refusal, args)
+		b.mu.Unlock()
+		result = textResult(output.Refusal.Message)
 	}
 	if output.Status == "ok" {
 		result = textResult(output.Snapshot)
@@ -1074,15 +1098,14 @@ func (b *cuaBrowserServer) guardNativeKeyTarget(ctx context.Context) (*cuaRefusa
 		}
 		return refusal, err
 	}
+	targetChanged := bind.TargetID != "" && bind.TargetID != targetID
+	if targetChanged {
+		b.observeTargetGeneration(bind.TargetID)
+	}
 	if err := validateExactBinding(bind); err != nil {
 		return nil, err
 	}
-	if bind.TargetID != targetID {
-		b.mu.Lock()
-		state := b.aliasStateLocked()
-		state.observeTarget(bind.TargetID)
-		b.installAliasStateLocked(state)
-		b.mu.Unlock()
+	if targetChanged {
 		return &cuaRefusal{Code: "browser_target_changed", Message: "browser target changed; take a fresh snapshot"}, nil
 	}
 	selectedCount, activeCount := 0, 0
