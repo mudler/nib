@@ -184,6 +184,34 @@ func TestBrowserPathRejectsTraversalSymlinksAndWrongKinds(t *testing.T) {
 	}
 }
 
+func TestBrowserPathRejectsPortableTraversalAndWindowsVolumes(t *testing.T) {
+	fixture := newBrowserPathFixture(t)
+	tests := []struct {
+		name       string
+		relative   string
+		wantReason string
+	}{
+		{name: "backslash traversal", relative: `nested\..\upload.txt`, wantReason: "parent traversal"},
+		{name: "mixed slash traversal", relative: `nested/..\upload.txt`, wantReason: "parent traversal"},
+		{name: "mixed backslash traversal", relative: `nested\../upload.txt`, wantReason: "parent traversal"},
+		{name: "drive relative", relative: `C:upload.txt`, wantReason: "relative to WorkingDir"},
+		{name: "drive absolute", relative: `C:\upload.txt`, wantReason: "relative to WorkingDir"},
+		{name: "UNC path", relative: `\\server\share\upload.txt`, wantReason: "relative to WorkingDir"},
+		{name: "device path", relative: `\\?\C:\upload.txt`, wantReason: "relative to WorkingDir"},
+		{name: "device namespace", relative: `\\.\PhysicalDrive0`, wantReason: "relative to WorkingDir"},
+		{name: "root relative Windows path", relative: `\Windows\upload.txt`, wantReason: "relative to WorkingDir"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := resolveBrowserPath(fixture.root, test.relative, browserUploadFile)
+			assertBrowserErrorHasNoPaths(t, err, fixture.root, fixture.canonicalRoot)
+			if !strings.Contains(err.Error(), test.wantReason) {
+				t.Fatalf("error = %v, want %q", err, test.wantReason)
+			}
+		})
+	}
+}
+
 func configurePreparedFileServer(server *cuaBrowserServer, root string, action string) {
 	server.cfg.WorkingDir = root
 	server.refs["@e1"] = cuaElement{Raw: "raw-file-capability", Actions: map[string]bool{action: true}}
@@ -323,7 +351,7 @@ func TestCUABrowserFilesPassCanonicalPathsAndMapFileCount(t *testing.T) {
 		},
 		"get_browser_state": func(map[string]any) (*mcp.CallToolResult, map[string]any, error) {
 			return cuaOK(cuaBrowserSnapshot(
-				"target-1", "tab-a", "files assigned "+fixture.root+" raw-file-capability",
+				"target-1", "tab-a", "files assigned "+fixture.root+" raw-file-capability upload.txt nested/second.bin second.bin",
 				cuaBrowserRef("raw-fresh", "Fresh", "click"),
 			))
 		},
@@ -343,7 +371,9 @@ func TestCUABrowserFilesPassCanonicalPathsAndMapFileCount(t *testing.T) {
 	if resultText(result) != output.Snapshot {
 		t.Fatalf("upload text result = %q, want fresh snapshot %q", resultText(result), output.Snapshot)
 	}
-	for _, secret := range []string{fixture.root, fixture.canonicalRoot, "raw-file-capability"} {
+	for _, secret := range []string{
+		fixture.root, fixture.canonicalRoot, "raw-file-capability", "upload.txt", "nested/second.bin", "second.bin",
+	} {
 		if strings.Contains(output.Snapshot, secret) {
 			t.Fatalf("upload snapshot leaked %q: %s", secret, output.Snapshot)
 		}
@@ -501,7 +531,7 @@ func TestCUABrowserDownloadUsesExistingCanonicalSubdirectory(t *testing.T) {
 			}, nil
 		},
 		"get_browser_state": func(map[string]any) (*mcp.CallToolResult, map[string]any, error) {
-			return cuaOK(cuaBrowserSnapshot("target-1", "tab-a", "empty download complete"))
+			return cuaOK(cuaBrowserSnapshot("target-1", "tab-a", "empty downloads complete"))
 		},
 	})
 	configurePreparedFileServer(server, fixture.root, "click")
@@ -513,6 +543,9 @@ func TestCUABrowserDownloadUsesExistingCanonicalSubdirectory(t *testing.T) {
 	}
 	if output.Bytes != 0 || output.DownloadID == "" {
 		t.Fatalf("zero-byte download output = %#v", output)
+	}
+	if strings.Contains(output.Snapshot, "downloads") {
+		t.Fatalf("download snapshot leaked destination basename: %s", output.Snapshot)
 	}
 	calls := callsNamed(fake.Calls(), "browser_download")
 	if len(calls) != 1 || calls[0].Args["destination_root"] != fixture.downloads {
@@ -527,6 +560,7 @@ func TestCUABrowserDownloadRejectsMalformedCompletedResultAndInvalidatesCapabili
 		response map[string]any
 	}{
 		{name: "missing id", response: map[string]any{"status": "completed", "bytes": int64(4)}},
+		{name: "missing bytes", response: map[string]any{"status": "completed", "download_id": "opaque"}},
 		{name: "negative bytes", response: map[string]any{"status": "completed", "download_id": "opaque", "bytes": int64(-1)}},
 		{name: "wrong status", response: map[string]any{"status": "ok", "download_id": "opaque", "bytes": int64(4)}},
 	}
@@ -546,8 +580,134 @@ func TestCUABrowserDownloadRejectsMalformedCompletedResultAndInvalidatesCapabili
 			if got := countFakeCUACalls(fake.Calls(), "browser_download"); got != 1 {
 				t.Fatalf("browser_download calls = %d, want 1", got)
 			}
+			if got := countFakeCUACalls(fake.Calls(), "get_browser_state"); got != 0 {
+				t.Fatalf("malformed download triggered verification snapshot: %d", got)
+			}
 			if len(server.refs) != 0 {
 				t.Fatalf("uncertain download retained element capabilities: %#v", server.refs)
+			}
+		})
+	}
+}
+
+func TestCUABrowserDownloadRejectsUnsafeOpaqueIDsBeforeSnapshot(t *testing.T) {
+	fixture := newBrowserPathFixture(t)
+	tests := []struct {
+		name string
+		id   string
+	}{
+		{name: "dot", id: "."},
+		{name: "parent", id: ".."},
+		{name: "slash component", id: "nested/download"},
+		{name: "backslash component", id: `nested\download`},
+		{name: "drive relative component", id: `C:download`},
+		{name: "target capability", id: "opaque-target-1-value"},
+		{name: "tab capability", id: "opaque-tab-a-value"},
+		{name: "element capability", id: "opaque-raw-file-capability-value"},
+		{name: "session capability", id: "opaque-" + testCUASessionID + "-value"},
+		{name: "private root", id: fixture.canonicalRoot},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			server, fake := preparedCUABrowserTestServer(t, map[string]fakeCUAHandler{
+				"browser_download": func(map[string]any) (*mcp.CallToolResult, map[string]any, error) {
+					return &mcp.CallToolResult{}, map[string]any{
+						"status": "completed", "download_id": test.id, "bytes": int64(4),
+					}, nil
+				},
+			})
+			configurePreparedFileServer(server, fixture.root, "click")
+			_, _, err := server.browserDownload(context.Background(), nil, BrowserDownloadInput{Ref: "@e1"})
+			if err == nil {
+				t.Fatalf("unsafe download id %q was accepted", test.id)
+			}
+			assertBrowserErrorHasNoPaths(t, err, fixture.root, fixture.canonicalRoot, test.id)
+			if got := countFakeCUACalls(fake.Calls(), "browser_download"); got != 1 {
+				t.Fatalf("browser_download calls = %d, want 1", got)
+			}
+			if got := countFakeCUACalls(fake.Calls(), "get_browser_state"); got != 0 {
+				t.Fatalf("unsafe download id triggered verification snapshot: %d", got)
+			}
+			if len(server.refs) != 0 {
+				t.Fatalf("unsafe download id retained element capabilities: %#v", server.refs)
+			}
+		})
+	}
+}
+
+func TestCUABrowserDownloadRejectsKnownContinuationInOpaqueID(t *testing.T) {
+	server, _ := preparedCUABrowserTestServer(t, nil)
+	const continuation = "bc-private-continuation"
+	downloadID := "opaque-" + continuation + "-value"
+	byteCount := int64(4)
+	publicArgs := map[string]any{
+		"continuation": continuation,
+	}
+	_, _, err := server.validateBrowserDownloadResult(cuaDownloadResult{
+		DownloadID: &downloadID,
+		Bytes:      &byteCount,
+	}, publicArgs)
+	if err == nil {
+		t.Fatal("download id containing a known continuation capability was accepted")
+	}
+	if strings.Contains(err.Error(), continuation) {
+		t.Fatalf("download id validation leaked continuation capability: %v", err)
+	}
+}
+
+func TestCUABrowserFilesValidatePathsUnderActionSerialization(t *testing.T) {
+	fixture := newBrowserPathFixture(t)
+	tests := []struct {
+		name string
+		call func(*cuaBrowserServer) error
+	}{
+		{
+			name: "upload",
+			call: func(server *cuaBrowserServer) error {
+				_, _, err := server.browserSetInputFiles(context.Background(), nil, BrowserSetInputFilesInput{
+					Ref: "@e1", Files: []string{fixture.upload},
+				})
+				return err
+			},
+		},
+		{
+			name: "download",
+			call: func(server *cuaBrowserServer) error {
+				_, _, err := server.browserDownload(context.Background(), nil, BrowserDownloadInput{
+					Ref: "@e1", Directory: fixture.downloads,
+				})
+				return err
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			server, fake := preparedCUABrowserTestServer(t, nil)
+			configurePreparedFileServer(server, fixture.root, "click")
+			if test.name == "upload" {
+				configurePreparedFileServer(server, fixture.root, "upload")
+			}
+
+			server.actionMu.Lock()
+			started := make(chan struct{})
+			done := make(chan error, 1)
+			go func() {
+				close(started)
+				done <- test.call(server)
+			}()
+			<-started
+
+			select {
+			case err := <-done:
+				server.actionMu.Unlock()
+				t.Fatalf("path validation completed outside action serialization: %v", err)
+			case <-time.After(75 * time.Millisecond):
+				server.actionMu.Unlock()
+			}
+			err := <-done
+			assertBrowserErrorHasNoPaths(t, err, fixture.root, fixture.canonicalRoot)
+			if calls := fake.Calls(); len(calls) != 0 {
+				t.Fatalf("invalid path called Cua: %#v", calls)
 			}
 		})
 	}
@@ -627,10 +787,11 @@ func TestCUABrowserFilesAndDownloadRefusalsAreSingleCallAndPathFree(t *testing.T
 		name         string
 		action       string
 		mutationTool string
+		privateName  string
 		call         func(*cuaBrowserServer) (string, BrowserOutcome, error)
 	}{
 		{
-			name: "upload", action: "upload", mutationTool: "browser_set_input_files",
+			name: "upload", action: "upload", mutationTool: "browser_set_input_files", privateName: "upload.txt",
 			call: func(server *cuaBrowserServer) (string, BrowserOutcome, error) {
 				result, output, err := server.browserSetInputFiles(context.Background(), nil, BrowserSetInputFilesInput{
 					Ref: "@e1", Files: []string{"upload.txt"},
@@ -639,9 +800,9 @@ func TestCUABrowserFilesAndDownloadRefusalsAreSingleCallAndPathFree(t *testing.T
 			},
 		},
 		{
-			name: "download", action: "click", mutationTool: "browser_download",
+			name: "download", action: "click", mutationTool: "browser_download", privateName: "downloads",
 			call: func(server *cuaBrowserServer) (string, BrowserOutcome, error) {
-				result, output, err := server.browserDownload(context.Background(), nil, BrowserDownloadInput{Ref: "@e1"})
+				result, output, err := server.browserDownload(context.Background(), nil, BrowserDownloadInput{Ref: "@e1", Directory: "downloads"})
 				return resultText(result), output.BrowserOutcome, err
 			},
 		},
@@ -650,8 +811,8 @@ func TestCUABrowserFilesAndDownloadRefusalsAreSingleCallAndPathFree(t *testing.T
 		t.Run(test.name, func(t *testing.T) {
 			server, fake := preparedCUABrowserTestServer(t, map[string]fakeCUAHandler{
 				test.mutationTool: func(map[string]any) (*mcp.CallToolResult, map[string]any, error) {
-					return cuaRefused("browser_ref_stale", "ref raw-file-capability denied "+fixture.upload, map[string]any{
-						"path": fixture.upload, "safe_reason": "raw-file-capability under " + fixture.root,
+					return cuaRefused("browser_ref_stale", "ref raw-file-capability denied "+fixture.upload+" "+test.privateName, map[string]any{
+						"path": fixture.upload, "safe_reason": "raw-file-capability under " + fixture.root + " " + test.privateName,
 					})
 				},
 			})
@@ -668,7 +829,7 @@ func TestCUABrowserFilesAndDownloadRefusalsAreSingleCallAndPathFree(t *testing.T
 				t.Fatal(err)
 			}
 			public := text + string(encoded)
-			for _, secret := range []string{fixture.root, fixture.canonicalRoot, fixture.upload, "raw-file-capability"} {
+			for _, secret := range []string{fixture.root, fixture.canonicalRoot, fixture.upload, "raw-file-capability", test.privateName} {
 				if strings.Contains(public, secret) {
 					t.Fatalf("refusal leaked %q: %s", secret, public)
 				}

@@ -62,14 +62,15 @@ type cuaSetInputFilesResult struct {
 }
 
 type cuaDownloadResult struct {
-	Status     string `json:"status"`
-	DownloadID string `json:"download_id"`
-	Bytes      int64  `json:"bytes"`
+	Status     string  `json:"status"`
+	DownloadID *string `json:"download_id"`
+	Bytes      *int64  `json:"bytes"`
 }
 
 type setInputFilesCall struct {
 	args        map[string]any
 	privateRoot string
+	publicPaths []string
 	rawRef      string
 	fileCount   int
 }
@@ -81,7 +82,7 @@ func resolveBrowserPath(root, relative string, kind browserPathKind) (string, er
 	if kind == browserUploadFile && relative == "" {
 		return "", errors.New("browser upload path must not be empty")
 	}
-	if filepath.IsAbs(relative) || filepath.VolumeName(relative) != "" {
+	if isPortableBrowserAbsolutePath(relative) {
 		return "", errors.New("browser file paths must be relative to WorkingDir")
 	}
 	if hasBrowserParentComponent(relative) {
@@ -158,12 +159,28 @@ func canonicalBrowserRoot(root string) (string, error) {
 }
 
 func hasBrowserParentComponent(path string) bool {
-	for _, component := range strings.Split(path, string(filepath.Separator)) {
+	for _, component := range strings.FieldsFunc(path, func(character rune) bool {
+		return character == '/' || character == '\\'
+	}) {
 		if component == ".." {
 			return true
 		}
 	}
 	return false
+}
+
+func isPortableBrowserAbsolutePath(path string) bool {
+	if filepath.IsAbs(path) || filepath.VolumeName(path) != "" {
+		return true
+	}
+	if strings.HasPrefix(path, "/") || strings.HasPrefix(path, `\`) {
+		return true
+	}
+	return len(path) >= 2 && isASCIIBrowserDriveLetter(path[0]) && path[1] == ':'
+}
+
+func isASCIIBrowserDriveLetter(character byte) bool {
+	return character >= 'A' && character <= 'Z' || character >= 'a' && character <= 'z'
 }
 
 func browserPathContained(root, path string) bool {
@@ -230,6 +247,12 @@ func (b *cuaBrowserServer) browserSetInputFiles(
 			maxBrowserUploadFiles,
 		)
 	}
+
+	// Keep canonical path validation and the Cua mutation in one action-critical
+	// section. Cua accepts path strings rather than open handles, so this narrows
+	// the local pathname race as far as its current API permits.
+	b.actionMu.Lock()
+	defer b.actionMu.Unlock()
 	files := make([]string, len(in.Files))
 	privateRoot, err := canonicalBrowserRoot(b.cfg.WorkingDir)
 	if err != nil {
@@ -243,8 +266,6 @@ func (b *cuaBrowserServer) browserSetInputFiles(
 		files[index] = resolved
 	}
 
-	b.actionMu.Lock()
-	defer b.actionMu.Unlock()
 	if err := b.requirePrepared(); err != nil {
 		return nil, BrowserSetInputFilesOutput{}, err
 	}
@@ -261,6 +282,7 @@ func (b *cuaBrowserServer) browserSetInputFiles(
 	return b.setInputFilesThenSnapshot(actionCtx, setInputFilesCall{
 		args:        args,
 		privateRoot: privateRoot,
+		publicPaths: in.Files,
 		rawRef:      element.Raw,
 		fileCount:   len(files),
 	})
@@ -270,7 +292,7 @@ func (b *cuaBrowserServer) setInputFilesThenSnapshot(
 	ctx context.Context,
 	call setInputFilesCall,
 ) (*mcp.CallToolResult, BrowserSetInputFilesOutput, error) {
-	publicArgs := browserFileSanitizerArgs(call.args, call.privateRoot)
+	publicArgs := browserFileSanitizerArgs(call.args, call.privateRoot, call.publicPaths)
 	var mutation cuaSetInputFilesResult
 	_, refusal, err := b.callResult(ctx, "browser_set_input_files", call.args, &mutation)
 	if err != nil {
@@ -364,6 +386,10 @@ func (b *cuaBrowserServer) browserDownload(
 	_ *mcp.CallToolRequest,
 	in BrowserDownloadInput,
 ) (*mcp.CallToolResult, BrowserDownloadOutput, error) {
+	// Serialize filesystem validation with the browser action for the same reason
+	// as uploads: Cua currently consumes path strings, not pinned file handles.
+	b.actionMu.Lock()
+	defer b.actionMu.Unlock()
 	privateRoot, err := canonicalBrowserRoot(b.cfg.WorkingDir)
 	if err != nil {
 		return nil, BrowserDownloadOutput{}, err
@@ -373,8 +399,6 @@ func (b *cuaBrowserServer) browserDownload(
 		return nil, BrowserDownloadOutput{}, err
 	}
 
-	b.actionMu.Lock()
-	defer b.actionMu.Unlock()
 	if err := b.requirePrepared(); err != nil {
 		return nil, BrowserDownloadOutput{}, err
 	}
@@ -390,15 +414,16 @@ func (b *cuaBrowserServer) browserDownload(
 	}
 	actionCtx, cancel := context.WithTimeout(ctx, browserActionTimeout)
 	defer cancel()
-	return b.downloadThenSnapshot(actionCtx, args, privateRoot)
+	return b.downloadThenSnapshot(actionCtx, args, privateRoot, []string{in.Directory})
 }
 
 func (b *cuaBrowserServer) downloadThenSnapshot(
 	ctx context.Context,
 	args map[string]any,
 	privateRoot string,
+	publicPaths []string,
 ) (*mcp.CallToolResult, BrowserDownloadOutput, error) {
-	publicArgs := browserFileSanitizerArgs(args, privateRoot)
+	publicArgs := browserFileSanitizerArgs(args, privateRoot, publicPaths)
 	mutation, refusal, err := b.callDownloadResult(ctx, args)
 	if err != nil {
 		b.clearTabScopedCapabilities()
@@ -409,12 +434,10 @@ func (b *cuaBrowserServer) downloadThenSnapshot(
 		return b.downloadRefusalResult(refusal, publicArgs)
 	}
 
+	downloadID, byteCount, err := b.validateBrowserDownloadResult(mutation, publicArgs)
 	b.clearTabScopedCapabilities()
-	if mutation.DownloadID == "" {
-		return nil, BrowserDownloadOutput{}, errors.New("Cua browser_download completion omitted download id")
-	}
-	if mutation.Bytes < 0 {
-		return nil, BrowserDownloadOutput{}, errors.New("Cua browser_download completion returned a negative byte count")
+	if err != nil {
+		return nil, BrowserDownloadOutput{}, err
 	}
 	snapshotResult, snapshotOutput, _, err := b.snapshotInternal(ctx, false, false, false)
 	if err != nil {
@@ -439,8 +462,8 @@ func (b *cuaBrowserServer) downloadThenSnapshot(
 	}
 	output := BrowserDownloadOutput{
 		BrowserOutcome: snapshotOutput.BrowserOutcome,
-		DownloadID:     mutation.DownloadID,
-		Bytes:          mutation.Bytes,
+		DownloadID:     downloadID,
+		Bytes:          byteCount,
 		Snapshot:       snapshotOutput.Snapshot,
 		ElementCount:   snapshotOutput.ElementCount,
 	}
@@ -448,6 +471,38 @@ func (b *cuaBrowserServer) downloadThenSnapshot(
 		snapshotResult = textResult(output.Snapshot)
 	}
 	return snapshotResult, output, nil
+}
+
+func (b *cuaBrowserServer) validateBrowserDownloadResult(
+	result cuaDownloadResult,
+	publicArgs map[string]any,
+) (string, int64, error) {
+	if result.DownloadID == nil || *result.DownloadID == "" {
+		return "", 0, errors.New("Cua browser_download completion omitted download id")
+	}
+	if result.Bytes == nil {
+		return "", 0, errors.New("Cua browser_download completion omitted byte count")
+	}
+	if *result.Bytes < 0 {
+		return "", 0, errors.New("Cua browser_download completion returned a negative byte count")
+	}
+	downloadID := *result.DownloadID
+	if !isNormalBrowserPathComponent(downloadID) {
+		return "", 0, errors.New("Cua browser_download completion returned an unsafe download id")
+	}
+
+	b.mu.Lock()
+	replacements, safe := b.aliasStateLocked().refusalReplacements(publicArgs)
+	b.mu.Unlock()
+	if !safe || applyReplacements(downloadID, replacements) != downloadID {
+		return "", 0, errors.New("Cua browser_download completion returned a private download id")
+	}
+	return downloadID, *result.Bytes, nil
+}
+
+func isNormalBrowserPathComponent(value string) bool {
+	return value != "" && value != "." && value != ".." &&
+		!strings.ContainsAny(value, `/\`) && !isPortableBrowserAbsolutePath(value)
 }
 
 func (b *cuaBrowserServer) callDownloadResult(
@@ -514,13 +569,40 @@ func (b *cuaBrowserServer) downloadRefusalResult(
 	return textResult(public.Message), output, nil
 }
 
-func browserFileSanitizerArgs(args map[string]any, privateRoot string) map[string]any {
-	publicArgs := make(map[string]any, len(args)+1)
+func browserFileSanitizerArgs(args map[string]any, privateRoot string, publicPaths []string) map[string]any {
+	publicArgs := make(map[string]any, len(args)+2)
 	for key, value := range args {
 		publicArgs[key] = value
 	}
 	publicArgs["path"] = privateRoot
+	publicArgs["filename"] = browserFileSensitiveNames(publicPaths)
 	return publicArgs
+}
+
+func browserFileSensitiveNames(paths []string) []string {
+	names := make([]string, 0, len(paths)*2)
+	seen := make(map[string]struct{}, len(paths)*2)
+	for _, path := range paths {
+		for _, name := range []string{path, portableBrowserBase(path)} {
+			if name == "" || name == "." {
+				continue
+			}
+			if _, duplicate := seen[name]; duplicate {
+				continue
+			}
+			seen[name] = struct{}{}
+			names = append(names, name)
+		}
+	}
+	return names
+}
+
+func portableBrowserBase(path string) string {
+	path = strings.TrimRight(path, `/\`)
+	if separator := strings.LastIndexAny(path, `/\`); separator >= 0 {
+		return path[separator+1:]
+	}
+	return path
 }
 
 func (b *cuaBrowserServer) sanitizeBrowserFileSnapshot(snapshot string, args map[string]any) (string, error) {
