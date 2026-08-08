@@ -70,6 +70,14 @@ type cuaDialogResult struct {
 	Action   string `json:"action"`
 }
 
+type cuaPointerResult struct {
+	Status   string `json:"status"`
+	TargetID string `json:"target_id"`
+	TabID    string `json:"tab_id"`
+	Action   string `json:"action"`
+	Route    string `json:"route"`
+}
+
 func (b *cuaBrowserServer) browserPointer(
 	ctx context.Context,
 	_ *mcp.CallToolRequest,
@@ -122,7 +130,59 @@ func (b *cuaBrowserServer) browserPointer(
 	}
 	actionCtx, cancel := context.WithTimeout(ctx, browserActionTimeout)
 	defer cancel()
-	return b.mutateThenSnapshot(actionCtx, "browser_pointer", exact, "browser pointer "+validated.action)
+	return b.mutatePointerThenSnapshot(actionCtx, exact, validated.action, validated.inputRoute)
+}
+
+func (b *cuaBrowserServer) mutatePointerThenSnapshot(
+	ctx context.Context,
+	args map[string]any,
+	action string,
+	route string,
+) (*mcp.CallToolResult, BrowserOutput, error) {
+	var mutation cuaPointerResult
+	_, refusal, err := b.callResult(ctx, "browser_pointer", args, &mutation)
+	if err != nil {
+		return nil, BrowserOutput{}, err
+	}
+	if refusal != nil {
+		b.invalidateOnRefusal(refusal)
+		return b.browserRefusalResult(refusal, args)
+	}
+
+	// Cua accepted the mutation. Every capability from the pre-action page is
+	// stale even when the success envelope itself is malformed or mismatched.
+	b.clearTabScopedCapabilities()
+	if err := b.validatePointerResult(mutation, action, route); err != nil {
+		return nil, BrowserOutput{}, err
+	}
+	result, output, _, err := b.snapshotInternal(ctx, false, false, false)
+	if err != nil {
+		return nil, BrowserOutput{}, fmt.Errorf("browser pointer %s succeeded but post-action snapshot failed: %w", action, err)
+	}
+	if output.Status == "ok" {
+		result = textResult(output.Snapshot)
+	}
+	return result, output, nil
+}
+
+func (b *cuaBrowserServer) validatePointerResult(result cuaPointerResult, action, route string) error {
+	b.mu.Lock()
+	targetID, tabID := b.targetID, b.selectedTab
+	b.mu.Unlock()
+	if result.TargetID == "" || result.TabID == "" || result.Action == "" || result.Route == "" {
+		return errors.New("Cua browser_pointer success omitted exact target, tab, action, or route")
+	}
+	if result.TargetID != targetID {
+		b.observeTargetGeneration(result.TargetID)
+		return errors.New("Cua browser_pointer returned a different browser target")
+	}
+	if result.TabID != tabID {
+		return errors.New("Cua browser_pointer returned a different browser tab")
+	}
+	if result.Action != action || result.Route != route {
+		return errors.New("Cua browser_pointer returned a different action or input route")
+	}
+	return nil
 }
 
 func validateBrowserPointerInput(in BrowserPointerInput) (validatedPointerInput, error) {
@@ -392,7 +452,7 @@ func (b *cuaBrowserServer) resolveDialog(
 	var resolution cuaDialogResult
 	_, refusal, err := b.callResult(ctx, "browser_dialog", args, &resolution)
 	if err != nil {
-		return nil, BrowserDialogOutput{}, err
+		return nil, BrowserDialogOutput{}, b.publicCallError(err, args)
 	}
 	if refusal != nil {
 		b.invalidateOnRefusal(refusal)
@@ -401,7 +461,7 @@ func (b *cuaBrowserServer) resolveDialog(
 
 	// Resolution has happened and must never be repeated, even if response
 	// validation or the verification snapshot fails.
-	b.clearDialogCapability()
+	b.clearTabScopedCapabilities()
 	if err := b.validateDialogBinding(resolution.TargetID, resolution.TabID); err != nil {
 		return nil, BrowserDialogOutput{}, err
 	}
@@ -411,7 +471,13 @@ func (b *cuaBrowserServer) resolveDialog(
 
 	snapshotResult, snapshotOutput, _, err := b.snapshotInternal(ctx, false, false, false)
 	if err != nil {
-		return nil, BrowserDialogOutput{}, fmt.Errorf("%s dialog succeeded but post-action snapshot failed: %w", action, err)
+		return nil, BrowserDialogOutput{}, fmt.Errorf("%s dialog succeeded but post-action snapshot failed: %w", action, b.publicCallError(err, args))
+	}
+	if snapshotOutput.Refusal != nil {
+		b.mu.Lock()
+		snapshotOutput.Refusal = b.aliasStateLocked().resanitizePublicRefusal(snapshotOutput.Refusal, args)
+		b.mu.Unlock()
+		snapshotResult = textResult(snapshotOutput.Refusal.Message)
 	}
 	output := BrowserDialogOutput{
 		BrowserOutcome: snapshotOutput.BrowserOutcome,
@@ -425,6 +491,16 @@ func (b *cuaBrowserServer) resolveDialog(
 		snapshotResult = textResult(output.Snapshot)
 	}
 	return snapshotResult, output, nil
+}
+
+func (b *cuaBrowserServer) publicCallError(err error, args map[string]any) error {
+	if err == nil {
+		return nil
+	}
+	b.mu.Lock()
+	public := b.aliasStateLocked().publicError(err, args)
+	b.mu.Unlock()
+	return public
 }
 
 func validDialogKind(kind string) bool {

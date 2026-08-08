@@ -446,6 +446,21 @@ func (state *cuaAliasState) publicRefusal(refusal *cuaRefusal, args map[string]a
 	return public
 }
 
+func (state *cuaAliasState) resanitizePublicRefusal(refusal *BrowserRefusal, args map[string]any) *BrowserRefusal {
+	if refusal == nil {
+		return nil
+	}
+	replacements, safe := state.refusalReplacements(args)
+	if !safe {
+		return &BrowserRefusal{Code: refusal.Code, Message: "browser action refused"}
+	}
+	return &BrowserRefusal{
+		Code:    refusal.Code,
+		Message: applyReplacements(refusal.Message, replacements),
+		Detail:  sanitizeRefusalDetail(refusal.Detail, replacements),
+	}
+}
+
 func (state *cuaAliasState) refusalReplacements(args map[string]any) (map[string]string, bool) {
 	replacements := make(map[string]string)
 	keys := make([]string, 0, len(args))
@@ -527,12 +542,30 @@ var sensitiveRefusalArgumentReplacements = map[string]string{
 	"launch_path":      "[redacted]",
 	"origin_ref":       "[ref]",
 	"path":             "[redacted]",
+	"prompt_text":      "[redacted]",
 	"ref":              "[ref]",
 	"scope_ref":        "[ref]",
 	"session":          "[session]",
 	"tab_id":           "[tab]",
 	"target_id":        "[target]",
 	"url":              "[redacted]",
+}
+
+type sanitizedCUAError struct {
+	message string
+	cause   error
+}
+
+func (err *sanitizedCUAError) Error() string { return err.message }
+
+func (err *sanitizedCUAError) Unwrap() error { return err.cause }
+
+func (state *cuaAliasState) publicError(err error, args map[string]any) error {
+	replacements, safe := state.refusalReplacements(args)
+	if !safe {
+		return &sanitizedCUAError{message: "Cua browser action failed", cause: err}
+	}
+	return &sanitizedCUAError{message: applyReplacements(err.Error(), replacements), cause: err}
 }
 
 func refusalArgumentReplacement(key string) (string, bool) {
@@ -572,7 +605,7 @@ func collectNormalizedSensitiveStrings(value any, replacement string, replacemen
 
 var sensitiveRefusalDetailKeys = []string{
 	"target", "tab", "ref", "continuation", "endpoint", "path", "url", "filename",
-	"dialog", "download", "session",
+	"dialog", "download", "session", "prompt",
 }
 
 func sanitizeRefusalDetail(value any, replacements map[string]string) any {

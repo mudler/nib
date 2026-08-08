@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math"
 	"reflect"
 	"strings"
@@ -141,7 +142,15 @@ func TestCUABrowserPointerMapsEverySupportedLocationShape(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			server, fake := preparedCUABrowserTestServer(t, map[string]fakeCUAHandler{
-				"browser_pointer": func(map[string]any) (*mcp.CallToolResult, map[string]any, error) { return cuaOK(nil) },
+				"browser_pointer": func(map[string]any) (*mcp.CallToolResult, map[string]any, error) {
+					route := test.in.InputRoute
+					if route == "" {
+						route = "trusted"
+					}
+					return cuaOK(map[string]any{
+						"target_id": "target-1", "tab_id": "tab-a", "action": test.in.Action, "route": route,
+					})
+				},
 				"get_browser_state": func(map[string]any) (*mcp.CallToolResult, map[string]any, error) {
 					return cuaOK(cuaBrowserSnapshot("target-1", "tab-a", "pointer complete", cuaBrowserRef("raw-fresh", "Fresh", "click")))
 				},
@@ -254,7 +263,11 @@ func TestCUABrowserPointerEnforcesCurrentRefCapabilities(t *testing.T) {
 
 func TestCUABrowserPointerNeverRetriesAndInvalidatesBeforeVerification(t *testing.T) {
 	server, fake := preparedCUABrowserTestServer(t, map[string]fakeCUAHandler{
-		"browser_pointer": func(map[string]any) (*mcp.CallToolResult, map[string]any, error) { return cuaOK(nil) },
+		"browser_pointer": func(map[string]any) (*mcp.CallToolResult, map[string]any, error) {
+			return cuaOK(map[string]any{
+				"target_id": "target-1", "tab_id": "tab-a", "action": "hover", "route": "trusted",
+			})
+		},
 		"get_browser_state": func(map[string]any) (*mcp.CallToolResult, map[string]any, error) {
 			return cuaRefused("browser_binding_stale", "stale after pointer", nil)
 		},
@@ -275,6 +288,53 @@ func TestCUABrowserPointerNeverRetriesAndInvalidatesBeforeVerification(t *testin
 	}
 	if len(server.refs) != 0 || server.lastEditable != "" || server.dialogID != "" {
 		t.Fatalf("stale capabilities survived pointer mutation: refs=%#v editable=%q dialog=%q", server.refs, server.lastEditable, server.dialogID)
+	}
+}
+
+func TestCUABrowserPointerValidatesMutationResultBeforeSnapshot(t *testing.T) {
+	tests := []struct {
+		name     string
+		response map[string]any
+	}{
+		{name: "missing target", response: map[string]any{"tab_id": "tab-a", "action": "hover", "route": "trusted"}},
+		{name: "missing tab", response: map[string]any{"target_id": "target-1", "action": "hover", "route": "trusted"}},
+		{name: "missing action", response: map[string]any{"target_id": "target-1", "tab_id": "tab-a", "route": "trusted"}},
+		{name: "missing route", response: map[string]any{"target_id": "target-1", "tab_id": "tab-a", "action": "hover"}},
+		{name: "wrong target", response: map[string]any{"target_id": "target-other", "tab_id": "tab-a", "action": "hover", "route": "trusted"}},
+		{name: "wrong tab", response: map[string]any{"target_id": "target-1", "tab_id": "tab-other", "action": "hover", "route": "trusted"}},
+		{name: "wrong action", response: map[string]any{"target_id": "target-1", "tab_id": "tab-a", "action": "drag", "route": "trusted"}},
+		{name: "wrong route", response: map[string]any{"target_id": "target-1", "tab_id": "tab-a", "action": "hover", "route": "dom_event"}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			server, fake := preparedCUABrowserTestServer(t, map[string]fakeCUAHandler{
+				"browser_pointer": func(map[string]any) (*mcp.CallToolResult, map[string]any, error) {
+					return cuaOK(test.response)
+				},
+				"get_browser_state": func(map[string]any) (*mcp.CallToolResult, map[string]any, error) {
+					return cuaOK(cuaBrowserSnapshot("target-1", "tab-a", "must not snapshot", cuaBrowserRef("raw-new", "New", "click")))
+				},
+			})
+			server.refs["@e1"] = cuaElement{Raw: "raw-origin", Actions: map[string]bool{"pointer": true}}
+			server.lastEditable = "raw-editable"
+			server.dialogID = "dialog-old"
+			server.dialogKind = "alert"
+
+			_, _, err := server.browserPointer(context.Background(), nil, BrowserPointerInput{Action: "hover", Ref: "@e1"})
+			if err == nil {
+				t.Fatal("malformed pointer success was accepted")
+			}
+			if got := len(callsNamed(fake.Calls(), "browser_pointer")); got != 1 {
+				t.Fatalf("pointer calls = %d, want one", got)
+			}
+			if calls := callsNamed(fake.Calls(), "get_browser_state"); len(calls) != 0 {
+				t.Fatalf("malformed pointer success was snapshot-verified: %#v", calls)
+			}
+			if len(server.refs) != 0 || server.lastEditable != "" || server.dialogID != "" || server.dialogKind != "" {
+				t.Fatalf("pointer validation failure retained capabilities: refs=%#v editable=%q dialog=%q/%q",
+					server.refs, server.lastEditable, server.dialogID, server.dialogKind)
+			}
+		})
 	}
 }
 
@@ -491,6 +551,164 @@ func TestCUABrowserDialogResolutionNeverRetriesAndClearsImmediately(t *testing.T
 	}
 	if got := len(callsNamed(fake.Calls(), "get_browser_state")); got != 1 {
 		t.Fatalf("snapshot calls = %d, want one without rebind retry", got)
+	}
+}
+
+func TestCUABrowserDialogSuccessfulResolutionClearsAllCapabilitiesBeforeValidation(t *testing.T) {
+	tests := []struct {
+		name             string
+		resolution       map[string]any
+		snapshot         fakeCUAHandler
+		wantSnapshotCall bool
+	}{
+		{
+			name: "response validation failure",
+			resolution: map[string]any{
+				"target_id": "target-1", "tab_id": "tab-a", "dialog_id": "dialog-1",
+				"kind": "prompt", "action": "dismiss",
+			},
+		},
+		{
+			name: "snapshot transport failure",
+			resolution: map[string]any{
+				"target_id": "target-1", "tab_id": "tab-a", "dialog_id": "dialog-1",
+				"kind": "prompt", "action": "accept",
+			},
+			snapshot: func(map[string]any) (*mcp.CallToolResult, map[string]any, error) {
+				return nil, nil, errors.New("snapshot transport failed")
+			},
+			wantSnapshotCall: true,
+		},
+		{
+			name: "snapshot protocol failure",
+			resolution: map[string]any{
+				"target_id": "target-1", "tab_id": "tab-a", "dialog_id": "dialog-1",
+				"kind": "prompt", "action": "accept",
+			},
+			snapshot: func(map[string]any) (*mcp.CallToolResult, map[string]any, error) {
+				return &mcp.CallToolResult{IsError: true}, nil, nil
+			},
+			wantSnapshotCall: true,
+		},
+		{
+			name: "snapshot non stale refusal",
+			resolution: map[string]any{
+				"target_id": "target-1", "tab_id": "tab-a", "dialog_id": "dialog-1",
+				"kind": "prompt", "action": "accept",
+			},
+			snapshot: func(map[string]any) (*mcp.CallToolResult, map[string]any, error) {
+				return cuaRefused("browser_consent_required", "verification refused", nil)
+			},
+			wantSnapshotCall: true,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			server, fake := preparedCUABrowserTestServer(t, map[string]fakeCUAHandler{
+				"browser_dialog": func(map[string]any) (*mcp.CallToolResult, map[string]any, error) {
+					return cuaOK(test.resolution)
+				},
+				"get_browser_state": test.snapshot,
+			})
+			server.refs["@e1"] = cuaElement{Raw: "raw-old", Actions: map[string]bool{"click": true}}
+			server.lastEditable = "raw-editable"
+			server.dialogID = "dialog-1"
+			server.dialogKind = "prompt"
+
+			_, _, _ = server.browserDialog(context.Background(), nil, BrowserDialogInput{
+				Action: "accept", DialogID: "dialog-1", PromptText: pointerToString("response"),
+			})
+			if len(server.refs) != 0 || server.lastEditable != "" || server.dialogID != "" || server.dialogKind != "" {
+				t.Fatalf("successful resolution retained capabilities: refs=%#v editable=%q dialog=%q/%q",
+					server.refs, server.lastEditable, server.dialogID, server.dialogKind)
+			}
+			if got := len(callsNamed(fake.Calls(), "browser_dialog")); got != 1 {
+				t.Fatalf("dialog calls = %d, want one", got)
+			}
+			wantSnapshots := 0
+			if test.wantSnapshotCall {
+				wantSnapshots = 1
+			}
+			if got := len(callsNamed(fake.Calls(), "get_browser_state")); got != wantSnapshots {
+				t.Fatalf("snapshot calls = %d, want %d", got, wantSnapshots)
+			}
+		})
+	}
+}
+
+func TestCUABrowserDialogPromptSecretIsRedactedFromRefusalsAndErrors(t *testing.T) {
+	const secret = "private prompt response 7xQ"
+	tests := []struct {
+		name          string
+		handler       fakeCUAHandler
+		snapshot      fakeCUAHandler
+		directCallErr bool
+	}{
+		{
+			name: "structured refusal",
+			handler: func(map[string]any) (*mcp.CallToolResult, map[string]any, error) {
+				return cuaRefused("browser_action_unavailable", "prompt echo: "+secret, map[string]any{
+					"safe":        secret,
+					secret:        "secret used as a map key",
+					"prompt_echo": secret,
+				})
+			},
+		},
+		{
+			name:          "transport error",
+			directCallErr: true,
+		},
+		{
+			name: "protocol error content",
+			handler: func(map[string]any) (*mcp.CallToolResult, map[string]any, error) {
+				return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: secret}}}, nil, nil
+			},
+		},
+		{
+			name: "post resolution snapshot refusal",
+			handler: func(map[string]any) (*mcp.CallToolResult, map[string]any, error) {
+				return cuaOK(map[string]any{
+					"target_id": "target-1", "tab_id": "tab-a", "dialog_id": "dialog-1",
+					"kind": "prompt", "action": "accept",
+				})
+			},
+			snapshot: func(map[string]any) (*mcp.CallToolResult, map[string]any, error) {
+				return cuaRefused("browser_action_unavailable", "snapshot echoed "+secret, map[string]any{
+					"safe": secret,
+					secret: "secret used as a map key",
+				})
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			server, _ := preparedCUABrowserTestServer(t, map[string]fakeCUAHandler{
+				"browser_dialog":    test.handler,
+				"get_browser_state": test.snapshot,
+			})
+			if test.directCallErr {
+				server.runtime.client = &failingCUAClient{err: errors.New("transport echoed " + secret)}
+			}
+			server.dialogID = "dialog-1"
+			server.dialogKind = "prompt"
+			result, output, err := server.browserDialog(context.Background(), nil, BrowserDialogInput{
+				Action: "accept", DialogID: "dialog-1", PromptText: pointerToString(secret),
+			})
+			public := output.Refusal
+			encoded := ""
+			if result != nil {
+				encoded += firstText(result.Content)
+			}
+			if public != nil {
+				encoded += fmt.Sprintf("%#v", public)
+			}
+			if err != nil {
+				encoded += err.Error()
+			}
+			if strings.Contains(encoded, secret) {
+				t.Fatalf("public refusal/error leaked prompt text: %s", encoded)
+			}
+		})
 	}
 }
 
