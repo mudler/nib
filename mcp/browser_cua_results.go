@@ -320,6 +320,23 @@ func renderCUASnapshot(state *cuaAliasState, result cuaResultEnvelope) BrowserOu
 	}
 }
 
+// appendSnapshotPage combines segments minted under one semantic snapshot.
+// The caller validates exact target/tab identity and single-use continuation
+// tokens before aggregation.
+func appendSnapshotPage(aggregate, next cuaResultEnvelope) cuaResultEnvelope {
+	if aggregate.Outline != "" && next.Outline != "" {
+		aggregate.Outline += "\n"
+	}
+	aggregate.Outline += next.Outline
+	aggregate.Refs = append(aggregate.Refs, next.Refs...)
+	aggregate.ContentRefs = append(aggregate.ContentRefs, next.ContentRefs...)
+	aggregate.Snapshot = next.Snapshot
+	if next.Screenshot != nil {
+		aggregate.Screenshot = next.Screenshot
+	}
+	return aggregate
+}
+
 var cuaElementAliasPattern = regexp.MustCompile(`@e\d+\b`)
 
 func finishCUASnapshot(body string, snapshot cuaSnapshotMeta) string {

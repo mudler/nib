@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"runtime"
 	"strings"
 	"sync"
@@ -17,6 +18,8 @@ import (
 const cuaBrowserPrepareTimeout = 60 * time.Second
 
 const cuaBrowserWindowPollInterval = 100 * time.Millisecond
+
+const maxCUASnapshotContinuations = 64
 
 type cuaBrowserServer struct {
 	runtime *cuaRuntime
@@ -116,7 +119,7 @@ func (b *cuaBrowserServer) browserNavigate(
 
 	actionCtx, cancel := context.WithTimeout(ctx, browserActionTimeout)
 	defer cancel()
-	args, err := b.selectedExactArgs(map[string]any{"url": url})
+	args, err := b.exactArgs(map[string]any{"url": url, "snapshot_format": "semantic_v2"})
 	if err != nil {
 		return nil, BrowserOutput{}, err
 	}
@@ -126,7 +129,11 @@ func (b *cuaBrowserServer) browserNavigate(
 		return nil, BrowserOutput{}, err
 	}
 	if refusal != nil {
+		b.invalidateOnRefusal(refusal)
 		return b.browserRefusalResult(refusal, args)
+	}
+	if err := b.validateSelectedSnapshot(envelope); err != nil {
+		return nil, BrowserOutput{}, err
 	}
 
 	b.mu.Lock()
@@ -399,37 +406,207 @@ func (b *cuaBrowserServer) browserSelectTab(
 	return textResult(output.Snapshot), output, nil
 }
 
-// Task 8 maps these shared handlers. Task 7 keeps them registered and, most
-// importantly, prevents them from preparing or launching a browser implicitly.
-func (b *cuaBrowserServer) browserSnapshot(context.Context, *mcp.CallToolRequest, BrowserInput) (*mcp.CallToolResult, BrowserOutput, error) {
-	return b.unmappedSharedTool("browser_snapshot")
-}
-
-func (b *cuaBrowserServer) browserClick(context.Context, *mcp.CallToolRequest, BrowserInput) (*mcp.CallToolResult, BrowserOutput, error) {
-	return b.unmappedSharedTool("browser_click")
-}
-
-func (b *cuaBrowserServer) browserType(context.Context, *mcp.CallToolRequest, BrowserInput) (*mcp.CallToolResult, BrowserOutput, error) {
-	return b.unmappedSharedTool("browser_type")
-}
-
-func (b *cuaBrowserServer) browserPress(context.Context, *mcp.CallToolRequest, BrowserInput) (*mcp.CallToolResult, BrowserOutput, error) {
-	return b.unmappedSharedTool("browser_press")
-}
-
-func (b *cuaBrowserServer) browserScroll(context.Context, *mcp.CallToolRequest, BrowserInput) (*mcp.CallToolResult, BrowserOutput, error) {
-	return b.unmappedSharedTool("browser_scroll")
-}
-
-func (b *cuaBrowserServer) browserVision(context.Context, *mcp.CallToolRequest, BrowserInput) (*mcp.CallToolResult, BrowserOutput, error) {
-	return b.unmappedSharedTool("browser_vision")
-}
-
-func (b *cuaBrowserServer) unmappedSharedTool(name string) (*mcp.CallToolResult, BrowserOutput, error) {
+func (b *cuaBrowserServer) browserSnapshot(
+	ctx context.Context,
+	_ *mcp.CallToolRequest,
+	in BrowserInput,
+) (*mcp.CallToolResult, BrowserOutput, error) {
+	b.actionMu.Lock()
+	defer b.actionMu.Unlock()
 	if err := b.requirePrepared(); err != nil {
 		return nil, BrowserOutput{}, err
 	}
-	return nil, BrowserOutput{}, fmt.Errorf("%s is not implemented by the Cua browser backend yet", name)
+	actionCtx, cancel := context.WithTimeout(ctx, browserActionTimeout)
+	defer cancel()
+	return b.snapshot(actionCtx, in.Full, false)
+}
+
+func (b *cuaBrowserServer) browserClick(
+	ctx context.Context,
+	_ *mcp.CallToolRequest,
+	in BrowserInput,
+) (*mcp.CallToolResult, BrowserOutput, error) {
+	b.actionMu.Lock()
+	defer b.actionMu.Unlock()
+	if err := b.requirePrepared(); err != nil {
+		return nil, BrowserOutput{}, err
+	}
+	element, err := b.actionableRef(in.Ref, "click")
+	if err != nil {
+		return nil, BrowserOutput{}, err
+	}
+	actionCtx, cancel := context.WithTimeout(ctx, browserActionTimeout)
+	defer cancel()
+	args, err := b.exactArgs(map[string]any{"ref": element.Raw, "input_route": "trusted"})
+	if err != nil {
+		return nil, BrowserOutput{}, err
+	}
+	return b.mutateThenSnapshot(actionCtx, "browser_click", args, "click")
+}
+
+func (b *cuaBrowserServer) browserType(
+	ctx context.Context,
+	_ *mcp.CallToolRequest,
+	in BrowserInput,
+) (*mcp.CallToolResult, BrowserOutput, error) {
+	if in.Text == "" {
+		return nil, BrowserOutput{}, fmt.Errorf("browser_type needs text")
+	}
+	b.actionMu.Lock()
+	defer b.actionMu.Unlock()
+	if err := b.requirePrepared(); err != nil {
+		return nil, BrowserOutput{}, err
+	}
+	element, err := b.actionableRef(in.Ref, "type")
+	if err != nil {
+		return nil, BrowserOutput{}, err
+	}
+	actionCtx, cancel := context.WithTimeout(ctx, browserActionTimeout)
+	defer cancel()
+	args, err := b.exactArgs(map[string]any{
+		"ref": element.Raw, "text": in.Text, "mode": "insert_text", "replace": true,
+	})
+	if err != nil {
+		return nil, BrowserOutput{}, err
+	}
+	result, output, snapshotResult, err := b.mutateThenSnapshotEnvelope(actionCtx, "browser_type", args, "type")
+	if err != nil || output.Status != "ok" {
+		return result, output, err
+	}
+	raw := uniqueFocusedEditable(snapshotResult.Refs)
+	b.mu.Lock()
+	if raw != "" && b.containsRawRefLocked(raw) {
+		b.lastEditable = raw
+	}
+	b.mu.Unlock()
+	return result, output, nil
+}
+
+func (b *cuaBrowserServer) browserPress(
+	ctx context.Context,
+	_ *mcp.CallToolRequest,
+	in BrowserInput,
+) (*mcp.CallToolResult, BrowserOutput, error) {
+	if _, err := keyForName(in.Key); err != nil {
+		return nil, BrowserOutput{}, err
+	}
+	b.actionMu.Lock()
+	defer b.actionMu.Unlock()
+	if err := b.requirePrepared(); err != nil {
+		return nil, BrowserOutput{}, err
+	}
+	actionCtx, cancel := context.WithTimeout(ctx, browserActionTimeout)
+	defer cancel()
+
+	b.mu.Lock()
+	editable := b.lastEditable
+	b.mu.Unlock()
+	if in.Key == "Enter" && editable != "" {
+		args, err := b.exactArgs(map[string]any{
+			"ref": editable, "text": "\n", "mode": "keystrokes", "replace": false,
+		})
+		if err != nil {
+			return nil, BrowserOutput{}, err
+		}
+		return b.mutateThenSnapshot(actionCtx, "browser_type", args, "press Enter")
+	}
+
+	refusal, err := b.guardNativeKeyTarget(actionCtx)
+	if err != nil {
+		return nil, BrowserOutput{}, err
+	}
+	if refusal != nil {
+		return b.browserRefusalResult(refusal, nil)
+	}
+	b.mu.Lock()
+	pid, windowID := b.preparedPID, b.windowID
+	b.mu.Unlock()
+	args := b.sessionArgs(map[string]any{
+		"pid": pid, "window_id": windowID, "key": canonicalKey(in.Key),
+	})
+	return b.mutateThenSnapshot(actionCtx, "press_key", args, "press "+in.Key)
+}
+
+func (b *cuaBrowserServer) browserScroll(
+	ctx context.Context,
+	_ *mcp.CallToolRequest,
+	in BrowserInput,
+) (*mcp.CallToolResult, BrowserOutput, error) {
+	if in.Direction != "up" && in.Direction != "down" {
+		return nil, BrowserOutput{}, fmt.Errorf("browser_scroll: direction must be up or down")
+	}
+	b.actionMu.Lock()
+	defer b.actionMu.Unlock()
+	if err := b.requirePrepared(); err != nil {
+		return nil, BrowserOutput{}, err
+	}
+	actionCtx, cancel := context.WithTimeout(ctx, browserActionTimeout)
+	defer cancel()
+	_, output, screenshotState, err := b.snapshotInternal(actionCtx, false, true, false)
+	if err != nil || output.Status != "ok" {
+		return nil, output, err
+	}
+	b.clearTabScopedCapabilities()
+	metrics := screenshotState.Screenshot
+	if err := validateScreenshotMetrics(metrics); err != nil {
+		return nil, BrowserOutput{}, err
+	}
+	deltaY := metrics.ViewportCSSHeight * 0.9
+	if in.Direction == "up" {
+		deltaY = -deltaY
+	}
+	args, err := b.exactArgs(map[string]any{
+		"action": "scroll", "input_route": "trusted",
+		"x": metrics.ViewportCSSWidth / 2, "y": metrics.ViewportCSSHeight / 2,
+		"delta_x": float64(0), "delta_y": deltaY,
+	})
+	if err != nil {
+		return nil, BrowserOutput{}, err
+	}
+	return b.mutateThenSnapshot(actionCtx, "browser_pointer", args, "scroll "+in.Direction)
+}
+
+func (b *cuaBrowserServer) browserVision(
+	ctx context.Context,
+	_ *mcp.CallToolRequest,
+	in BrowserInput,
+) (*mcp.CallToolResult, BrowserOutput, error) {
+	b.actionMu.Lock()
+	defer b.actionMu.Unlock()
+	if err := b.requirePrepared(); err != nil {
+		return nil, BrowserOutput{}, err
+	}
+	actionCtx, cancel := context.WithTimeout(ctx, browserActionTimeout)
+	defer cancel()
+	result, output, state, err := b.snapshotInternal(actionCtx, false, true, true)
+	if err != nil || output.Status != "ok" {
+		return result, output, err
+	}
+	b.clearTabScopedCapabilities()
+	if err := validateScreenshotMetadata(state.Screenshot); err != nil {
+		return nil, BrowserOutput{}, err
+	}
+	var image *mcp.ImageContent
+	for _, content := range result.Content {
+		candidate, ok := content.(*mcp.ImageContent)
+		if !ok {
+			continue
+		}
+		if image != nil {
+			return nil, BrowserOutput{}, errors.New("Cua browser_vision returned multiple images")
+		}
+		image = candidate
+	}
+	if image == nil || len(image.Data) == 0 {
+		return nil, BrowserOutput{}, errors.New("Cua browser_vision returned no non-empty image")
+	}
+	if image.MIMEType != "image/png" {
+		return nil, BrowserOutput{}, fmt.Errorf("Cua browser_vision returned image MIME type %q, want image/png", image.MIMEType)
+	}
+	imageCopy := &mcp.ImageContent{MIMEType: "image/png", Data: append([]byte(nil), image.Data...)}
+	return &mcp.CallToolResult{Content: []mcp.Content{
+		&mcp.TextContent{Text: "screenshot for: " + in.Question}, imageCopy,
+	}}, BrowserOutput{}, nil
 }
 
 func (b *cuaBrowserServer) call(
@@ -438,18 +615,28 @@ func (b *cuaBrowserServer) call(
 	args map[string]any,
 	dst any,
 ) (*cuaRefusal, error) {
+	_, refusal, err := b.callResult(ctx, name, args, dst)
+	return refusal, err
+}
+
+func (b *cuaBrowserServer) callResult(
+	ctx context.Context,
+	name string,
+	args map[string]any,
+	dst any,
+) (*mcp.CallToolResult, *cuaRefusal, error) {
 	if b.runtime == nil {
-		return nil, errors.New("Cua browser backend requires a shared runtime")
+		return nil, nil, errors.New("Cua browser backend requires a shared runtime")
 	}
 	result, err := b.runtime.CallTool(ctx, &mcp.CallToolParams{Name: name, Arguments: args})
 	if err != nil {
-		return nil, fmt.Errorf("Cua %s: %w", name, err)
+		return nil, nil, fmt.Errorf("Cua %s: %w", name, err)
 	}
 	refusal, err := decodeCUAResult(result, dst)
 	if err != nil {
-		return nil, fmt.Errorf("Cua %s result: %w", name, err)
+		return nil, nil, fmt.Errorf("Cua %s result: %w", name, err)
 	}
-	return refusal, nil
+	return result, refusal, nil
 }
 
 func (b *cuaBrowserServer) sessionArgs(extra map[string]any) map[string]any {
@@ -462,16 +649,428 @@ func (b *cuaBrowserServer) sessionArgs(extra map[string]any) map[string]any {
 }
 
 func (b *cuaBrowserServer) selectedExactArgs(extra map[string]any) (map[string]any, error) {
+	return b.exactArgs(extra)
+}
+
+func (b *cuaBrowserServer) exactArgs(extra map[string]any) (map[string]any, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.preparedPID <= 0 || b.windowID <= 0 || b.targetID == "" || b.selectedTab == "" {
 		return nil, fmt.Errorf("no page open — call browser_navigate first")
 	}
-	args := map[string]any{"target_id": b.targetID, "tab_id": b.selectedTab}
+	args := make(map[string]any, len(extra)+2)
 	for key, value := range extra {
 		args[key] = value
 	}
+	args["target_id"] = b.targetID
+	args["tab_id"] = b.selectedTab
 	return b.sessionArgs(args), nil
+}
+
+func (b *cuaBrowserServer) actionableRef(alias, action string) (cuaElement, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	element, ok := b.refs[strings.TrimSpace(alias)]
+	if !ok || element.Raw == "" {
+		return cuaElement{}, fmt.Errorf("unknown or stale element ref %q; call browser_snapshot", alias)
+	}
+	if !element.Actions[action] {
+		return cuaElement{}, fmt.Errorf("element ref %q does not support %s; call browser_snapshot", alias, action)
+	}
+	return element, nil
+}
+
+func (b *cuaBrowserServer) containsRawRefLocked(raw string) bool {
+	for _, element := range b.refs {
+		if element.Raw == raw {
+			return true
+		}
+	}
+	return false
+}
+
+func (b *cuaBrowserServer) clearTabScopedCapabilities() {
+	b.mu.Lock()
+	state := b.aliasStateLocked()
+	clearCUATabScopedCapabilities(state)
+	b.installAliasStateLocked(state)
+	b.mu.Unlock()
+}
+
+func uniqueFocusedEditable(refs []cuaSemanticRef) string {
+	focused := ""
+	for _, ref := range refs {
+		if ref.Ref == "" || !semanticRefSupports(ref, "type") || !semanticStateTrue(ref.States, "focused") {
+			continue
+		}
+		if focused != "" {
+			return ""
+		}
+		focused = ref.Ref
+	}
+	return focused
+}
+
+func semanticRefSupports(ref cuaSemanticRef, action string) bool {
+	for _, candidate := range ref.Actions {
+		if candidate == action {
+			return true
+		}
+	}
+	return false
+}
+
+func semanticStateTrue(states map[string]any, name string) bool {
+	value, ok := states[name].(bool)
+	return ok && value
+}
+
+func (b *cuaBrowserServer) snapshot(
+	ctx context.Context,
+	full bool,
+	includeScreenshot bool,
+) (*mcp.CallToolResult, BrowserOutput, error) {
+	result, output, _, err := b.snapshotInternal(ctx, full, includeScreenshot, true)
+	if err == nil && output.Status == "ok" {
+		result = textResult(output.Snapshot)
+	}
+	return result, output, err
+}
+
+func (b *cuaBrowserServer) snapshotInternal(
+	ctx context.Context,
+	full bool,
+	includeScreenshot bool,
+	allowRetry bool,
+) (*mcp.CallToolResult, BrowserOutput, cuaResultEnvelope, error) {
+	args, err := b.exactArgs(map[string]any{"snapshot_format": "semantic_v2"})
+	if err != nil {
+		return nil, BrowserOutput{}, cuaResultEnvelope{}, err
+	}
+	if includeScreenshot {
+		args["include_screenshot"] = true
+	}
+	retryAvailable := allowRetry
+	result, envelope, refusal, err := b.readSnapshotPage(ctx, args, &retryAvailable)
+	if err != nil {
+		return nil, BrowserOutput{}, cuaResultEnvelope{}, err
+	}
+	if refusal != nil {
+		refusalResult, output, refusalErr := b.browserRefusalResult(refusal, args)
+		return refusalResult, output, cuaResultEnvelope{}, refusalErr
+	}
+	if err := b.validateSelectedSnapshot(envelope); err != nil {
+		return nil, BrowserOutput{}, cuaResultEnvelope{}, err
+	}
+
+	aggregate := envelope
+	seenContinuations := make(map[string]struct{})
+	for page := 0; full && aggregate.Snapshot.Continuation != "" && page < maxCUASnapshotContinuations; page++ {
+		if rendered := renderCUASnapshotCopy(b, aggregate); len(rendered.Snapshot) >= maxSnapshotChars ||
+			strings.Contains(rendered.Snapshot, "snapshot truncated at nib limit") {
+			break
+		}
+		token := aggregate.Snapshot.Continuation
+		if _, seen := seenContinuations[token]; seen {
+			break
+		}
+		seenContinuations[token] = struct{}{}
+		continuationArgs, exactErr := b.exactArgs(map[string]any{
+			"snapshot_format": "semantic_v2", "continuation": token,
+		})
+		if exactErr != nil {
+			return nil, BrowserOutput{}, cuaResultEnvelope{}, exactErr
+		}
+		_, next, continuationRefusal, continuationErr := b.readSnapshotPage(ctx, continuationArgs, &retryAvailable)
+		if continuationErr != nil {
+			return nil, BrowserOutput{}, cuaResultEnvelope{}, continuationErr
+		}
+		if continuationRefusal != nil {
+			refusalResult, output, refusalErr := b.browserRefusalResult(continuationRefusal, continuationArgs)
+			return refusalResult, output, cuaResultEnvelope{}, refusalErr
+		}
+		if err := b.validateSelectedSnapshot(next); err != nil {
+			return nil, BrowserOutput{}, cuaResultEnvelope{}, err
+		}
+		aggregate = appendSnapshotPage(aggregate, next)
+	}
+
+	b.mu.Lock()
+	state := b.aliasStateLocked()
+	output := renderCUASnapshot(state, aggregate)
+	b.installAliasStateLocked(state)
+	b.mu.Unlock()
+	return result, output, aggregate, nil
+}
+
+func renderCUASnapshotCopy(b *cuaBrowserServer, envelope cuaResultEnvelope) BrowserOutput {
+	b.mu.Lock()
+	state := b.aliasStateLocked()
+	b.mu.Unlock()
+	state.tabs = cloneCUATabs(state.tabs)
+	state.tabAliases = cloneStringMap(state.tabAliases)
+	state.tabReverse = cloneStringMap(state.tabReverse)
+	state.refs = cloneCUARefs(state.refs)
+	return renderCUASnapshot(state, envelope)
+}
+
+func cloneCUATabs(source map[string]cuaTab) map[string]cuaTab {
+	cloned := make(map[string]cuaTab, len(source))
+	for key, value := range source {
+		cloned[key] = value
+	}
+	return cloned
+}
+
+func cloneStringMap(source map[string]string) map[string]string {
+	cloned := make(map[string]string, len(source))
+	for key, value := range source {
+		cloned[key] = value
+	}
+	return cloned
+}
+
+func cloneCUARefs(source map[string]cuaElement) map[string]cuaElement {
+	cloned := make(map[string]cuaElement, len(source))
+	for key, value := range source {
+		cloned[key] = value
+	}
+	return cloned
+}
+
+func (b *cuaBrowserServer) readSnapshotPage(
+	ctx context.Context,
+	args map[string]any,
+	retryAvailable *bool,
+) (*mcp.CallToolResult, cuaResultEnvelope, *cuaRefusal, error) {
+	var envelope cuaResultEnvelope
+	result, refusal, err := b.callResult(ctx, "get_browser_state", args, &envelope)
+	if err != nil || refusal == nil || retryAvailable == nil || !*retryAvailable || !isRebindableReadRefusal(refusal.Code) {
+		if refusal != nil {
+			b.invalidateOnRefusal(refusal)
+		}
+		return result, envelope, refusal, err
+	}
+	*retryAvailable = false
+	b.mu.Lock()
+	oldTarget, oldSelected := b.targetID, b.selectedTab
+	b.mu.Unlock()
+	b.invalidateOnRefusal(refusal)
+	if rebindRefusal, rebindErr := b.rebindExact(ctx, oldTarget, oldSelected); rebindErr != nil {
+		return nil, cuaResultEnvelope{}, nil, rebindErr
+	} else if rebindRefusal != nil {
+		return nil, cuaResultEnvelope{}, rebindRefusal, nil
+	}
+	retryArgs := make(map[string]any, len(args))
+	for key, value := range args {
+		retryArgs[key] = value
+	}
+	b.mu.Lock()
+	retryArgs["target_id"] = b.targetID
+	retryArgs["tab_id"] = b.selectedTab
+	b.mu.Unlock()
+	envelope = cuaResultEnvelope{}
+	result, refusal, err = b.callResult(ctx, "get_browser_state", retryArgs, &envelope)
+	if refusal != nil {
+		b.invalidateOnRefusal(refusal)
+	}
+	return result, envelope, refusal, err
+}
+
+func (b *cuaBrowserServer) rebindExact(
+	ctx context.Context,
+	oldTarget string,
+	oldSelected string,
+) (*cuaRefusal, error) {
+	b.mu.Lock()
+	pid, windowID := b.preparedPID, b.windowID
+	b.mu.Unlock()
+	if pid <= 0 || windowID <= 0 {
+		return nil, errors.New("cannot rebind Cua browser without a prepared pid and window")
+	}
+	var bind cuaResultEnvelope
+	refusal, err := b.call(ctx, "get_browser_state", b.sessionArgs(map[string]any{
+		"pid": pid, "window_id": windowID,
+	}), &bind)
+	if err != nil || refusal != nil {
+		return refusal, err
+	}
+	if err := validateExactBinding(bind); err != nil {
+		return nil, err
+	}
+	b.mu.Lock()
+	state := b.aliasStateLocked()
+	changed := oldTarget == "" || bind.TargetID != oldTarget
+	state.observeTarget(bind.TargetID)
+	state.syncTabs(bind.Tabs)
+	if !changed {
+		state.selectedTab = oldSelected
+		if state.tabs[oldSelected].ID == "" {
+			changed = true
+		}
+	}
+	if changed {
+		selected, selectionRefusal := selectUnambiguousTab(bind.Tabs)
+		if selectionRefusal != nil {
+			b.installAliasStateLocked(state)
+			b.mu.Unlock()
+			return selectionRefusal, nil
+		}
+		state.selectedTab = selected
+	}
+	clearCUATabScopedCapabilities(state)
+	b.installAliasStateLocked(state)
+	b.mu.Unlock()
+	return nil, nil
+}
+
+func (b *cuaBrowserServer) validateSelectedSnapshot(envelope cuaResultEnvelope) error {
+	b.mu.Lock()
+	targetID, tabID := b.targetID, b.selectedTab
+	b.mu.Unlock()
+	if envelope.TargetID == "" || envelope.TabID == "" {
+		return errors.New("Cua semantic snapshot omitted target or tab identity")
+	}
+	if envelope.TargetID != targetID || envelope.TabID != tabID {
+		if envelope.TargetID != "" && envelope.TargetID != targetID {
+			b.mu.Lock()
+			state := b.aliasStateLocked()
+			state.observeTarget(envelope.TargetID)
+			b.installAliasStateLocked(state)
+			b.mu.Unlock()
+		}
+		return errors.New("Cua semantic snapshot returned a different target or tab")
+	}
+	if envelope.Snapshot.Format != "semantic_v2" {
+		return fmt.Errorf("Cua snapshot format is %q, want semantic_v2", envelope.Snapshot.Format)
+	}
+	return nil
+}
+
+func (b *cuaBrowserServer) mutateThenSnapshot(
+	ctx context.Context,
+	tool string,
+	args map[string]any,
+	summary string,
+) (*mcp.CallToolResult, BrowserOutput, error) {
+	result, output, _, err := b.mutateThenSnapshotEnvelope(ctx, tool, args, summary)
+	return result, output, err
+}
+
+func (b *cuaBrowserServer) mutateThenSnapshotEnvelope(
+	ctx context.Context,
+	tool string,
+	args map[string]any,
+	summary string,
+) (*mcp.CallToolResult, BrowserOutput, cuaResultEnvelope, error) {
+	var mutation cuaResultEnvelope
+	_, refusal, err := b.callResult(ctx, tool, args, &mutation)
+	if err != nil {
+		return nil, BrowserOutput{}, cuaResultEnvelope{}, err
+	}
+	if refusal != nil {
+		b.invalidateOnRefusal(refusal)
+		result, output, refusalErr := b.browserRefusalResult(refusal, args)
+		return result, output, cuaResultEnvelope{}, refusalErr
+	}
+	result, output, envelope, err := b.snapshotInternal(ctx, false, false, false)
+	if err != nil {
+		return nil, BrowserOutput{}, cuaResultEnvelope{}, fmt.Errorf("%s succeeded but post-action snapshot failed: %w", summary, err)
+	}
+	if output.Status == "ok" {
+		result = textResult(output.Snapshot)
+	}
+	return result, output, envelope, nil
+}
+
+func (b *cuaBrowserServer) invalidateOnRefusal(refusal *cuaRefusal) {
+	if refusal == nil {
+		return
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	state := b.aliasStateLocked()
+	switch refusal.Code {
+	case "browser_binding_stale", "browser_reconnect_exhausted":
+		state.clearCapabilities()
+	case "browser_target_changed":
+		state.targetID = ""
+		state.clearCapabilities()
+	case "browser_tab_stale", "browser_ref_stale", "browser_ref_unknown":
+		clearCUATabScopedCapabilities(state)
+	}
+	b.installAliasStateLocked(state)
+}
+
+func isRebindableReadRefusal(code string) bool {
+	return code == "browser_binding_stale" || code == "browser_reconnect_exhausted"
+}
+
+func (b *cuaBrowserServer) guardNativeKeyTarget(ctx context.Context) (*cuaRefusal, error) {
+	b.mu.Lock()
+	pid, windowID := b.preparedPID, b.windowID
+	targetID, selectedTab := b.targetID, b.selectedTab
+	b.mu.Unlock()
+	var bind cuaResultEnvelope
+	refusal, err := b.call(ctx, "get_browser_state", b.sessionArgs(map[string]any{
+		"pid": pid, "window_id": windowID,
+	}), &bind)
+	if err != nil || refusal != nil {
+		if refusal != nil {
+			b.invalidateOnRefusal(refusal)
+		}
+		return refusal, err
+	}
+	if err := validateExactBinding(bind); err != nil {
+		return nil, err
+	}
+	if bind.TargetID != targetID {
+		b.mu.Lock()
+		state := b.aliasStateLocked()
+		state.observeTarget(bind.TargetID)
+		b.installAliasStateLocked(state)
+		b.mu.Unlock()
+		return &cuaRefusal{Code: "browser_target_changed", Message: "browser target changed; take a fresh snapshot"}, nil
+	}
+	selectedCount, activeCount := 0, 0
+	selectedActive := false
+	for _, tab := range bind.Tabs {
+		if tab.Active != nil && *tab.Active {
+			activeCount++
+		}
+		if tab.ID == selectedTab {
+			selectedCount++
+			selectedActive = tab.Active != nil && *tab.Active
+		}
+	}
+	if selectedCount != 1 || activeCount != 1 || !selectedActive {
+		return &cuaRefusal{
+			Code:    "browser_native_key_target_ambiguous",
+			Message: "selected browser tab is not uniquely active; select or click a page control before pressing a native key",
+		}, nil
+	}
+	return nil, nil
+}
+
+func validateScreenshotMetrics(screenshot *cuaScreenshot) error {
+	if screenshot == nil || !finitePositive(screenshot.ViewportCSSWidth) || !finitePositive(screenshot.ViewportCSSHeight) {
+		return errors.New("Cua screenshot omitted valid positive viewport CSS metrics")
+	}
+	return nil
+}
+
+func validateScreenshotMetadata(screenshot *cuaScreenshot) error {
+	if err := validateScreenshotMetrics(screenshot); err != nil {
+		return err
+	}
+	if screenshot.MIMEType != "image/png" || screenshot.Width <= 0 || screenshot.Height <= 0 {
+		return errors.New("Cua screenshot metadata is not a non-empty PNG")
+	}
+	return nil
+}
+
+func finitePositive(value float64) bool {
+	return value > 0 && !math.IsNaN(value) && !math.IsInf(value, 0)
 }
 
 func (b *cuaBrowserServer) bindingArgs() (map[string]any, error) {
