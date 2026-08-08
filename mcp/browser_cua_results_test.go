@@ -133,7 +133,7 @@ func TestCUAResultDecodesSemanticSnapshotAndContentRefs(t *testing.T) {
 
 func TestCUAResultDecodesScreenshotAndLaterResultFields(t *testing.T) {
 	result := cuaResultFixture(t, `{
-		"status":"completed","prepared_pid":812,"pid":900,
+		"status":"ok","prepared_pid":812,"pid":900,
 		"windows":[{"pid":900,"window_id":77,"title":"Chromium","app":"Chromium"}],
 		"dialog_id":"dialog-4","kind":"confirm","present":true,
 		"download_id":"download-private","bytes":4096,"file_count":2,
@@ -150,7 +150,7 @@ func TestCUAResultDecodesScreenshotAndLaterResultFields(t *testing.T) {
 	if err != nil || refusal != nil {
 		t.Fatalf("decode = refusal %#v, error %v", refusal, err)
 	}
-	if got.Status != "completed" || got.PreparedPID != 812 || got.PID != 900 || len(got.Windows) != 1 {
+	if got.Status != "ok" || got.PreparedPID != 812 || got.PID != 900 || len(got.Windows) != 1 {
 		t.Fatalf("result metadata = %#v", got)
 	}
 	dialogMatches := got.DialogID == "dialog-4" && got.Kind == "confirm" && got.Present
@@ -317,6 +317,8 @@ func TestCUAResultRejectsTransportProtocolAndMalformedData(t *testing.T) {
 		{name: "structured content is not object", result: &sdkmcp.CallToolResult{StructuredContent: "not an object"}},
 		{name: "missing status", result: cuaResultFixture(t, `{"mode":"bind"}`)},
 		{name: "wrong status type", result: cuaResultFixture(t, `{"status":7}`)},
+		{name: "partial status", result: cuaResultFixture(t, `{"status":"partial"}`)},
+		{name: "completed status", result: cuaResultFixture(t, `{"status":"completed"}`)},
 		{
 			name: "wrong nested field type",
 			result: cuaResultFixture(

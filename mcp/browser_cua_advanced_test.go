@@ -338,6 +338,32 @@ func TestCUABrowserPointerValidatesMutationResultBeforeSnapshot(t *testing.T) {
 	}
 }
 
+func TestCUABrowserPointerRejectsUnknownResultStatusBeforeSnapshot(t *testing.T) {
+	server, fake := preparedCUABrowserTestServer(t, map[string]fakeCUAHandler{
+		"browser_pointer": func(map[string]any) (*mcp.CallToolResult, map[string]any, error) {
+			return cuaOK(map[string]any{
+				"status": "partial", "target_id": "target-1", "tab_id": "tab-a",
+				"action": "hover", "route": "trusted",
+			})
+		},
+		"get_browser_state": func(map[string]any) (*mcp.CallToolResult, map[string]any, error) {
+			return cuaOK(cuaBrowserSnapshot("target-1", "tab-a", "must not snapshot"))
+		},
+	})
+	server.refs["@e1"] = cuaElement{Raw: "raw-origin", Actions: map[string]bool{"pointer": true}}
+
+	result, output, err := server.browserPointer(context.Background(), nil, BrowserPointerInput{Action: "hover", Ref: "@e1"})
+	if err == nil || result != nil || output.Status != "" {
+		t.Fatalf("unknown pointer status result/output/error = %#v %#v %v", result, output, err)
+	}
+	if got := len(callsNamed(fake.Calls(), "browser_pointer")); got != 1 {
+		t.Fatalf("pointer calls = %d, want one", got)
+	}
+	if calls := callsNamed(fake.Calls(), "get_browser_state"); len(calls) != 0 {
+		t.Fatalf("unknown pointer status was snapshot-verified: %#v", calls)
+	}
+}
+
 func TestCUABrowserDialogInspectReturnsOnlyCurrentCapability(t *testing.T) {
 	server, fake := preparedCUABrowserTestServer(t, map[string]fakeCUAHandler{
 		"browser_dialog": func(map[string]any) (*mcp.CallToolResult, map[string]any, error) {
@@ -633,6 +659,35 @@ func TestCUABrowserDialogSuccessfulResolutionClearsAllCapabilitiesBeforeValidati
 				t.Fatalf("snapshot calls = %d, want %d", got, wantSnapshots)
 			}
 		})
+	}
+}
+
+func TestCUABrowserDialogRejectsUnknownResultStatusBeforeSnapshot(t *testing.T) {
+	server, fake := preparedCUABrowserTestServer(t, map[string]fakeCUAHandler{
+		"browser_dialog": func(map[string]any) (*mcp.CallToolResult, map[string]any, error) {
+			return cuaOK(map[string]any{
+				"status": "partial", "target_id": "target-1", "tab_id": "tab-a",
+				"dialog_id": "dialog-1", "kind": "prompt", "action": "accept",
+			})
+		},
+		"get_browser_state": func(map[string]any) (*mcp.CallToolResult, map[string]any, error) {
+			return cuaOK(cuaBrowserSnapshot("target-1", "tab-a", "must not snapshot"))
+		},
+	})
+	server.dialogID = "dialog-1"
+	server.dialogKind = "prompt"
+
+	result, output, err := server.browserDialog(context.Background(), nil, BrowserDialogInput{
+		Action: "accept", DialogID: "dialog-1", PromptText: pointerToString("response"),
+	})
+	if err == nil || result != nil || output.Status != "" {
+		t.Fatalf("unknown dialog status result/output/error = %#v %#v %v", result, output, err)
+	}
+	if got := len(callsNamed(fake.Calls(), "browser_dialog")); got != 1 {
+		t.Fatalf("dialog calls = %d, want one", got)
+	}
+	if calls := callsNamed(fake.Calls(), "get_browser_state"); len(calls) != 0 {
+		t.Fatalf("unknown dialog status was snapshot-verified: %#v", calls)
 	}
 }
 

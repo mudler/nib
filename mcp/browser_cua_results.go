@@ -157,6 +157,9 @@ func decodeCUAResult(result *sdkmcp.CallToolResult, dst any) (*cuaRefusal, error
 		}
 		return header.Refusal, nil
 	}
+	if header.Status != "ok" {
+		return nil, fmt.Errorf("cua structured content returned unsupported status %q", header.Status)
+	}
 	if dst == nil {
 		return nil, fmt.Errorf("decode cua structured content: nil destination")
 	}
