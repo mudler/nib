@@ -39,6 +39,7 @@ type cuaBrowserServer struct {
 	refs           map[string]cuaElement
 	lastEditable   string
 	dialogID       string
+	dialogKind     string
 	cleanupWarning string
 
 	prepareTimeout time.Duration
@@ -1350,6 +1351,9 @@ func (b *cuaBrowserServer) installAliasStateLocked(state *cuaAliasState) {
 	b.refs = state.refs
 	b.lastEditable = state.lastEditable
 	b.dialogID = state.dialogID
+	if state.dialogID == "" {
+		b.dialogKind = ""
+	}
 }
 
 func clearCUATabScopedCapabilities(state *cuaAliasState) {
@@ -1445,6 +1449,7 @@ func startCUABrowserMCPServer(
 		Name:        "browser_select_tab",
 		Description: "Select a current logical @tN tab without native activation and return its semantic snapshot.",
 	}, bs.browserSelectTab)
+	registerCUABrowserAdvancedTools(server, bs)
 
 	xlog.Info("Cua browser MCP server ready")
 	return server.Run(ctx, transport)
