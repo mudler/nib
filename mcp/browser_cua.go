@@ -231,6 +231,12 @@ func (b *cuaBrowserServer) prepare(ctx context.Context) (retRefusal *cuaRefusal,
 	if prepareResult.PreparedPID <= 0 {
 		return nil, fmt.Errorf("Cua browser_prepare returned no positive prepared_pid")
 	}
+	// Once preparation adopts our temporary source process, ownership transfers
+	// to the declared Cua session immediately. Any later window, bind, or tab
+	// failure must leave that prepared process for end_session to clean up.
+	if ownedPID != 0 && ownedPID == prepareResult.PreparedPID {
+		ownedPID = 0
+	}
 	preparedWindow, refusal, err := b.waitForExactWindow(prepareCtx, prepareResult.PreparedPID)
 	if err != nil || refusal != nil {
 		return refusal, err
@@ -305,16 +311,25 @@ func (b *cuaBrowserServer) browserTabs(
 
 	b.mu.Lock()
 	state := b.aliasStateLocked()
+	previousSelected := state.selectedTab
 	targetChanged := state.observeTarget(bind.TargetID)
 	state.syncTabs(bind.Tabs)
+	selectionChanged := state.selectedTab != previousSelected
 	if targetChanged || state.selectedTab == "" || state.tabs[state.selectedTab].ID == "" {
 		selected, selectionRefusal := selectUnambiguousTab(bind.Tabs)
 		if selectionRefusal != nil {
+			if selectionChanged {
+				clearCUATabScopedCapabilities(state)
+			}
 			b.installAliasStateLocked(state)
 			b.mu.Unlock()
 			return b.tabsRefusalResult(selectionRefusal, nil)
 		}
 		state.selectedTab = selected
+		selectionChanged = selected != previousSelected
+	}
+	if selectionChanged {
+		clearCUATabScopedCapabilities(state)
 	}
 	b.installAliasStateLocked(state)
 	output := b.tabsOutputLocked(bind.Tabs)
@@ -339,10 +354,6 @@ func (b *cuaBrowserServer) browserSelectTab(
 		b.mu.Unlock()
 		return nil, BrowserOutput{}, fmt.Errorf("unknown or stale tab alias %q; call browser_tabs", in.TabID)
 	}
-	b.selectedTab = rawTab
-	b.refs = make(map[string]cuaElement)
-	b.lastEditable = ""
-	b.dialogID = ""
 	targetID := b.targetID
 	b.mu.Unlock()
 
@@ -359,7 +370,10 @@ func (b *cuaBrowserServer) browserSelectTab(
 	if refusal != nil {
 		return b.browserRefusalResult(refusal, args)
 	}
-	if snapshot.TargetID != "" && snapshot.TargetID != targetID {
+	if snapshot.TargetID == "" {
+		return nil, BrowserOutput{}, errors.New("Cua browser_select_tab snapshot omitted target identity")
+	}
+	if snapshot.TargetID != targetID {
 		b.mu.Lock()
 		state := b.aliasStateLocked()
 		state.observeTarget(snapshot.TargetID)
@@ -368,6 +382,12 @@ func (b *cuaBrowserServer) browserSelectTab(
 		return b.browserRefusalResult(&cuaRefusal{
 			Code: "browser_target_changed", Message: "browser target changed; call browser_tabs and select a current tab",
 		}, nil)
+	}
+	if snapshot.TabID == "" {
+		return nil, BrowserOutput{}, errors.New("Cua browser_select_tab snapshot omitted tab identity")
+	}
+	if snapshot.TabID != rawTab {
+		return nil, BrowserOutput{}, errors.New("Cua browser_select_tab returned a snapshot for a different tab")
 	}
 
 	b.mu.Lock()
@@ -498,7 +518,11 @@ func isSupportedBrowserName(name string) bool {
 }
 
 func normalizedExecutableIdentity(path string) string {
-	return strings.ToLower(strings.TrimSpace(strings.ReplaceAll(path, `\`, "/")))
+	identity := strings.TrimSpace(strings.ReplaceAll(path, `\`, "/"))
+	if runtime.GOOS == "windows" {
+		identity = strings.ToLower(identity)
+	}
+	return identity
 }
 
 func appMatchesExecutable(app cuaBrowserApp, explicit string) bool {
@@ -679,6 +703,12 @@ func (b *cuaBrowserServer) installAliasStateLocked(state *cuaAliasState) {
 	b.refs = state.refs
 	b.lastEditable = state.lastEditable
 	b.dialogID = state.dialogID
+}
+
+func clearCUATabScopedCapabilities(state *cuaAliasState) {
+	state.refs = make(map[string]cuaElement)
+	state.lastEditable = ""
+	state.dialogID = ""
 }
 
 func (b *cuaBrowserServer) browserRefusalResult(

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"reflect"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -258,6 +259,20 @@ func TestCUABrowserNavigateRequiresExactConfiguredExecutableIdentity(t *testing.
 	}
 }
 
+func TestCUABrowserExecutableIdentityUsesPlatformCaseRules(t *testing.T) {
+	upper := normalizedExecutableIdentity(`/opt/Chrome`)
+	lower := normalizedExecutableIdentity(`/opt/chrome`)
+	if runtime.GOOS == "windows" {
+		if upper != lower {
+			t.Fatalf("Windows executable identities differ by case: %q != %q", upper, lower)
+		}
+		return
+	}
+	if upper == lower {
+		t.Fatalf("POSIX executable identities collapsed distinct paths: %q == %q", upper, lower)
+	}
+}
+
 func TestCUABrowserNavigateLaunchesAndKillsOnlyOwnedTemporarySource(t *testing.T) {
 	bind := cuaBrowserBind("target-owned", cuaBrowserTab("tab-owned", "Owned", true))
 	handlers := standardRunningCUAHandlers(bind, cuaBrowserSnapshot("target-owned", "tab-owned", "ready"))
@@ -286,6 +301,37 @@ func TestCUABrowserNavigateLaunchesAndKillsOnlyOwnedTemporarySource(t *testing.T
 	if got := calls[7].Args; !reflect.DeepEqual(got, map[string]any{"pid": float64(51), "session": testCUASessionID}) &&
 		!reflect.DeepEqual(got, map[string]any{"pid": 51, "session": testCUASessionID}) {
 		t.Fatalf("kill_app args = %#v, want owned pid only", got)
+	}
+}
+
+func TestCUABrowserPreparedOwnedSourceIsNeverKilledAfterLaterBindFailure(t *testing.T) {
+	handlers := standardRunningCUAHandlers(nil, nil)
+	handlers["list_windows"] = scriptedWindowHandler(
+		cuaBrowserWindows(),
+		cuaBrowserWindows(cuaBrowserWindow(51, 12)),
+		cuaBrowserWindows(cuaBrowserWindow(51, 12)),
+	)
+	handlers["launch_app"] = func(map[string]any) (*mcp.CallToolResult, map[string]any, error) {
+		return cuaOK(map[string]any{"pid": 51})
+	}
+	handlers["browser_prepare"] = func(map[string]any) (*mcp.CallToolResult, map[string]any, error) {
+		return cuaOK(map[string]any{"prepared_pid": 51})
+	}
+	handlers["get_browser_state"] = func(map[string]any) (*mcp.CallToolResult, map[string]any, error) {
+		return cuaOK(map[string]any{
+			"mode": "bind", "target_id": "target-owned-prepared",
+			"binding_quality": "ambiguous", "mutation_allowed": false,
+			"tabs": []any{cuaBrowserTab("tab", "Tab", true)},
+		})
+	}
+	server, fake := startCUABrowserTestServer(t, handlers)
+
+	_, _, err := server.browserNavigate(context.Background(), nil, BrowserInput{URL: "https://example.test"})
+	if err == nil || !strings.Contains(err.Error(), "binding quality") {
+		t.Fatalf("error = %v, want later exact-binding failure", err)
+	}
+	if countFakeCUACalls(fake.Calls(), "kill_app") != 0 {
+		t.Fatalf("prepared process was killed after ownership transfer: %#v", fake.Calls())
 	}
 }
 
@@ -517,6 +563,43 @@ func TestCUABrowserTabsPreserveAliasesWithoutActivating(t *testing.T) {
 	}
 }
 
+func TestCUABrowserTabsClearCapabilitiesWhenClosedSelectionIsReplaced(t *testing.T) {
+	bindCalls := 0
+	handlers := standardRunningCUAHandlers(
+		cuaBrowserBind("target-tabs", cuaBrowserTab("tab-a", "A", false), cuaBrowserTab("tab-b", "B", true)),
+		cuaBrowserSnapshot("target-tabs", "tab-b", "old-ref", cuaBrowserRef("raw-old", "Old", "click")),
+	)
+	handlers["get_browser_state"] = func(map[string]any) (*mcp.CallToolResult, map[string]any, error) {
+		bindCalls++
+		if bindCalls == 1 {
+			return cuaOK(cuaBrowserBind("target-tabs",
+				cuaBrowserTab("tab-a", "A", false), cuaBrowserTab("tab-b", "B", true),
+			))
+		}
+		return cuaOK(cuaBrowserBind("target-tabs", cuaBrowserTab("tab-a", "A", true)))
+	}
+	server, _ := startCUABrowserTestServer(t, handlers)
+	callCUANavigate(t, server)
+	server.mu.Lock()
+	server.lastEditable = "raw-editable"
+	server.dialogID = "raw-dialog"
+	server.mu.Unlock()
+
+	_, output, err := server.browserTabs(context.Background(), nil, BrowserTabsInput{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(output.Tabs) != 1 || output.Tabs[0].ID != "@t1" || !output.Tabs[0].Selected {
+		t.Fatalf("replacement selection = %#v, want surviving @t1 selected", output.Tabs)
+	}
+	server.mu.Lock()
+	defer server.mu.Unlock()
+	if len(server.refs) != 0 || server.lastEditable != "" || server.dialogID != "" {
+		t.Fatalf("replacement selection retained stale capabilities: refs=%#v editable=%q dialog=%q",
+			server.refs, server.lastEditable, server.dialogID)
+	}
+}
+
 func TestCUABrowserSelectTabIsLogicalOnly(t *testing.T) {
 	bindCalls := 0
 	handlers := standardRunningCUAHandlers(
@@ -553,6 +636,40 @@ func TestCUABrowserSelectTabIsLogicalOnly(t *testing.T) {
 	after := fake.Calls()[before:]
 	if got := fakeCallNames(after); !reflect.DeepEqual(got, []string{"get_browser_state"}) {
 		t.Fatalf("browser_select_tab calls = %v, want semantic snapshot only", got)
+	}
+}
+
+func TestCUABrowserSelectTabRejectsMismatchedReturnedTabWithoutCommitting(t *testing.T) {
+	bindCalls := 0
+	handlers := standardRunningCUAHandlers(
+		cuaBrowserBind("target-select", cuaBrowserTab("tab-a", "A", false), cuaBrowserTab("tab-b", "B", true)),
+		cuaBrowserSnapshot("target-select", "tab-b", "old-ref", cuaBrowserRef("raw-old", "Old", "click")),
+	)
+	handlers["get_browser_state"] = func(map[string]any) (*mcp.CallToolResult, map[string]any, error) {
+		bindCalls++
+		if bindCalls == 1 {
+			return cuaOK(cuaBrowserBind("target-select",
+				cuaBrowserTab("tab-a", "A", false), cuaBrowserTab("tab-b", "B", true),
+			))
+		}
+		return cuaOK(cuaBrowserSnapshot(
+			"target-select", "tab-b", "wrong-tab-ref", cuaBrowserRef("raw-wrong", "Wrong", "click"),
+		))
+	}
+	server, _ := startCUABrowserTestServer(t, handlers)
+	callCUANavigate(t, server)
+
+	_, output, err := server.browserSelectTab(context.Background(), nil, BrowserSelectTabInput{TabID: "@t1"})
+	if err == nil && output.Status != "refused" {
+		t.Fatalf("mismatched returned tab was accepted: output=%#v error=%v", output, err)
+	}
+	server.mu.Lock()
+	defer server.mu.Unlock()
+	if server.selectedTab != "tab-b" {
+		t.Fatalf("selected tab = %q, want original tab-b after rejected response", server.selectedTab)
+	}
+	if got := server.refs["@e1"].Raw; got != "raw-old" {
+		t.Fatalf("element capabilities changed to %q, want original raw-old", got)
 	}
 }
 
