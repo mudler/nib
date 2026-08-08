@@ -273,6 +273,30 @@ func TestCUABrowserExecutableIdentityUsesPlatformCaseRules(t *testing.T) {
 	}
 }
 
+func TestCUABrowserPOSIXExecutableIdentityPreservesPathBytes(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX executable identity rules do not apply on Windows")
+	}
+	paths := []string{
+		`/opt/Chrome\bin`,
+		`/opt/Chrome/bin`,
+		` /opt/Chrome/bin`,
+		`/opt/Chrome/bin `,
+	}
+	for _, path := range paths {
+		if got := normalizedExecutableIdentity(path); got != path {
+			t.Errorf("normalizedExecutableIdentity(%q) = %q, want verbatim POSIX identity", path, got)
+		}
+	}
+	if normalizedExecutableIdentity(paths[0]) == normalizedExecutableIdentity(paths[1]) {
+		t.Error("POSIX backslash and slash paths collapsed to one executable identity")
+	}
+	if normalizedExecutableIdentity(paths[1]) == normalizedExecutableIdentity(paths[2]) ||
+		normalizedExecutableIdentity(paths[1]) == normalizedExecutableIdentity(paths[3]) {
+		t.Error("POSIX boundary-whitespace paths collapsed to one executable identity")
+	}
+}
+
 func TestCUABrowserNavigateLaunchesAndKillsOnlyOwnedTemporarySource(t *testing.T) {
 	bind := cuaBrowserBind("target-owned", cuaBrowserTab("tab-owned", "Owned", true))
 	handlers := standardRunningCUAHandlers(bind, cuaBrowserSnapshot("target-owned", "tab-owned", "ready"))

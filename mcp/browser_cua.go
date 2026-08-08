@@ -518,11 +518,10 @@ func isSupportedBrowserName(name string) bool {
 }
 
 func normalizedExecutableIdentity(path string) string {
-	identity := strings.TrimSpace(strings.ReplaceAll(path, `\`, "/"))
-	if runtime.GOOS == "windows" {
-		identity = strings.ToLower(identity)
+	if runtime.GOOS != "windows" {
+		return path
 	}
-	return identity
+	return strings.ToLower(strings.ReplaceAll(path, `\`, "/"))
 }
 
 func appMatchesExecutable(app cuaBrowserApp, explicit string) bool {
