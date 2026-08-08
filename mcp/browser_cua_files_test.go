@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -184,8 +185,11 @@ func TestBrowserPathRejectsTraversalSymlinksAndWrongKinds(t *testing.T) {
 	}
 }
 
-func TestBrowserPathRejectsPortableTraversalAndWindowsVolumes(t *testing.T) {
-	fixture := newBrowserPathFixture(t)
+func TestBrowserPathRejectsWindowsTraversalAndVolumes(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows path grammar is host-native")
+	}
+	root := t.TempDir()
 	tests := []struct {
 		name       string
 		relative   string
@@ -203,12 +207,85 @@ func TestBrowserPathRejectsPortableTraversalAndWindowsVolumes(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			_, err := resolveBrowserPath(fixture.root, test.relative, browserUploadFile)
-			assertBrowserErrorHasNoPaths(t, err, fixture.root, fixture.canonicalRoot)
+			_, err := resolveBrowserPath(root, test.relative, browserUploadFile)
+			assertBrowserErrorHasNoPaths(t, err, root)
 			if !strings.Contains(err.Error(), test.wantReason) {
 				t.Fatalf("error = %v, want %q", err, test.wantReason)
 			}
 		})
+	}
+}
+
+func TestBrowserPathAcceptsPOSIXColonAndBackslashComponents(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("colon and backslash have path semantics on Windows")
+	}
+	root := t.TempDir()
+	tests := []string{
+		`C:upload.txt`,
+		`\name`,
+		`nested\..\upload.txt`,
+	}
+	for _, relative := range tests {
+		t.Run(relative, func(t *testing.T) {
+			want := filepath.Join(root, relative)
+			mustWriteBrowserPath(t, want, "upload")
+			got, err := resolveBrowserPath(root, relative, browserUploadFile)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != want {
+				t.Fatalf("resolved path = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
+func TestBrowserPathLexicalPolicyUsesTargetOS(t *testing.T) {
+	windowsTraversal := []string{
+		`nested\..\upload.txt`,
+		`nested/..\upload.txt`,
+		`nested\../upload.txt`,
+	}
+	for _, path := range windowsTraversal {
+		if !hasBrowserParentComponentForOS(path, "windows") {
+			t.Errorf("Windows path %q did not detect parent traversal", path)
+		}
+	}
+	windowsRooted := []string{
+		`C:upload.txt`,
+		`C:\upload.txt`,
+		`\\server\share\upload.txt`,
+		`\\?\C:\upload.txt`,
+		`\\.\PhysicalDrive0`,
+		`\Windows\upload.txt`,
+	}
+	for _, path := range windowsRooted {
+		if !isBrowserRootedForOS(path, "windows") {
+			t.Errorf("Windows path %q was not classified as rooted or volume-qualified", path)
+		}
+	}
+
+	for _, path := range []string{`C:upload.txt`, `\name`} {
+		if isBrowserRootedForOS(path, "linux") {
+			t.Errorf("POSIX path %q was classified using Windows volume rules", path)
+		}
+	}
+	if hasBrowserParentComponentForOS(`nested\..\upload.txt`, "linux") {
+		t.Error("POSIX backslash filename was classified using Windows separator rules")
+	}
+	for _, value := range []string{`C:download`, `\name`, `nested\download`, `name/`, `name/.`} {
+		if !isNormalBrowserPathComponentForOS(value, "linux") {
+			t.Errorf("POSIX value %q was not classified as one Normal component", value)
+		}
+	}
+	for _, value := range []string{`nested\download`, `C:download`, `.\download`, `download\child`} {
+		if isNormalBrowserPathComponentForOS(value, "windows") {
+			t.Errorf("Windows value %q was classified as one Normal component", value)
+		}
+	}
+	if !isNormalBrowserPathComponentForOS("opaque-download", "windows") {
+		t.Error("Windows normal filename was rejected")
 	}
 }
 
@@ -592,20 +669,25 @@ func TestCUABrowserDownloadRejectsMalformedCompletedResultAndInvalidatesCapabili
 
 func TestCUABrowserDownloadRejectsUnsafeOpaqueIDsBeforeSnapshot(t *testing.T) {
 	fixture := newBrowserPathFixture(t)
-	tests := []struct {
+	type unsafeIDTest struct {
 		name string
 		id   string
-	}{
+	}
+	tests := []unsafeIDTest{
 		{name: "dot", id: "."},
 		{name: "parent", id: ".."},
 		{name: "slash component", id: "nested/download"},
-		{name: "backslash component", id: `nested\download`},
-		{name: "drive relative component", id: `C:download`},
 		{name: "target capability", id: "opaque-target-1-value"},
 		{name: "tab capability", id: "opaque-tab-a-value"},
 		{name: "element capability", id: "opaque-raw-file-capability-value"},
 		{name: "session capability", id: "opaque-" + testCUASessionID + "-value"},
 		{name: "private root", id: fixture.canonicalRoot},
+	}
+	if runtime.GOOS == "windows" {
+		tests = append(tests,
+			unsafeIDTest{name: "backslash component", id: `nested\download`},
+			unsafeIDTest{name: "drive relative component", id: `C:download`},
+		)
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -630,6 +712,38 @@ func TestCUABrowserDownloadRejectsUnsafeOpaqueIDsBeforeSnapshot(t *testing.T) {
 			}
 			if len(server.refs) != 0 {
 				t.Fatalf("unsafe download id retained element capabilities: %#v", server.refs)
+			}
+		})
+	}
+}
+
+func TestCUABrowserDownloadAcceptsPOSIXNormalOpaqueIDs(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("colon and backslash have path semantics on Windows")
+	}
+	fixture := newBrowserPathFixture(t)
+	for _, downloadID := range []string{`C:download`, `\name`, `nested\download`} {
+		t.Run(downloadID, func(t *testing.T) {
+			server, fake := preparedCUABrowserTestServer(t, map[string]fakeCUAHandler{
+				"browser_download": func(map[string]any) (*mcp.CallToolResult, map[string]any, error) {
+					return &mcp.CallToolResult{}, map[string]any{
+						"status": "completed", "download_id": downloadID, "bytes": int64(4),
+					}, nil
+				},
+				"get_browser_state": func(map[string]any) (*mcp.CallToolResult, map[string]any, error) {
+					return cuaOK(cuaBrowserSnapshot("target-1", "tab-a", "download complete"))
+				},
+			})
+			configurePreparedFileServer(server, fixture.root, "click")
+			_, output, err := server.browserDownload(context.Background(), nil, BrowserDownloadInput{Ref: "@e1"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if output.DownloadID != downloadID || output.Bytes != 4 || output.Status != "ok" {
+				t.Fatalf("download output = %#v", output)
+			}
+			if got := countFakeCUACalls(fake.Calls(), "get_browser_state"); got != 1 {
+				t.Fatalf("verification snapshot calls = %d, want 1", got)
 			}
 		})
 	}

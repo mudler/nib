@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -82,7 +83,7 @@ func resolveBrowserPath(root, relative string, kind browserPathKind) (string, er
 	if kind == browserUploadFile && relative == "" {
 		return "", errors.New("browser upload path must not be empty")
 	}
-	if isPortableBrowserAbsolutePath(relative) {
+	if isBrowserRootedForOS(relative, runtime.GOOS) {
 		return "", errors.New("browser file paths must be relative to WorkingDir")
 	}
 	if hasBrowserParentComponent(relative) {
@@ -159,8 +160,12 @@ func canonicalBrowserRoot(root string) (string, error) {
 }
 
 func hasBrowserParentComponent(path string) bool {
+	return hasBrowserParentComponentForOS(path, runtime.GOOS)
+}
+
+func hasBrowserParentComponentForOS(path, goos string) bool {
 	for _, component := range strings.FieldsFunc(path, func(character rune) bool {
-		return character == '/' || character == '\\'
+		return isBrowserPathSeparatorForOS(character, goos)
 	}) {
 		if component == ".." {
 			return true
@@ -169,14 +174,21 @@ func hasBrowserParentComponent(path string) bool {
 	return false
 }
 
-func isPortableBrowserAbsolutePath(path string) bool {
-	if filepath.IsAbs(path) || filepath.VolumeName(path) != "" {
-		return true
+func isBrowserRootedForOS(path, goos string) bool {
+	if path == "" {
+		return false
 	}
-	if strings.HasPrefix(path, "/") || strings.HasPrefix(path, `\`) {
+	if goos != "windows" {
+		return path[0] == '/'
+	}
+	if path[0] == '/' || path[0] == '\\' {
 		return true
 	}
 	return len(path) >= 2 && isASCIIBrowserDriveLetter(path[0]) && path[1] == ':'
+}
+
+func isBrowserPathSeparatorForOS(character rune, goos string) bool {
+	return character == '/' || goos == "windows" && character == '\\'
 }
 
 func isASCIIBrowserDriveLetter(character byte) bool {
@@ -501,8 +513,32 @@ func (b *cuaBrowserServer) validateBrowserDownloadResult(
 }
 
 func isNormalBrowserPathComponent(value string) bool {
-	return value != "" && value != "." && value != ".." &&
-		!strings.ContainsAny(value, `/\`) && !isPortableBrowserAbsolutePath(value)
+	return isNormalBrowserPathComponentForOS(value, runtime.GOOS)
+}
+
+func isNormalBrowserPathComponentForOS(value, goos string) bool {
+	if value == "" || isBrowserRootedForOS(value, goos) {
+		return false
+	}
+	normalComponents := 0
+	for _, component := range strings.FieldsFunc(value, func(character rune) bool {
+		return isBrowserPathSeparatorForOS(character, goos)
+	}) {
+		switch component {
+		case ".":
+			if normalComponents == 0 {
+				return false
+			}
+		case "..":
+			return false
+		default:
+			normalComponents++
+			if normalComponents > 1 {
+				return false
+			}
+		}
+	}
+	return normalComponents == 1
 }
 
 func (b *cuaBrowserServer) callDownloadResult(
