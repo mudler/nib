@@ -720,3 +720,79 @@ func TestPruneKeepsAStubbedResultStubbedInsideTheTrailingRun(t *testing.T) {
 		t.Fatal("stubbed a trailing result that had never been stubbed before")
 	}
 }
+
+func TestEffectivePruningNoScalingAtZeroUtilization(t *testing.T) {
+	cfg := types.ToolOutputPruningConfig{HighWaterTokens: 24000, LowWaterTokens: 8000, MinResultTokens: 200}
+	got := effectivePruning(cfg, 0, 128000, 0.8)
+	if got.HighWaterTokens != 24000 || got.LowWaterTokens != 8000 {
+		t.Fatalf("zero utilization should not scale: got high=%d low=%d", got.HighWaterTokens, got.LowWaterTokens)
+	}
+}
+
+func TestEffectivePruningScalesToMinScaleAtThreshold(t *testing.T) {
+	cfg := types.ToolOutputPruningConfig{HighWaterTokens: 24000, LowWaterTokens: 8000, MinResultTokens: 200}
+	// 80% of 128k = 102400, exactly at the default threshold.
+	got := effectivePruning(cfg, 102400, 128000, 0.8)
+	wantHigh := int(24000 * pruningMinScale)
+	wantLow := int(8000 * pruningMinScale)
+	if got.HighWaterTokens != wantHigh || got.LowWaterTokens != wantLow {
+		t.Fatalf("at threshold: got high=%d low=%d, want high=%d low=%d", got.HighWaterTokens, got.LowWaterTokens, wantHigh, wantLow)
+	}
+}
+
+func TestEffectivePruningScalesLinearlyAtMidRange(t *testing.T) {
+	cfg := types.ToolOutputPruningConfig{HighWaterTokens: 24000, LowWaterTokens: 8000, MinResultTokens: 200}
+	// 50% of the threshold (40% of 128k = 51200).
+	// scale = 1.0 - 0.5 * (1.0 - 0.25) = 0.625
+	got := effectivePruning(cfg, 51200, 128000, 0.8)
+	wantHigh := int(24000 * 0.625)
+	wantLow := int(8000 * 0.625)
+	if got.HighWaterTokens != wantHigh || got.LowWaterTokens != wantLow {
+		t.Fatalf("at 50%% of threshold: got high=%d low=%d, want high=%d low=%d", got.HighWaterTokens, got.LowWaterTokens, wantHigh, wantLow)
+	}
+}
+
+func TestEffectivePruningClampsAboveThreshold(t *testing.T) {
+	cfg := types.ToolOutputPruningConfig{HighWaterTokens: 24000, LowWaterTokens: 8000, MinResultTokens: 200}
+	// 120000 / 128000 ≈ 93.75%, well above the 0.8 threshold.
+	got := effectivePruning(cfg, 120000, 128000, 0.8)
+	wantHigh := int(24000 * pruningMinScale)
+	wantLow := int(8000 * pruningMinScale)
+	if got.HighWaterTokens != wantHigh || got.LowWaterTokens != wantLow {
+		t.Fatalf("above threshold: got high=%d low=%d, want high=%d low=%d (clamped to minScale)", got.HighWaterTokens, got.LowWaterTokens, wantHigh, wantLow)
+	}
+}
+
+func TestEffectivePruningNoScalingWithoutWindow(t *testing.T) {
+	cfg := types.ToolOutputPruningConfig{HighWaterTokens: 24000, LowWaterTokens: 8000, MinResultTokens: 200}
+	got := effectivePruning(cfg, 50000, 0, 0.8)
+	if got.HighWaterTokens != 24000 || got.LowWaterTokens != 8000 {
+		t.Fatalf("unknown window should not scale: got high=%d low=%d", got.HighWaterTokens, got.LowWaterTokens)
+	}
+}
+
+func TestEffectivePruningNoScalingWhenSizePruningOff(t *testing.T) {
+	cfg := types.ToolOutputPruningConfig{HighWaterTokens: 0, LowWaterTokens: 0, MinResultTokens: 200}
+	got := effectivePruning(cfg, 50000, 128000, 0.8)
+	if got.HighWaterTokens != 0 || got.LowWaterTokens != 0 {
+		t.Fatalf("HighWaterTokens=0 should not scale: got high=%d low=%d", got.HighWaterTokens, got.LowWaterTokens)
+	}
+}
+
+func TestEffectivePruningPreservesLowLeHighAfterScaling(t *testing.T) {
+	cfg := types.ToolOutputPruningConfig{HighWaterTokens: 1000, LowWaterTokens: 999, MinResultTokens: 200}
+	got := effectivePruning(cfg, 102400, 128000, 0.8)
+	if got.LowWaterTokens > got.HighWaterTokens {
+		t.Fatalf("low > high after scaling: low=%d high=%d", got.LowWaterTokens, got.HighWaterTokens)
+	}
+}
+
+func TestEffectivePruningDefaultsThresholdToZeroPointEight(t *testing.T) {
+	cfg := types.ToolOutputPruningConfig{HighWaterTokens: 24000, LowWaterTokens: 8000, MinResultTokens: 200}
+	// threshold=0 should default to 0.8, so 80% utilization scales to minScale.
+	got := effectivePruning(cfg, 102400, 128000, 0)
+	wantHigh := int(24000 * pruningMinScale)
+	if got.HighWaterTokens != wantHigh {
+		t.Fatalf("threshold=0 should default to 0.8: got high=%d, want %d", got.HighWaterTokens, wantHigh)
+	}
+}

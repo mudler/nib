@@ -262,11 +262,18 @@ func pruneToolOutputs(msgs []openai.ChatCompletionMessage, cfg types.ToolOutputP
 // manipulator is called from inside cogito's loop, and nothing here should
 // assume which goroutine that is.
 func (s *Session) pruneMessages(msgs []openai.ChatCompletionMessage) []openai.ChatCompletionMessage {
+	// Compute utilization outside the prunedMu lock: contextWindow takes
+	// modelMu and estimateTokens is O(n), neither of which needs to run
+	// under prunedMu.
+	promptTokens := estimateTokens(msgs)
+	window := s.contextWindow()
+	threshold := s.compaction.Threshold
+
 	s.prunedMu.Lock()
 	if s.prunedIDs == nil {
 		s.prunedIDs = map[string]string{}
 	}
-	out, newly, freed := pruneToolOutputs(msgs, effectivePruning(s.pruning), s.prunedIDs)
+	out, newly, freed := pruneToolOutputs(msgs, effectivePruning(s.pruning, promptTokens, window, threshold), s.prunedIDs)
 	for _, n := range newly {
 		s.prunedIDs[n.id] = n.detail
 	}
@@ -282,17 +289,50 @@ func (s *Session) pruneMessages(msgs []openai.ChatCompletionMessage) []openai.Ch
 	return out
 }
 
-// effectivePruning returns cfg with a low-water mark that cannot exceed the high
-// -water mark.
+// pruningMinScale is the floor for pressure-scaled water marks. At the
+// compaction threshold (default 80% utilization), water marks are scaled down
+// to this fraction of their configured value. This makes pruning most
+// aggressive right before compaction would fire, reclaiming every token the
+// sweep can so the summary has less to cover.
+const pruningMinScale = 0.25
+
+// effectivePruning returns cfg with water marks scaled by context utilization
+// and a low-water mark that cannot exceed the high-water mark.
 //
-// A config with low above high is not a stricter policy, it is an inert one: the
-// sweep starts when the total reaches the high mark and then immediately finds
-// itself already under the low mark, so crossing the mark prunes nothing at all
-// — and keeps crossing it on every subsequent call. Clamping is applied here,
-// where a config becomes a live policy, rather than in config defaulting,
-// because NewSession takes a types.Config from embedders too and never sees
-// config.Load's defaulting.
-func effectivePruning(cfg types.ToolOutputPruningConfig) types.ToolOutputPruningConfig {
+// Pressure scaling: the configured water marks are the values at zero
+// utilization. As the context fills, both marks shrink linearly toward
+// pruningMinScale × configured value, reaching that floor at the compaction
+// threshold. Below the threshold, pruning is gentler (larger marks → sweeps
+// less often and less deeply); at the threshold, it is at its most aggressive
+// because compaction is about to fire anyway and every reclaimed token is one
+// the summary does not have to cover.
+//
+// Scaling is skipped when size pruning is off (HighWaterTokens ≤ 0), when the
+// window is unknown, or when there is nothing to measure — the stale-read rule
+// still applies in all those cases.
+//
+// The low ≤ high clamp is applied here, where a config becomes a live policy,
+// rather than in config defaulting, because NewSession takes a types.Config
+// from embedders too and never sees config.Load's defaulting. The clamp runs
+// both before scaling (to fix a misconfigured policy) and after (to fix integer
+// truncation that can flip the invariant by 1).
+func effectivePruning(cfg types.ToolOutputPruningConfig, promptTokens, window int, threshold float64) types.ToolOutputPruningConfig {
+	if cfg.LowWaterTokens > cfg.HighWaterTokens {
+		cfg.LowWaterTokens = cfg.HighWaterTokens
+	}
+	if cfg.HighWaterTokens <= 0 || window <= 0 || promptTokens <= 0 {
+		return cfg
+	}
+	if threshold <= 0 || threshold > 1 {
+		threshold = 0.8
+	}
+	utilization := float64(promptTokens) / float64(window)
+	if utilization > threshold {
+		utilization = threshold
+	}
+	scale := 1.0 - (utilization/threshold)*(1.0-pruningMinScale)
+	cfg.HighWaterTokens = int(float64(cfg.HighWaterTokens) * scale)
+	cfg.LowWaterTokens = int(float64(cfg.LowWaterTokens) * scale)
 	if cfg.LowWaterTokens > cfg.HighWaterTokens {
 		cfg.LowWaterTokens = cfg.HighWaterTokens
 	}
