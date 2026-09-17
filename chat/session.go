@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
@@ -17,6 +18,7 @@ import (
 	"github.com/mudler/nib/llmprovider"
 	"github.com/mudler/nib/manage"
 	wizmcp "github.com/mudler/nib/mcp"
+	"github.com/mudler/nib/plugin"
 	"github.com/mudler/nib/provenance"
 	"github.com/mudler/nib/specialist"
 	"github.com/mudler/nib/trace"
@@ -189,6 +191,11 @@ type Session struct {
 	overflowRetried int
 
 	tracer *trace.Recorder // non-nil when session tracing is enabled
+
+	// memoryStore persists notes written via the memory tool. Rooted at the
+	// per-user BaseDir (like the session store) so notes survive across
+	// sessions and compaction.
+	memoryStore *MemoryStore
 
 	// traceDir is where usage.json is written on Close. Empty = tracing off, so
 	// an untraced session leaves nothing behind. Kept separate from tracer
@@ -447,6 +454,7 @@ func NewSession(ctx context.Context, cfg types.Config, callbacks Callbacks, tran
 		cfgClients:           map[string]*mcp.ClientSession{},
 		cfgServers:           map[string]types.MCPServer{},
 		configurator:         manage.NewIn(cfg.BaseDir),
+		memoryStore:          NewMemoryStore(filepath.Join(plugin.BaseDirIn(cfg.BaseDir), "memory")),
 		tracer:               tracer,
 		traceDir:             cfg.TraceDir,
 		provenanceClassifier: classifier,
@@ -1144,6 +1152,12 @@ func (s *Session) toolOptions(turnCtx context.Context, goal, mainModel string) [
 			s.runMu.Unlock()
 			return "Goal marked complete: " + justification
 		})))
+	}
+
+	// Wire the persistent memory tool so the assistant can save and retrieve
+	// notes that survive compaction and model restarts.
+	if s.toolEnabled("memory") {
+		opts = append(opts, cogito.WithTools(memoryToolDefinition(s.memoryStore)))
 	}
 
 	// Wire the native self-configuration tools so the assistant can manage its
