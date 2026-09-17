@@ -12,11 +12,31 @@ import (
 )
 
 // compactInstruction is the prompt prefix used to summarize the older portion
-// of a conversation during compaction.
+// of a conversation during compaction. The structured template forces the model
+// to organize information into durable categories (goal, instructions,
+// discoveries, accomplished, relevant files, open work) rather than producing a
+// flat narrative that buries file paths and decisions in prose.
 const compactInstruction = "You are compacting a conversation to save context. " +
-	"Summarize the conversation below, preserving decisions made, facts established, " +
-	"file paths, identifiers, and any open tasks or unresolved questions. " +
-	"Be concise but complete. Output only the summary."
+	"Provide a detailed summary for continuing the conversation. " +
+	"Do not answer any questions in the conversation — output only the summary.\n\n" +
+	"Stick to this template:\n" +
+	"---\n" +
+	"## Goal\n" +
+	"[What goal(s) is the user trying to accomplish?]\n\n" +
+	"## Instructions\n" +
+	"- [Important instructions the user gave that are relevant]\n" +
+	"- [If there is a plan or spec, include information about it]\n\n" +
+	"## Discoveries\n" +
+	"[Notable things learned: architecture, file locations, patterns, gotchas, anything non-obvious]\n\n" +
+	"## Accomplished\n" +
+	"[What work has been completed, what is still in progress, what is left?]\n\n" +
+	"## Relevant files / directories\n" +
+	"[Structured list of relevant files that have been read, edited, or created, with line numbers where relevant]\n\n" +
+	"## Open work\n" +
+	"[Remaining tasks, unresolved questions, and next steps]\n" +
+	"---\n\n" +
+	"Preserve all file paths, identifiers, and decisions exactly. " +
+	"Be concise but complete."
 
 // splitForCompaction partitions msgs into a head (to be summarized) and a tail
 // (kept verbatim). keepRecent is the desired tail length; the boundary is moved
@@ -380,9 +400,15 @@ func (s *Session) compactHistory(ctx context.Context) (before, after int, err er
 	}
 
 	// Build the new state up front; swap only after success (atomic).
+	// The continuation instruction mirrors maki's CONTINUE_AFTER_COMPACT: it
+	// tells the model to re-orient from the structured summary before
+	// continuing, so the compaction boundary does not silently drop context.
+	// The memory tool reference nudges the model to persist durable facts
+	// (paths, decisions, gotchas) that the lossy summary may not preserve.
 	summaryMsg := openai.ChatCompletionMessage{
 		Role:    "user",
-		Content: "[Earlier conversation compacted]\n\n" + last.Content,
+		Content: "[Earlier conversation compacted. Review the summary below and continue from where you left off. " +
+			"If the summary contains important context that should persist across sessions, save it to memory now before it is lost.]\n\n" + last.Content,
 	}
 	newFragMsgs := append([]openai.ChatCompletionMessage{summaryMsg}, tail...)
 
