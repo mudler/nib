@@ -20,14 +20,21 @@ require (
 	github.com/msuozzo/bonsai v0.4.0
 	github.com/msuozzo/bonsai/bonsai-bash v0.4.0
 	github.com/msuozzo/bonsai/bonsai-c v0.4.0
+	github.com/msuozzo/bonsai/bonsai-dockerfile v0.4.0
 	github.com/msuozzo/bonsai/bonsai-go v0.4.0
+	github.com/msuozzo/bonsai/bonsai-gotemplate v0.4.0
+	github.com/msuozzo/bonsai/bonsai-groovy v0.4.0
 	github.com/msuozzo/bonsai/bonsai-java v0.4.0
 	github.com/msuozzo/bonsai/bonsai-javascript v0.4.0
+	github.com/msuozzo/bonsai/bonsai-kotlin v0.4.0
+	github.com/msuozzo/bonsai/bonsai-markdown v0.4.0
 	github.com/msuozzo/bonsai/bonsai-python v0.4.0
 	github.com/msuozzo/bonsai/bonsai-ruby v0.4.0
 	github.com/msuozzo/bonsai/bonsai-rust v0.4.0
+	github.com/msuozzo/bonsai/bonsai-terraform v0.4.0
 	github.com/msuozzo/bonsai/bonsai-tsx v0.4.0
 	github.com/msuozzo/bonsai/bonsai-typescript v0.4.0
+	github.com/msuozzo/bonsai/bonsai-yaml v0.4.0
 	github.com/mudler/cogito v0.11.1-0.20260917210357-ecfa9bd71211
 	github.com/mudler/xlog v0.0.1
 	github.com/muesli/termenv v0.16.0
@@ -65,6 +72,7 @@ require (
 	github.com/microcosm-cc/bluemonday v1.0.27 // indirect
 	github.com/mitchellh/copystructure v1.2.0 // indirect
 	github.com/mitchellh/reflectwalk v1.0.2 // indirect
+	github.com/msuozzo/bonsai/bonsai-markdown-inline v0.4.0 // indirect
 	github.com/muesli/ansi v0.0.0-20230316100256-276c6243b2f6 // indirect
 	github.com/muesli/cancelreader v0.2.2 // indirect
 	github.com/muesli/reflow v0.3.0 // indirect

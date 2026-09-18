@@ -644,3 +644,221 @@ func TestLineNumbersJava(t *testing.T) {
 	// package is on line 1
 	assertContains(t, out, "Package: com.example [1]", "java package line number")
 }
+
+// ---- Dockerfile ----
+
+const sampleDockerfile = `FROM golang:1.22 AS builder
+ARG VERSION=1.0
+ENV GOPATH=/go
+WORKDIR /app
+COPY . .
+RUN go build -o app .
+EXPOSE 8080
+CMD ["./app"]
+`
+
+func TestIndexDockerfile(t *testing.T) {
+	path := writeTempFile(t, "Dockerfile", sampleDockerfile)
+	out := mustIndex(t, path)
+
+	assertContains(t, out, "Import: FROM golang:1.22 AS builder", "dockerfile from")
+	assertContains(t, out, "Variable: ARG VERSION=1.0", "dockerfile arg")
+	assertContains(t, out, "Variable: ENV GOPATH=/go", "dockerfile env")
+	assertContains(t, out, "Function: RUN go build -o app .", "dockerfile run")
+	assertContains(t, out, "Function: CMD", "dockerfile cmd")
+	assertContains(t, out, "Function: EXPOSE 8080", "dockerfile expose")
+}
+
+func TestIndexDockerfileExt(t *testing.T) {
+	path := writeTempFile(t, "dev.dockerfile", sampleDockerfile)
+	out := mustIndex(t, path)
+	assertContains(t, out, "Import: FROM", "dockerfile by extension")
+}
+
+// ---- Go Template ----
+
+const sampleGoTemplate = `{{ define "header" }}
+<h1>{{ .Title }}</h1>
+{{ end }}
+
+{{ template "header" . }}
+
+{{ block "content" . }}
+<p>default</p>
+{{ end }}
+`
+
+func TestIndexGoTemplate(t *testing.T) {
+	path := writeTempFile(t, "page.tmpl", sampleGoTemplate)
+	out := mustIndex(t, path)
+
+	assertContains(t, out, "Function: header", "gotemplate define")
+	assertContains(t, out, "Import: header", "gotemplate template include")
+	assertContains(t, out, "Function: content", "gotemplate block")
+}
+
+// ---- Groovy ----
+
+const sampleGroovy = `package com.example
+
+import java.util.List
+
+class Calculator extends Base {
+    int add(int a, int b) {
+        return a + b
+    }
+
+    def multiply(x, y) {
+        x * y
+    }
+}
+
+def greet(name) {
+    println "hello ${name}"
+}
+`
+
+func TestIndexGroovy(t *testing.T) {
+	path := writeTempFile(t, "calc.groovy", sampleGroovy)
+	out := mustIndex(t, path)
+
+	assertContains(t, out, "Package: com.example", "groovy package")
+	assertContains(t, out, "Import: import java.util.List", "groovy import")
+	assertContains(t, out, "Class: Calculator extends Base", "groovy class")
+	assertContains(t, out, "add", "groovy class method add")
+	assertContains(t, out, "multiply", "groovy class method multiply")
+	assertContains(t, out, "Function: greet", "groovy top-level function")
+}
+
+// ---- Kotlin ----
+
+const sampleKotlin = `package com.example
+
+import kotlin.collections.List
+
+class Person(val name: String, val age: Int) {
+    fun greet(): String {
+        return "Hi, I am $name"
+    }
+
+    val isAdult: Boolean
+        get() = age >= 18
+}
+
+object Database {
+    fun connect(): Connection {
+        return DriverManager.getConnection(url)
+    }
+}
+
+fun add(x: Int, y: Int): Int = x + y
+
+val PI = 3.14159
+
+typealias StringList = List<String>
+`
+
+func TestIndexKotlin(t *testing.T) {
+	path := writeTempFile(t, "main.kt", sampleKotlin)
+	out := mustIndex(t, path)
+
+	assertContains(t, out, "Package: com.example", "kotlin package")
+	assertContains(t, out, "Import: import kotlin.collections.List", "kotlin import")
+	assertContains(t, out, "Class: Person", "kotlin class")
+	assertContains(t, out, "greet", "kotlin class method")
+	assertContains(t, out, "isAdult", "kotlin class property")
+	assertContains(t, out, "Class: Database", "kotlin object")
+	assertContains(t, out, "connect", "kotlin object method")
+	assertContains(t, out, "Function: Int add(x, y)", "kotlin top-level function")
+	assertContains(t, out, "Variable: PI", "kotlin top-level property")
+	assertContains(t, out, "Type: StringList", "kotlin typealias")
+}
+
+// ---- Markdown ----
+
+const sampleMarkdown = `# Project Title
+
+Some intro text.
+
+## Installation
+
+Run the following:
+
+    go install
+
+### Prerequisites
+
+- Go 1.22+
+
+## Usage
+
+    wiz --help
+`
+
+func TestIndexMarkdown(t *testing.T) {
+	path := writeTempFile(t, "README.md", sampleMarkdown)
+	out := mustIndex(t, path)
+
+	assertContains(t, out, "Heading: Project Title", "markdown h1")
+	assertContains(t, out, "Heading: Installation", "markdown h2")
+	assertContains(t, out, "Heading: Prerequisites", "markdown h3")
+	assertContains(t, out, "Heading: Usage", "markdown h2 heading")
+	assertNotContains(t, out, "Some intro text", "markdown no body text")
+}
+
+// ---- Terraform ----
+
+const sampleTerraform = `variable "region" {
+  type    = string
+  default = "us-east-1"
+}
+
+resource "aws_instance" "web" {
+  ami           = "ami-12345"
+  instance_type = "t3.micro"
+
+  tags = {
+    Name = "WebServer"
+  }
+}
+
+output "instance_id" {
+  value = aws_instance.web.id
+}
+`
+
+func TestIndexTerraform(t *testing.T) {
+	path := writeTempFile(t, "main.tf", sampleTerraform)
+	out := mustIndex(t, path)
+
+	assertContains(t, out, "Resource: variable region", "terraform variable block")
+	assertContains(t, out, "Resource: resource aws_instance web", "terraform resource block")
+	assertContains(t, out, "Resource: output instance_id", "terraform output block")
+	assertContains(t, out, "ami", "terraform resource attribute")
+	assertContains(t, out, "instance_type", "terraform resource attribute")
+	assertContains(t, out, "type", "terraform variable attribute")
+}
+
+// ---- YAML ----
+
+const sampleYAML = `name: myapp
+version: 1.0.0
+server:
+  port: 8080
+  host: localhost
+database:
+  url: postgres://localhost
+  pool: 10
+`
+
+func TestIndexYAML(t *testing.T) {
+	path := writeTempFile(t, "config.yaml", sampleYAML)
+	out := mustIndex(t, path)
+
+	assertContains(t, out, "Variable: name", "yaml top-level key name")
+	assertContains(t, out, "Variable: version", "yaml top-level key version")
+	assertContains(t, out, "Variable: server", "yaml top-level key server")
+	assertContains(t, out, "Variable: database", "yaml top-level key database")
+	assertNotContains(t, out, "Variable: port", "yaml no nested key port")
+	assertNotContains(t, out, "Variable: host", "yaml no nested key host")
+}

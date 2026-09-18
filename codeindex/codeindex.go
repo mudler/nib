@@ -33,6 +33,8 @@ const (
 	SectionImpl    Section = "Impl"
 	SectionModule  Section = "Module"
 	SectionMacro   Section = "Macro"
+	SectionHeading  Section = "Heading"  // markdown headings
+	SectionResource Section = "Resource" // terraform/HCL blocks
 )
 
 // Entry is one element of the file skeleton.
@@ -102,6 +104,11 @@ func Index(path string) (string, error) {
 	ext := strings.ToLower(filepath.Ext(path))
 	mu.RLock()
 	lang := byExt[ext]
+	if lang == nil {
+		// Fall back to filename for extension-less files like
+		// "Dockerfile" or "Jenkinsfile".
+		lang = byExt[strings.ToLower(filepath.Base(path))]
+	}
 	mu.RUnlock()
 	if lang == nil {
 		return "", fmt.Errorf("index: no extractor for %s files (supported: %s)",
