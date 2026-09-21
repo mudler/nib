@@ -51,8 +51,8 @@ func TestSelfConfigToolsListAndAdd(t *testing.T) {
 
 func TestSelfConfigToolDefinitionsCount(t *testing.T) {
 	defs := selfConfigToolDefs(newToolConfigurator(t), func() {})
-	if len(defs) != 10 {
-		t.Fatalf("expected 10 tools, got %d", len(defs))
+	if len(defs) != 13 {
+		t.Fatalf("expected 13 tools, got %d", len(defs))
 	}
 }
 

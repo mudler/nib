@@ -188,6 +188,52 @@ func selfConfigToolDefs(c *manage.Configurator, reload func()) []toolDef {
 				return b.String(), nil
 			}),
 
+		makeTool("list_skill_packs",
+			"List all installed skill packs with their enabled state and the skills each contributes.",
+			noArgs{}, func(args map[string]any) (string, error) {
+				packs, err := c.ListSkillPacks()
+				if err != nil {
+					return "", err
+				}
+				if len(packs) == 0 {
+					return "No skill packs installed.", nil
+				}
+				var b strings.Builder
+				for _, p := range packs {
+					state := "disabled"
+					if p.Enabled {
+						state = "enabled"
+					}
+					fmt.Fprintf(&b, "- %s [%s] %s\n", p.Name, state, p.SourceURL)
+					for _, s := range p.Skills {
+						fmt.Fprintf(&b, "    - %s: %s\n", s.Name, s.Description)
+					}
+				}
+				return b.String(), nil
+			}),
+
+		makeTool("enable_skill",
+			"Enable an installed skill pack so its skills are loaded on the next message.",
+			nameArgs{}, func(args map[string]any) (string, error) {
+				name := argStr(args, "name")
+				if err := c.SetSkillEnabled(name, true); err != nil {
+					return "", err
+				}
+				reload()
+				return fmt.Sprintf("Enabled skill pack %q. Its skills are active on the next message.", name), nil
+			}),
+
+		makeTool("disable_skill",
+			"Disable an installed skill pack so its skills are removed on the next message.",
+			nameArgs{}, func(args map[string]any) (string, error) {
+				name := argStr(args, "name")
+				if err := c.SetSkillEnabled(name, false); err != nil {
+					return "", err
+				}
+				reload()
+				return fmt.Sprintf("Disabled skill pack %q.", name), nil
+			}),
+
 		makeTool("generate_skill",
 			"Author a new skill: writes a SKILL.md into the local skill pack and registers it so load_skill can use it on the next message.",
 			generateSkillArgs{}, func(args map[string]any) (string, error) {

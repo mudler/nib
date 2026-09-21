@@ -246,6 +246,7 @@ func skillList(mgr *skill.Manager) int {
 		fmt.Println("No skill packs installed.")
 		return 0
 	}
+	fmt.Println("NAME                 STATUS    SOURCE")
 	for _, e := range entries {
 		status := "disabled"
 		if e.Enabled {

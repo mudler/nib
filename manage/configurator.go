@@ -62,6 +62,15 @@ type SkillInfo struct {
 	Pack        string
 }
 
+// SkillPackInfo is a skill pack in tool-facing form, including its enabled
+// state and the skills it contributes.
+type SkillPackInfo struct {
+	Name      string
+	SourceURL string
+	Enabled   bool
+	Skills    []SkillInfo
+}
+
 // ListPlugins returns all installed plugins from the registry.
 func (c *Configurator) ListPlugins() ([]PluginInfo, error) {
 	entries, err := c.plugins.List()
@@ -114,6 +123,33 @@ func (c *Configurator) ListSkills() ([]SkillInfo, error) {
 		}
 	}
 	return out, nil
+}
+
+// ListSkillPacks returns all installed skill packs with their enabled state and
+// the skills each contributes (regardless of enabled state).
+func (c *Configurator) ListSkillPacks() ([]SkillPackInfo, error) {
+	entries, err := c.skills.List()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]SkillPackInfo, 0, len(entries))
+	for _, p := range entries {
+		skills, err := c.skills.Skills(p.Name)
+		if err != nil {
+			skills = nil // skip packs that fail to harvest; one bad pack shouldn't break listing
+		}
+		sis := make([]SkillInfo, 0, len(skills))
+		for _, s := range skills {
+			sis = append(sis, SkillInfo{Name: s.Name, Description: s.Description, Pack: p.Name})
+		}
+		out = append(out, SkillPackInfo{Name: p.Name, SourceURL: p.SourceURL, Enabled: p.Enabled, Skills: sis})
+	}
+	return out, nil
+}
+
+// SetSkillEnabled flips a skill pack's enabled flag.
+func (c *Configurator) SetSkillEnabled(name string, enabled bool) error {
+	return c.skills.SetEnabled(name, enabled)
 }
 
 // EffectiveConfig recomputes the merged config (same as startup) so callers can
