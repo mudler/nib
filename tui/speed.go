@@ -2,10 +2,11 @@ package tui
 
 import (
 	"math"
-	"strconv"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/mudler/nib/chat"
 	"github.com/mudler/nib/theme"
 )
 
@@ -45,6 +46,13 @@ type speedMeter struct {
 	// live rate and the sparkline. bucketAt is when the newest one started.
 	buckets  [speedBuckets]float64
 	bucketAt time.Time
+
+	// turn is the turn generation (Model.turnGen) the chunks of turnTokens
+	// came in, and turnTokens the tokens generated in it: the count the
+	// working indicator shows. total counts every chunk.
+	turn       int32
+	turnTokens float64
+	total      float64
 }
 
 const (
@@ -59,12 +67,29 @@ const (
 
 // record counts one streamed chunk of n bytes, received at now.
 func (s *speedMeter) record(n int, now time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.recordLocked(n, now)
+}
+
+// recordTurn counts one streamed chunk of n bytes, received at now in the
+// turn of generation gen. The turn count starts over when gen changes.
+func (s *speedMeter) recordTurn(gen int32, n int, now time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if gen != s.turn {
+		s.turn, s.turnTokens = gen, 0
+	}
+	s.recordLocked(n, now)
+}
+
+func (s *speedMeter) recordLocked(n int, now time.Time) {
 	if n <= 0 {
 		return
 	}
 	tokens := math.Max(1, float64(n)/4)
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.turnTokens += tokens
+	s.total += tokens
 	if s.active && now.Sub(s.last) > speedGap {
 		s.closeLocked()
 	}
@@ -117,6 +142,12 @@ func (s *speedMeter) shiftLocked(now time.Time) {
 
 // speedReading is what the footer shows.
 type speedReading struct {
+	// Turn is the generation of the turn the latest chunk came in, and
+	// TurnTokens the tokens generated in that turn. Total counts every chunk.
+	Turn       int32
+	TurnTokens float64
+	Total      float64
+
 	// Live is true while the model is generating: Rate is then the rate over
 	// the last two seconds and Spark the tokens per second of each bucket.
 	// Idle, Rate is the rate of the last stretch.
@@ -141,6 +172,7 @@ func (s *speedMeter) read(now time.Time) (r speedReading, ok bool) {
 	if tokens == 0 {
 		return r, false
 	}
+	r.Turn, r.TurnTokens, r.Total = s.turn, s.turnTokens, s.total
 	if dur > 0 {
 		r.Avg = tokens / dur.Seconds()
 	}
@@ -171,22 +203,34 @@ func (s *speedMeter) read(now time.Time) (r speedReading, ok bool) {
 	return r, true
 }
 
-// liveSpeed renders the rate for the working indicator line, "42 tok/s ▃▅▆▇",
-// while the model is generating; "" otherwise. It sits where the user looks
-// while the model works, and needs no room in the footer.
+// liveSpeed renders the rate and the tokens generated this turn for the
+// working indicator line, "42 tok/s ▃▅▆▇ · 1.2k tokens", while the model
+// works. The rate shows only while the model is generating; the count stays
+// while a tool runs. "" before the turn's first chunk. It sits where the user
+// looks while the model works, and needs no room in the footer.
 func (m Model) liveSpeed() string {
 	if m.speed == nil || !m.loading {
 		return ""
 	}
 	r, ok := m.speed.read(time.Now())
-	if !ok || !r.Live {
+	if !ok {
 		return ""
 	}
-	out := theme.Running.Render(formatRate(r.Rate)) + theme.Help.Render(" tok/s")
-	if spark := theme.Sparkline(r.Spark); spark != "" {
-		out += " " + theme.Running.Render(spark)
+	var parts []string
+	if r.Live {
+		rate := theme.Running.Render(formatRate(r.Rate)) + theme.Help.Render(" tok/s")
+		if spark := theme.Sparkline(r.Spark); spark != "" {
+			rate += " " + theme.Running.Render(spark)
+		}
+		parts = append(parts, rate)
 	}
-	return out
+	// The count is of this turn's chunks: one from a turn before the first
+	// chunk of this one would show the last turn's count.
+	if r.Turn == m.currentTurnGen() && r.TurnTokens > 0 {
+		n := chat.HumanTokens(int(math.Round(r.TurnTokens)))
+		parts = append(parts, theme.Meta.Render(n)+theme.Help.Render(" tokens"))
+	}
+	return strings.Join(parts, " "+theme.SepStyle.Render(theme.Sep)+" ")
 }
 
 // speedBadges renders the footer's speed badge in its full form, "tok/s 41 ·
@@ -208,11 +252,68 @@ func (m Model) speedBadges() (full, narrow string) {
 	return full, narrow
 }
 
-// formatRate formats a rate in tokens per second: whole numbers, with one
-// decimal below 10 so a slow model does not read as 0 or 1.
-func formatRate(r float64) string {
-	if r < 10 {
-		return strconv.FormatFloat(r, 'f', 1, 64)
+// formatRate formats a rate in tokens per second (see chat.HumanRate).
+func formatRate(r float64) string { return chat.HumanRate(r) }
+
+// agentMeters meters each sub-agent's stream on its own, for the rate and the
+// output count its landing line reports. OnStream records into it from the
+// session's goroutine and Update reads it, so it has its own lock.
+type agentMeters struct {
+	mu     sync.Mutex
+	meters map[string]*speedMeter
+}
+
+// record counts one streamed chunk of n bytes from sub-agent id.
+func (a *agentMeters) record(id string, n int, now time.Time) {
+	if a == nil || id == "" || n <= 0 {
+		return
 	}
-	return strconv.Itoa(int(math.Round(r)))
+	a.mu.Lock()
+	s := a.meters[id]
+	if s == nil {
+		if a.meters == nil {
+			a.meters = map[string]*speedMeter{}
+		}
+		s = &speedMeter{}
+		a.meters[id] = s
+	}
+	a.mu.Unlock()
+	s.record(n, now)
+}
+
+// finish drops sub-agent id's meter and returns what it measured: the tokens
+// it streamed and its average generation rate. ok is false when it streamed
+// nothing.
+func (a *agentMeters) finish(id string, now time.Time) (tokens, rate float64, ok bool) {
+	if a == nil {
+		return 0, 0, false
+	}
+	a.mu.Lock()
+	s := a.meters[id]
+	delete(a.meters, id)
+	a.mu.Unlock()
+	if s == nil {
+		return 0, 0, false
+	}
+	r, ok := s.read(now)
+	return r.Total, r.Avg, ok
+}
+
+// withStreamStats adds what the sub-agent's meter measured to a completion
+// event: the rate, and the output count when the backend reported no usage.
+// The meter is dropped on failure too, so it does not outlive the agent.
+func (m Model) withStreamStats(ev chat.AgentEvent) chat.AgentEvent {
+	if ev.Status != chat.AgentStatusCompleted && ev.Status != chat.AgentStatusFailed {
+		return ev
+	}
+	tokens, rate, ok := m.agentSpeed.finish(ev.ID, time.Now())
+	if !ok {
+		return ev
+	}
+	ev.TokensPerSec = rate
+	if ev.OutputTokens <= 0 {
+		ev.OutputTokens = int(math.Round(tokens))
+		ev.OutputEstimated = true
+	}
+	return ev
 }

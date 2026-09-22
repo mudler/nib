@@ -3,10 +3,12 @@ package tui
 import (
 	"math"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/charmbracelet/x/ansi"
+	"github.com/mudler/nib/chat"
 )
 
 // feed records n one-token chunks, one every gap, from start; it returns the
@@ -101,5 +103,71 @@ func TestFormatRate(t *testing.T) {
 		if got := formatRate(r); got != want {
 			t.Errorf("formatRate(%v) = %q, want %q", r, got, want)
 		}
+	}
+}
+
+// The working indicator counts the tokens of the turn in progress, keeps the
+// count while a tool runs, and starts over with the next turn.
+func TestLiveSpeedTurnTokens(t *testing.T) {
+	var gen atomic.Int32
+	m := Model{speed: &speedMeter{}, loading: true, turnGen: &gen}
+	t0 := time.Now().Add(-time.Second)
+	for i := 0; i < 50; i++ {
+		m.speed.recordTurn(1, 3, t0.Add(time.Duration(i)*20*time.Millisecond))
+	}
+	gen.Store(1)
+	if got := ansi.Strip(m.liveSpeed()); !strings.Contains(got, " tok/s") || !strings.HasSuffix(got, "50 tokens") {
+		t.Fatalf("live speed = %q, want the rate and 50 tokens", got)
+	}
+
+	// A tool runs: no chunk for longer than speedGap. The rate goes, the
+	// count stays.
+	m.speed.mu.Lock()
+	m.speed.start = m.speed.start.Add(-10 * time.Second)
+	m.speed.last = m.speed.last.Add(-10 * time.Second)
+	m.speed.mu.Unlock()
+	if got := ansi.Strip(m.liveSpeed()); got != "50 tokens" {
+		t.Fatalf("live speed while a tool runs = %q, want %q", got, "50 tokens")
+	}
+
+	// The next turn has no chunk yet: the last turn's count is not shown.
+	gen.Store(2)
+	if got := m.liveSpeed(); got != "" {
+		t.Fatalf("live speed before the new turn's first chunk = %q, want empty", got)
+	}
+	m.speed.recordTurn(2, 3, time.Now())
+	if got := ansi.Strip(m.liveSpeed()); !strings.HasSuffix(got, "1 tokens") {
+		t.Fatalf("live speed = %q, want the new turn's count", got)
+	}
+}
+
+// Each sub-agent's stream is metered on its own, and its landing line gets
+// the rate, and the streamed count when the backend reported no usage.
+func TestAgentStreamStats(t *testing.T) {
+	m := Model{agentSpeed: &agentMeters{}}
+	t0 := time.Now().Add(-2 * time.Second)
+	for i := 0; i <= 50; i++ {
+		m.agentSpeed.record("a1", 3, t0.Add(time.Duration(i)*20*time.Millisecond))
+	}
+	m.agentSpeed.record("", 3, t0) // the main agent's: not metered here
+
+	ev := m.withStreamStats(chat.AgentEvent{ID: "a1", Status: chat.AgentStatusCompleted, TotalTokens: 900})
+	near(t, "rate", ev.TokensPerSec, 51)
+	if ev.OutputTokens != 51 || !ev.OutputEstimated {
+		t.Fatalf("output = %d (estimated %v), want the streamed 51, estimated", ev.OutputTokens, ev.OutputEstimated)
+	}
+	if got := agentTranscriptLine(ev); !strings.Contains(got, "900 tokens (~51 out) · 51 tok/s") {
+		t.Fatalf("landing line = %q", got)
+	}
+	if _, _, ok := m.agentSpeed.finish("a1", time.Now()); ok {
+		t.Fatal("meter kept after the agent landed")
+	}
+
+	// Measured output wins over the streamed count.
+	m.agentSpeed.record("a2", 3, t0)
+	m.agentSpeed.record("a2", 3, t0.Add(time.Second))
+	ev = m.withStreamStats(chat.AgentEvent{ID: "a2", Status: chat.AgentStatusCompleted, OutputTokens: 7})
+	if ev.OutputTokens != 7 || ev.OutputEstimated {
+		t.Fatalf("output = %d (estimated %v), want the measured 7", ev.OutputTokens, ev.OutputEstimated)
 	}
 }

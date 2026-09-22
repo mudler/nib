@@ -834,6 +834,7 @@ func (s *Session) emitAgentEvent(a *cogito.AgentState) {
 		var au cogito.LLMUsage
 		ev.ToolCount, au = agentUsageFull(a)
 		ev.TotalTokens = au.TotalTokens
+		ev.OutputTokens = au.CompletionTokens
 		// Sub-agent tokens are spent on the same bill as the main loop, so the
 		// session total owns them too.
 		//
@@ -1633,6 +1634,7 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 				Content:  ev.Content,
 				ToolName: ev.ToolName,
 				ToolArgs: ev.ToolArgs,
+				AgentID:  ev.AgentID,
 			})
 		}))
 	}

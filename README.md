@@ -178,6 +178,13 @@ configure). Background a running job with `Ctrl+B` and watch the jobs footer wit
   <img alt="nib delegating to the explore sub-agent, with the jobs footer" src="docs/images/demo-agents.gif" width="800">
 </p>
 
+While the model works, the working indicator shows its generation speed and the
+tokens generated this turn, e.g. `thinking · 42 tok/s ▃▅▆▇ · 1.2k tokens`. When a
+sub-agent finishes, its line reports the same: `sub-agent explore finished · 3 tools ·
+12.4k tokens (812 out) · 38 tok/s · 1m 03s`. The total comes from the backend's
+usage report. When the backend reports no usage, nib counts the streamed output
+and marks it with `~`.
+
 ### `/loop` — recurring & self-paced tasks
 
 - `/loop 5m /foo` — run `/foo` (a slash command or prompt) every 5 minutes.

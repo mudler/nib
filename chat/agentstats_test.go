@@ -58,6 +58,9 @@ func TestStatsSuffix(t *testing.T) {
 		{"no tools", AgentEvent{ToolCount: 0, TotalTokens: 500, Elapsed: 5 * time.Second}, " · 500 tokens · 5s"},
 		{"tokens only", AgentEvent{TotalTokens: 500}, " · 500 tokens"},
 		{"empty", AgentEvent{}, ""},
+		{"output measured", AgentEvent{ToolCount: 3, TotalTokens: 12400, OutputTokens: 812, TokensPerSec: 38.4, Elapsed: 63 * time.Second}, " · 3 tools · 12.4k tokens (812 out) · 38 tok/s · 1m 03s"},
+		{"output estimated", AgentEvent{TotalTokens: 12400, OutputTokens: 812, OutputEstimated: true}, " · 12.4k tokens (~812 out)"},
+		{"output only", AgentEvent{OutputTokens: 812, OutputEstimated: true, TokensPerSec: 7.25}, " · ~812 tokens out · 7.2 tok/s"},
 	}
 	for _, c := range cases {
 		if got := c.ev.StatsSuffix(); got != c.want {

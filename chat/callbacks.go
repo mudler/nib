@@ -24,6 +24,16 @@ type AgentEvent struct {
 	ToolCount   int           // tools the sub-agent executed
 	TotalTokens int           // cumulative tokens consumed across the run
 	Elapsed     time.Duration // wall-clock from spawn to completion
+	// OutputTokens is the part of TotalTokens the sub-agent generated. The
+	// session fills it from measured usage. A UI that counts the sub-agent's
+	// stream may fill it with that count when the backend reports no usage,
+	// and then sets OutputEstimated.
+	OutputTokens    int
+	OutputEstimated bool
+	// TokensPerSec is the sub-agent's generation rate. The session cannot
+	// time generation, so it leaves this 0; a UI that meters the sub-agent's
+	// stream fills it.
+	TokensPerSec float64
 }
 
 // StreamEvent is a single live delta during generation, forwarded only when a
@@ -36,6 +46,10 @@ type StreamEvent struct {
 	Content  string // text delta, for reasoning/content
 	ToolName string // tool name, for tool_call (first chunk only)
 	ToolArgs string // streamed argument fragment, for tool_call
+	// AgentID is the sub-agent that produced the delta, "" for the main
+	// agent. A foreground sub-agent keeps its delta's Kind; a background
+	// one arrives with Kind "sub_agent".
+	AgentID string
 }
 
 // Message represents a chat message.

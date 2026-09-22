@@ -253,6 +253,8 @@ type Model struct {
 	// speed measures the model's generation rate for the footer gauge (see
 	// speed.go). OnStream records into it from the session's goroutine.
 	speed *speedMeter
+	// agentSpeed meters each sub-agent's stream for its landing line.
+	agentSpeed *agentMeters
 	// revealIdx is the index plus one of a reply still being revealed after
 	// its turn ended (0 for none), and revealText the text it was revealed
 	// with: a transcript rebuild that changed the entry stops the reveal.
@@ -723,6 +725,7 @@ func NewModel(ctx context.Context, cfg types.Config, height int, shellJobs *wizm
 		ctx:                ctx,
 		anim:               newAnimClock(ctx),
 		speed:              &speedMeter{},
+		agentSpeed:         &agentMeters{},
 		cancel:             cancel,
 		maxHeight:          maxH,
 		transports:         transports,
@@ -855,9 +858,14 @@ func (m Model) initSession() tea.Cmd {
 				if ev.Kind == "reasoning" || ev.Kind == "content" {
 					// Timed here, as the chunk arrives, not when Update
 					// gets to it: a burst drained from reasoningChan in one
-					// batch would otherwise read as one instant.
-					m.speed.record(len(ev.Content), time.Now())
+					// batch would otherwise read as one instant. A
+					// foreground sub-agent's chunks count too: the turn
+					// waits on it, and spends its tokens.
+					m.speed.recordTurn(gen, len(ev.Content), time.Now())
 				}
+				// Each sub-agent is also metered on its own, for its
+				// landing line. Only text deltas carry Content.
+				m.agentSpeed.record(ev.AgentID, len(ev.Content), time.Now())
 				switch ev.Kind {
 				case "reasoning":
 					m.reasoningChan <- reasoningEvent{kind: reasoningEventDelta, text: ev.Content, gen: gen}
@@ -2044,7 +2052,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case agentEventMsg:
 		// Update value-receiver copy via pointer helper, then write back.
-		ev := chat.AgentEvent(msg)
+		ev := m.withStreamStats(chat.AgentEvent(msg))
 		am := m
 		(&am).applyAgentEvent(ev)
 		m = am
