@@ -278,3 +278,78 @@ func TestOverflowRetryKeepsTheSystemPrompt(t *testing.T) {
 		t.Fatalf("the retried turn's system block does not carry the session's system prompt; got %q", retry.system)
 	}
 }
+
+// The same recovery when the overflow arrives INSIDE a streamed reply.
+//
+// LocalAI sends the SSE headers before llama.cpp has looked at the prompt, so
+// it cannot answer an oversized request with a 400. It reports the overflow as
+// a `data: {"error":{...}}` chunk followed by [DONE] on a 200 stream. The TUI
+// always streams, so this is the shape a LocalAI user actually hits. When the
+// client dropped that chunk, the turn failed with "streaming decision produced
+// no content (finish_reason=\"\")": no compaction, no learned window, and
+// nothing the user could act on.
+func TestOverflowRecoveryOverStreamedErrorChunk(t *testing.T) {
+	xlog.SetLogger(xlog.NewLogger(xlog.LogLevel("error"), ""))
+
+	var calls atomic.Int32
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if isModelProbe(r) {
+			serveEmptyModels(w)
+			return
+		}
+		body, _ := io.ReadAll(r.Body)
+		// Compaction's summary request does not stream; answer it as JSON.
+		if !strings.Contains(string(body), `"stream":true`) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"id":"c","object":"chat.completion","created":1,"model":"m","choices":[{"index":0,"message":{"role":"assistant","content":"summary"},"finish_reason":"stop"}]}`)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		if calls.Add(1) == 1 {
+			_, _ = io.WriteString(w, `data: {"error":{"message":"request (368203 tokens) exceeds the available context size (262144 tokens), try increasing it","type":"server_error","code":"server_error"}}`+"\n\n")
+			_, _ = io.WriteString(w, "data: [DONE]\n\n")
+			return
+		}
+		_, _ = io.WriteString(w, `data: {"choices":[{"index":0,"delta":{"content":"recovered"},"finish_reason":"stop"}]}`+"\n\n")
+		_, _ = io.WriteString(w, "data: [DONE]\n\n")
+	}))
+	defer srv.Close()
+
+	cfg := types.Config{
+		Model:        "m",
+		APIKey:       "k",
+		BaseURL:      srv.URL + "/v1",
+		LogLevel:     "error",
+		ApprovalMode: "auto",
+		// MaxRetries 1 for the reason TestOverflowRecoveryOverHTTP gives.
+		AgentOptions: types.AgentOptions{Iterations: 10, MaxAttempts: 3, MaxRetries: 1},
+		Compaction: types.CompactionConfig{
+			MaxContextTokens: 400000, Threshold: 0.8, KeepRecent: 2, ReserveTokens: 4096,
+		},
+	}
+	// OnStream opts the session into cogito's streaming path, as the TUI does.
+	s, err := NewSession(context.Background(), cfg, Callbacks{OnStream: func(StreamEvent) {}})
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	defer s.Close()
+
+	s.fragment = s.fragment.
+		AddMessage("user", "u1").AddMessage("assistant", "a1").
+		AddMessage("user", "u2").AddMessage("assistant", "a2")
+
+	got, err := s.SendMessage("what changed?")
+	if err != nil {
+		t.Fatalf("the turn failed instead of recovering: %v", err)
+	}
+	if got == "" {
+		t.Fatal("empty response after recovery")
+	}
+	if n := s.overflowRetries(); n != 1 {
+		t.Fatalf("overflow retries = %d, want exactly 1: the answer did not come from the recovery path", n)
+	}
+	if s.contextWindow() != 262144 {
+		t.Fatalf("contextWindow = %d, want the learned 262144", s.contextWindow())
+	}
+}
