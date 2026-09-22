@@ -62,8 +62,37 @@ func humanizeError(err error) error {
 	if isRateLimitError(err) {
 		return &FriendlyError{err: err, msg: rateLimitMessage(err)}
 	}
+	if isEmptyReply(err) {
+		return &FriendlyError{err: err, msg: emptyReplyMessage}
+	}
 	return err
 }
+
+// emptyReplyMarkers are the texts cogito uses when every decision attempt came
+// back with no text and no tool call: "streaming decision produced no content
+// (finish_reason=...)" on the streaming path, "no choices: 0" on the other.
+//
+// A backend that reports its failure (a context overflow, a crash) is matched
+// before this by its own message. What is left is a backend that ended the
+// reply without saying why, so the message can only list the likely causes.
+var emptyReplyMarkers = []string{
+	"produced no content",
+	"no choices: 0",
+}
+
+func isEmptyReply(err error) bool {
+	msg := err.Error()
+	for _, marker := range emptyReplyMarkers {
+		if strings.Contains(msg, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+const emptyReplyMessage = "the model returned an empty reply (no text and no tool call) several times. " +
+	"The backend may have dropped the request: check its log. " +
+	"If the conversation is long, it may no longer fit the model's context: run /compact, then retry."
 
 // humanizeTurnError is humanizeError plus the one fact only the turn knows:
 // whether nib already compacted the conversation and re-sent it. An overflow

@@ -100,3 +100,35 @@ func TestHumanizeErrorPassthrough(t *testing.T) {
 		t.Fatalf("unrelated error must be returned unchanged, got %q", got.Error())
 	}
 }
+
+// An empty reply that cogito gave up on after its retries is rewritten into
+// something the user can act on. The raw text names cogito internals
+// ("streaming decision", finish_reason="") and gives no next step.
+func TestHumanizeErrorEmptyReply(t *testing.T) {
+	for _, raw := range []string{
+		`failed to select tool: failed to pick tool: tool selection failed: failed to make a streaming decision after 3 attempts: streaming decision produced no content (finish_reason="") on attempt 3`,
+		`failed to make a decision after 3 attempts: no choices: 0`,
+	} {
+		orig := errors.New(raw)
+		got := humanizeError(orig)
+		if got == orig {
+			t.Fatalf("not humanized: %q", raw)
+		}
+		msg := got.Error()
+		if !strings.Contains(msg, "empty reply") || !strings.Contains(msg, "/compact") {
+			t.Fatalf("message = %q, want it to name the empty reply and suggest /compact", msg)
+		}
+		if !errors.Is(got, orig) {
+			t.Fatal("humanized error must unwrap to the original")
+		}
+	}
+}
+
+// A context overflow keeps its own message even though it also passed through
+// the decision retry loop.
+func TestHumanizeErrorOverflowWinsOverEmptyReply(t *testing.T) {
+	raw := `failed to make a streaming decision after 3 attempts: localai stream: request (9739 tokens) exceeds the available context size (8192 tokens), try increasing it`
+	if msg := humanizeError(errors.New(raw)).Error(); !strings.Contains(msg, "context window") {
+		t.Fatalf("message = %q, want the context-overflow message", msg)
+	}
+}
