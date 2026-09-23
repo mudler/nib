@@ -58,6 +58,7 @@ type Setting struct {
 var settingDocs = map[string]string{
 	"ui.hide_hud":                             "hide the footer clock, cpu and memory badges",
 	"ui.no_bell":                              "do not ring the terminal bell when nib needs you",
+	"ui.no_funny":                             "turn off funny thinking lines and tips while the agent works",
 	"approval_mode":                           "tool-call gating: prompt, strict, allowlist, classify or auto",
 	"classifier.endpoint":                     "named endpoint that serves the classifier",
 	"classifier.model":                        "classifier model (e.g. a GLiNER SystemOne model)",

@@ -1,6 +1,9 @@
 package theme
 
 // Microcopy — calm, lowercase, no wizard metaphor, no emoji.
+
+import "math/rand"
+
 const (
 	BrandName = "nib"
 
@@ -287,6 +290,14 @@ const (
 	// DiffMore is the fold line under a capped diff — a %d format string for
 	// the number of rows not shown.
 	DiffMore = "… %d more lines"
+	// ToolMore is the fold row of a tool block whose output is cut short —
+	// a %d format string for the number of lines not shown. The expand and
+	// collapse hints reuse ReasoningExpand and ReasoningCollapse, since
+	// ctrl+r folds tool output and thinking together.
+	ToolMore = "… %d more lines · "
+	// ToolBackgroundHint follows the elapsed time on a running shell
+	// command's header: ctrl+b detaches it into a background job.
+	ToolBackgroundHint = "ctrl+b background"
 
 	// UsageEstimatedPrefix marks the session usage badge (tui/model.go's
 	// usageBadge) when its figure is chat.Session.EstimatedUsage's byte/4
@@ -315,6 +326,65 @@ const (
 	VerbWorking  = "working"
 	VerbReading  = "reading"
 )
+
+// ThinkingLines replace the plain "thinking" verb with a funny one-liner,
+// picked at random each turn. Kept short to fit the spinner line.
+var ThinkingLines = []string{
+	"thinking",
+	"connecting neurons…",
+	"consulting the oracle…",
+	"bribing the tokens…",
+	"warming up the GPU…",
+	"pondering the imponderable…",
+	"negotiating with the weights…",
+	"herding tokens into sentences…",
+	"searching for the right words…",
+	"reasoning about reasoning…",
+	"connecting the dots…",
+	"divining intent…",
+	"chewing on the prompt…",
+	"flipping bits of wisdom…",
+}
+
+// Tips are short nib usage hints shown as a dim line beneath the spinner
+// while the agent is thinking. Picked at random each turn.
+var Tips = []string{
+	"/yolo auto-approves every tool call",
+	"type / for skills, agents & commands",
+	"ctrl+c once interrupts, twice exits",
+	"/resume to reload a past session",
+	"/compact to summarize and free context",
+	"/model to switch models mid-session",
+	"/endpoint to switch endpoints",
+	"/login to add a provider",
+	"/goal to set a persistent task",
+	"/loop to run a prompt on a schedule",
+	"ctrl+y to use a slash command directly",
+	"/settings to toggle UI preferences",
+	"/about for what nib is",
+	"drag a file in to attach it",
+}
+
+// RandomThinkingLine returns a random funny thinking line, or VerbThinking
+// when the list is empty (defensive). When funny is false the caller should
+// use VerbThinking directly.
+func RandomThinkingLine() string {
+	if len(ThinkingLines) == 0 {
+		return VerbThinking
+	}
+	return ThinkingLines[randIntn(len(ThinkingLines))]
+}
+
+// RandomTip returns a random tip string, or "" when the list is empty.
+func RandomTip() string {
+	if len(Tips) == 0 {
+		return ""
+	}
+	return Tips[randIntn(len(Tips))]
+}
+
+// randIntn wraps rand.Intn so callers don't need to import math/rand.
+func randIntn(n int) int { return rand.Intn(n) }
 
 // EmptyExamples are the sample prompts shown on the first-run empty state.
 var EmptyExamples = []string{

@@ -114,6 +114,9 @@ func (Base) Reasoning(v ViewState, w int) string {
 		b.WriteString(" " + theme.SepStyle.Render(theme.Sep) + " " + v.Speed)
 	}
 	b.WriteString("\n")
+	if v.Tip != "" {
+		b.WriteString(theme.Hint.Render("  " + v.Tip) + "\n")
+	}
 	if strings.TrimSpace(v.Reasoning.Text) != "" {
 		r := v.Reasoning
 		box := CollapsibleBox{

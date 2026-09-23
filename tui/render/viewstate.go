@@ -36,6 +36,9 @@ type Message struct {
 	Meta   string
 	Status ToolStatus
 	Diff   *textdiff.Diff
+	// Expanded, for RoleTool, shows all of Content; folded (the zero value),
+	// a block shows its first ToolFoldLines lines and a row counting the rest.
+	Expanded bool
 	// HugNext, for RoleTool, is true when this block is a lone header line and
 	// the next message is another tool block: the Presenter omits the trailing
 	// separator so a run of one-line calls stacks. For RoleAgent it is true when the next raw message
@@ -246,6 +249,10 @@ type ViewState struct {
 	// status on the working indicator line; "" when the model is not
 	// generating right now.
 	Speed     string
+	// Tip is a dim usage hint shown as a single line beneath the loader,
+	// above reasoning. Empty when the feature is disabled or no tip was
+	// picked.
+	Tip       string
 	Reasoning Reasoning
 	Dialogs   []Dialog
 	Help      string

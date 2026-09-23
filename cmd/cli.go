@@ -53,10 +53,12 @@ type spinner struct {
 	out      io.Writer
 	active   bool
 	message  string
+	tip      string
 	stopChan chan struct{}
 	doneChan chan struct{}
 	tty      bool
 	lastLine string // last message printed in non-TTY mode, for de-duplication
+	lastTip  string // last tip printed in non-TTY mode, for de-duplication
 }
 
 func newSpinner(out io.Writer) *spinner {
@@ -88,12 +90,31 @@ func (s *spinner) printStatic(message string) {
 	fmt.Fprintln(s.out, theme.Help.Render(message))
 }
 
+// printTip emits a dim tip line once in non-TTY mode, skipping consecutive
+// duplicates. Caller must hold s.mu.
+func (s *spinner) printTip(tip string) {
+	if tip == "" || tip == s.lastTip {
+		return
+	}
+	s.lastTip = tip
+	fmt.Fprintln(s.out, theme.Hint.Render("  "+tip))
+}
+
 func (s *spinner) start(message string) {
+	s.startWithTip(message, "")
+}
+
+// startWithTip starts the spinner with message and, if tip is non-empty,
+// prints it as a dim line beneath the spinner. In non-TTY mode the tip is
+// printed once after the status line (de-duplicated like the status).
+func (s *spinner) startWithTip(message, tip string) {
 	if !s.tty {
 		s.mu.Lock()
 		s.active = true
 		s.message = message
+		s.tip = tip
 		s.printStatic(message)
+		s.printTip(tip)
 		s.mu.Unlock()
 		return
 	}
@@ -105,6 +126,7 @@ func (s *spinner) start(message string) {
 	}
 	s.active = true
 	s.message = message
+	s.tip = tip
 	s.stopChan = make(chan struct{})
 	s.doneChan = make(chan struct{})
 	s.mu.Unlock()
@@ -119,14 +141,26 @@ func (s *spinner) start(message string) {
 		for {
 			select {
 			case <-s.stopChan:
-				// Clear the spinner line
-				fmt.Fprint(s.out, "\r\033[K")
+				s.mu.Lock()
+				tipActive := s.tip != ""
+				s.mu.Unlock()
+				if tipActive {
+					// Clear the tip line then the spinner line
+					fmt.Fprint(s.out, "\r\033[K\033[A\033[K")
+				} else {
+					fmt.Fprint(s.out, "\r\033[K")
+				}
 				return
 			case <-ticker.C:
 				s.mu.Lock()
 				msg := s.message
+				t := s.tip
 				s.mu.Unlock()
-				fmt.Fprintf(s.out, "\r%s %s", theme.Help.Render(frames[frame]), theme.Help.Render(msg))
+				if t != "" {
+					fmt.Fprintf(s.out, "\r%s %s\n\033[K%s", theme.Help.Render(frames[frame]), theme.Help.Render(msg), theme.Hint.Render("  "+t))
+				} else {
+					fmt.Fprintf(s.out, "\r%s %s", theme.Help.Render(frames[frame]), theme.Help.Render(msg))
+				}
 				frame = (frame + 1) % len(frames)
 			}
 		}
@@ -149,6 +183,7 @@ func (s *spinner) stop() {
 		// Reset so the next start() reprints the status even if it repeats a
 		// prior message, keeping the log readable across tool-call boundaries.
 		s.lastLine = ""
+		s.lastTip = ""
 		s.mu.Unlock()
 		return
 	}
@@ -185,13 +220,13 @@ func (s *spinner) pause() (resume func()) {
 		return func() {}
 	}
 	s.mu.Lock()
-	active, msg := s.active, s.message
+	active, msg, tip := s.active, s.message, s.tip
 	s.mu.Unlock()
 	if !active {
 		return func() {}
 	}
 	s.stop()
-	return func() { s.start(msg) }
+	return func() { s.startWithTip(msg, tip) }
 }
 
 // writeNotice prints a one-line notice that arrives mid-run, on a line of its
@@ -243,6 +278,33 @@ func formatAgentEventLine(ev chat.AgentEvent) string {
 	}
 }
 
+// cliThinkingLine picks a funny line for the spinner this turn.
+// Returns VerbThinking when ui.no_funny is on.
+func cliThinkingLine(cfg types.Config) string {
+	if cfg.UI.NoFunny {
+		return theme.VerbThinking
+	}
+	return theme.RandomThinkingLine()
+}
+
+// cliTip picks a tip for display beneath the spinner this turn.
+// Returns "" when ui.no_funny is on.
+func cliTip(cfg types.Config) string {
+	if cfg.UI.NoFunny {
+		return ""
+	}
+	return theme.RandomTip()
+}
+
+// startThinkingSpin picks a fresh funny line and tip for the turn and
+// starts the spinner with them. Reuses the same line within a turn
+// (e.g. after OnReasoning reprints) by passing the existing line/tip.
+func startThinkingSpin(spin *spinner, cfg types.Config) {
+	line := cliThinkingLine(cfg)
+	tip := cliTip(cfg)
+	spin.startWithTip(line, tip)
+}
+
 func RunCLI(ctx context.Context, cfg types.Config, streams Streams, shellJobs *wizmcp.ShellJobs, transports ...mcp.Transport) error {
 	in, out, errOut := streams.stdin(), streams.stdout(), streams.stderr()
 	reader := bufio.NewReader(in)
@@ -271,7 +333,7 @@ func RunCLI(ctx context.Context, cfg types.Config, streams Streams, shellJobs *w
 			for _, line := range strings.Split(strings.TrimRight(reasoning, "\n"), "\n") {
 				fmt.Fprintln(out, "  "+theme.Reasoning.Render(line))
 			}
-			spin.start(theme.VerbThinking)
+			startThinkingSpin(spin, cfg)
 		},
 		OnToolCall: func(req chat.ToolCallRequest) chat.ToolCallResponse {
 			spin.stop()
@@ -431,12 +493,12 @@ func RunCLI(ctx context.Context, cfg types.Config, streams Streams, shellJobs *w
 			for _, line := range strings.Split(preview, "\n") {
 				fmt.Fprintln(out, theme.Help.Render("  "+line))
 			}
-			spin.start(theme.VerbThinking)
+			startThinkingSpin(spin, cfg)
 		},
 		OnAgentEvent: func(ev chat.AgentEvent) {
 			spin.stop()
 			fmt.Fprintln(out, formatAgentEventLine(ev))
-			spin.start(theme.VerbThinking)
+			startThinkingSpin(spin, cfg)
 		},
 	}
 
@@ -549,7 +611,7 @@ func RunCLI(ctx context.Context, cfg types.Config, streams Streams, shellJobs *w
 				}
 				continue
 			case slash.KindCompact:
-				spin.start(theme.VerbThinking)
+				startThinkingSpin(spin, cfg)
 				before, after, err := session.CompactHistory()
 				spin.stop()
 				if err != nil {
@@ -687,7 +749,7 @@ func RunCLI(ctx context.Context, cfg types.Config, streams Streams, shellJobs *w
 				continue
 			case slash.KindSend:
 				fmt.Fprintln(out)
-				spin.start(theme.VerbThinking)
+				startThinkingSpin(spin, cfg)
 				files, overrides := attachstage.BuildSend(pending, action)
 				if len(files) == 0 {
 					_, err = session.SendMessage(action.Text)
