@@ -144,7 +144,13 @@ predict an action for the assistant.
 
 ```go
 type Suggester interface {
-    Suggest(ctx context.Context, in SuggestInput) (text string, ok bool, err error)
+    // Suggest returns candidate replies, best first. Empty means no suggestion.
+    Suggest(ctx context.Context, in SuggestInput) ([]Suggestion, error)
+}
+
+type Suggestion struct {
+    Text       string
+    Confidence float64
 }
 
 type SuggestInput struct {
@@ -169,8 +175,8 @@ send:
 2. **Rank.** A `choice` question, "the reply the user sends next to keep
    the work going", over the last assistant message. The options are the
    candidates.
-3. Returns the top option if its confidence is at least
-   `suggestions.threshold`. Otherwise it returns `ok == false`.
+3. Returns the options whose probability is at least
+   `suggestions.threshold`, sorted best first.
 
 ## Approval flow
 
@@ -215,13 +221,21 @@ level with the tool name, category and confidence.
   `Suggest` in a command with a 1 s timeout and a sequence number.
 - The result is dropped when the sequence number is stale: the user typed, a
   new turn started, or the session changed.
-- The suggestion shows only while the composer is empty and the completion
-  popup is closed. It uses the existing ghost-hint style.
-- `Tab` with a visible suggestion puts the text into the composer exactly as
-  if the user had typed it: plain editable input, cursor at the end. It is not
-  sent; the user can edit it or press Enter. Any other key clears the
-  suggestion and then acts as usual (typing starts from an empty composer).
-- Errors and `ok == false` show nothing. Errors are logged at debug level.
+- It works like shell autosuggestion (fish, zsh-autosuggestions). The ranked
+  list is computed once per turn. It is not recomputed on each key press, so
+  typing makes no model calls.
+- With an empty composer, the grey text is the top suggestion.
+- While the user types, the grey text is the rest of the best-ranked
+  suggestion that starts with the composer text (case-insensitive prefix
+  match). When no suggestion matches, nothing shows. Deleting back to a
+  matching prefix shows it again.
+- The completion popup (slash commands, `@` files) wins: while it is open,
+  no suggestion shows, and `Tab` keeps its current meaning.
+- `Tab` with visible grey text completes the composer to the full suggestion
+  exactly as if the user had typed it: plain editable input, cursor at the
+  end. It is not sent. The user can edit it or press Enter.
+- The suggestions are cleared when a new turn starts or the session changes.
+- Errors and an empty result show nothing. Errors are logged at debug level.
 
 ## Setup offer
 
@@ -242,9 +256,12 @@ a name that contains `gliner`, the wizard offers to configure the
   external-data boundary win over the classifier, that read-only calls never
   reach it, that errors prompt, and that the prompt carries the verdict.
 - `chat/suggest`: a fake `Classifier`. Covers the three candidate sources,
-  de-duplication, the length caps, the threshold, and an empty message.
+  de-duplication, the length caps, the threshold, the ordering, and an empty
+  message.
 - TUI: `Shift+Tab` cycle with and without a classifier, the `/approve`
   parsing, `Tab` accepting a suggestion (the text fills in and is not sent),
+  prefix matching while typing (match, no match, backspace to a match,
+  case-insensitivity), the completion popup taking precedence,
   stale suggestion results dropped, and the status bar mode.
 - Config: validation errors for an unknown endpoint, an unknown category, and
   `classify` without a classifier.
