@@ -51,7 +51,8 @@ const (
 	cmdGoalResume = "resume"
 
 	// /model sub-verbs
-	cmdModelReset = "reset"
+	cmdModelReset   = "reset"
+	cmdModelDefault = "default"
 
 	// /yolo sub-verbs
 	cmdYoloOn  = "on"
@@ -67,31 +68,32 @@ const (
 )
 
 const (
-	KindSend       Kind = iota // send Text to the agent
-	KindLoadSkill              // eagerly load Skill into the session prompt
-	KindError                  // report Err to the user, send nothing
-	KindCompact                // compact the current conversation
-	KindLoopStart              // start a recurring/self-paced loop
-	KindLoopStop               // stop one loop (LoopID) or all (empty)
-	KindLoopList               // list active loops
-	KindGoalSet                // set/replace the session goal (Text)
-	KindGoalShow               // show the current goal
-	KindGoalClear              // clear the current goal
-	KindGoalResume             // resume a goal an interrupt paused
-	KindAttach                 // stage/list/clear file attachments
-	KindModelList              // list available models
-	KindModelPick              // pick a model from the available models
-	KindModelSet               // switch the session model to Model
-	KindYolo                   // toggle (or explicitly set) session-wide auto-approval
-	KindResume                 // resume a recorded session (ResumeID) or open the picker
-	KindLogin                  // log in to a provider (Provider empty = list)
-	KindLogout                 // log out of a provider (Provider empty = list)
-	KindSettings               // list, show, set or unset a config key (SettingKey etc.)
-	KindEndpoint               // switch endpoint (Endpoint empty = open the picker)
-	KindModelReset             // drop the saved model override for the current endpoint
-	KindAbout                  // print version, config paths, and tool inventory
-	KindApprove                // set the approval mode (Mode), or show it when Mode is empty
-	KindClassifier             // set the classifier (Endpoint, Model), turn it off, or pick one
+	KindSend         Kind = iota // send Text to the agent
+	KindLoadSkill                // eagerly load Skill into the session prompt
+	KindError                    // report Err to the user, send nothing
+	KindCompact                  // compact the current conversation
+	KindLoopStart                // start a recurring/self-paced loop
+	KindLoopStop                 // stop one loop (LoopID) or all (empty)
+	KindLoopList                 // list active loops
+	KindGoalSet                  // set/replace the session goal (Text)
+	KindGoalShow                 // show the current goal
+	KindGoalClear                // clear the current goal
+	KindGoalResume               // resume a goal an interrupt paused
+	KindAttach                   // stage/list/clear file attachments
+	KindModelList                // list available models
+	KindModelPick                // pick a model from the available models
+	KindModelSet                 // switch the session model to Model
+	KindYolo                     // toggle (or explicitly set) session-wide auto-approval
+	KindResume                   // resume a recorded session (ResumeID) or open the picker
+	KindLogin                    // log in to a provider (Provider empty = list)
+	KindLogout                   // log out of a provider (Provider empty = list)
+	KindSettings                 // list, show, set or unset a config key (SettingKey etc.)
+	KindEndpoint                 // switch endpoint (Endpoint empty = open the picker)
+	KindModelReset               // drop the saved model override for the current endpoint
+	KindModelDefault             // save Model (empty = the one in use) as the endpoint's default
+	KindAbout                    // print version, config paths, and tool inventory
+	KindApprove                  // set the approval mode (Mode), or show it when Mode is empty
+	KindClassifier               // set the classifier (Endpoint, Model), turn it off, or pick one
 )
 
 // AttachOp enumerates the /attach sub-operations.
@@ -205,6 +207,9 @@ func Resolve(input string, cmds []types.CommandConfig, skills []types.Skill, age
 			return Action{Kind: KindModelPick}
 		case cmdModelReset:
 			return Action{Kind: KindModelReset}
+		}
+		if verb, arg, _ := strings.Cut(name, " "); verb == cmdModelDefault {
+			return Action{Kind: KindModelDefault, Model: strings.TrimSpace(arg)}
 		}
 		return Action{Kind: KindModelSet, Model: name}
 	case cmdLoop:

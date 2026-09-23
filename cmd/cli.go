@@ -652,7 +652,15 @@ func RunCLI(ctx context.Context, cfg types.Config, streams Streams, shellJobs *w
 				if err != nil {
 					fmt.Fprintln(errOut, theme.Error.Render(theme.Cross+" "+err.Error()))
 				} else {
-					fmt.Fprintln(out, theme.Subtle.Render(notice))
+					fmt.Fprintln(out, theme.Subtle.Render(notice+" · "+theme.ModelSessionOnly))
+				}
+				continue
+			case slash.KindModelDefault:
+				notice, err := session.SetDefaultModel(ctx, action.Model)
+				if err != nil {
+					fmt.Fprintln(errOut, theme.Error.Render(theme.Cross+" "+err.Error()))
+				} else {
+					fmt.Fprintln(out, theme.Subtle.Render(notice+" · "+theme.ProviderSavedDefault))
 				}
 				continue
 			case slash.KindAttach:

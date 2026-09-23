@@ -246,6 +246,11 @@ type Config struct {
 	// never from the YAML config.
 	InitialGoal       string `yaml:"-"`
 	InitialGoalPaused bool   `yaml:"-"`
+	// InitialEndpoint and InitialModel put a resumed session back on the
+	// endpoint and model it was using, for that session only. Set at
+	// runtime by --resume and /resume, never from the YAML config.
+	InitialEndpoint string `yaml:"-"`
+	InitialModel    string `yaml:"-"`
 	// ResumeSessionID and ResumeSessionTitle, when non-empty, seed the TUI's
 	// own session bookkeeping (Model.sessionID/sessionTitle) alongside
 	// InitialHistory above, so continuing a --resume'd conversation autosaves

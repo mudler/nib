@@ -161,45 +161,56 @@ func TestModelPickerNamesTheCurrentProvider(t *testing.T) {
 	}
 }
 
-// Picking a model on a /login provider persists it to provider.json; the
-// confirmation says so, so the next start is no surprise.
-func TestModelPickerConfirmsTheSavedDefault(t *testing.T) {
-	m := newRegoloOverrideModel(t)
-	m.modelPicker.open(1)
-	m.modelPicker.setModels([]string{"glm5.2", "qwen"}, "glm5.2")
-	m.modelPicker.move(1)
-
-	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	m = next.(Model)
-	msg := lastMessage(t, m)
-	if !strings.Contains(msg.Content, "Regolo") || !strings.Contains(msg.Content, "qwen") || !strings.Contains(msg.Content, theme.ProviderSavedDefault) {
-		t.Fatalf("confirmation = %q, want provider, model and %q", msg.Content, theme.ProviderSavedDefault)
-	}
-}
-
-// Finding 7: picking a model on config.yaml's own default endpoint DOES
-// persist and DOES override config.yaml on the next start (SetModel saves
-// uniformly across every endpoint), but SavesModelAsDefault is false there
-// (config.yaml already documents its own model), so the notice used to say
-// only "model: X" with no hint that the pick just shadowed config.yaml. The
-// user should not have to find that out from the next boot's note.
-func TestModelPickerNotesTheOverrideOnTheDefaultEndpoint(t *testing.T) {
+// ctrl+s in the /model picker switches and saves the pick as the default,
+// and the hint names both keys.
+func TestModelPickerCtrlSSavesTheDefault(t *testing.T) {
 	m := newModelSwitchTestModel(t, "model-a", "model-b")
 	m.modelPicker.open(1)
 	m.modelPicker.setModels([]string{"model-a", "model-b"}, "model-a")
-	m.modelPicker.move(1) // select model-b, away from config.yaml's model-a
+	m.modelPicker.loading = false
+	if d := m.buildModelPickerDialog(); !strings.Contains(d.Hint, "ctrl+s") || !strings.Contains(d.Hint, "enter use in this session") {
+		t.Fatalf("hint = %q, want both the session-only and the save-as-default keys", d.Hint)
+	}
+	m.modelPicker.move(1)
 
-	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlS})
 	m = next.(Model)
-	msg := lastMessage(t, m)
-	if !strings.HasPrefix(msg.Content, "model: model-b") {
-		t.Fatalf("confirmation = %q, want it to lead with model: model-b", msg.Content)
+	if m.modelPicker.active || m.session.Model() != "model-b" {
+		t.Fatalf("ctrl+s picker active=%v model=%q, want closed on model-b", m.modelPicker.active, m.session.Model())
 	}
-	if !strings.Contains(msg.Content, "config.yaml") || !strings.Contains(msg.Content, "model-a") {
-		t.Fatalf("confirmation = %q, want it to name config.yaml's overridden model-a", msg.Content)
+	want := "model: model-b · " + theme.ProviderSavedDefault
+	if msg := lastMessage(t, m); msg.Content != want {
+		t.Fatalf("confirmation = %q, want %q", msg.Content, want)
 	}
-	if !strings.Contains(msg.Content, "/model reset") {
-		t.Fatalf("confirmation = %q, want it to point at /model reset", msg.Content)
+	next2, err := chat.NewSession(context.Background(), m.cfg, chat.Callbacks{})
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	t.Cleanup(func() { next2.Close() })
+	if got := next2.Model(); got != "model-b" {
+		t.Fatalf("next session Model = %q, want the saved model-b", got)
+	}
+}
+
+// A /model pick applies to this session only, on the default endpoint and
+// on a /login provider alike, and the confirmation says so rather than
+// promising a saved default that other sessions would inherit.
+func TestModelPickerSaysThePickIsForThisSessionOnly(t *testing.T) {
+	for name, m := range map[string]Model{
+		"default endpoint": newModelSwitchTestModel(t, "model-a", "model-b"),
+		"login provider":   newRegoloOverrideModel(t),
+	} {
+		m.modelPicker.open(1)
+		m.modelPicker.setModels([]string{"model-a", "model-b"}, "model-a")
+		m.modelPicker.move(1)
+
+		next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+		m = next.(Model)
+		msg := lastMessage(t, m)
+		want := "model: model-b · " + theme.ModelSessionOnly
+		if msg.Content != want {
+			t.Fatalf("%s: confirmation = %q, want %q", name, msg.Content, want)
+		}
 	}
 }
 
@@ -319,6 +330,9 @@ func TestBootLogNotesADefaultEndpointModelOverride(t *testing.T) {
 	}
 	if err := first.SetModel("saved-model"); err != nil {
 		t.Fatalf("SetModel: %v", err)
+	}
+	if err := first.SaveModelAsDefault(); err != nil {
+		t.Fatalf("SaveModelAsDefault: %v", err)
 	}
 	first.Close()
 

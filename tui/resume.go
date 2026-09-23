@@ -61,6 +61,7 @@ func (m *Model) recordSession() {
 		Title:      m.sessionTitle,
 		Cwd:        cwd,
 		Model:      m.session.Model(),
+		Endpoint:   m.session.EndpointID(),
 		Created:    m.sessionCreated,
 		Updated:    time.Now(),
 		Messages:   hist,
@@ -241,6 +242,8 @@ func (m *Model) applyResume(rec chat.SessionRecord) tea.Cmd {
 	m.cfg.InitialHistory = rec.Messages
 	m.cfg.InitialGoal = rec.Goal
 	m.cfg.InitialGoalPaused = rec.GoalPaused
+	m.cfg.InitialEndpoint = rec.Endpoint
+	m.cfg.InitialModel = rec.Model
 	m.sessionID = rec.ID
 	m.sessionTitle = rec.Title
 	m.sessionCreated = rec.Created

@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"fmt"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -189,9 +188,11 @@ func (m Model) buildModelPickerDialog() render.Dialog {
 		Hint:  theme.ModelPickerKeyHint,
 	}
 	if p.target == nil {
-		// /model cannot change provider; say where that lives. A /login pick
-		// (target set) is already the provider switch.
-		d.Hint += " · " + theme.ModelPickerLoginHint
+		// /model's Enter is session-only, so its hint names the key that
+		// also saves the pick. /model cannot change provider either; say
+		// where that lives. A /login pick (target set) is already the
+		// provider switch, and is saved on Enter.
+		d.Hint = theme.ModelPickerSessionKeyHint + " · " + theme.ModelPickerLoginHint
 	}
 
 	switch {
@@ -223,31 +224,47 @@ func (m Model) buildModelPickerDialog() render.Dialog {
 	return d
 }
 
-// modelSwitchNotice confirms a /model pick. On a /login provider or a named
-// endpoint, SetModel also saved the model to provider.json, so the notice
-// names the endpoint and says it is the new default: the pick outlives the
-// session, and the user should not have to discover that from the next
-// start's header.
-//
-// On config.yaml's own DEFAULT endpoint, SavesModelAsDefault is false (see
-// its doc), but SetModel still persists the pick there too, uniformly across
-// every endpoint. When that pick differs from what config.yaml declares, it
-// silently outranks config.yaml on the next start exactly like a /login
-// pick would — so this appends the same kind of note the boot log already
-// gives that case (tui/boot.go's bootModel), instead of leaving the user to
-// find out only then.
-func (m Model) modelSwitchNotice(model string) string {
-	if m.session == nil {
-		return "model: " + model
+// pickModel applies the picker's selection and closes it. On /model's own
+// picker (no target), Enter (saveDefault false) switches this session only,
+// and ctrl+s (saveDefault true) also saves the model as the endpoint's
+// default for later sessions (see chat.Session.SaveModelAsDefault).
+func (m *Model) pickModel(saveDefault bool) {
+	choice, ok := m.modelPicker.choice()
+	if !ok {
+		return
 	}
-	if !m.session.SavesModelAsDefault() {
-		notice := "model: " + model
-		if cfgModel := m.session.ConfigModel(); cfgModel != "" && cfgModel != model {
-			notice += " · " + fmt.Sprintf(theme.ModelOverridesConfigNotice, cfgModel)
+	switch target := m.modelPicker.target; {
+	case target != nil && m.modelPicker.forClassifier:
+		m.useClassifier(target.ID, choice, false)
+	case target != nil:
+		if err := m.session.SwitchProvider(target.ID, choice); err != nil {
+			m.appendMessage(ChatMessage{Role: "error", Content: err.Error()})
+		} else {
+			m.appendMessage(ChatMessage{Role: "agent", Content: "provider: " + target.Name + " · model: " + choice + " · " + theme.ProviderSavedDefault})
 		}
-		return notice
+	default:
+		m.switchModel(choice, saveDefault)
 	}
-	return "provider: " + m.session.ActiveProviderName() + " · model: " + model + " · " + theme.ProviderSavedDefault
+	m.refreshContextTokens()
+	m.modelPicker.close()
+}
+
+// switchModel is a /model picker pick on the current endpoint.
+func (m *Model) switchModel(choice string, saveDefault bool) {
+	if err := m.session.SetModel(choice); err != nil {
+		m.appendMessage(ChatMessage{Role: "error", Content: err.Error()})
+		return
+	}
+	if !saveDefault {
+		m.appendMessage(ChatMessage{Role: "agent", Content: "model: " + choice + " · " + theme.ModelSessionOnly})
+		return
+	}
+	if err := m.session.SaveModelAsDefault(); err != nil {
+		// The switch itself happened; only the save failed.
+		m.appendMessage(ChatMessage{Role: "error", Content: "model: " + choice + " · " + theme.ModelSessionOnly + " · could not save it as the default: " + err.Error()})
+		return
+	}
+	m.appendMessage(ChatMessage{Role: "agent", Content: "model: " + choice + " · " + theme.ProviderSavedDefault})
 }
 
 func clipModelPickerLine(line string, width int) string {

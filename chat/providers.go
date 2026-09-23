@@ -145,19 +145,6 @@ func (s *Session) ConfigBaseURL() string {
 	return s.configProvider.BaseURL
 }
 
-// SavesModelAsDefault reports whether a model pick made right now, via
-// SetModel, is worth calling out in the UI as "this outlives the session and
-// overrides config.yaml": true on a /login provider or a named config.yaml
-// endpoint, whose pick lives only in provider.json, so nothing else records
-// it. False on the default endpoint: SetModel still records the pick there
-// too (every entry's pick is saved uniformly now, including the default),
-// but config.yaml already documents its own model, so there is nothing
-// hidden for the notice to point out.
-func (s *Session) SavesModelAsDefault() bool {
-	id := s.EndpointID()
-	return s.savedPath != "" && id != "" && id != ConfigProviderID
-}
-
 // Providers lists every endpoint the pickers offer: the config.yaml default
 // endpoint, its named endpoints, then the registry in its display order.
 func (s *Session) Providers() []ProviderEntry {
@@ -234,6 +221,38 @@ func (s *Session) SwitchProvider(id, model string) error {
 	return endpoint.WriteSaved(s.savedPath, endpoint.Saved{ID: id, Model: model})
 }
 
+// SaveModelAsDefault saves the model in use as the one the current endpoint
+// starts on, in provider.json, so later sessions start there too. A /model
+// pick alone does not do this (see SetModel); the /model picker calls this
+// when the user picks with the save-as-default key.
+func (s *Session) SaveModelAsDefault() error {
+	model := s.Model()
+	if model == "" {
+		return fmt.Errorf("no model in use to save as the default")
+	}
+	return endpoint.WriteSaved(s.savedPath, endpoint.Saved{ID: s.EndpointID(), Model: model})
+}
+
+// SetDefaultModel is /model default [name]. An empty name saves the model in
+// use as the endpoint's default. A name first switches this session to it,
+// checked the way SwitchModel checks it, and nothing is saved when that
+// fails. The notice is SwitchModel's for a switch, else "model: <name>".
+func (s *Session) SetDefaultModel(ctx context.Context, name string) (string, error) {
+	name = strings.TrimSpace(name)
+	notice := "model: " + s.Model()
+	if name != "" && name != s.Model() {
+		n, err := s.SwitchModel(ctx, name)
+		if err != nil {
+			return "", err
+		}
+		notice = n
+	}
+	if err := s.SaveModelAsDefault(); err != nil {
+		return "", err
+	}
+	return notice, nil
+}
+
 // ProviderStateFile holds the endpoint picked via the picker or /login, next
 // to credentials.json, so the next session starts on it. It is nib-managed
 // state rather than a config.yaml edit: config.yaml keeps describing its own
@@ -254,6 +273,43 @@ func (s *Session) restoreStartupEndpoint() {
 	}
 	if err := s.applyProvider(p, e.ID); err != nil {
 		xlog.Warn("could not start on the saved endpoint; using config.yaml", "endpoint", e.ID, "error", err)
+	}
+}
+
+// restoreResumedModel puts a resumed session back on the endpoint and model
+// it was using (types.Config.InitialEndpoint/InitialModel). Like a /model
+// pick, it applies to this session only and saves nothing. A record from
+// before sessions kept their endpoint (empty id) is left on the startup
+// endpoint: its model name may belong to another provider. An endpoint that
+// no longer resolves, or cannot authenticate, leaves the session on the
+// startup endpoint too, and the boot log says why.
+func (s *Session) restoreResumedModel(id, model string) {
+	if id == "" || model == "" {
+		return
+	}
+	if id == s.EndpointID() && model == s.Model() {
+		return
+	}
+	skip := func(why string) {
+		s.startupNote = fmt.Sprintf("could not resume on %s (%s): %s · using %s", id, model, why, s.Model())
+	}
+	e, ok := s.endpoints.Lookup(id)
+	if !ok {
+		skip("the endpoint is gone")
+		return
+	}
+	if !e.Ready {
+		skip("not logged in")
+		return
+	}
+	p, err := s.endpoints.Config(id)
+	if err != nil {
+		skip(err.Error())
+		return
+	}
+	p.Model = model
+	if err := s.applyProvider(p, id); err != nil {
+		skip(err.Error())
 	}
 }
 

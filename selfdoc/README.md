@@ -251,6 +251,17 @@ This is inspired by [maki](https://github.com/tontinton/maki)'s todo system.
   current one with `*`. In the TUI, bare `/model` opens a searchable model
   picker; in the CLI, bare `/model` prints the same listing as `/models`.
 - `/model <name>` switches the session to that model.
+- `/model default [name]` saves a model as the default for new sessions on
+  the current endpoint. With a name, it switches to that model first; without
+  one, it saves the model in use. In the TUI picker, `ctrl+s` does the same for
+  the selected model.
+
+A model switch applies to **this session only**. Other nib sessions, including
+ones already running in other terminals and ones you start later, keep the
+endpoint's model until you save a default. Resuming a session (`--resume` or
+`/resume`) puts it back on the endpoint and model it was using, again for that
+session only. If that endpoint is gone or no longer logged in, the session
+stays on the startup endpoint and nib shows why.
 
 The switch **keeps the conversation**: history carries over to the new model.
 It applies from the next turn (a turn already in flight finishes on the model
@@ -616,16 +627,17 @@ endpoint can never point somewhere the default block did not say.
 `metadata` and `reasoning_effort` do inherit from the default block when an
 entry leaves them unset.
 
-Your last pick sticks. nib records the active endpoint and model in
-`provider.json`, next to `credentials.json`, and starts there next
-session. This applies even to a plain model change on the default
-endpoint, not only to switching endpoints. `/model reset` drops the saved
-model for the current endpoint, restoring its own `model:` (or the
-default's); on an endpoint with no `model:` of its own, `/model reset`
-refuses and tells you to pick one with `/model` instead. While a saved pick
-or a named endpoint is active, `/settings model` (and `provider`/`base_url`)
-reports the value it would write as not in use, and names the command that
-undoes it.
+Your last endpoint pick sticks. nib records the active endpoint (and the
+model picked with it) in `provider.json`, next to `credentials.json`, and
+starts there next session. A plain `/model` change does not touch this
+file: only `/model default` (or `ctrl+s` in the `/model` picker) saves a
+model for later sessions. `/model reset` puts the session back on the
+endpoint's own `model:` (or the default's) and drops the saved model for
+it; on an endpoint with no `model:` of its own, `/model reset` refuses and
+tells you to pick one with `/model` instead. While a saved pick, a session
+model or a named endpoint is active, `/settings model` (and
+`provider`/`base_url`) reports the value it would write as not in use, and
+names the command that undoes it.
 
 To skip every approval prompt for a run ("yolo" mode), pass `--yolo` or set
 `NIB_YOLO=1` — both force `approval_mode: auto` regardless of what the config

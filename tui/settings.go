@@ -63,9 +63,9 @@ var providerOwnedSettings = []string{"model", "provider", "base_url"}
 //
 // The second arm is the value comparison alone, which is what remains once
 // the session IS on config.yaml's own default endpoint: there the keys ARE
-// consulted, but SetModel persists a model pick on every endpoint
-// uniformly, including the default one, so a saved pick can still shadow
-// config.yaml's own model even though the endpoint identity matches.
+// consulted, but a /model pick in this session, or a model saved with
+// /model default, can still shadow config.yaml's own model even though the
+// endpoint identity matches.
 func (m Model) endpointOverrides(key string) bool {
 	if m.session == nil || !slices.Contains(providerOwnedSettings, key) {
 		return false
@@ -93,7 +93,7 @@ func (m Model) endpointOverrides(key string) bool {
 // a different endpoint entirely (a named config.yaml endpoint or a /login
 // provider), in which case /endpoint config is the way back and applies to
 // any of the three keys; or, only for "model", the session can still be ON
-// config.yaml's own endpoint while a model pick saved earlier shadows the
+// config.yaml's own endpoint while a session or saved model pick shadows the
 // file's model, in which case /endpoint config would be a confusing thing
 // to suggest (the session is already there) and /model reset is the true
 // escape hatch.

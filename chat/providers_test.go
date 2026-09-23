@@ -232,19 +232,82 @@ func TestANamedEndpointIsRestoredOnTheNextSession(t *testing.T) {
 	}
 }
 
-func TestPickingAModelOnTheDefaultEndpointPersists(t *testing.T) {
+// A /model pick belongs to the session that made it. It must not reach
+// provider.json: every nib process reads that file at startup, so a pick
+// written there would switch every other session started afterwards.
+func TestPickingAModelStaysInTheSession(t *testing.T) {
 	cfg := types.Config{BaseDir: t.TempDir(), Model: "default-model", BaseURL: "http://localhost:8080/v1"}
 	first := newTestSessionWithConfig(t, cfg)
 	if err := first.SetModel("other-model"); err != nil {
 		t.Fatalf("SetModel: %v", err)
 	}
+	if got := first.Model(); got != "other-model" {
+		t.Fatalf("Model = %q, want the pick applied to this session", got)
+	}
 	second := newTestSessionWithConfig(t, cfg)
 	second.restoreStartupEndpoint()
-	if got := second.Model(); got != "other-model" {
-		t.Fatalf("Model = %q, want the pick to survive the session", got)
+	if got := second.Model(); got != "default-model" {
+		t.Fatalf("Model = %q, want config.yaml's model: a /model pick must not reach other sessions", got)
 	}
 	if got := second.EndpointID(); got != endpoint.DefaultID {
 		t.Fatalf("EndpointID = %q", got)
+	}
+}
+
+// A /model pick on a saved endpoint keeps the endpoint pick as it was.
+func TestPickingAModelKeepsTheSavedEndpointPick(t *testing.T) {
+	cfg := types.Config{
+		BaseDir: t.TempDir(),
+		Model:   "default-model", BaseURL: "http://localhost:8080/v1",
+		Endpoints: types.Endpoints{{
+			Name:                "work",
+			ModelProviderConfig: types.ModelProviderConfig{BaseURL: "https://vllm.corp/v1", Model: "llama"},
+		}},
+	}
+	first := newTestSessionWithConfig(t, cfg)
+	if err := first.SwitchProvider("@work", "llama-70b"); err != nil {
+		t.Fatalf("SwitchProvider: %v", err)
+	}
+	if err := first.SetModel("llama-8b"); err != nil {
+		t.Fatalf("SetModel: %v", err)
+	}
+	second := newTestSessionWithConfig(t, cfg)
+	second.restoreStartupEndpoint()
+	if got := second.EndpointID(); got != "@work" {
+		t.Fatalf("EndpointID = %q, want the saved endpoint pick", got)
+	}
+	if got := second.Model(); got != "llama-70b" {
+		t.Fatalf("Model = %q, want the model saved with the endpoint pick, not the session's /model", got)
+	}
+}
+
+// /model default saves a model for later sessions: with a name it switches
+// to it first, without one it saves the model in use.
+func TestSetDefaultModelSavesForLaterSessions(t *testing.T) {
+	cfg := types.Config{BaseDir: t.TempDir(), Model: "default-model", BaseURL: "http://127.0.0.1:1/v1"}
+	first := newTestSessionWithConfig(t, cfg)
+	if _, err := first.SetDefaultModel(context.Background(), "other-model"); err != nil {
+		t.Fatalf("SetDefaultModel: %v", err)
+	}
+	if got := first.Model(); got != "other-model" {
+		t.Fatalf("Model = %q, want the named model applied to this session", got)
+	}
+	second := newTestSessionWithConfig(t, cfg)
+	second.restoreStartupEndpoint()
+	if got := second.Model(); got != "other-model" {
+		t.Fatalf("Model = %q, want the saved default", got)
+	}
+
+	if err := second.SetModel("third-model"); err != nil {
+		t.Fatalf("SetModel: %v", err)
+	}
+	if _, err := second.SetDefaultModel(context.Background(), ""); err != nil {
+		t.Fatalf("SetDefaultModel without a name: %v", err)
+	}
+	third := newTestSessionWithConfig(t, cfg)
+	third.restoreStartupEndpoint()
+	if got := third.Model(); got != "third-model" {
+		t.Fatalf("Model = %q, want the model in use saved", got)
 	}
 }
 
@@ -260,12 +323,6 @@ func TestResetModelRestoresTheEndpointModel(t *testing.T) {
 	}
 	if got != "default-model" || s.Model() != "default-model" {
 		t.Fatalf("ResetModel = %q, Model = %q", got, s.Model())
-	}
-
-	next := newTestSessionWithConfig(t, cfg)
-	next.restoreStartupEndpoint()
-	if next.Model() != "default-model" {
-		t.Fatalf("Model = %q, want the reset to survive too", next.Model())
 	}
 }
 
@@ -333,7 +390,10 @@ func TestSwitchProviderPersistsTheDefault(t *testing.T) {
 	if err := s.SwitchProvider("regolo", "model-one"); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.SetModel("model-two"); err != nil { // /model on a /login provider updates the default
+	if err := s.SetModel("model-two"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SaveModelAsDefault(); err != nil { // the picker's ctrl+s, /model default
 		t.Fatal(err)
 	}
 
@@ -452,13 +512,6 @@ func TestActiveProviderNameFollowsTheLogin(t *testing.T) {
 	if got := s.ConfigModel(); got != "uncensored" {
 		t.Fatalf("ConfigModel = %q, want uncensored", got)
 	}
-	// On the default endpoint, SetModel still records the pick (every entry's
-	// pick is saved now), but config.yaml already documents its own model, so
-	// there is nothing for the UI to flag as a hidden override.
-	if s.SavesModelAsDefault() {
-		t.Fatal("SavesModelAsDefault should report false on the default endpoint")
-	}
-
 	if _, err := s.SaveAPIKey("regolo", "rg-secret", ""); err != nil {
 		t.Fatal(err)
 	}
@@ -468,38 +521,11 @@ func TestActiveProviderNameFollowsTheLogin(t *testing.T) {
 	if got := s.ActiveProviderName(); got != "Regolo" {
 		t.Fatalf("ActiveProviderName after /login = %q, want Regolo", got)
 	}
-	if !s.SavesModelAsDefault() {
-		t.Fatal("SavesModelAsDefault should report true on a /login provider")
-	}
 	if got := s.ConfigModel(); got != "uncensored" {
 		t.Fatalf("ConfigModel after /login = %q, want config.yaml's model unchanged", got)
 	}
 	if got := s.Model(); got != "glm5.2" {
 		t.Fatalf("Model = %q, want glm5.2", got)
-	}
-
-	// A named config.yaml endpoint is just as much an override hidden from
-	// config.yaml's top-level block as a /login provider is.
-	named := newTestSessionWithConfig(t, types.Config{
-		Model: "default-model", BaseURL: "http://localhost:8080/v1",
-		Endpoints: types.Endpoints{{
-			Name:                "work",
-			ModelProviderConfig: types.ModelProviderConfig{BaseURL: "https://vllm.corp/v1", Model: "llama"},
-		}},
-	})
-	if err := named.SwitchProvider("@work", ""); err != nil {
-		t.Fatalf("SwitchProvider: %v", err)
-	}
-	if !named.SavesModelAsDefault() {
-		t.Fatal("SavesModelAsDefault should report true on a named yaml endpoint")
-	}
-
-	// Switching back to the default endpoint drops the flag again.
-	if err := named.SwitchProvider(ConfigProviderID, ""); err != nil {
-		t.Fatalf("SwitchProvider back to default: %v", err)
-	}
-	if named.SavesModelAsDefault() {
-		t.Fatal("SavesModelAsDefault should report false again after switching back to the default")
 	}
 }
 
@@ -594,5 +620,55 @@ func TestLogoutOfAnotherProviderDoesNotSwitch(t *testing.T) {
 	}
 	if s.EndpointID() != "anthropic" {
 		t.Fatalf("EndpointID = %q, want the session left alone", s.EndpointID())
+	}
+}
+
+// A resumed session carries on with the model it was using, on the endpoint
+// it was using, whatever the saved default is.
+func TestResumeRestoresTheSessionModel(t *testing.T) {
+	cfg := types.Config{
+		BaseDir: t.TempDir(),
+		Model:   "default-model", BaseURL: "http://localhost:8080/v1",
+		Endpoints: types.Endpoints{{
+			Name:                "work",
+			ModelProviderConfig: types.ModelProviderConfig{BaseURL: "https://vllm.corp/v1", Model: "llama"},
+		}},
+	}
+	s := newTestSessionWithConfig(t, cfg)
+	s.restoreStartupEndpoint()
+	s.restoreResumedModel("@work", "llama-8b")
+	if got := s.EndpointID(); got != "@work" {
+		t.Fatalf("EndpointID = %q, want the resumed session's endpoint", got)
+	}
+	if got := s.Model(); got != "llama-8b" {
+		t.Fatalf("Model = %q, want the resumed session's model", got)
+	}
+	if note := s.StartupNote(); note != "" {
+		t.Fatalf("StartupNote = %q, want none", note)
+	}
+
+	// Restoring is a session pick, not a saved default.
+	next := newTestSessionWithConfig(t, cfg)
+	next.restoreStartupEndpoint()
+	if got := next.Model(); got != "default-model" {
+		t.Fatalf("next session Model = %q, want config.yaml's model", got)
+	}
+}
+
+// A record from before sessions kept their endpoint, or one whose endpoint
+// is gone, leaves the session on the startup endpoint and says why.
+func TestResumeKeepsTheStartupModelWhenTheEndpointIsGone(t *testing.T) {
+	cfg := types.Config{BaseDir: t.TempDir(), Model: "default-model", BaseURL: "http://localhost:8080/v1"}
+	s := newTestSessionWithConfig(t, cfg)
+	s.restoreResumedModel("", "old-model")
+	if got := s.Model(); got != "default-model" {
+		t.Fatalf("Model = %q, want the startup model for a record without an endpoint", got)
+	}
+	s.restoreResumedModel("@gone", "gone-model")
+	if got := s.Model(); got != "default-model" {
+		t.Fatalf("Model = %q, want the startup model when the endpoint is gone", got)
+	}
+	if note := s.StartupNote(); !strings.Contains(note, "@gone") || !strings.Contains(note, "gone-model") {
+		t.Fatalf("StartupNote = %q, want it to name the endpoint and model it could not restore", note)
 	}
 }
