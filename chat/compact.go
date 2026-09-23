@@ -2,7 +2,9 @@ package chat
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/mudler/nib/types"
@@ -379,24 +381,162 @@ func HumanTokens(n int) string {
 	return formatTokenCount(n)
 }
 
+// summaryPiece is one message rendered for the summarization prompt.
+type summaryPiece struct {
+	role string
+	text string
+	// tool marks a tool result or a message that calls tools.
+	tool bool
+}
+
 // renderMessages flattens messages to plain "role: content" lines for the
-// summarization prompt, skipping system boilerplate and rendering tool calls
-// inline. A message carrying both content and tool calls renders both. Like
-// estimateTokens, this ignores m.MultiContent (multimedia parts).
-func renderMessages(msgs []openai.ChatCompletionMessage) string {
-	var b strings.Builder
+// summarization prompt, one piece per message, skipping system boilerplate and
+// rendering tool calls inline. A message carrying both content and tool calls
+// renders both. Like estimateTokens, this ignores m.MultiContent (multimedia
+// parts).
+func renderMessages(msgs []openai.ChatCompletionMessage) []summaryPiece {
+	var out []summaryPiece
 	for _, m := range msgs {
 		if m.Role == "system" {
 			continue
 		}
+		var b strings.Builder
 		if m.Content != "" {
 			fmt.Fprintf(&b, "%s: %s\n", m.Role, m.Content)
 		}
 		for _, tc := range m.ToolCalls {
 			fmt.Fprintf(&b, "%s: [tool call %s(%s)]\n", m.Role, tc.Function.Name, tc.Function.Arguments)
 		}
+		if b.Len() > 0 {
+			out = append(out, summaryPiece{role: m.Role, text: b.String(), tool: m.Role == "tool" || len(m.ToolCalls) > 0})
+		}
 	}
-	return b.String()
+	return out
+}
+
+// stubbedView returns a copy of msgs with every result in already replaced by
+// the stub the requests send in its place.
+//
+// Compaction must summarize this view, not the raw fragment. The fragment keeps
+// the full body of every stubbed result, so on a long session it grows far past
+// the window while every request still fits. Summarizing the raw fragment then
+// sends the one request that cannot fit, and compaction fails exactly when the
+// session needs it.
+func stubbedView(msgs []openai.ChatCompletionMessage, already map[string]string) []openai.ChatCompletionMessage {
+	if len(already) == 0 {
+		return msgs
+	}
+	calls := indexToolCalls(msgs)
+	out := make([]openai.ChatCompletionMessage, len(msgs))
+	copy(out, msgs)
+	for i, m := range out {
+		detail, ok := already[m.ToolCallID]
+		if m.Role != "tool" || !ok {
+			continue
+		}
+		info := calls[m.ToolCallID]
+		if info.name == "" {
+			info.name = "tool"
+		}
+		out[i].Content = prunedStub(info.name, info.path, detail)
+	}
+	return out
+}
+
+// summaryPieceKeep is how much of an over-long piece fitSummaryInput keeps: the
+// start of a message carries its role, the tool name and its arguments, which
+// is what a summary needs to record that the step happened.
+const summaryPieceKeep = 512
+
+// fitSummaryInput joins pieces into at most maxTokens (byte/4) tokens. A
+// maxTokens of zero or less means no limit.
+//
+// It gives things up in order of what a summary can best spare. First it cuts
+// long tool results and tool calls, oldest first: the model re-reads files
+// anyway, and a cut piece still records which tool ran on what. Then it cuts
+// long user and assistant messages, oldest first. Last, it drops whole pieces
+// after the first, oldest first, because the first is normally the user's
+// statement of the goal.
+func fitSummaryInput(pieces []summaryPiece, maxTokens int) string {
+	join := func() string {
+		var b strings.Builder
+		for _, p := range pieces {
+			b.WriteString(p.text)
+		}
+		return b.String()
+	}
+	total := 0
+	for _, p := range pieces {
+		total += len(p.text)
+	}
+	if maxTokens <= 0 || total/4 <= maxTokens {
+		return join()
+	}
+	pieces = append([]summaryPiece(nil), pieces...)
+	limit := maxTokens * 4
+
+	cut := func(tools bool) {
+		for i := range pieces {
+			if total <= limit {
+				return
+			}
+			if pieces[i].tool != tools || len(pieces[i].text) <= summaryPieceKeep*2 {
+				continue
+			}
+			text := pieces[i].text
+			short := text[:summaryPieceKeep] + fmt.Sprintf("\n[... %d bytes omitted to fit the summary]\n", len(text)-summaryPieceKeep)
+			total -= len(text) - len(short)
+			pieces[i].text = short
+		}
+	}
+	cut(true)
+	cut(false)
+
+	dropped := 0
+	for total > limit && len(pieces) > 1 {
+		total -= len(pieces[1].text)
+		pieces = append(pieces[:1], pieces[2:]...)
+		dropped++
+	}
+	if dropped > 0 {
+		marker := fmt.Sprintf("[... %d earlier messages omitted to fit the summary]\n", dropped)
+		pieces = append(pieces[:1], append([]summaryPiece{{text: marker}}, pieces[1:]...)...)
+	}
+	return join()
+}
+
+// summaryRetryTarget returns the prompt size to retry a summary at after the
+// backend rejected a prompt of sent (byte/4) tokens.
+//
+// byte/4 is only an estimate, and a backend can count the same text as more
+// tokens than that. The rejection states both figures in the backend's own
+// count, so their ratio corrects the estimate. The 10% margin covers the
+// estimate varying across the text. With no figures to go on, it halves.
+func summaryRetryTarget(err error, sent int) int {
+	needs, allows, ok := overflowFigures(err)
+	if !ok {
+		return sent / 2
+	}
+	return int(float64(sent) * float64(allows) / float64(needs) * 0.9)
+}
+
+// overflowFigures reads the request size and the window from an overflow
+// error, applying the same rule as learnedWindowFrom: the larger figure is the
+// request and the smaller is the limit, whatever order the backend used.
+func overflowFigures(err error) (needs, allows int, ok bool) {
+	for e := err; e != nil; e = errors.Unwrap(e) {
+		m := tokenCountRe.FindAllStringSubmatch(e.Error(), -1)
+		if !hasOverflowMarker(e.Error()) || len(m) < 2 {
+			continue
+		}
+		a, _ := strconv.Atoi(m[0][1])
+		b, _ := strconv.Atoi(m[1][1])
+		needs, allows = max(a, b), min(a, b)
+		if allows > 0 {
+			return needs, allows, true
+		}
+	}
+	return 0, 0, false
 }
 
 // CompactHistory summarizes the older portion of the conversation via the LLM
@@ -420,15 +560,37 @@ func (s *Session) compactHistory(ctx context.Context) (before, after int, err er
 
 	before = estimateTokens(msgs)
 
-	head, tail := splitForCompaction(msgs, s.compactionConfig().KeepRecent)
-	headContent := renderMessages(head)
-	if strings.TrimSpace(headContent) == "" {
+	cfg := s.compactionConfig()
+	head, tail := splitForCompaction(msgs, cfg.KeepRecent)
+	s.prunedMu.Lock()
+	head = stubbedView(head, s.prunedIDs)
+	s.prunedMu.Unlock()
+	pieces := renderMessages(head)
+	if len(pieces) == 0 {
 		return before, before, nil // nothing to compact
 	}
 
-	prompt := compactInstruction + "\n\n--- CONVERSATION ---\n" + headContent
+	// The summary prompt has to fit the same window as any other request, and
+	// the head it summarizes is by nature most of a window that just filled up.
+	const prefix = compactInstruction + "\n\n--- CONVERSATION ---\n"
+	limit := 0
+	if window := s.contextWindow(); window > 0 {
+		limit = max(ContextBudget(cfg, window)-tokensOf(prefix), 1)
+	}
+	prompt := prefix + fitSummaryInput(pieces, limit)
 	llm, _ := s.currentLLM()
 	res, aerr := llm.Ask(ctx, cogito.NewFragment().AddMessage(cogito.UserMessageRole, prompt))
+	// Exactly once: the backend's rejection states by how much the estimate was
+	// off, so a single corrected retry fits, and a second failure means the
+	// backend cannot take even the minimal prompt.
+	if aerr != nil && canRecoverFromOverflow(ctx, aerr) {
+		if res.Status != nil {
+			s.addUsage(res.Status.LastUsage)
+		}
+		limit = max(summaryRetryTarget(aerr, tokensOf(prompt))-tokensOf(prefix), 1)
+		prompt = prefix + fitSummaryInput(pieces, limit)
+		res, aerr = llm.Ask(ctx, cogito.NewFragment().AddMessage(cogito.UserMessageRole, prompt))
+	}
 	// Compaction is not free, and it fires exactly when a session has already
 	// grown expensive — so leaving it out would understate the runs that cost
 	// the most.
