@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/lipgloss"
 
@@ -22,6 +23,14 @@ const (
 
 // toolIndent is how far a tool block's body sits beneath its header.
 const toolIndent = "  "
+
+// ToolFoldLines is how many lines of a finished tool's output show while its
+// block is folded; RunningTailLines is how many trailing lines of a running
+// call's output show while its block is folded.
+const (
+	ToolFoldLines    = 12
+	RunningTailLines = 5
+)
 
 // TranscriptDiffRows caps a diff shown in the transcript; ApprovalDiffRows caps
 // one in the approval prompt, where the user decides on it and so gets more.
@@ -59,10 +68,71 @@ func ToolBlock(m Message, w int) string {
 		// A failure's output is what the user needs to read next; do not dim it.
 		style = lipgloss.NewStyle()
 	}
-	wrapped := Wrap(m.Content, bodyW)
+	lines := strings.Split(m.Content, "\n")
+	hidden := 0
+	if !m.Expanded && len(lines) > ToolFoldLines {
+		hidden = len(lines) - ToolFoldLines
+		lines = lines[:ToolFoldLines]
+	}
+	writeToolLines(&b, lines, style, bodyW)
+	switch {
+	case hidden > 0:
+		b.WriteString(toolIndent + theme.Hint.Render(fmt.Sprintf(theme.ToolMore, hidden)+theme.ReasoningExpand) + "\n")
+	case m.Expanded && len(lines) > ToolFoldLines:
+		b.WriteString(toolIndent + theme.Hint.Render(theme.ReasoningCollapse) + "\n")
+	}
+	return b.String()
+}
+
+// writeToolLines writes output lines beneath a tool header: each wrapped to w,
+// indented and styled.
+func writeToolLines(b *strings.Builder, lines []string, style lipgloss.Style, w int) {
+	wrapped := Wrap(strings.Join(lines, "\n"), w)
 	for _, line := range strings.Split(strings.TrimRight(wrapped, "\n"), "\n") {
 		b.WriteString(toolIndent + style.Render(line) + "\n")
 	}
+}
+
+// RunningTool is a root-agent tool call that has started and not finished.
+type RunningTool struct {
+	Label   string        // the call summary, as Message.Label
+	Elapsed time.Duration // time since the call started
+	// Hint is a dim key hint after the elapsed time ("ctrl+b background"),
+	// or "" for none.
+	Hint string
+	// Output is what the call has printed so far; only a shell command has
+	// any before it ends.
+	Output string
+	// Expanded shows all of Output; folded, only its last RunningTailLines.
+	Expanded bool
+}
+
+// RunningToolBlock renders a running call: a header whose mark pulses, with
+// the elapsed time once it reaches a second, then the output so far. Folded,
+// it tails the output, with the fold row above the tail so the newest line
+// stays last and the block reads as live progress.
+func RunningToolBlock(r RunningTool, w int) string {
+	var meta []string
+	if r.Elapsed >= time.Second {
+		meta = append(meta, theme.Elapsed(r.Elapsed))
+	}
+	if r.Hint != "" {
+		meta = append(meta, r.Hint)
+	}
+	var b strings.Builder
+	b.WriteString(toolHeaderMarked(theme.RunningDotAt(r.Elapsed), r.Label, strings.Join(meta, " "+theme.Sep+" "), "", 0, w))
+	b.WriteString("\n")
+	out := strings.TrimRight(r.Output, "\n")
+	if strings.TrimSpace(out) == "" {
+		return b.String()
+	}
+	lines := strings.Split(out, "\n")
+	if !r.Expanded && len(lines) > RunningTailLines {
+		hidden := len(lines) - RunningTailLines
+		lines = lines[hidden:]
+		b.WriteString(toolIndent + theme.Hint.Render(fmt.Sprintf(theme.ToolMore, hidden)+theme.ReasoningExpand) + "\n")
+	}
+	writeToolLines(&b, lines, theme.ToolOutput, w-lipgloss.Width(toolIndent))
 	return b.String()
 }
 
@@ -88,6 +158,12 @@ func toolHeader(label, meta, agentID string, status ToolStatus, arriving float64
 	default:
 		mark = fade(theme.Subtle).Render(theme.Sep)
 	}
+	return toolHeaderMarked(mark, label, meta, agentID, arriving, w)
+}
+
+// toolHeaderMarked is toolHeader with the mark already rendered.
+func toolHeaderMarked(mark, label, meta, agentID string, arriving float64, w int) string {
+	fade := func(s lipgloss.Style) lipgloss.Style { return theme.Fading(s, arriving) }
 	head := mark + " "
 	if agentID != "" {
 		head += fade(theme.Subtle).Render(theme.SubAgent+" "+ShortID(agentID)) + theme.SepStyle.Render(" "+theme.Sep+" ")

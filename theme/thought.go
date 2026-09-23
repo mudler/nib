@@ -12,12 +12,18 @@ func ThoughtSummary(d time.Duration) string {
 	if d <= 0 {
 		return ThoughtLabel
 	}
+	return ThoughtFor + Elapsed(d)
+}
+
+// Elapsed renders a duration to the second: "4s", "2m 5s". It rounds to the
+// nearest second and never reads below "1s".
+func Elapsed(d time.Duration) string {
 	secs := int((d + time.Second/2) / time.Second)
 	if secs < 1 {
 		secs = 1
 	}
 	if secs < 60 {
-		return ThoughtFor + strconv.Itoa(secs) + "s"
+		return strconv.Itoa(secs) + "s"
 	}
-	return ThoughtFor + strconv.Itoa(secs/60) + "m " + strconv.Itoa(secs%60) + "s"
+	return strconv.Itoa(secs/60) + "m " + strconv.Itoa(secs%60) + "s"
 }

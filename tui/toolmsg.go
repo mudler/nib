@@ -28,7 +28,7 @@ func toolMessage(res chat.ToolResult) ChatMessage {
 		if e := resultError(res.Result); e != "" {
 			msg.Content = e
 		} else {
-			msg.Content = chat.PreviewResult(res.Name, res.Result, toolResultPreviewLines)
+			msg.Content = chat.PreviewResult(res.Name, res.Result, toolOutputKeepLines)
 		}
 		return msg
 	}
@@ -47,7 +47,7 @@ func toolMessage(res chat.ToolResult) ChatMessage {
 	case "write":
 		return msg
 	}
-	msg.Content = chat.PreviewResult(res.Name, res.Result, toolResultPreviewLines)
+	msg.Content = chat.PreviewResult(res.Name, res.Result, toolOutputKeepLines)
 	return msg
 }
 

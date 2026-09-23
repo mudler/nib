@@ -48,9 +48,20 @@ const CursorPulsePeriod = 1200 * time.Millisecond
 // started. It breathes between Faint and Accent on a sine, so it reads as
 // alive without blinking hard.
 func StreamCursorAt(elapsed time.Duration) string {
+	return lipgloss.NewStyle().Foreground(pulseInk(elapsed)).Render(StreamCursor)
+}
+
+// RunningDotAt renders the mark of a tool block whose call is still running,
+// breathing on the same sine as the streaming cursor.
+func RunningDotAt(elapsed time.Duration) string {
+	return lipgloss.NewStyle().Foreground(pulseInk(elapsed)).Render(RunningDot)
+}
+
+// pulseInk is the ink at elapsed time into a breath between Faint and Accent.
+func pulseInk(elapsed time.Duration) lipgloss.Color {
 	phase := float64(elapsed%CursorPulsePeriod) / float64(CursorPulsePeriod)
 	t := (1 - math.Cos(2*math.Pi*phase)) / 2
-	return lipgloss.NewStyle().Foreground(Blend(Faint, Accent, 0.35+0.65*t)).Render(StreamCursor)
+	return Blend(Faint, Accent, 0.35+0.65*t)
 }
 
 // FadeDuration is how long a new transcript entry takes to reach its full ink.
