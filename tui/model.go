@@ -1555,6 +1555,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case sessionReadyMsg:
+		// A new session: suggestions from the old one answer nothing here.
+		m.resetSuggestion()
 		if msg.err != nil {
 			m.err = msg.err
 			// Every other footer-state mutator routes through updateViewport
