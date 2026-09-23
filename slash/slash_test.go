@@ -275,11 +275,11 @@ func TestResolveModelsForOneEndpoint(t *testing.T) {
 
 func TestResolveApprove(t *testing.T) {
 	for in, want := range map[string]string{
-		"/approve":          "",
-		"/approve classify": "classify",
-		"/approve AUTO":     "auto",
-		"/approve prompt":   "prompt",
-		"/approve strict":   "strict",
+		"/approve":           "",
+		"/approve classify":  "classify",
+		"/approve AUTO":      "auto",
+		"/approve prompt":    "prompt",
+		"/approve strict":    "strict",
 		"/approve allowlist": "allowlist",
 	} {
 		got := Resolve(in, nil, nil, nil)
