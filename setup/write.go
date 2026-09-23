@@ -59,6 +59,14 @@ func Save(cfg types.Config) (string, error) {
 	existing["model"] = cfg.Model
 	existing["api_key"] = cfg.APIKey
 	existing["base_url"] = cfg.BaseURL
+	if cfg.Classifier.Model != "" {
+		cl, _ := existing["classifier"].(map[string]any)
+		if cl == nil {
+			cl = map[string]any{}
+		}
+		cl["model"] = cfg.Classifier.Model
+		existing["classifier"] = cl
+	}
 
 	out, err := yaml.Marshal(existing)
 	if err != nil {
