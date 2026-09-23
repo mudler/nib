@@ -63,6 +63,7 @@ Think of it as the **`fzf` for LLMs**: portable, keyboard-driven, composable, an
 - **`Ctrl+Space` anywhere** — summon nib straight from your shell prompt; inline like `fzf`, or a tmux split when you're in tmux.
 - **Two modes** — a polished TUI, or a plain `--cli` mode for pipes and scripts.
 - **Tool execution with approval** — the AI proposes commands; you approve, deny, edit, or trust for the session.
+- **Classifier approval & reply suggestions** — a small local classifier (e.g. GLiNER on LocalAI) can approve safe calls for you, and suggests your next reply as grey text that `Tab` accepts.
 - **Sub-agents & background jobs** — delegate to typed sub-agents; background them (`Ctrl+B`) and watch the jobs footer (`Ctrl+J`).
 - **Plugins** — `nib plugin install <git-url|local-path|zip|catalog-name>`; six contribution types; Claude-Code-plugin compatible.
 - **Skills** — `nib skill install <git-url|local-path|zip|url|catalog-name>`; progressive-disclosure skill packs loaded on demand.
@@ -245,6 +246,25 @@ does serve. If the lookup fails or the endpoint advertises nothing (it is
 bounded at 3 seconds, since it runs on the goroutine that draws the prompt),
 the switch still goes through and is marked unverified: a broken endpoint may
 be the very reason you are switching. Both the TUI and `--cli` support this.
+
+### Reply suggestions
+
+When a [classifier](#classifier-approval-classify-mode) is configured, the TUI
+suggests your next reply. A turn ends, you wait half a second without typing,
+and the most likely reply shows as grey text in the composer:
+
+```
+› run the tests
+```
+
+Press `Tab` to put it in the composer as if you had typed it. Nothing is sent
+until you press Enter, so you can edit it first. While you type, the grey text
+follows the best suggestion that starts with your text; `Tab` completes it.
+
+The candidates are the stock `suggestions.replies`, your own recent short
+messages in the session, and the options the assistant asked you to choose
+between ("Postgres or SQLite?"). The classifier ranks them against the
+assistant's last message. Set `suggestions.disabled: true` to turn them off.
 
 ## Plugins
 
@@ -429,6 +449,32 @@ prompt_injection_protection:
     api_key: local
     base_url: http://localhost:8080/v1
 
+# Optional: a small classification model, reached through the SystemOne API
+# (LocalAI with a GLiNER model, vllm.cpp, or kev). approval_mode: classify and
+# the TUI's reply suggestions use it. Unrelated to the LLM classifier above.
+classifier:
+  endpoint: home-localai   # a name under endpoints:; omit for the top-level base_url
+  model: gliner2.5         # optional
+  timeout: 2s              # per request (default 2s)
+
+# Optional: what approval_mode: classify may approve without asking.
+# Categories: inspect, build_test, local_edit, destructive, network, system.
+auto_approve:
+  allow: [inspect, build_test]   # default
+  threshold: 0.85                # min classifier confidence (default)
+
+# Optional: TUI reply suggestions (on when a classifier is configured).
+suggestions:
+  disabled: false
+  threshold: 0.5           # min confidence to show a suggestion (default)
+  delay: 500ms             # idle time after a turn before asking (default)
+  replies:                 # stock candidates (default below)
+    - continue
+    - yes, go ahead
+    - run the tests
+    - fix it
+    - commit it
+
 # For either role, provider: codex defaults to `codex app-server --stdio`.
 # Codex retains the ChatGPT OAuth credentials; nib communicates over stdio and
 # never reads the token. On Nix, make Codex available on PATH with
@@ -463,6 +509,8 @@ agent_options:
 #               `ls`, `cat`, `git status`, `go list`). Mutating calls prompt.
 #   strict    — ask before EVERY tool call, including read-only ones
 #   allowlist — auto-approve the tools in allowed_tools, prompt for the rest
+#   classify  — like prompt, but the classifier (classifier:) may approve a
+#               call first; see auto_approve and Tool Approval below
 #   auto      — approve every tool call without prompting
 approval_mode: prompt
 allowed_tools:
@@ -608,6 +656,40 @@ In the **TUI**, approval is a single keypress (no Enter):
 - `e` — edit the call, then submit
 
 (`y`/`a`/`A` still work as aliases for `1`/`2`/`3`.)
+
+### Classifier approval (`classify` mode)
+
+With `approval_mode: classify`, a small classifier looks at each call that
+would prompt you. It puts the call in one category: `inspect`, `build_test`,
+`local_edit`, `destructive`, `network` or `system`. When the category is in
+`auto_approve.allow` (default `inspect` and `build_test`) and its confidence
+is at least `auto_approve.threshold` (default 0.85), the call runs without a
+prompt, and the transcript shows a line such as
+`auto-approved · build_test 0.93 · $ go test ./...`.
+
+Anything else prompts as usual, and the prompt shows the verdict
+(`classifier: destructive (0.82)`). The classifier never denies a call. It
+runs only where a prompt would have: hooks, grants, read-only calls and the
+external-data boundary of `prompt_injection_protection` all come first. If
+the classifier is slow or unreachable, you get the prompt
+(`classifier: unavailable`).
+
+The classifier is any server that speaks the SystemOne API
+(`POST {base_url}/systemone`), for example LocalAI with a GLiNER model on the
+vllm-cpp backend. Configure it with the `classifier` block (see
+[Configuration](#configuration)). If `nib setup` finds a GLiNER model on your
+endpoint, it offers to configure it for you.
+
+### Switching modes
+
+- `Shift+Tab` in the TUI cycles your configured mode → `classify` → `auto`
+  and back. Without a classifier it skips `classify`.
+- `/approve prompt|strict|allowlist|classify|auto` sets a mode for this
+  session, in the TUI and the CLI. Bare `/approve` shows the current one.
+- The header shows a `classify` badge, or the `yolo` badge in `auto`.
+
+These changes last for the session. `/settings approval_mode …` also writes
+the mode to the config file.
 
 In the **CLI** (`--cli`) the prompt is line-based: type `y`, `a`, `all`, `n`, or a free-form
 change, then Enter. Read-only calls (reads, searches, safe read-only shell) already skip the
