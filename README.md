@@ -186,6 +186,23 @@ sub-agent finishes, its line reports the same: `sub-agent explore finished · 3 
 usage report. When the backend reports no usage, nib counts the streamed output
 and marks it with `~`.
 
+### Watching tool calls
+
+A tool call shows in the TUI as soon as it starts. Its line has a pulsing `●`,
+the call, and the time it has run. A shell command also shows the last lines of
+its output as it prints them, and the hint `ctrl+b background`:
+
+```
+● $ go test ./...  12s · ctrl+b background
+  … 38 more lines · ctrl+r expand
+  ok   github.com/mudler/nib/chat   3.1s
+  ok   github.com/mudler/nib/mcp    1.4s
+```
+
+When the call finishes, its block shows the first 12 lines of the output. Press
+`Ctrl+R` to expand or fold all tool output and model thinking together. In
+full-screen mode, click a block to expand or fold only that block.
+
 ### `/loop` — recurring & self-paced tasks
 
 - `/loop 5m /foo` — run `/foo` (a slash command or prompt) every 5 minutes.

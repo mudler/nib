@@ -91,6 +91,13 @@ type ToolResult struct {
 	Change *FileChange
 }
 
+// ToolStart announces an approved root-agent tool call that is about to run,
+// so a UI can show it while it runs. Its ToolResult follows when it finishes.
+type ToolStart struct {
+	Name      string
+	Arguments string // marshaled JSON of the call's arguments
+}
+
 // ToolCallResponse represents the user's decision on a tool call.
 type ToolCallResponse struct {
 	Approved    bool
@@ -157,6 +164,9 @@ type Callbacks struct {
 	OnStepContent func(content string)
 	OnResponse    func(response string)
 	OnError       func(err error)
+	// OnToolStart is called when an approved root-agent tool call is about
+	// to run. OnToolResult reports the same call when it ends. Optional.
+	OnToolStart func(ts ToolStart)
 	// OnToolResult is called after a tool finishes, with its output. Optional.
 	OnToolResult func(res ToolResult)
 	// OnAgentEvent is called on sub-agent lifecycle changes. Optional.

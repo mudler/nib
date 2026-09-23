@@ -652,6 +652,16 @@ func (s *Session) emitSubAgentToolLine(approved bool, agentID, name, args string
 	s.callbacks.OnToolResult(ToolResult{Name: name, Arguments: args, AgentID: agentID})
 }
 
+// emitToolStart tells the UI that an approved root-agent call is about to
+// run. A sub-agent's call is not announced here (emitSubAgentToolLine covers
+// it), and a denied call never runs.
+func (s *Session) emitToolStart(approved bool, agentID, name, args string) {
+	if !approved || agentID != "" || s.callbacks.OnToolStart == nil {
+		return
+	}
+	s.callbacks.OnToolStart(ToolStart{Name: name, Arguments: args})
+}
+
 func (s *Session) decideToolCall(req ToolCallRequest) cogito.ToolCallDecision {
 	req.ExternalSources = s.activeExternalSourceIDs()
 	// Once external data has entered the conversation, consequential actions
@@ -1591,6 +1601,7 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 				s.changes.put(changeKey(tool.ID, tool.Name, string(args)), change)
 			}
 			s.emitSubAgentToolLine(decision.Approved, state.AgentID, tool.Name, string(args))
+			s.emitToolStart(decision.Approved, state.AgentID, tool.Name, string(args))
 			return decision
 		}),
 		cogito.WithToolCallResultCallback(func(status cogito.ToolStatus) {

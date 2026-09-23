@@ -61,6 +61,9 @@ type ChatMessage struct {
 	// arrived is when the entry joined the transcript; its chrome fades in
 	// from it (see arriving). Zero means drawn at full ink.
 	arrived time.Time
+	// flipped inverts the ctrl+r fold state for this tool entry alone (a
+	// click on it). ctrl+r clears it.
+	flipped bool
 }
 
 type sessionStore interface {
@@ -377,6 +380,13 @@ type Model struct {
 	// Update, which compares a translated click row against this span.
 	reasoningSpanStart int
 	reasoningSpanEnd   int
+	// toolSpans records where each tool block (finished or running) sits in
+	// the viewport for THIS render, for click-to-fold; recomputed on every
+	// updateViewport pass, like the reasoning span.
+	toolSpans []toolSpan
+	// running holds the root-agent tool calls that have started and not
+	// finished, drawn live below the transcript (see running.go).
+	running []runningTool
 	// err holds the most recent fatal error, shown as a persistent banner
 	// above the composer. It is set only for errors that leave the session
 	// unusable (session init failure) — a failed turn already records its
@@ -529,6 +539,7 @@ type Model struct {
 	toolRequestChan  chan chat.ToolCallRequest
 	toolResponseChan chan chat.ToolCallResponse
 	toolResultChan   chan chat.ToolResult
+	toolStartChan    chan chat.ToolStart
 	autoApprovedChan chan autoApprovedMsg
 	// suggest is the reply autosuggestion shown in the composer.
 	suggest suggestState
@@ -688,8 +699,14 @@ type askMsg chat.AskRequest
 // agentEventMsg is sent for sub-agent lifecycle updates.
 type agentEventMsg chat.AgentEvent
 
-// toolResultPreviewLines bounds how many lines of a tool result we show inline.
+// toolResultPreviewLines bounds how many lines of a sub-agent's result we
+// show inline.
 const toolResultPreviewLines = 12
+
+// toolOutputKeepLines bounds how many lines of a tool's output its transcript
+// entry keeps. The block shows render.ToolFoldLines of them until it is
+// expanded; past this cap even an expanded block is cut short.
+const toolOutputKeepLines = 1000
 
 // spinnerFPS matches the 80ms frame advance used by comparable harnesses —
 // fast enough to read as motion, slow enough to stay off the CPU.
@@ -775,6 +792,7 @@ func NewModel(ctx context.Context, cfg types.Config, height int, shellJobs *wizm
 		toolRequestChan:    make(chan chat.ToolCallRequest),
 		toolResponseChan:   make(chan chat.ToolCallResponse),
 		toolResultChan:     make(chan chat.ToolResult, 64),
+		toolStartChan:      make(chan chat.ToolStart, 64),
 		autoApprovedChan:   make(chan autoApprovedMsg, 64),
 		askRequestChan:     make(chan chat.AskRequest),
 		askResponseChan:    make(chan string),
@@ -1022,6 +1040,12 @@ func (m Model) initSession() tea.Cmd {
 			OnAutoApproved: func(req chat.ToolCallRequest, v chat.Verdict) {
 				select {
 				case m.autoApprovedChan <- autoApprovedMsg{req: req, verdict: v}:
+				default:
+				}
+			},
+			OnToolStart: func(ts chat.ToolStart) {
+				select {
+				case m.toolStartChan <- ts:
 				default:
 				}
 			},
@@ -1367,8 +1391,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case tea.KeyCtrlR:
 			// Toggle the live reasoning trace between its tailing collapsed
 			// box and its full expanded form. Per-session state, so it
-			// persists across turns until the user toggles it again.
+			// persists across turns until the user toggles it again. Tool
+			// output folds with it, and a block the user clicked open or shut
+			// follows the rest again.
 			m.reasoningCollapsed = !m.reasoningCollapsed
+			m.clearToolFlips()
 			m.updateViewport()
 			return m, nil
 
@@ -1567,6 +1594,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.updateViewport()
 				return m, nil
 			}
+			if span, ok := m.toolBlockHit(msg.Y); ok {
+				m.toggleToolBlock(span)
+				m.updateViewport()
+				return m, nil
+			}
 		}
 
 	case tea.WindowSizeMsg:
@@ -1623,7 +1655,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.appendMessage(ChatMessage{Role: "agent", Content: fmt.Sprintf("Reloaded %d durable loop(s).", n)})
 		}
 		// Start listening for callbacks
-		cmds = append(cmds, m.listenStatus(), m.listenReasoningEvents(), m.listenToolRequest(), m.listenToolResult(), m.listenAutoApproved(), m.listenAskRequest(), m.listenAgentEvents(), m.shellTick(), m.loopTick(), m.listenWakeup(), m.listenCronFire(), m.listenPark(), m.listenCompact(), m.listenPrune())
+		cmds = append(cmds, m.listenStatus(), m.listenReasoningEvents(), m.listenToolRequest(), m.listenToolResult(), m.listenToolStart(), m.listenAutoApproved(), m.listenAskRequest(), m.listenAgentEvents(), m.shellTick(), m.loopTick(), m.listenWakeup(), m.listenCronFire(), m.listenPark(), m.listenCompact(), m.listenPrune())
 
 	case bootTickMsg:
 		if m.boot != nil {
@@ -1682,6 +1714,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.status = ""
 		m.stopThinking()
 		m.endThoughtStep()
+		// The turn is over, so a call still marked running will not report.
+		m.clearRunning()
 		m.reasoningResetPending = false
 		// The turn is over: move the generation now, not only at the next
 		// dispatch. A boundary or delta this turn sent just before it
@@ -1817,6 +1851,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// must not land in the box after this reset.
 			m.bumpTurnGen()
 			m.stopThinking()
+			m.clearRunning()
 			if m.isWorking() {
 				m.status = "Working in the background — type to add a follow-up"
 			} else {
@@ -2171,10 +2206,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.updateViewportFollow()
 		return m, m.listenAutoApproved()
 
+	case toolStartMsg:
+		m.startTool(chat.ToolStart(msg))
+		m.updateViewport()
+		cmds = append(cmds, m.listenToolStart())
+
 	case toolResultMsg:
 		res := chat.ToolResult(msg)
 		if res.AgentID == "" {
-			// Root agent: stream the result inline with its (previewed) body.
+			// Root agent: the running block gives way to the finished one.
+			m.finishTool(res)
 			m.appendMessage(toolMessage(res))
 			m.updateViewport()
 		} else {
@@ -2785,6 +2826,18 @@ func (m Model) listenToolRequest() tea.Cmd {
 		select {
 		case req := <-m.toolRequestChan:
 			return toolCallMsg(req)
+		case <-m.ctx.Done():
+			return nil
+		}
+	}
+}
+
+// listenToolStart listens for tool calls that start running.
+func (m Model) listenToolStart() tea.Cmd {
+	return func() tea.Msg {
+		select {
+		case ts := <-m.toolStartChan:
+			return toolStartMsg(ts)
 		case <-m.ctx.Done():
 			return nil
 		}
@@ -3541,6 +3594,7 @@ func (m *Model) updateViewport() {
 
 	prevRole := render.RoleNone
 	lastAgent := "" // id of the agent whose line was rendered last, "" for non-agent
+	m.toolSpans = nil
 	for i := 0; i < len(m.messages); i++ {
 		msg := m.messages[i]
 
@@ -3608,6 +3662,7 @@ func (m *Model) updateViewport() {
 			}, prevRole, contentWidth))
 			prevRole = render.RoleAgent
 		case "tool":
+			toolStart := strings.Count(sb.String(), "\n")
 			sb.WriteString(presenter.Message(render.Message{
 				Role:    render.RoleTool,
 				Content: msg.Content,
@@ -3616,6 +3671,9 @@ func (m *Model) updateViewport() {
 				Meta:    msg.Meta,
 				Status:  msg.Status,
 				Diff:    msg.Diff,
+				// ctrl+r folds tool output with the thinking; a click flips
+				// one block.
+				Expanded: m.toolsExpanded() != msg.flipped,
 				// Fades in like every other entry (see render.ToolBlock).
 				Arriving: m.arriving(msg),
 				// A one-line tool block (a collapsed read, a bare write) hugs
@@ -3623,6 +3681,7 @@ func (m *Model) updateViewport() {
 				// rather than a column of blank-separated lines.
 				HugNext: msg.bodyless() && i+1 < len(m.messages) && m.messages[i+1].Role == "tool",
 			}, prevRole, contentWidth))
+			m.toolSpans = append(m.toolSpans, toolSpan{start: toolStart, end: strings.Count(sb.String(), "\n"), index: i})
 			prevRole = render.RoleTool
 		case "error":
 			sb.WriteString(presenter.Message(render.Message{Role: render.RoleError, Content: msg.Content, Arriving: m.arriving(msg)}, prevRole, contentWidth))
@@ -3656,6 +3715,19 @@ func (m *Model) updateViewport() {
 	// pass (never cached across frames) — see reasoningSpanStart/End's doc
 	// comment on Model. An empty Reasoning() write (not loading, or no trace
 	// yet) leaves start == end, an empty span nothing can click.
+	// Calls still running sit between the transcript and the working
+	// indicator. A block with no output yet hugs the next one, so parallel
+	// calls stack as a list.
+	for i, r := range m.running {
+		start := strings.Count(sb.String(), "\n")
+		rb := m.runningBlock(r)
+		sb.WriteString(render.RunningToolBlock(rb, contentWidth))
+		if strings.TrimSpace(rb.Output) != "" || i == len(m.running)-1 {
+			sb.WriteString("\n")
+		}
+		m.toolSpans = append(m.toolSpans, toolSpan{start: start, end: strings.Count(sb.String(), "\n"), index: i, running: true})
+	}
+
 	reasoningStart := strings.Count(sb.String(), "\n")
 	reasoningOut := presenter.Reasoning(vs, contentWidth)
 	sb.WriteString(reasoningOut)

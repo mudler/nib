@@ -67,6 +67,7 @@ var (
 	DiffGap        = "⋯"  // elided unchanged lines between two diff hunks
 	NoticeGlyph    = "∙"  // housekeeping notice (context pruned / compacted)
 	StreamCursor   = "▍"  // end of a reply that is still streaming
+	RunningDot     = "●"  // pulses on a tool block while its call runs
 
 	// RadioOn/RadioOff mark a single-select ask_user option; CheckOn/CheckOff
 	// mark a multi-select one. Cursor marks whichever row is highlighted,
@@ -137,6 +138,7 @@ func applyGlyphProfile() {
 		DiffGap = "..."
 		NoticeGlyph = "-"
 		StreamCursor = "_"
+		RunningDot = "*"
 		RadioOn, RadioOff = "(*)", "( )"
 		CheckOn, CheckOff = "[x]", "[ ]"
 		Cursor = ">"
@@ -157,6 +159,7 @@ func applyGlyphProfile() {
 	DiffGap = "⋯"
 	NoticeGlyph = "∙"
 	StreamCursor = "▍"
+	RunningDot = "●"
 	RadioOn, RadioOff = "◉", "○"
 	CheckOn, CheckOff = "◼", "◻"
 	Cursor = "▸"
