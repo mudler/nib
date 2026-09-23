@@ -503,6 +503,10 @@ type Model struct {
 	autoApprovedChan chan autoApprovedMsg
 	// suggest is the reply autosuggestion shown in the composer.
 	suggest suggestState
+	// classifierOverride is the /classifier choice for this session, kept
+	// over config.yaml's classifier block across session rebuilds. Nil
+	// means none was made.
+	classifierOverride *types.ClassifierConfig
 	// reasoningChan carries BOTH step-boundary reasoning (Callbacks.OnReasoning,
 	// the COMPLETE block for a step) and live streamed reasoning deltas
 	// (Callbacks.OnStream's "reasoning" kind), as a single ordered stream of
@@ -1123,7 +1127,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.modelPicker.backspace()
 			case tea.KeyEnter:
 				if choice, ok := m.modelPicker.choice(); ok {
-					if target := m.modelPicker.target; target != nil {
+					if target := m.modelPicker.target; target != nil && m.modelPicker.forClassifier {
+						m.useClassifier(target.ID, choice, false)
+					} else if target != nil {
 						if err := m.session.SwitchProvider(target.ID, choice); err != nil {
 							m.appendMessage(ChatMessage{Role: "error", Content: err.Error()})
 						} else {
@@ -1573,6 +1579,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.session.SetAutoApprove(*m.carryAutoApprove)
 			m.carryAutoApprove = nil
 		}
+		m.applyClassifierOverride()
 		if m.boot != nil {
 			m.boot.markReady(&m)
 			// A resumed session already has a conversation to show; the
@@ -2343,6 +2350,16 @@ func (m *Model) dispatchResolved(input string) tea.Cmd {
 		return nil
 	case slash.KindApprove:
 		m.setApprovalMode(action.Mode)
+		return nil
+	case slash.KindClassifier:
+		switch {
+		case action.ClassifierOff:
+			m.useClassifier("", "", true)
+		case action.Endpoint != "":
+			m.useClassifier(action.Endpoint, action.Model, false)
+		default:
+			m.openProviderPicker(pickerClassifier)
+		}
 		return nil
 	case slash.KindYolo:
 		on := !m.session.AutoApprove()

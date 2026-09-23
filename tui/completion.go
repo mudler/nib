@@ -48,6 +48,7 @@ func buildCompItems(cmds []types.CommandConfig, skills []types.Skill, agents []t
 		compItem{Cat: compBuiltin, Name: theme.CompAttachName, Desc: theme.CompAttachDesc, Insert: "/" + theme.CompAttachName + " "},
 		compItem{Cat: compBuiltin, Name: theme.CompYoloName, Desc: theme.CompYoloDesc, Insert: "/" + theme.CompYoloName + " "},
 		compItem{Cat: compBuiltin, Name: theme.CompApproveName, Desc: theme.CompApproveDesc, Insert: "/" + theme.CompApproveName + " "},
+		compItem{Cat: compBuiltin, Name: theme.CompClassifierName, Desc: theme.CompClassifierDesc, Insert: "/" + theme.CompClassifierName + " "},
 		compItem{Cat: compBuiltin, Name: theme.CompResumeName, Desc: theme.CompResumeDesc, Insert: "/" + theme.CompResumeName + " "},
 		compItem{Cat: compBuiltin, Name: theme.CompEndpointName, Desc: theme.CompEndpointDesc, Insert: "/" + theme.CompEndpointName + " "},
 		compItem{Cat: compBuiltin, Name: theme.CompAboutName, Desc: theme.CompAboutDesc, Insert: "/" + theme.CompAboutName + " "},

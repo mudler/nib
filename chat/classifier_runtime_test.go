@@ -84,3 +84,23 @@ func TestSetClassifierAppliesToTheGate(t *testing.T) {
 		t.Fatalf("after removal: asked = %v, classifier calls = %d", asked, f.calls)
 	}
 }
+
+func TestClassifierChoice(t *testing.T) {
+	base := types.ClassifierConfig{API: "systemone", Timeout: 3}
+	for _, tc := range []struct {
+		id, model, wantEndpoint string
+		wantErr                 bool
+	}{
+		{"@home", "g", "home", false},
+		{"home", "g", "home", false},
+		{"config", "g", "", false},
+		{"config.yaml", "g", "", false},
+		{"config", "", "", true},
+		{"home", "", "home", false},
+	} {
+		c, err := ClassifierChoice(base, tc.id, tc.model)
+		if (err != nil) != tc.wantErr || (err == nil && (c.Endpoint != tc.wantEndpoint || c.Model != tc.model || c.API != "systemone" || c.Timeout != 3)) {
+			t.Errorf("%q %q: got %+v, %v", tc.id, tc.model, c, err)
+		}
+	}
+}

@@ -21,6 +21,9 @@ type modelPicker struct {
 	// target is the provider being switched to (a /login pick), or nil for
 	// the session's current provider (/model).
 	target *chat.ProviderEntry
+	// forClassifier means the pick sets the session's classifier model on
+	// target (/classifier), not the chat model.
+	forClassifier bool
 	// typed means no model list is available for target: the query itself
 	// is the model name Enter uses.
 	typed bool
@@ -169,6 +172,8 @@ func (m Model) buildModelPickerDialog() render.Dialog {
 	// only offers the current provider's, and without its name a /login pick
 	// and config.yaml's endpoint look the same.
 	switch {
+	case p.target != nil && p.forClassifier:
+		search = theme.ClassifierPickerTitle + " " + p.target.Name + " model " + search
 	case p.target != nil:
 		search = p.target.Name + " model " + search
 	case m.session != nil:

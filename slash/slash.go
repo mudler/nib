@@ -21,22 +21,23 @@ type Kind int
 // Command verbs — typed constants to avoid string literals scattered
 // through the switch in Resolve and its helpers.
 const (
-	cmdSkill    = "skill"
-	cmdAgent    = "agent"
-	cmdCompact  = "compact"
-	cmdModels   = "models"
-	cmdModel    = "model"
-	cmdLoop     = "loop"
-	cmdYolo     = "yolo"
-	cmdApprove  = "approve"
-	cmdGoal     = "goal"
-	cmdResume   = "resume"
-	cmdLogin    = "login"
-	cmdLogout   = "logout"
-	cmdAttach   = "attach"
-	cmdSettings = "settings"
-	cmdEndpoint = "endpoint"
-	cmdAbout    = "about"
+	cmdSkill      = "skill"
+	cmdAgent      = "agent"
+	cmdCompact    = "compact"
+	cmdModels     = "models"
+	cmdModel      = "model"
+	cmdLoop       = "loop"
+	cmdYolo       = "yolo"
+	cmdApprove    = "approve"
+	cmdClassifier = "classifier"
+	cmdGoal       = "goal"
+	cmdResume     = "resume"
+	cmdLogin      = "login"
+	cmdLogout     = "logout"
+	cmdAttach     = "attach"
+	cmdSettings   = "settings"
+	cmdEndpoint   = "endpoint"
+	cmdAbout      = "about"
 
 	// /attach sub-verbs
 	cmdAttachClear = "clear"
@@ -90,6 +91,7 @@ const (
 	KindModelReset             // drop the saved model override for the current endpoint
 	KindAbout                  // print version, config paths, and tool inventory
 	KindApprove                // set the approval mode (Mode), or show it when Mode is empty
+	KindClassifier             // set the classifier (Endpoint, Model), turn it off, or pick one
 )
 
 // AttachOp enumerates the /attach sub-operations.
@@ -110,6 +112,9 @@ type Action struct {
 	Model  string // for KindModelSet: the model to switch to
 	YoloOn *bool  // for KindYolo: nil = toggle, non-nil = set explicitly (on/off)
 	Mode   string // for KindApprove: the approval mode, empty = show the current one
+	// ClassifierOff is /classifier off. KindClassifier also uses Endpoint
+	// and Model; both empty opens the picker.
+	ClassifierOff bool
 
 	// Resume actions:
 	ResumeAll bool   // KindResume: widen the picker to sessions from any cwd
@@ -224,6 +229,20 @@ func Resolve(input string, cmds []types.CommandConfig, skills []types.Skill, age
 			return Action{Kind: KindApprove, Mode: mode}
 		default:
 			return Action{Kind: KindError, Err: theme.ApproveUsage}
+		}
+	case cmdClassifier:
+		args := strings.Fields(rest)
+		switch {
+		case len(args) == 0:
+			return Action{Kind: KindClassifier}
+		case len(args) == 1 && strings.EqualFold(args[0], "off"):
+			return Action{Kind: KindClassifier, ClassifierOff: true}
+		case len(args) == 1:
+			return Action{Kind: KindClassifier, Endpoint: args[0]}
+		case len(args) == 2:
+			return Action{Kind: KindClassifier, Endpoint: args[0], Model: args[1]}
+		default:
+			return Action{Kind: KindError, Err: theme.ClassifierUsage}
 		}
 	case cmdGoal:
 		return resolveGoal(rest)

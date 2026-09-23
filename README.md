@@ -708,6 +708,21 @@ endpoint, it offers to configure it for you.
 These changes last for the session. `/settings approval_mode …` also writes
 the mode to the config file.
 
+### Changing the classifier at runtime
+
+- `/classifier` opens a picker: pick one of your endpoints (config.yaml's own,
+  or a named one), then one of the models it lists. In the CLI, bare
+  `/classifier` shows the one in use.
+- `/classifier <endpoint> [model]` sets it directly, for example
+  `/classifier home-localai gliner2.5`. Use `config` for config.yaml's own
+  endpoint.
+- `/classifier off` removes it. In `classify` mode, nib falls back to
+  `prompt`.
+
+Like `/approve`, these last for the session. `/settings` changes to
+`classifier.*`, `auto_approve.*` and `suggestions.*` also apply at once, and
+are saved to the config file.
+
 ## MCP Servers
 
 nib speaks the [Model Context Protocol](https://modelcontextprotocol.io/). A set of

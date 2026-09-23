@@ -93,3 +93,16 @@ func TestCLIApproveClassifyNeedsClassifier(t *testing.T) {
 		t.Fatalf("expected a refusal naming the classifier, got %q", out)
 	}
 }
+
+// /classifier sets, shows and removes the classifier in the REPL.
+func TestCLIClassifierSetsAndShows(t *testing.T) {
+	out, errOut := runCLIScript(t, unreachableCfg, "/classifier\n/classifier config gliner\n/classifier\n/classifier off\nexit\n")
+	for _, want := range []string{theme.ClassifierNone, "gliner @ ", theme.ClassifierOffNotice} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output lacks %q: %q", want, out)
+		}
+	}
+	if errOut != "" {
+		t.Fatalf("/classifier must not reach the model: stderr %q", errOut)
+	}
+}

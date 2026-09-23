@@ -30,6 +30,10 @@ const (
 	// pickerEndpoint is /endpoint: every entry — the config.yaml default, its
 	// named endpoints, then the registry — Enter switches to it.
 	pickerEndpoint
+	// pickerClassifier is /classifier: the config.yaml default and its named
+	// endpoints (a registry provider serves no classifier), Enter lists the
+	// endpoint's models for the classifier.
+	pickerClassifier
 )
 
 // providerPicker is the /login, /logout and /endpoint dialog: a searchable
@@ -55,6 +59,10 @@ func (p *providerPicker) open(entries []chat.ProviderEntry, mode pickerMode) {
 			}
 		case pickerLogin:
 			if e.Kind != endpoint.KindProvider {
+				continue
+			}
+		case pickerClassifier:
+			if e.Kind == endpoint.KindProvider {
 				continue
 			}
 		}
@@ -123,6 +131,8 @@ func (p providerPicker) dialog() render.Dialog {
 		title, hint = theme.ProviderPickerLogoutTitle, theme.ProviderPickerLogoutHint
 	case pickerEndpoint:
 		title, hint = theme.EndpointPickerTitle, theme.EndpointPickerKeyHint
+	case pickerClassifier:
+		title, hint = theme.ClassifierPickerTitle, theme.ClassifierPickerKeyHint
 	}
 	title += " " + theme.ModelPickerSearchLabel
 	if p.query != "" {
@@ -387,6 +397,8 @@ func (m Model) handleProviderPickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.logout(e.ID)
 			case pickerEndpoint:
 				cmd = m.useEndpoint(e)
+			case pickerClassifier:
+				cmd = m.openClassifierModelPicker(e)
 			default:
 				cmd = m.useProvider(e, false)
 			}

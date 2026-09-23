@@ -635,6 +635,35 @@ func RunCLI(ctx context.Context, cfg types.Config, streams Streams, shellJobs *w
 				}
 				fmt.Fprintln(out, theme.Subtle.Render(fmt.Sprintf(theme.ApproveModeNotice, mode)))
 				continue
+			case slash.KindClassifier:
+				switch {
+				case action.ClassifierOff:
+					fellBack, _ := session.SetClassifier(types.Config{})
+					notice := theme.ClassifierOffNotice
+					if fellBack {
+						notice += theme.ClassifierFellBack
+					}
+					fmt.Fprintln(out, theme.Subtle.Render(notice))
+				case action.Endpoint != "":
+					c, err := chat.ClassifierChoice(cfg.Classifier, action.Endpoint, action.Model)
+					if err == nil {
+						next := cfg
+						next.Classifier = c
+						_, err = session.SetClassifier(next)
+					}
+					if err != nil {
+						fmt.Fprintln(out, theme.Error.Render(theme.Cross+" "+err.Error()))
+						continue
+					}
+					fmt.Fprintln(out, theme.Subtle.Render(fmt.Sprintf(theme.ClassifierSet, session.ClassifierInfo())))
+				default:
+					if info := session.ClassifierInfo(); info != "" {
+						fmt.Fprintln(out, theme.Subtle.Render(fmt.Sprintf(theme.ClassifierCurrent, info)))
+					} else {
+						fmt.Fprintln(out, theme.Subtle.Render(theme.ClassifierNone))
+					}
+				}
+				continue
 			case slash.KindLogin:
 				if action.Provider == "" {
 					fmt.Fprint(out, session.LoginList())

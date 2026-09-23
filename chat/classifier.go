@@ -1,6 +1,7 @@
 package chat
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -98,4 +99,23 @@ func (s *Session) ClassifierInfo() string {
 		return st.info
 	}
 	return ""
+}
+
+// ErrClassifierNeedsModel refuses a classifier on config.yaml's own
+// endpoint with no model: a block with neither field means "none".
+var ErrClassifierNeedsModel = errors.New("name a model for the config.yaml endpoint: /classifier config <model>")
+
+// ClassifierChoice is cfg's classifier block pointed at endpointID (a picker
+// ID such as "@home" or "config", or a bare endpoint name) and model. Its
+// other fields (api, timeout) carry over.
+func ClassifierChoice(cfg types.ClassifierConfig, endpointID, model string) (types.ClassifierConfig, error) {
+	name := strings.TrimPrefix(endpointID, endpoint.NamedPrefix)
+	if endpointID == endpoint.DefaultID || endpointID == endpoint.DefaultName {
+		name = ""
+	}
+	cfg.Endpoint, cfg.Model = name, model
+	if !cfg.Configured() {
+		return cfg, ErrClassifierNeedsModel
+	}
+	return cfg, nil
 }

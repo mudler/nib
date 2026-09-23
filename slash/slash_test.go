@@ -291,3 +291,21 @@ func TestResolveApprove(t *testing.T) {
 		t.Errorf("unknown mode: got %+v, want KindError", got)
 	}
 }
+
+func TestResolveClassifier(t *testing.T) {
+	cases := map[string]Action{
+		"/classifier":                {Kind: KindClassifier},
+		"/classifier off":            {Kind: KindClassifier, ClassifierOff: true},
+		"/classifier home":           {Kind: KindClassifier, Endpoint: "home"},
+		"/classifier home gliner2.5": {Kind: KindClassifier, Endpoint: "home", Model: "gliner2.5"},
+	}
+	for in, want := range cases {
+		got := Resolve(in, nil, nil, nil)
+		if got.Kind != want.Kind || got.ClassifierOff != want.ClassifierOff || got.Endpoint != want.Endpoint || got.Model != want.Model {
+			t.Errorf("%q: got %+v, want %+v", in, got, want)
+		}
+	}
+	if got := Resolve("/classifier a b c", nil, nil, nil); got.Kind != KindError {
+		t.Errorf("three args: got %+v, want KindError", got)
+	}
+}

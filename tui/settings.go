@@ -26,7 +26,7 @@ var settingsVerb = "/" + theme.CompSettingsName + " "
 // arm in applyLiveSettings. Everything else is read once at startup (the model
 // and endpoint build the client, log_level configures the logger, browser and
 // agent options wire tools), so it is saved and reported as "next start".
-var liveSettingPrefixes = []string{"ui.", "approval_mode", "compaction.", "tool_output_pruning."}
+var liveSettingPrefixes = []string{"ui.", "approval_mode", "compaction.", "tool_output_pruning.", "classifier.", "auto_approve.", "suggestions."}
 
 func isLiveSetting(key string) bool {
 	for _, p := range liveSettingPrefixes {
@@ -343,15 +343,31 @@ func (m *Model) applyLiveSettings(changed []config.Setting) {
 	if m.session == nil {
 		return
 	}
-	var approval, compaction, pruning bool
+	var approval, compaction, pruning, classifier bool
 	for _, s := range changed {
 		switch {
+		case strings.HasPrefix(s.Key, "classifier."):
+			// A saved classifier block replaces this session's /classifier
+			// choice: the user just said what they want.
+			m.classifierOverride = nil
+			classifier = true
+		case strings.HasPrefix(s.Key, "auto_approve."), strings.HasPrefix(s.Key, "suggestions."):
+			classifier = true
 		case s.Key == "approval_mode":
 			approval = true
 		case strings.HasPrefix(s.Key, "compaction."):
 			compaction = true
 		case strings.HasPrefix(s.Key, "tool_output_pruning."):
 			pruning = true
+		}
+	}
+	if classifier {
+		fellBack, err := m.session.SetClassifier(m.classifierConfig())
+		switch {
+		case err != nil:
+			m.appendMessage(ChatMessage{Role: "error", Content: err.Error()})
+		case fellBack:
+			m.appendMessage(ChatMessage{Role: "agent", Content: theme.ClassifierOffNotice + theme.ClassifierFellBack})
 		}
 	}
 	if approval {

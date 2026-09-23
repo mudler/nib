@@ -128,7 +128,7 @@ const (
 	// CLIHelp is cmd/cli.go's help() output — the CLI's own command list, kept
 	// separate from the TUI's slash-completion popup. /yolo works in CLI mode
 	// (cmd/cli.go's KindYolo case) and belongs here alongside exit/clear/help.
-	CLIHelp = "commands:  exit  ·  clear  ·  help  ·  /yolo  ·  /approve  ·  /about"
+	CLIHelp = "commands:  exit  ·  clear  ·  help  ·  /yolo  ·  /approve  ·  /classifier  ·  /about"
 
 	// CLINotAvailable is the CLI dispatch loop's catch-all for a resolved
 	// slash.Action whose Kind has no explicit case there — a %s format string
@@ -212,6 +212,20 @@ const (
 	YoloUsage = "usage: /yolo [on|off]"
 	// ApproveUsage is the /approve slash command's usage error.
 	ApproveUsage = "usage: /approve [prompt|strict|allowlist|classify|auto]"
+	// ClassifierUsage is the /classifier slash command's usage error.
+	ClassifierUsage = "usage: /classifier [off | <endpoint> [model]]"
+	// ClassifierSet confirms a /classifier pick; ClassifierOffNotice its
+	// removal, and ClassifierFellBack the fallback from classify mode.
+	ClassifierSet       = "classifier: %s (this session)"
+	ClassifierOffNotice = "classifier off (this session)"
+	ClassifierFellBack  = " · approval mode: prompt"
+	// ClassifierNone and ClassifierCurrent answer a bare /classifier in the CLI.
+	ClassifierNone    = "no classifier configured"
+	ClassifierCurrent = "classifier: %s"
+	// ClassifierPickerTitle and ClassifierPickerKeyHint label /classifier's
+	// endpoint picker.
+	ClassifierPickerTitle   = "classifier endpoint"
+	ClassifierPickerKeyHint = "enter pick endpoint · esc cancel"
 	// ApproveModeNotice reports the approval mode after /approve or Shift+Tab.
 	ApproveModeNotice = "approval mode: %s"
 	// ClassifyNeedsClassifier refuses approval_mode classify when no
@@ -228,32 +242,34 @@ const (
 	// Name is the verb shown, matched against the typed query, and used to
 	// build the option's Insert token; Desc is the one-line summary shown
 	// beside it in the popup.
-	CompLoopName     = "loop"
-	CompLoopDesc     = "recurring or self-paced task"
-	CompCompactName  = "compact"
-	CompCompactDesc  = "compact the conversation"
-	CompGoalName     = "goal"
-	CompGoalDesc     = "set a goal nib checks before stopping"
-	CompModelName    = "model"
-	CompModelDesc    = "switch model (current provider)"
-	CompModelsName   = "models"
-	CompModelsDesc   = "list the current provider's models"
-	CompAttachName   = "attach"
-	CompAttachDesc   = "stage a file for the next message"
-	CompYoloName     = "yolo"
-	CompYoloDesc     = "toggle (or on/off) auto-approve every tool call"
-	CompApproveName  = "approve"
-	CompApproveDesc  = "set the approval mode (prompt, strict, allowlist, classify, auto)"
-	CompResumeName   = "resume"
-	CompResumeDesc   = "resume a recorded session"
-	CompLoginName    = "login"
-	CompLoginDesc    = "log in to a provider"
-	CompLogoutName   = "logout"
-	CompLogoutDesc   = "remove a stored provider login"
-	CompEndpointName = "endpoint"
-	CompEndpointDesc = "switch endpoint"
-	CompAboutName    = "about"
-	CompAboutDesc    = "show version, config paths, and tool inventory"
+	CompLoopName       = "loop"
+	CompLoopDesc       = "recurring or self-paced task"
+	CompCompactName    = "compact"
+	CompCompactDesc    = "compact the conversation"
+	CompGoalName       = "goal"
+	CompGoalDesc       = "set a goal nib checks before stopping"
+	CompModelName      = "model"
+	CompModelDesc      = "switch model (current provider)"
+	CompModelsName     = "models"
+	CompModelsDesc     = "list the current provider's models"
+	CompAttachName     = "attach"
+	CompAttachDesc     = "stage a file for the next message"
+	CompYoloName       = "yolo"
+	CompYoloDesc       = "toggle (or on/off) auto-approve every tool call"
+	CompApproveName    = "approve"
+	CompClassifierName = "classifier"
+	CompClassifierDesc = "set the classifier: endpoint model, or off"
+	CompApproveDesc    = "set the approval mode for this session"
+	CompResumeName     = "resume"
+	CompResumeDesc     = "resume a recorded session"
+	CompLoginName      = "login"
+	CompLoginDesc      = "log in to a provider"
+	CompLogoutName     = "logout"
+	CompLogoutDesc     = "remove a stored provider login"
+	CompEndpointName   = "endpoint"
+	CompEndpointDesc   = "switch endpoint"
+	CompAboutName      = "about"
+	CompAboutDesc      = "show version, config paths, and tool inventory"
 
 	// ToolResultNoOutput is fmtBashResult's (chat/resultfmt.go) fallback for a
 	// failed bash/bash_job_output call whose stdout and stderr were both
