@@ -617,7 +617,11 @@ Switch with `/endpoint`, which opens a picker listing the default, every
 named endpoint, then the provider registry (the same list `/login`
 authenticates against). `/endpoint <name>` switches directly; a named
 endpoint's ID carries its `@`, so this is `/endpoint @work-vllm`.
-`/endpoint config` returns to the top-level default. `/models <name>` (for
+`/endpoint config` returns to the top-level default. `/endpoint add` opens
+a template-driven form (OpenAI, OpenAI Responses, OpenRouter, LocalAI,
+Ollama, or Custom) that writes a new named endpoint to `config.yaml` and
+makes it appear in the picker immediately — no restart needed. The
+picker's "+ add new endpoint" row does the same. `/models <name>` (for
 example `/models @work-vllm`) lists another endpoint's models without
 switching to it; bare `/models` still lists the current endpoint.
 

@@ -10,6 +10,7 @@ import (
 	"github.com/mudler/nib/auth"
 	"github.com/mudler/nib/endpoint"
 	"github.com/mudler/nib/provider"
+	"github.com/mudler/nib/types"
 )
 
 // ConfigProviderID is endpoint.DefaultID under its pre-endpoints name, kept
@@ -328,4 +329,25 @@ func (s *Session) SaveAPIKey(id, key, baseURL string) (auth.Credential, error) {
 		baseURL = ""
 	}
 	return auth.LoginAPIKeyAt(s.credStore, def, key, baseURL)
+}
+
+// AddEndpoint persists a named endpoint to config.yaml via the Configurator
+// and flags the session for reload so the new endpoint appears immediately in
+// the /endpoint picker.
+func (s *Session) AddEndpoint(name string, cfg types.ModelProviderConfig) error {
+	if err := s.configurator.AddEndpoint(name, cfg); err != nil {
+		return err
+	}
+	s.requestReload()
+	return nil
+}
+
+// RemoveEndpoint deletes a named endpoint from config.yaml and flags the
+// session for reload.
+func (s *Session) RemoveEndpoint(name string) error {
+	if err := s.configurator.RemoveEndpoint(name); err != nil {
+		return err
+	}
+	s.requestReload()
+	return nil
 }

@@ -75,6 +75,15 @@ func (p *providerPicker) open(entries []chat.ProviderEntry, mode pickerMode) {
 			p.selected = i
 		}
 	}
+	// Append the "+ add new" row in endpoint mode so Enter on it opens
+	// the add-endpoint form.
+	if mode == pickerEndpoint {
+		p.matches = append(p.matches, chat.ProviderEntry{
+			ID:   endpointAddSentinel,
+			Name: theme.EndpointAddRow,
+			Kind: endpoint.KindNamed,
+		})
+	}
 	p.scrollSelectionIntoView()
 }
 
@@ -89,6 +98,20 @@ func (p *providerPicker) filter() {
 		}
 	}
 	p.selected, p.offset = 0, 0
+}
+
+// endpointAddSentinel is the ID of the "+ add new endpoint" row appended to
+// the endpoint picker. It is not a real provider, so it is never sent to
+// useEndpoint — handleProviderPickerKey intercepts it.
+const endpointAddSentinel = "__add__"
+
+func (p *providerPicker) hasEndpointAddRow() bool {
+	for _, e := range p.matches {
+		if e.ID == endpointAddSentinel {
+			return true
+		}
+	}
+	return false
 }
 
 func (p *providerPicker) appendQuery(text string) {
@@ -396,6 +419,10 @@ func (m Model) handleProviderPickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			case pickerLogout:
 				m.logout(e.ID)
 			case pickerEndpoint:
+				if e.ID == endpointAddSentinel {
+					m.openEndpointForm()
+					return m, nil
+				}
 				cmd = m.useEndpoint(e)
 			case pickerClassifier:
 				cmd = m.openClassifierModelPicker(e)
