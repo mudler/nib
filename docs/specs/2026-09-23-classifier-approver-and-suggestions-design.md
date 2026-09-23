@@ -50,6 +50,7 @@ auto_approve:
 suggestions:
   enabled: true            # default true when classifier is configured
   threshold: 0.5           # min confidence to show a suggestion
+  delay: 500ms             # idle time after the turn ends before it fires
   replies:                 # stock candidate user replies (default below)
     - continue
     - yes, go ahead
@@ -217,10 +218,16 @@ level with the tool name, category and confidence.
 
 ## Suggestion flow (TUI)
 
-- When a turn ends normally (not interrupted, not an error), the TUI starts
-  `Suggest` in a command with a 1 s timeout and a sequence number.
-- The result is dropped when the sequence number is stale: the user typed, a
-  new turn started, or the session changed.
+- The suggester fires only when the session is waiting on the user: the turn
+  ended normally (not interrupted, not an error), no queued message is about
+  to start the next turn, and the composer is empty.
+- It fires after `suggestions.delay` (default 500 ms) in that state with no
+  key press. The timer starts when the turn ends. When the user types
+  anything before it fires, it is cancelled and does not fire for this turn:
+  the user is already replying.
+- It fires at most once per turn. The request uses a 1 s timeout and carries a
+  sequence number. The result is dropped when the number is stale: a new turn
+  started or the session changed.
 - It works like shell autosuggestion (fish, zsh-autosuggestions). The ranked
   list is computed once per turn. It is not recomputed on each key press, so
   typing makes no model calls.
@@ -260,6 +267,8 @@ a name that contains `gliner`, the wizard offers to configure the
   message.
 - TUI: `Shift+Tab` cycle with and without a classifier, the `/approve`
   parsing, `Tab` accepting a suggestion (the text fills in and is not sent),
+  the idle trigger (fires after the delay; a key press before it cancels it;
+  no fire after an interrupted or failed turn; at most once per turn),
   prefix matching while typing (match, no match, backspace to a match,
   case-insensitivity), the completion popup taking precedence,
   stale suggestion results dropped, and the status bar mode.
