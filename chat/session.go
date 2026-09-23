@@ -75,11 +75,12 @@ type Session struct {
 	externalSources      map[string]provenance.Envelope
 	externalToolNames    map[string]bool // tools supplied by configured/plugin MCP servers
 	provenanceClassifier provenance.Classifier
-	// classifier is the small classification model (classifier:), nil
-	// when none is configured. approver applies auto_approve with it in
-	// approval_mode "classify".
-	classifier classify.Classifier
-	approver   *Approver
+	// approver applies auto_approve with the small classification model
+	// (classifier:) in approval_mode "classify"; suggester predicts the
+	// user's next reply with it. Both nil when no classifier is configured.
+	approver     *Approver
+	suggester    Suggester
+	suggestDelay time.Duration
 
 	agentMu    sync.Mutex
 	agentStart map[string]time.Time // sub-agent ID -> spawn time, for elapsed
@@ -577,8 +578,11 @@ func NewSession(ctx context.Context, cfg types.Config, callbacks Callbacks, tran
 		s.toolAllow[name] = true
 	}
 	if smallClassifier != nil {
-		s.classifier = smallClassifier
 		s.approver = NewApprover(smallClassifier, cfg.AutoApprove, cfg.WorkingDir)
+		if !cfg.Suggestions.Disabled {
+			s.suggester = NewClassifierSuggester(smallClassifier, cfg.Suggestions)
+			s.suggestDelay = cfg.Suggestions.Delay
+		}
 	}
 	for _, name := range cfg.AutoApprove.Allow {
 		if !classify.ValidCategory(name) {
