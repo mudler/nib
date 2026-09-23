@@ -207,8 +207,8 @@ github.com/msuozzo/bonsai/bonsai-typescript v0.4.0 h1:BD6JHfCs3rGNUttL+tMnz/iav1
 github.com/msuozzo/bonsai/bonsai-typescript v0.4.0/go.mod h1:DElq3FKqbTkJXcat1o8m98ijL3wUf+jW+DNInzh5Mgo=
 github.com/msuozzo/bonsai/bonsai-yaml v0.4.0 h1:PJfyfjMQrcWU5e3ib0xGsVuOafNuimf5fK0NhTk8olU=
 github.com/msuozzo/bonsai/bonsai-yaml v0.4.0/go.mod h1:z8jc0tjXDSOQRKRG0G3uymvVxHdBbrVsWd149nPOyHE=
-github.com/mudler/cogito v0.11.1-0.20260922174807-3fe1239fa4ec h1:4ztF9kSpfjbhh9+FXywZwebhnh8W5C0p71gW0IYlgOk=
-github.com/mudler/cogito v0.11.1-0.20260922174807-3fe1239fa4ec/go.mod h1:6sfja3lcu2nWRzEc0wwqGNu/eCG3EWgij+8s7xyUeQ4=
+github.com/mudler/cogito v0.11.1-0.20260923083907-5cbfdb15460b h1:DAyr5sxdltoLcLqG32zHYyfR5YOZow3Vufxoz3jH5SA=
+github.com/mudler/cogito v0.11.1-0.20260923083907-5cbfdb15460b/go.mod h1:6sfja3lcu2nWRzEc0wwqGNu/eCG3EWgij+8s7xyUeQ4=
 github.com/mudler/xlog v0.0.1 h1:yR3/wszd3ZM6u1n96YITJZ4yUcDgqHSwvQmzUJa+8vg=
 github.com/mudler/xlog v0.0.1/go.mod h1:39f5vcd05Qd6GWKM8IjyHNQ7AmOx3ZM0YfhfIGhC18U=
 github.com/muesli/ansi v0.0.0-20230316100256-276c6243b2f6 h1:ZK8zHtRHOkbHy6Mmr5D264iyp3TiX5OmNcI5cIARiQI=
