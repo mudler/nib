@@ -500,6 +500,7 @@ type Model struct {
 	toolRequestChan  chan chat.ToolCallRequest
 	toolResponseChan chan chat.ToolCallResponse
 	toolResultChan   chan chat.ToolResult
+	autoApprovedChan chan autoApprovedMsg
 	// reasoningChan carries BOTH step-boundary reasoning (Callbacks.OnReasoning,
 	// the COMPLETE block for a step) and live streamed reasoning deltas
 	// (Callbacks.OnStream's "reasoning" kind), as a single ordered stream of
@@ -739,6 +740,7 @@ func NewModel(ctx context.Context, cfg types.Config, height int, shellJobs *wizm
 		toolRequestChan:    make(chan chat.ToolCallRequest),
 		toolResponseChan:   make(chan chat.ToolCallResponse),
 		toolResultChan:     make(chan chat.ToolResult, 64),
+		autoApprovedChan:   make(chan autoApprovedMsg, 64),
 		askRequestChan:     make(chan chat.AskRequest),
 		askResponseChan:    make(chan string),
 		wakeupChan:         make(chan chat.WakeupRequest, 8),
@@ -979,6 +981,12 @@ func (m Model) initSession() tea.Cmd {
 			OnPruneDone: func(results, freed int) {
 				select {
 				case m.pruneChan <- [2]int{results, freed}:
+				default:
+				}
+			},
+			OnAutoApproved: func(req chat.ToolCallRequest, v chat.Verdict) {
+				select {
+				case m.autoApprovedChan <- autoApprovedMsg{req: req, verdict: v}:
 				default:
 				}
 			},
@@ -1324,6 +1332,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.updateViewport()
 			return m, nil
 
+		case tea.KeyShiftTab:
+			// Cycle the approval mode: configured → classify → auto.
+			// Not while a picker or the completion popup owns the keys.
+			if !m.sessionReady || m.completion.active {
+				break
+			}
+			m.cycleApprovalMode()
+			// The prompt on screen is one auto would not have raised.
+			if m.awaitingApproval && m.session.AutoApprove() {
+				return m.resolveApproval(chat.ToolCallResponse{Approved: true})
+			}
+			m.updateViewportFollow()
+			return m, nil
+
 		case tea.KeyCtrlT:
 			// Toggle the todo panel.
 			if !m.sessionReady {
@@ -1438,7 +1460,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// behind the run (as slash commands otherwise are) left every tool
 			// call of that run still asking, and inside the approval prompt it
 			// went to the model as an adjustment to the call.
-			if slash.Resolve(input, m.cfg.Commands, m.cfg.Skills, m.cfg.Agents).Kind == slash.KindYolo {
+			if k := slash.Resolve(input, m.cfg.Commands, m.cfg.Skills, m.cfg.Agents).Kind; k == slash.KindYolo || k == slash.KindApprove {
 				m.pushHistory(input)
 				m.textarea.Reset()
 				m.completion.sync("")
@@ -1555,7 +1577,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.appendMessage(ChatMessage{Role: "agent", Content: fmt.Sprintf("Reloaded %d durable loop(s).", n)})
 		}
 		// Start listening for callbacks
-		cmds = append(cmds, m.listenStatus(), m.listenReasoningEvents(), m.listenToolRequest(), m.listenToolResult(), m.listenAskRequest(), m.listenAgentEvents(), m.shellTick(), m.loopTick(), m.listenWakeup(), m.listenCronFire(), m.listenPark(), m.listenCompact(), m.listenPrune())
+		cmds = append(cmds, m.listenStatus(), m.listenReasoningEvents(), m.listenToolRequest(), m.listenToolResult(), m.listenAutoApproved(), m.listenAskRequest(), m.listenAgentEvents(), m.shellTick(), m.loopTick(), m.listenWakeup(), m.listenCronFire(), m.listenPark(), m.listenCompact(), m.listenPrune())
 
 	case bootTickMsg:
 		if m.boot != nil {
@@ -2085,6 +2107,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Continue listening for more agent events
 		cmds = append(cmds, m.listenAgentEvents())
 
+	case autoApprovedMsg:
+		m.appendMessage(ChatMessage{Role: "agent", Content: autoApprovedLine(msg)})
+		m.updateViewportFollow()
+		return m, m.listenAutoApproved()
+
 	case toolResultMsg:
 		res := chat.ToolResult(msg)
 		if res.AgentID == "" {
@@ -2293,6 +2320,9 @@ func (m *Model) dispatchResolved(input string) tea.Cmd {
 		} else {
 			m.appendMessage(ChatMessage{Role: "agent", Content: "No goal to clear."})
 		}
+		return nil
+	case slash.KindApprove:
+		m.setApprovalMode(action.Mode)
 		return nil
 	case slash.KindYolo:
 		on := !m.session.AutoApprove()
@@ -3357,10 +3387,16 @@ func (m Model) viewState() render.ViewState {
 		Cwd:         shortenPath(currentDir()),
 		Brand:       theme.BrandName,
 		AutoApprove: m.session != nil && m.session.AutoApprove(),
-		Loading:     m.loading,
-		Status:      status,
-		Spinner:     m.spinner.View(),
-		Speed:       m.liveSpeed(),
+		ApprovalMode: func() string {
+			if m.session == nil {
+				return ""
+			}
+			return m.session.ApprovalMode()
+		}(),
+		Loading: m.loading,
+		Status:  status,
+		Spinner: m.spinner.View(),
+		Speed:   m.liveSpeed(),
 		Reasoning: render.Reasoning{
 			Text:      m.reasoning,
 			Collapsed: m.reasoningCollapsed,

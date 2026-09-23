@@ -233,9 +233,12 @@ type ViewState struct {
 	Cwd         string
 	Brand       string
 	AutoApprove bool
-	Loading     bool
-	Status      string
-	Spinner     string
+	// ApprovalMode is the session's approval_mode, for the header badge.
+	// Only "classify" draws one; yolo has AutoApprove.
+	ApprovalMode string
+	Loading      bool
+	Status       string
+	Spinner      string
 	// Speed is the live generation rate, already rendered, shown after the
 	// status on the working indicator line; "" when the model is not
 	// generating right now.

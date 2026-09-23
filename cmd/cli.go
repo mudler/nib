@@ -298,6 +298,9 @@ func RunCLI(ctx context.Context, cfg types.Config, streams Streams, shellJobs *w
 			if req.Reasoning != "" {
 				fmt.Fprintln(out, g+theme.Reasoning.Render(req.Reasoning))
 			}
+			if req.Verdict != "" {
+				fmt.Fprintln(out, g+theme.Meta.Render(theme.ClassifierVerdict+req.Verdict))
+			}
 			// Nothing can answer a prompt once stdin has closed, so record the
 			// call and deny it instead of printing a question at a dead stream.
 			if stdinClosed.Load() {
@@ -404,6 +407,11 @@ func RunCLI(ctx context.Context, cfg types.Config, streams Streams, shellJobs *w
 		OnError: func(err error) {
 			spin.stop()
 			fmt.Fprintln(errOut, theme.Error.Render(theme.Cross+" "+err.Error()))
+		},
+		OnAutoApproved: func(req chat.ToolCallRequest, v chat.Verdict) {
+			spin.stop()
+			call, _, _ := strings.Cut(chat.FormatToolCall(req.Name, req.Arguments), "\n")
+			fmt.Fprintln(out, theme.Subtle.Render(fmt.Sprintf(theme.AutoApprovedNotice, v.Category, v.Confidence, call)))
 		},
 		OnToolResult: func(res chat.ToolResult) {
 			preview := chat.PreviewResult(res.Name, res.Result, 12)
@@ -613,6 +621,19 @@ func RunCLI(ctx context.Context, cfg types.Config, streams Streams, shellJobs *w
 					notice = theme.YoloOn
 				}
 				fmt.Fprintln(out, theme.Subtle.Render(notice))
+				continue
+			case slash.KindApprove:
+				if action.Mode != "" {
+					if err := session.SetApprovalMode(action.Mode); err != nil {
+						fmt.Fprintln(out, theme.Error.Render(theme.Cross+" "+err.Error()))
+						continue
+					}
+				}
+				mode := session.ApprovalMode()
+				if session.AutoApprove() {
+					mode = "auto"
+				}
+				fmt.Fprintln(out, theme.Subtle.Render(fmt.Sprintf(theme.ApproveModeNotice, mode)))
 				continue
 			case slash.KindLogin:
 				if action.Provider == "" {

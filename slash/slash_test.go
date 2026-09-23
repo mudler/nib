@@ -272,3 +272,22 @@ func TestResolveModelsForOneEndpoint(t *testing.T) {
 		t.Fatalf("Resolve(\"/models\") = kind %v endpoint %q, want kind KindModelList endpoint \"\"", got.Kind, got.Endpoint)
 	}
 }
+
+func TestResolveApprove(t *testing.T) {
+	for in, want := range map[string]string{
+		"/approve":          "",
+		"/approve classify": "classify",
+		"/approve AUTO":     "auto",
+		"/approve prompt":   "prompt",
+		"/approve strict":   "strict",
+		"/approve allowlist": "allowlist",
+	} {
+		got := Resolve(in, nil, nil, nil)
+		if got.Kind != KindApprove || got.Mode != want {
+			t.Errorf("%q: got %+v, want KindApprove mode %q", in, got, want)
+		}
+	}
+	if got := Resolve("/approve sometimes", nil, nil, nil); got.Kind != KindError {
+		t.Errorf("unknown mode: got %+v, want KindError", got)
+	}
+}

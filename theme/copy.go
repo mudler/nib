@@ -128,7 +128,7 @@ const (
 	// CLIHelp is cmd/cli.go's help() output — the CLI's own command list, kept
 	// separate from the TUI's slash-completion popup. /yolo works in CLI mode
 	// (cmd/cli.go's KindYolo case) and belongs here alongside exit/clear/help.
-	CLIHelp = "commands:  exit  ·  clear  ·  help  ·  /yolo  ·  /about"
+	CLIHelp = "commands:  exit  ·  clear  ·  help  ·  /yolo  ·  /approve  ·  /about"
 
 	// CLINotAvailable is the CLI dispatch loop's catch-all for a resolved
 	// slash.Action whose Kind has no explicit case there — a %s format string
@@ -210,6 +210,18 @@ const (
 	// YoloUsage is the /yolo slash command's usage error, shown when the
 	// argument after "yolo" is neither empty, "on" nor "off".
 	YoloUsage = "usage: /yolo [on|off]"
+	// ApproveUsage is the /approve slash command's usage error.
+	ApproveUsage = "usage: /approve [prompt|strict|allowlist|classify|auto]"
+	// ApproveModeNotice reports the approval mode after /approve or Shift+Tab.
+	ApproveModeNotice = "approval mode: %s"
+	// ClassifyBadge is the header badge in approval_mode classify.
+	ClassifyBadge = "classify"
+	// AutoApprovedNotice is the transcript line for a call the classifier
+	// approved without asking: category, confidence, the call.
+	AutoApprovedNotice = "auto-approved · %s %.2f · %s"
+	// ClassifierVerdict prefixes the classifier's verdict in the approval
+	// prompt.
+	ClassifierVerdict = "classifier: "
 
 	// Built-in `/` completion entries (tui/completion.go's buildCompItems).
 	// Name is the verb shown, matched against the typed query, and used to
@@ -229,6 +241,8 @@ const (
 	CompAttachDesc   = "stage a file for the next message"
 	CompYoloName     = "yolo"
 	CompYoloDesc     = "toggle (or on/off) auto-approve every tool call"
+	CompApproveName  = "approve"
+	CompApproveDesc  = "set the approval mode (prompt, strict, allowlist, classify, auto)"
 	CompResumeName   = "resume"
 	CompResumeDesc   = "resume a recorded session"
 	CompLoginName    = "login"

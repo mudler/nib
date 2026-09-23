@@ -28,6 +28,7 @@ const (
 	cmdModel    = "model"
 	cmdLoop     = "loop"
 	cmdYolo     = "yolo"
+	cmdApprove  = "approve"
 	cmdGoal     = "goal"
 	cmdResume   = "resume"
 	cmdLogin    = "login"
@@ -88,6 +89,7 @@ const (
 	KindEndpoint               // switch endpoint (Endpoint empty = open the picker)
 	KindModelReset             // drop the saved model override for the current endpoint
 	KindAbout                  // print version, config paths, and tool inventory
+	KindApprove                // set the approval mode (Mode), or show it when Mode is empty
 )
 
 // AttachOp enumerates the /attach sub-operations.
@@ -107,6 +109,7 @@ type Action struct {
 	Err    string // for KindError
 	Model  string // for KindModelSet: the model to switch to
 	YoloOn *bool  // for KindYolo: nil = toggle, non-nil = set explicitly (on/off)
+	Mode   string // for KindApprove: the approval mode, empty = show the current one
 
 	// Resume actions:
 	ResumeAll bool   // KindResume: widen the picker to sessions from any cwd
@@ -213,6 +216,14 @@ func Resolve(input string, cmds []types.CommandConfig, skills []types.Skill, age
 			return Action{Kind: KindYolo, YoloOn: &off}
 		default:
 			return Action{Kind: KindError, Err: theme.YoloUsage}
+		}
+	case cmdApprove:
+		mode := strings.ToLower(strings.TrimSpace(rest))
+		switch mode {
+		case "", "prompt", "strict", "allowlist", "classify", "auto":
+			return Action{Kind: KindApprove, Mode: mode}
+		default:
+			return Action{Kind: KindError, Err: theme.ApproveUsage}
 		}
 	case cmdGoal:
 		return resolveGoal(rest)

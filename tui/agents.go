@@ -164,6 +164,13 @@ func buildApprovalContent(req chat.ToolCallRequest) approvalContent {
 			c.unstructured = true
 		}
 	}
+	if req.Verdict != "" {
+		v := theme.ClassifierVerdict + req.Verdict
+		if c.meta != "" {
+			v = c.meta + "  " + theme.Sep + "  " + v
+		}
+		c.meta = v
+	}
 	if req.AgentID != "" {
 		c.title = theme.SubAgent + " " + render.ShortID(req.AgentID) + " " + theme.Sep + " " + c.title
 	}
