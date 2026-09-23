@@ -8,6 +8,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/mudler/nib/theme"
+	"github.com/mudler/nib/types"
 )
 
 // Base holds every Presenter method whose implementation genuinely does not
@@ -305,9 +306,9 @@ func (Base) Header(v ViewState) string {
 	left := theme.Brand.Render(v.Brand)
 	if v.AutoApprove {
 		left += "  " + theme.Yolo.Render(theme.YoloBadge)
-	} else if v.ApprovalMode != "" && v.ApprovalMode != "prompt" {
+	} else if m := v.ApprovalMode.OrDefault(); m != types.ApprovalPrompt {
 		// strict, allowlist and classify change what prompts; say so.
-		left += "  " + theme.Meta.Render(v.ApprovalMode)
+		left += "  " + theme.Meta.Render(string(m))
 	}
 
 	// Middle: stat segments, each with a separator dot. Built left-to-right

@@ -70,8 +70,8 @@ func (s *Session) setClassifierState(st *classifierState) (fellBack bool) {
 	s.approvalMu.Lock()
 	defer s.approvalMu.Unlock()
 	s.cls.Store(st)
-	if st == nil && s.approvalMode == "classify" {
-		s.approvalMode = "prompt"
+	if st == nil && s.approvalMode == types.ApprovalClassify {
+		s.approvalMode = types.ApprovalPrompt
 		return true
 	}
 	return false

@@ -8,43 +8,44 @@ import (
 
 	"github.com/mudler/nib/chat"
 	"github.com/mudler/nib/theme"
+	"github.com/mudler/nib/types"
 )
 
 // baseApprovalMode is where the Shift+Tab cycle returns to: the configured
 // mode when it is one that prompts, else prompt.
-func baseApprovalMode(configured string) string {
+func baseApprovalMode(configured types.ApprovalMode) types.ApprovalMode {
 	switch configured {
-	case "strict", "allowlist", "prompt":
+	case types.ApprovalStrict, types.ApprovalAllowlist, types.ApprovalPrompt:
 		return configured
 	default:
-		return "prompt"
+		return types.ApprovalPrompt
 	}
 }
 
 // nextApprovalMode is the mode Shift+Tab switches to from current: base,
 // then classify (when a classifier is configured), then auto, then base.
-func nextApprovalMode(current, base string, hasClassifier bool) string {
+func nextApprovalMode(current, base types.ApprovalMode, hasClassifier bool) types.ApprovalMode {
 	switch current {
-	case "auto":
+	case types.ApprovalAuto:
 		return base
-	case "classify":
-		return "auto"
+	case types.ApprovalClassify:
+		return types.ApprovalAuto
 	default:
 		if hasClassifier {
-			return "classify"
+			return types.ApprovalClassify
 		}
-		return "auto"
+		return types.ApprovalAuto
 	}
 }
 
 // effectiveApprovalMode is the mode the user is in: auto while /yolo is on,
 // else the session's approval_mode.
-func effectiveApprovalMode(s *chat.Session) string {
+func effectiveApprovalMode(s *chat.Session) types.ApprovalMode {
 	if s == nil {
-		return "prompt"
+		return types.ApprovalPrompt
 	}
 	if s.AutoApprove() {
-		return "auto"
+		return types.ApprovalAuto
 	}
 	return s.ApprovalMode()
 }
@@ -52,7 +53,7 @@ func effectiveApprovalMode(s *chat.Session) string {
 // setApprovalMode switches the session to mode for this session only, and
 // reports the result in the transcript. An empty mode reports the current
 // one.
-func (m *Model) setApprovalMode(mode string) {
+func (m *Model) setApprovalMode(mode types.ApprovalMode) {
 	if m.session == nil {
 		return
 	}

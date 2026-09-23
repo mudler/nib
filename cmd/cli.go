@@ -467,7 +467,7 @@ func RunCLI(ctx context.Context, cfg types.Config, streams Streams, shellJobs *w
 	fmt.Fprintln(out, theme.Rule.Render(strings.Repeat("─", 50)))
 	fmt.Fprintln(out, theme.Help.Render(theme.CLIWelcome))
 	fmt.Fprintln(out, theme.Help.Render(theme.CLIExit))
-	if cfg.ApprovalMode == "auto" {
+	if cfg.ApprovalMode == types.ApprovalAuto {
 		fmt.Fprintln(out, theme.Yolo.Render(theme.YoloNotice))
 	}
 	fmt.Fprintln(out)
@@ -631,7 +631,7 @@ func RunCLI(ctx context.Context, cfg types.Config, streams Streams, shellJobs *w
 				}
 				mode := session.ApprovalMode()
 				if session.AutoApprove() {
-					mode = "auto"
+					mode = types.ApprovalAuto
 				}
 				fmt.Fprintln(out, theme.Subtle.Render(fmt.Sprintf(theme.ApproveModeNotice, mode)))
 				continue

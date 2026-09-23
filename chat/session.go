@@ -61,14 +61,14 @@ type Session struct {
 	skills               []types.Skill
 	cogitoOptions        types.AgentOptions
 	compaction           types.CompactionConfig
-	allowedTools         map[string]bool  // Tools that don't need approval this session
-	toolAllow            map[string]bool  // if non-empty, the only built-in tools exposed to the model
-	allowedBashPrefixes  map[string]bool  // bash first-word grants ("git" → simple `git …` auto-approved)
-	autoApprove          atomic.Bool      // approval_mode: auto, or the /yolo toggle — approve every tool call
-	allowAllTurn         bool             // user chose "allow all this turn"; reset each top-level turn
-	approvalMode         string           // raw approval_mode: "" / "prompt" / "strict" / "allowlist" / "classify" / "auto"; guarded by approvalMu
-	approvalMu           sync.RWMutex     // guards approvalMode: /settings changes it while a turn reads it
-	readOnlyCommands     readOnlyCommands // bash commands auto-approved in prompt mode
+	allowedTools         map[string]bool    // Tools that don't need approval this session
+	toolAllow            map[string]bool    // if non-empty, the only built-in tools exposed to the model
+	allowedBashPrefixes  map[string]bool    // bash first-word grants ("git" → simple `git …` auto-approved)
+	autoApprove          atomic.Bool        // approval_mode: auto, or the /yolo toggle — approve every tool call
+	allowAllTurn         bool               // user chose "allow all this turn"; reset each top-level turn
+	approvalMode         types.ApprovalMode // raw approval_mode, "" meaning prompt; guarded by approvalMu
+	approvalMu           sync.RWMutex       // guards approvalMode: /settings changes it while a turn reads it
+	readOnlyCommands     readOnlyCommands   // bash commands auto-approved in prompt mode
 	hooks                *hooks.Dispatcher
 	provenanceMu         sync.Mutex
 	externalSources      map[string]provenance.Envelope
@@ -576,11 +576,11 @@ func NewSession(ctx context.Context, cfg types.Config, callbacks Callbacks, tran
 	if err := validateAutoApprove(cfg.AutoApprove); err != nil {
 		s.configErrs = append(s.configErrs, err)
 	}
-	s.autoApprove.Store(cfg.ApprovalMode == "auto")
+	s.autoApprove.Store(cfg.ApprovalMode == types.ApprovalAuto)
 	s.approvalMode = cfg.ApprovalMode
-	if cfg.ApprovalMode == "classify" && smallClassifier == nil {
+	if cfg.ApprovalMode == types.ApprovalClassify && smallClassifier == nil {
 		s.configErrs = append(s.configErrs, fmt.Errorf("approval_mode: classify needs a classifier block; using prompt"))
-		s.approvalMode = "prompt"
+		s.approvalMode = types.ApprovalPrompt
 	}
 	s.readOnlyCommands = newReadOnlyCommands(cfg.ReadOnlyCommands)
 	// Wire reloadable state (skills server, config MCP clients, agents, hooks,
@@ -706,14 +706,14 @@ func (s *Session) decideToolCall(req ToolCallRequest) cogito.ToolCallDecision {
 	// Not applied in allowlist (explicitly restrictive), strict (prompt for
 	// everything), or auto (already approved above). Hooks above still win.
 	// classify mode is prompt mode with a classifier in front of the prompt.
-	mode := s.currentApprovalMode()
-	if (mode == "" || mode == "prompt" || mode == "classify") &&
+	mode := s.currentApprovalMode().OrDefault()
+	if (mode == types.ApprovalPrompt || mode == types.ApprovalClassify) &&
 		IsReadOnly(req.Name, req.Arguments, s.readOnlyCommands) {
 		return cogito.ToolCallDecision{Approved: true}
 	}
 	// The classifier can only spare the user a prompt: a call it does not
 	// approve, or cannot judge, is asked about as usual, with its verdict.
-	if st := s.classifier(); mode == "classify" && st != nil {
+	if st := s.classifier(); mode == types.ApprovalClassify && st != nil {
 		v := st.approver.Judge(s.ctx, req)
 		if v.Approved {
 			if s.callbacks.OnAutoApproved != nil {

@@ -3424,7 +3424,7 @@ func (m Model) viewState() render.ViewState {
 		Cwd:         shortenPath(currentDir()),
 		Brand:       theme.BrandName,
 		AutoApprove: m.session != nil && m.session.AutoApprove(),
-		ApprovalMode: func() string {
+		ApprovalMode: func() types.ApprovalMode {
 			if m.session == nil {
 				return ""
 			}

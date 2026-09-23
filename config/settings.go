@@ -99,7 +99,7 @@ var settingValues = map[string]struct {
 	values []string
 	strict bool
 }{
-	"approval_mode":    {[]string{"prompt", "strict", "allowlist", "classify", "auto"}, true},
+	"approval_mode":    {types.ApprovalModeNames(), true},
 	"reasoning_effort": {[]string{"none", "low", "medium", "high"}, false},
 	"log_level":        {[]string{"debug", "info", "warn", "error"}, false},
 	"provider":         {[]string{"openai", "codex"}, false},

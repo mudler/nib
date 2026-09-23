@@ -11,32 +11,28 @@ import (
 // that already guards it, so it is safe from the UI goroutine while a turn
 // runs, unlike Reload, which reconnects MCP clients and must run at turn start.
 
-// SetApprovalMode switches tool-call gating to mode ("" / "prompt", "strict",
-// "allowlist", "classify" or "auto"), as approval_mode does at startup: "auto"
-// turns the approve-everything switch on, and any other mode turns it off, so
-// a /yolo toggled on earlier does not outlive an explicit change of mode.
-// Grants the user already made (allowedTools, bash prefixes) are kept, as with
-// /yolo. "classify" without a configured classifier is refused, and the mode
-// stays as it was.
-func (s *Session) SetApprovalMode(mode string) error {
+// SetApprovalMode switches tool-call gating to mode, as approval_mode does at
+// startup: ApprovalAuto turns the approve-everything switch on, and any other
+// mode turns it off, so a /yolo toggled on earlier does not outlive an
+// explicit change of mode. Grants the user already made (allowedTools, bash
+// prefixes) are kept, as with /yolo. ApprovalClassify without a configured
+// classifier is refused, and the mode stays as it was.
+func (s *Session) SetApprovalMode(mode types.ApprovalMode) error {
 	s.approvalMu.Lock()
-	if mode == "classify" && s.cls.Load() == nil {
+	if mode == types.ApprovalClassify && s.cls.Load() == nil {
 		s.approvalMu.Unlock()
 		return fmt.Errorf("classify mode needs a classifier: configure the classifier block")
 	}
 	s.approvalMode = mode
 	s.approvalMu.Unlock()
-	s.autoApprove.Store(mode == "auto")
+	s.autoApprove.Store(mode == types.ApprovalAuto)
 	return nil
 }
 
-// ApprovalMode is the current approval_mode ("" means prompt). A /yolo
-// toggle does not change it; AutoApprove reports that separately.
-func (s *Session) ApprovalMode() string {
-	if m := s.currentApprovalMode(); m != "" {
-		return m
-	}
-	return "prompt"
+// ApprovalMode is the current approval_mode, never empty. A /yolo toggle
+// does not change it; AutoApprove reports that separately.
+func (s *Session) ApprovalMode() types.ApprovalMode {
+	return s.currentApprovalMode().OrDefault()
 }
 
 // HasClassifier reports whether a classifier is configured, so classify
@@ -45,7 +41,7 @@ func (s *Session) HasClassifier() bool { return s.classifier() != nil }
 
 // currentApprovalMode reads approvalMode under its lock; decideToolCall runs on
 // the turn goroutine while SetApprovalMode runs on the UI's.
-func (s *Session) currentApprovalMode() string {
+func (s *Session) currentApprovalMode() types.ApprovalMode {
 	s.approvalMu.RLock()
 	defer s.approvalMu.RUnlock()
 	return s.approvalMode

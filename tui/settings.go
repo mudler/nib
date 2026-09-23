@@ -229,7 +229,7 @@ func (m *Model) setSetting(s config.Setting, raw string) {
 	}
 	// Refuse a mode the session cannot run before it reaches the file, or
 	// every later start would warn and fall back.
-	if s.Key == "approval_mode" && v == "classify" && m.session != nil && !m.session.HasClassifier() {
+	if s.Key == "approval_mode" && v == string(types.ApprovalClassify) && m.session != nil && !m.session.HasClassifier() {
 		m.appendMessage(ChatMessage{Role: "error", Content: theme.ClassifyNeedsClassifier})
 		return
 	}

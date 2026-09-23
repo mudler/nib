@@ -16,9 +16,9 @@ import (
 
 func TestNextApprovalMode(t *testing.T) {
 	for _, tc := range []struct {
-		current, base string
+		current, base types.ApprovalMode
 		classifier    bool
-		want          string
+		want          types.ApprovalMode
 	}{
 		{"prompt", "prompt", true, "classify"},
 		{"classify", "prompt", true, "auto"},
@@ -36,7 +36,7 @@ func TestNextApprovalMode(t *testing.T) {
 }
 
 func TestBaseApprovalMode(t *testing.T) {
-	for in, want := range map[string]string{"": "prompt", "prompt": "prompt", "strict": "strict", "allowlist": "allowlist", "classify": "prompt", "auto": "prompt"} {
+	for in, want := range map[types.ApprovalMode]types.ApprovalMode{"": "prompt", "prompt": "prompt", "strict": "strict", "allowlist": "allowlist", "classify": "prompt", "auto": "prompt"} {
 		if got := baseApprovalMode(in); got != want {
 			t.Errorf("base(%q) = %q, want %q", in, got, want)
 		}
@@ -120,7 +120,7 @@ func TestDispatchApproveClassifyWithoutClassifier(t *testing.T) {
 func TestShiftTabCyclesApprovalMode(t *testing.T) {
 	m := newQueueTestModel()
 	m.session = classifierSession(t)
-	var want = []string{"classify", "auto", "prompt"}
+	want := []types.ApprovalMode{types.ApprovalClassify, types.ApprovalAuto, types.ApprovalPrompt}
 	for _, w := range want {
 		next, _ := m.Update(tea.KeyMsg{Type: tea.KeyShiftTab})
 		m = next.(Model)
@@ -159,9 +159,9 @@ func TestAutoApprovedLineInTranscript(t *testing.T) {
 }
 
 func TestHeaderShowsEveryNonPromptMode(t *testing.T) {
-	for _, mode := range []string{"strict", "allowlist", "classify"} {
+	for _, mode := range []types.ApprovalMode{types.ApprovalStrict, types.ApprovalAllowlist, types.ApprovalClassify} {
 		h := render.Base{}.Header(render.ViewState{Brand: "nib", ApprovalMode: mode, Width: 80})
-		if !strings.Contains(h, mode) {
+		if !strings.Contains(h, string(mode)) {
 			t.Errorf("header lacks the %s badge: %q", mode, h)
 		}
 	}

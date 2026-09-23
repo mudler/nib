@@ -274,7 +274,7 @@ func TestResolveModelsForOneEndpoint(t *testing.T) {
 }
 
 func TestResolveApprove(t *testing.T) {
-	for in, want := range map[string]string{
+	for in, want := range map[string]types.ApprovalMode{
 		"/approve":           "",
 		"/approve classify":  "classify",
 		"/approve AUTO":      "auto",

@@ -106,12 +106,12 @@ const (
 // Action is the resolved result of a submitted input line.
 type Action struct {
 	Kind   Kind
-	Text   string // for KindSend: the message to send
-	Skill  string // for KindLoadSkill: the skill name
-	Err    string // for KindError
-	Model  string // for KindModelSet: the model to switch to
-	YoloOn *bool  // for KindYolo: nil = toggle, non-nil = set explicitly (on/off)
-	Mode   string // for KindApprove: the approval mode, empty = show the current one
+	Text   string             // for KindSend: the message to send
+	Skill  string             // for KindLoadSkill: the skill name
+	Err    string             // for KindError
+	Model  string             // for KindModelSet: the model to switch to
+	YoloOn *bool              // for KindYolo: nil = toggle, non-nil = set explicitly (on/off)
+	Mode   types.ApprovalMode // for KindApprove: the approval mode, empty = show the current one
 	// ClassifierOff is /classifier off. KindClassifier also uses Endpoint
 	// and Model; both empty opens the picker.
 	ClassifierOff bool
@@ -223,13 +223,14 @@ func Resolve(input string, cmds []types.CommandConfig, skills []types.Skill, age
 			return Action{Kind: KindError, Err: theme.YoloUsage}
 		}
 	case cmdApprove:
-		mode := strings.ToLower(strings.TrimSpace(rest))
-		switch mode {
-		case "", "prompt", "strict", "allowlist", "classify", "auto":
-			return Action{Kind: KindApprove, Mode: mode}
-		default:
+		if strings.TrimSpace(rest) == "" {
+			return Action{Kind: KindApprove}
+		}
+		mode, ok := types.ParseApprovalMode(rest)
+		if !ok {
 			return Action{Kind: KindError, Err: theme.ApproveUsage}
 		}
+		return Action{Kind: KindApprove, Mode: mode}
 	case cmdClassifier:
 		args := strings.Fields(rest)
 		switch {
