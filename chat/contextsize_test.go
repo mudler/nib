@@ -46,76 +46,6 @@ func TestStaticContextSizeCaseInsensitive(t *testing.T) {
 	}
 }
 
-func TestProbeContextSize(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/models/capabilities" {
-			http.NotFound(w, r)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"object": "list",
-			"data": []map[string]any{
-				{"id": "model-a", "context_size": 32768},
-				{"id": "model-b", "context_size": 8192},
-			},
-		})
-	}))
-	defer srv.Close()
-
-	got := probeContextSize(context.Background(), srv.URL, "", "model-a")
-	if got != 32768 {
-		t.Fatalf("probeContextSize(model-a) = %d, want 32768", got)
-	}
-	got = probeContextSize(context.Background(), srv.URL, "", "model-b")
-	if got != 8192 {
-		t.Fatalf("probeContextSize(model-b) = %d, want 8192", got)
-	}
-	// Model not in the list
-	got = probeContextSize(context.Background(), srv.URL, "", "model-c")
-	if got != 0 {
-		t.Fatalf("probeContextSize(model-c) = %d, want 0", got)
-	}
-}
-
-func TestProbeContextSizeMissingField(t *testing.T) {
-	// A model entry without context_size should yield 0, not a panic.
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"data": []map[string]any{
-				{"id": "no-ctx"},
-			},
-		})
-	}))
-	defer srv.Close()
-
-	got := probeContextSize(context.Background(), srv.URL, "", "no-ctx")
-	if got != 0 {
-		t.Fatalf("probeContextSize(no-ctx) = %d, want 0", got)
-	}
-}
-
-func TestProbeContextSizeServerDown(t *testing.T) {
-	// A non-responsive server returns 0 (best-effort).
-	got := probeContextSize(context.Background(), "http://127.0.0.1:1", "", "any")
-	if got != 0 {
-		t.Fatalf("probeContextSize(unreachable) = %d, want 0", got)
-	}
-}
-
-func TestProbeContextSizeNon200(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusNotFound)
-	}))
-	defer srv.Close()
-
-	got := probeContextSize(context.Background(), srv.URL, "", "any")
-	if got != 0 {
-		t.Fatalf("probeContextSize(404) = %d, want 0", got)
-	}
-}
-
 func TestDetectContextSizeProbeWins(t *testing.T) {
 	// When the probe returns a value, it should be used even if the static
 	// table also recognises the model.
@@ -154,5 +84,33 @@ func TestDetectContextSizeUnknownModel(t *testing.T) {
 	got := detectContextSize(context.Background(), srv.URL, "", "totally-unknown")
 	if got != 0 {
 		t.Fatalf("detectContextSize = %d, want 0 (unrecognised)", got)
+	}
+}
+
+func TestDetectContextSizeLiteLLMModelInfo(t *testing.T) {
+	// A LiteLLM proxy (regolo): no /models/capabilities, a /models listing
+	// without limits, and the window only in /model/info.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/v1/models":
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": []map[string]any{
+				{"id": "glm5.2", "object": "model", "owned_by": "openai"},
+			}})
+		case "/v1/model/info":
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": []map[string]any{
+				{"model_name": "glm5.2", "model_info": map[string]any{
+					"max_input_tokens": 96000, "max_tokens": 200000, "max_output_tokens": 96000,
+				}},
+			}})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	got := detectContextSize(context.Background(), srv.URL+"/v1", "", "glm5.2")
+	if got != 96000 {
+		t.Fatalf("detectContextSize = %d, want 96000 (LiteLLM max_input_tokens)", got)
 	}
 }

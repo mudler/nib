@@ -2,52 +2,16 @@ package chat
 
 import (
 	"context"
-	"encoding/json"
-	"net/http"
 	"strings"
 	"time"
+
+	"github.com/mudler/nib/llmprovider/catalog"
+	"github.com/mudler/xlog"
 )
 
 // defaultContextTokens is the last-resort fallback when neither the endpoint
 // probe nor the static table can identify the model's context window.
 const defaultContextTokens = 128000
-
-// probeContextSize asks the endpoint's /models/capabilities for the given
-// model's context_size. Returns 0 on any failure (network, decode, model not
-// found, or context_size absent), so the caller can fall through to the next
-// strategy.
-func probeContextSize(ctx context.Context, baseURL, apiKey, model string) int {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/models/capabilities", nil)
-	if err != nil {
-		return 0
-	}
-	if apiKey != "" {
-		req.Header.Set("Authorization", "Bearer "+apiKey)
-	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return 0
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return 0
-	}
-	var body struct {
-		Data []struct {
-			ID          string `json:"id"`
-			ContextSize int    `json:"context_size"`
-		} `json:"data"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
-		return 0
-	}
-	for _, m := range body.Data {
-		if m.ID == model && m.ContextSize > 0 {
-			return m.ContextSize
-		}
-	}
-	return 0
-}
 
 // staticContextSize returns a known context window for commercial models that
 // do not expose /models/capabilities. Matching is case-insensitive on the
@@ -89,11 +53,13 @@ var staticContextTable = []contextEntry{
 	{"gemini-1.5", 1048576},
 }
 
-// detectContextSize resolves the model's context window by trying the endpoint
-// probe first, then the static table. Returns 0 when neither source identifies
+// detectContextSize resolves the model's context window by asking the
+// endpoint first (catalog.DiscoverContextWindow: LocalAI, then /models, then
+// LiteLLM), then the static table. Returns 0 when neither source identifies
 // the model, leaving the caller to apply its own default.
 func detectContextSize(ctx context.Context, baseURL, apiKey, model string) int {
-	if v := probeContextSize(ctx, baseURL, apiKey, model); v > 0 {
+	if v, source := catalog.DiscoverContextWindow(ctx, baseURL, apiKey, model); v > 0 {
+		xlog.Debug("context window discovered", "model", model, "tokens", v, "source", source)
 		return v
 	}
 	return staticContextSize(model)

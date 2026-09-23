@@ -23,6 +23,9 @@ type ModelInfo struct {
 	MaxTokens           *int   `json:"max_tokens"`
 	ContextLength       *int   `json:"context_length"`
 	MaxOutputTokens     *int   `json:"max_output_tokens"`
+	// MaxModelLen is vLLM's name for the context window in its /models
+	// listing.
+	MaxModelLen *int `json:"max_model_len"`
 }
 
 // OutputCap returns the discovered output token cap, or 0 if unknown.
@@ -45,6 +48,9 @@ func (m ModelInfo) OutputCap() int {
 func (m ModelInfo) ContextWindow() int {
 	if m.ContextLength != nil && *m.ContextLength > 0 {
 		return *m.ContextLength
+	}
+	if m.MaxModelLen != nil && *m.MaxModelLen > 0 {
+		return *m.MaxModelLen
 	}
 	return 0
 }

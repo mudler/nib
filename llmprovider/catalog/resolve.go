@@ -2,7 +2,6 @@ package catalog
 
 import (
 	"context"
-	"log/slog"
 	"net/url"
 	"strings"
 
@@ -33,7 +32,7 @@ type Resolution struct {
 
 // ResolveMaxTokens runs the full resolution chain:
 //  1. User-explicit config.MaxTokens (always wins if >0)
-//  2. API discovery (query provider's /models endpoint)
+//  2. API discovery (DiscoverLimits: the provider's /models, then LiteLLM's /model/info)
 //  3. Catalog lookup (oh-my-pi model entry)
 //  4. FallbackMaxTokens (16384)
 //
@@ -54,22 +53,21 @@ func ResolveMaxTokens(ctx context.Context, config types.ModelProviderConfig, bas
 		return res
 	}
 
-	// 2. API discovery.
+	// 2. API discovery. /models has always answered here under the plain
+	// "api-discovery" source; another endpoint names itself in the suffix.
 	if ctx != nil && baseURL != "" && config.Model != "" {
-		info, err := DiscoverModel(ctx, baseURL, apiKey, config.Model)
-		if err != nil {
-			slog.Debug("max_tokens discovery failed", "model", config.Model, "base_url", baseURL, "error", err)
-		}
-		if info != nil {
-			if cap := info.OutputCap(); cap > 0 {
-				res := Resolution{
-					MaxTokens: cap,
-					Source:    "api-discovery",
-					WireField: "max_completion_tokens",
-				}
-				applyCatalogCompat(&res, config, baseURL)
-				return res
+		if l := discoverLimits(ctx, baseURL, apiKey, config.Model, false, true); l.OutputCap > 0 {
+			source := "api-discovery"
+			if l.OutputSource != SourceModels {
+				source += ":" + l.OutputSource
 			}
+			res := Resolution{
+				MaxTokens: l.OutputCap,
+				Source:    source,
+				WireField: "max_completion_tokens",
+			}
+			applyCatalogCompat(&res, config, baseURL)
+			return res
 		}
 	}
 
