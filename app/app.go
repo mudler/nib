@@ -8,6 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -426,7 +427,10 @@ func runCtx(ctx context.Context, o Options) int {
 	if cfg.LogLevel == "" {
 		cfg.LogLevel = "error"
 	}
-	xlog.SetLogger(xlog.NewLogger(xlog.LogLevel(cfg.LogLevel), os.Getenv("LOG_FORMAT")))
+	// xlog's own NewLogger writes to stdout, which is the MCP stdio transport
+	// in --mcp mode and the program output in --cli mode, so log to stderr.
+	// The TUI modes redirect it again below, once the mode is known.
+	xlog.SetLogger(newLogger(o.stderr(), cfg.LogLevel))
 
 	isTTY := false
 	if f, ok := o.stdin().(*os.File); ok {
@@ -497,6 +501,17 @@ func runCtx(ctx context.Context, o Options) int {
 		return 1
 	}
 
+	// The TUI owns the terminal: a log line written to stdout or stderr lands
+	// on top of the rendered frame and corrupts it. Send logs to a file.
+	if mode != modeCLI {
+		if f := openLogFile(cfg.BaseDir); f != nil {
+			defer f.Close()
+			xlog.SetLogger(newLogger(f, cfg.LogLevel))
+		} else {
+			xlog.SetLogger(newLogger(io.Discard, cfg.LogLevel))
+		}
+	}
+
 	switch mode {
 	case modeCLI:
 		if err := cmd.RunCLI(ctx, cfg, streams, shellJobs, transports...); err != nil {
@@ -533,6 +548,30 @@ func runCtx(ctx context.Context, o Options) int {
 		}
 	}
 	return 0
+}
+
+// newLogger builds the xlog logger at level, writing to w. LOG_FORMAT=json
+// selects JSON output, the same switch xlog.NewLogger honors.
+func newLogger(w io.Writer, level string) *slog.Logger {
+	opts := &slog.HandlerOptions{Level: xlog.LogLevel(level).ToSlogLevel()}
+	if os.Getenv("LOG_FORMAT") == "json" {
+		return slog.New(slog.NewJSONHandler(w, opts))
+	}
+	return slog.New(slog.NewTextHandler(w, opts))
+}
+
+// openLogFile opens (appending) nib.log in the nib base directory. It returns
+// nil when the file cannot be opened.
+func openLogFile(baseDir string) *os.File {
+	dir := plugin.BaseDirIn(baseDir)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return nil
+	}
+	f, err := os.OpenFile(filepath.Join(dir, "nib.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		return nil
+	}
+	return f
 }
 
 // parseHeight parses a height string like "40%" or "20". A negative result

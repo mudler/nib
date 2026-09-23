@@ -486,6 +486,12 @@ agents:
     metadata:
       enable_thinking: "true"
 
+# Optional: log verbosity (debug, info, warn, error; default error). The TUI
+# writes logs to nib.log in the nib config dir (~/.config/nib/nib.log) so they
+# do not draw over the screen; --cli and nib mcp write them to stderr.
+# LOG_FORMAT=json switches to JSON lines.
+log_level: error
+
 # Optional: external MCP servers
 mcp_servers:
   filesystem:
