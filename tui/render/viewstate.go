@@ -65,9 +65,6 @@ type Message struct {
 // theme.ReasoningMaxLines, and read by both presenters' Reasoning to build a
 // render.CollapsibleBox.
 type Reasoning struct {
-	// Label is the header text above the trace; "" means the plain
-	// theme.ReasoningLabel.
-	Label     string
 	Text      string
 	Collapsed bool
 	MaxLines  int
@@ -251,7 +248,7 @@ type ViewState struct {
 	// Speed is the live generation rate, already rendered, shown after the
 	// status on the working indicator line; "" when the model is not
 	// generating right now.
-	Speed string
+	Speed     string
 	// Tip is a dim usage hint shown as a single line beneath the loader,
 	// above reasoning. Empty when the feature is disabled or no tip was
 	// picked.
