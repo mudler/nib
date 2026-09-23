@@ -3,6 +3,7 @@ package chat
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -12,10 +13,20 @@ import (
 	"github.com/mudler/xlog"
 )
 
-// maxApproverState caps the text sent to the classifier for one call. A
-// small encoder reads a few hundred tokens well; a huge write gains nothing
-// from its tail.
-const maxApproverState = 8 << 10
+// maxApproverState caps the text sent to the classifier for one call: about
+// what a small encoder reads. A call that does not fit is not judged at all,
+// since the part the classifier never saw could do anything.
+const maxApproverState = 2 << 10
+
+// cannotJudge is why a call was not shown to the classifier.
+type cannotJudge string
+
+func (c cannotJudge) Error() string { return string(c) }
+
+const (
+	errTooLong  cannotJudge = "too long to judge"
+	errCompound cannotJudge = "compound command"
+)
 
 // Default auto_approve policy.
 var defaultAutoApproveAllow = []string{"inspect", "build_test"}
@@ -44,6 +55,10 @@ type Verdict struct {
 
 // String is the verdict as the approval prompt shows it.
 func (v Verdict) String() string {
+	var cj cannotJudge
+	if errors.As(v.Err, &cj) {
+		return string(cj)
+	}
 	if v.Err != nil || v.Category == "" {
 		return "unavailable"
 	}
@@ -73,7 +88,12 @@ func NewApprover(c classify.Classifier, cfg types.AutoApproveConfig, workDir str
 // Judge classifies req. It approves only when the top category is allowed
 // and its confidence reaches the threshold; any error leaves it unapproved.
 func (a *Approver) Judge(ctx context.Context, req ToolCallRequest) Verdict {
-	ans, err := a.c.Classify(ctx, a.state(req), map[string]classify.Question{
+	state, err := a.state(req)
+	if err != nil {
+		xlog.Debug("classifier skipped", "tool", req.Name, "reason", err)
+		return Verdict{Err: err}
+	}
+	ans, err := a.c.Classify(ctx, state, map[string]classify.Question{
 		"category": {
 			Type:         classify.TypeChoice,
 			Instructions: "What does this tool call do?",
@@ -94,31 +114,38 @@ func (a *Approver) Judge(ctx context.Context, req ToolCallRequest) Verdict {
 }
 
 // state renders the call as the text the classifier reads: the tool, what
-// it runs, where, and why the model says it wants it.
-func (a *Approver) state(req ToolCallRequest) string {
+// it runs, where, and why the model says it wants it. It refuses a call the
+// classifier could not see whole: one longer than maxApproverState, or a bash
+// script that is not one simple command, which would get one category for
+// all of its parts. The reason alone is shortened to fit, since it does not
+// run.
+func (a *Approver) state(req ToolCallRequest) (string, error) {
 	var b strings.Builder
 	fmt.Fprintf(&b, "tool: %s\n", req.Name)
 	if req.Name == "bash" {
+		if _, ok := BashGrantPrefix(req.Arguments); !ok {
+			return "", errCompound
+		}
 		var args struct {
 			Script string `json:"script"`
 		}
-		if json.Unmarshal([]byte(req.Arguments), &args) == nil && args.Script != "" {
-			fmt.Fprintf(&b, "command: %s\n", args.Script)
-		} else {
-			fmt.Fprintf(&b, "arguments: %s\n", req.Arguments)
-		}
+		_ = json.Unmarshal([]byte(req.Arguments), &args)
+		fmt.Fprintf(&b, "command: %s\n", args.Script)
 	} else {
 		fmt.Fprintf(&b, "arguments: %s\n", req.Arguments)
 	}
 	if a.workDir != "" {
 		fmt.Fprintf(&b, "working directory: %s\n", a.workDir)
 	}
+	if b.Len() > maxApproverState {
+		return "", errTooLong
+	}
 	if req.Reasoning != "" {
-		fmt.Fprintf(&b, "reason: %s\n", req.Reasoning)
+		reason := "reason: " + req.Reasoning + "\n"
+		if room := maxApproverState - b.Len(); len(reason) > room {
+			reason = strings.ToValidUTF8(reason[:room], "")
+		}
+		b.WriteString(reason)
 	}
-	s := b.String()
-	if len(s) > maxApproverState {
-		s = strings.ToValidUTF8(s[:maxApproverState], "")
-	}
-	return s
+	return b.String(), nil
 }

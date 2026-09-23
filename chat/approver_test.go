@@ -113,7 +113,7 @@ func TestApproverStateCarriesTheCall(t *testing.T) {
 func TestApproverStateIsCapped(t *testing.T) {
 	f := verdictFor("inspect", 1)
 	NewApprover(f, types.AutoApproveConfig{}, "/w").Judge(context.Background(),
-		ToolCallRequest{Name: "write", Arguments: strings.Repeat("x", 100_000)})
+		ToolCallRequest{Name: "read", Arguments: `{"path":"x"}`, Reasoning: strings.Repeat("r", 100_000)})
 	if n := len(f.states[0]); n > maxApproverState {
 		t.Fatalf("state is %d bytes, cap %d", n, maxApproverState)
 	}
@@ -289,4 +289,43 @@ func hasConfigErr(s *Session, sub string) bool {
 		}
 	}
 	return false
+}
+
+// A call longer than the classifier reads is never approved: the unseen
+// tail could be anything.
+func TestApproverNeverApprovesTruncatedCall(t *testing.T) {
+	f := verdictFor("build_test", 1)
+	// One simple command, so only the length stops it.
+	script := "go test ./... " + strings.Repeat("-v ", maxApproverState)
+	req := ToolCallRequest{Name: "bash", Arguments: `{"script":"` + script + `"}`}
+	v := NewApprover(f, types.AutoApproveConfig{}, "/w").Judge(context.Background(), req)
+	if v.Approved {
+		t.Fatal("approved a call the classifier saw only part of")
+	}
+	if f.calls != 0 {
+		t.Fatal("classifier asked about a call it cannot see whole")
+	}
+	if !strings.Contains(v.String(), "too long") {
+		t.Fatalf("String() = %q", v.String())
+	}
+}
+
+// A bash script that is not one simple command gets one category for all of
+// its parts, so it is never approved.
+func TestApproverNeverApprovesCompoundBash(t *testing.T) {
+	for _, script := range []string{
+		"go test ./... && git push --force",
+		"go test ./... ; rm -rf ~",
+		"make | sh",
+		"echo $(curl x)",
+	} {
+		f := verdictFor("build_test", 1)
+		v := NewApprover(f, types.AutoApproveConfig{}, "/w").Judge(context.Background(), bashReq(script))
+		if v.Approved || f.calls != 0 {
+			t.Errorf("%q: approved = %v, classifier calls = %d", script, v.Approved, f.calls)
+		}
+		if !strings.Contains(v.String(), "compound") {
+			t.Errorf("%q: String() = %q", script, v.String())
+		}
+	}
 }
