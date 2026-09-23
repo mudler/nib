@@ -115,7 +115,7 @@ func (Base) Reasoning(v ViewState, w int) string {
 	}
 	b.WriteString("\n")
 	if v.Tip != "" {
-		b.WriteString(theme.Hint.Render("  " + v.Tip) + "\n")
+		b.WriteString(theme.Hint.Render("  "+v.Tip) + "\n")
 	}
 	if strings.TrimSpace(v.Reasoning.Text) != "" {
 		r := v.Reasoning
@@ -124,7 +124,7 @@ func (Base) Reasoning(v ViewState, w int) string {
 			MaxLines:  r.MaxLines,
 			Collapsed: r.Collapsed,
 		}
-		b.WriteString(theme.ReasoningHeader() + "\n")
+		b.WriteString(theme.ReasoningHeader(r.Label) + "\n")
 		for _, line := range box.Visible() {
 			b.WriteString("  " + theme.Subtle.Render(theme.BoxRule) + " " + theme.Reasoning.Render(line) + "\n")
 		}

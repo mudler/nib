@@ -129,10 +129,12 @@ func (m *Model) startThinking() {
 	if m.cfg.UI.NoFunny {
 		m.thinkingLine = ""
 		m.tip = ""
+		m.reasoningLabel = ""
 		return
 	}
 	m.thinkingLine = theme.RandomThinkingLine()
 	m.tip = theme.RandomTip()
+	m.reasoningLabel = theme.RandomReasoningLabel()
 }
 
 // stopThinking clears the funny line and tip set by startThinking, called
@@ -140,6 +142,7 @@ func (m *Model) startThinking() {
 func (m *Model) stopThinking() {
 	m.thinkingLine = ""
 	m.tip = ""
+	m.reasoningLabel = ""
 }
 
 // appendStreamedContent applies one live "content" delta (Callbacks.OnStream,
@@ -351,7 +354,11 @@ type Model struct {
 	// Picked at random each turn by startThinking(); empty when
 	// ui.no_funny is on.
 	tip string
-	reasoning string
+	// reasoningLabel is the header above the live reasoning trace, picked
+	// at random each turn by startThinking(); empty (the plain "reasoning")
+	// when ui.no_funny is on.
+	reasoningLabel string
+	reasoning      string
 	// reasoningCollapsed caps the live thinking trace to a few trailing lines
 	// so it does not flood the transcript. Per-session, persists across
 	// turns: it is a Model field (not derived per-frame), toggled only by
@@ -3527,6 +3534,7 @@ func (m Model) viewState() render.ViewState {
 		Spinner: m.spinner.View(),
 		Speed:   m.liveSpeed(),
 		Reasoning: render.Reasoning{
+			Label:     m.reasoningLabel,
 			Text:      m.reasoning,
 			Collapsed: m.reasoningCollapsed,
 			MaxLines:  theme.ReasoningMaxLines,
