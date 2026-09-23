@@ -343,28 +343,6 @@ var ThinkingLines = []string{
 	"flipping bits of wisdom…",
 }
 
-// ReasoningLabel is the plain header of the live reasoning trace, used when
-// ui.no_funny is on.
-const ReasoningLabel = "reasoning"
-
-// ReasoningLabels replace the plain "reasoning" header above the live trace
-// with a playful one, picked at random each turn. Kept short: the header is
-// a single dim line.
-var ReasoningLabels = []string{
-	"reasoning",
-	"inner monologue",
-	"thinking out loud",
-	"train of thought",
-	"stream of consciousness",
-	"mulling it over",
-	"notes to self",
-	"scratchpad",
-	"back-of-the-napkin math",
-	"musings",
-	"the plot thickens",
-	"overheard in the weights",
-}
-
 // Tips are short nib usage hints shown as a dim line beneath the spinner
 // while the agent is thinking. Picked at random each turn.
 var Tips = []string{
@@ -392,15 +370,6 @@ func RandomThinkingLine() string {
 		return VerbThinking
 	}
 	return ThinkingLines[randIntn(len(ThinkingLines))]
-}
-
-// RandomReasoningLabel returns a random reasoning header label, or
-// ReasoningLabel when the list is empty (defensive).
-func RandomReasoningLabel() string {
-	if len(ReasoningLabels) == 0 {
-		return ReasoningLabel
-	}
-	return ReasoningLabels[randIntn(len(ReasoningLabels))]
 }
 
 // RandomTip returns a random tip string, or "" when the list is empty.

@@ -287,15 +287,6 @@ func cliThinkingLine(cfg types.Config) string {
 	return theme.RandomThinkingLine()
 }
 
-// cliReasoningLabel picks the header for a reasoning block. Returns "" (the
-// plain "reasoning") when ui.no_funny is on.
-func cliReasoningLabel(cfg types.Config) string {
-	if cfg.UI.NoFunny {
-		return ""
-	}
-	return theme.RandomReasoningLabel()
-}
-
 // cliTip picks a tip for display beneath the spinner this turn.
 // Returns "" when ui.no_funny is on.
 func cliTip(cfg types.Config) string {
@@ -338,7 +329,7 @@ func RunCLI(ctx context.Context, cfg types.Config, streams Streams, shellJobs *w
 		},
 		OnReasoning: func(reasoning string) {
 			spin.stop()
-			fmt.Fprintln(out, theme.ReasoningHeader(cliReasoningLabel(cfg)))
+			fmt.Fprintln(out, theme.ReasoningHeader())
 			for _, line := range strings.Split(strings.TrimRight(reasoning, "\n"), "\n") {
 				fmt.Fprintln(out, "  "+theme.Reasoning.Render(line))
 			}

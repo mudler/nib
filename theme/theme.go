@@ -209,14 +209,9 @@ var (
 // ReasoningHeader renders the labeled header that tags a block of model
 // thinking, so it reads as a distinct channel from the assistant's answer:
 // an accent glyph (✻ / * in restricted mode) and a dim, non-italic label.
-// The body beneath is rendered with the Reasoning style by the caller. label
-// is the header text (see RandomReasoningLabel); "" falls back to the plain
-// ReasoningLabel.
-func ReasoningHeader(label string) string {
-	if label == "" {
-		label = ReasoningLabel
-	}
-	return Gutter.Render(ReasoningGlyph) + " " + Help.Render(label)
+// The body beneath is rendered with the Reasoning style by the caller.
+func ReasoningHeader() string {
+	return Gutter.Render(ReasoningGlyph) + " " + Help.Render("reasoning")
 }
 
 // Hairline renders the dim horizontal rule that closes the header: the
