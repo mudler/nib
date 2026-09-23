@@ -14,13 +14,18 @@ import (
 // Backend failure resilience.
 //
 // A turn can run for many minutes and dozens of requests, so a backend hiccup
-// must not end it. Errors fall into three classes (classifyBackendError):
+// must not end it. Errors are retried by default; only a small set of fatal
+// errors stop immediately, because the same request fails the same way again.
+//
+// Errors fall into three classes (classifyBackendError):
 //
 //   - rate limit (HTTP 429): wait until the limit resets, then go on.
-//   - transient (5xx, overloaded, connection reset, EOF, timeouts): back off
-//     and go on.
-//   - fatal (anything else: 400, 401, 403, unknown model, ...): stop, because
-//     the same request fails the same way again.
+//   - transient (5xx, overloaded, connection reset, EOF, timeouts, unknown
+//     errors): back off and go on. This is the default: an error that matches
+//     no fatal marker is transient, so a new backend hiccup is retried even
+//     before we have a name for it.
+//   - fatal (context overflow, 400, 401, 403, unknown model, ...): stop,
+//     because the same request fails the same way again.
 //
 // Two layers cooperate:
 //
@@ -110,27 +115,13 @@ var rateLimitMarkers = []string{
 // "status code: 429" (OpenAI SDK) error strings.
 var statusRe = regexp.MustCompile(`status(?: code:)? (\d{3})\b`)
 
-// transientMarkers are lower-case substrings of errors that a later attempt
-// can succeed past: server-side failures and broken connections.
-var transientMarkers = []string{
-	"internal server error",
-	"bad gateway",
-	"service unavailable",
-	"gateway timeout",
-	"overloaded",
-	"connection refused",
-	"connection reset",
-	"broken pipe",
-	"unexpected eof",
-	"i/o timeout",
-	"tls handshake timeout",
-	"timeout exceeded",
-	"context deadline exceeded",
-	"no such host",
-	"network is unreachable",
-	"server closed",
-	"stream error",
-	"http2:",
+// fatalMarkers are lower-case substrings of errors where retrying cannot help:
+// the request itself is wrong, so the same call fails the same way again.
+// Everything that matches no marker is retried — see classifyBackendError.
+var fatalMarkers = []string{
+	// cogito's text for a tool call to a tool the model hallucinated;
+	// not a backend error, and the model will not self-correct on retry.
+	"not found",
 }
 
 // classifyBackendError sorts err into a retry class. Errors are matched as
@@ -138,6 +129,11 @@ var transientMarkers = []string{
 // the session loop. A context overflow is fatal here even when the backend
 // reports it as a 500: it has its own recovery, and repeating the request
 // cannot fix it.
+//
+// The default is transient: an error that matches no known fatal marker is
+// retried, so a new backend hiccup is covered even before we have a name for
+// it. Only the small set above — client-side failures that never succeed on
+// retry — stops immediately.
 func classifyBackendError(err error) backendErrorClass {
 	if err == nil || isContextOverflow(err) {
 		return errFatal
@@ -149,6 +145,9 @@ func classifyBackendError(err error) backendErrorClass {
 			return errRateLimited
 		case code == "408" || code[0] == '5':
 			return errTransient
+		default:
+			// 4xx (except 429/408): client error, same request fails again.
+			return errFatal
 		}
 	}
 	for _, m := range rateLimitMarkers {
@@ -156,16 +155,14 @@ func classifyBackendError(err error) backendErrorClass {
 			return errRateLimited
 		}
 	}
-	for _, m := range transientMarkers {
+	for _, m := range fatalMarkers {
 		if strings.Contains(low, m) {
-			return errTransient
+			return errFatal
 		}
 	}
-	// A connection the server dropped mid-response surfaces as a bare EOF.
-	if strings.HasSuffix(low, "eof") {
-		return errTransient
-	}
-	return errFatal
+	// Default: an unrecognized error is transient. A new backend hiccup
+	// is retried even before we have a name for it.
+	return errTransient
 }
 
 // isRateLimitError reports whether err is a rate-limit (HTTP 429) failure.

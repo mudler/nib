@@ -167,7 +167,7 @@ func (e *errorLLM) Ask(ctx context.Context, f cogito.Fragment) (cogito.Fragment,
 	return f.AddMessage("assistant", "compacted"), nil
 }
 
-var errFakeLLM = errFake("the LLM is unavailable")
+var errFakeLLM = errFake("localai stream: status 401: the LLM is unavailable")
 
 type errFake string
 
