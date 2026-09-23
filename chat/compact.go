@@ -569,7 +569,45 @@ func (s *Session) compactHistory(ctx context.Context) (before, after int, err er
 	if len(pieces) == 0 {
 		return before, before, nil // nothing to compact
 	}
+	summary, err := s.summarize(ctx, pieces)
+	if err != nil {
+		return before, before, err
+	}
 
+	// Build the new state up front; swap only after success (atomic).
+	newFragMsgs := append([]openai.ChatCompletionMessage{summaryMessage(summary)}, tail...)
+
+	s.historyMu.Lock()
+	newMessages := compactedDisplay(s.messages, tail)
+	newFrag := cogito.NewFragment(newFragMsgs...)
+	if s.fragment.Status != nil {
+		// Preserve the running token counters — but NOT LastUsage, which
+		// measured a request against the conversation this one just replaced.
+		// Left in place it outlives the history it describes: ContextTokens
+		// would keep reporting the pre-compaction size, so the footer's own
+		// "compacted 180k → 40k" notice would be contradicted by the gauge
+		// beside it. Zeroed, the fragment's estimate answers instead — the
+		// same number the notice quotes — until the next request reports a
+		// real one. The copy keeps this off the Status a reader may hold.
+		statusCopy := *s.fragment.Status
+		statusCopy.LastUsage = cogito.LLMUsage{}
+		newFrag.Status = &statusCopy
+	}
+	s.fragment = newFrag
+	s.messages = newMessages
+	s.historyMu.Unlock()
+	// Same reason, for a turn still in flight: the live figure was measured
+	// against the history that just went away.
+	s.live.reset()
+
+	after = estimateTokens(newFrag.Messages)
+	return before, after, nil
+}
+
+// summarize asks the model for the compaction summary of pieces, fitting the
+// prompt into the window. It counts the spend of every call it makes.
+func (s *Session) summarize(ctx context.Context, pieces []summaryPiece) (string, error) {
+	cfg := s.compactionConfig()
 	// The summary prompt has to fit the same window as any other request, and
 	// the head it summarizes is by nature most of a window that just filled up.
 	const prefix = compactInstruction + "\n\n--- CONVERSATION ---\n"
@@ -611,63 +649,46 @@ func (s *Session) compactHistory(ctx context.Context) (before, after int, err er
 		s.addUsage(res.Status.LastUsage)
 	}
 	if aerr != nil {
-		return before, before, fmt.Errorf("compaction summary failed: %w", aerr)
+		return "", fmt.Errorf("compaction summary failed: %w", aerr)
 	}
 	last := res.LastMessage()
 	if last == nil || strings.TrimSpace(last.Content) == "" {
-		return before, before, fmt.Errorf("compaction produced an empty summary")
+		return "", fmt.Errorf("compaction produced an empty summary")
 	}
+	return last.Content, nil
+}
 
-	// Build the new state up front; swap only after success (atomic).
-	// The continuation instruction mirrors maki's CONTINUE_AFTER_COMPACT: it
-	// tells the model to re-orient from the structured summary before
-	// continuing, so the compaction boundary does not silently drop context.
-	// The memory tool reference nudges the model to persist durable facts
-	// (paths, decisions, gotchas) that the lossy summary may not preserve.
-	summaryMsg := openai.ChatCompletionMessage{
+// summaryMessage wraps a compaction summary as the message that stands in for
+// the history it summarizes.
+//
+// The continuation instruction mirrors maki's CONTINUE_AFTER_COMPACT: it
+// tells the model to re-orient from the structured summary before
+// continuing, so the compaction boundary does not silently drop context.
+// The memory tool reference nudges the model to persist durable facts
+// (paths, decisions, gotchas) that the lossy summary may not preserve.
+func summaryMessage(summary string) openai.ChatCompletionMessage {
+	return openai.ChatCompletionMessage{
 		Role: "user",
 		Content: "[Earlier conversation compacted. Review the summary below and continue from where you left off. " +
-			"If the summary contains important context that should persist across sessions, save it to memory now before it is lost.]\n\n" + last.Content,
+			"If the summary contains important context that should persist across sessions, save it to memory now before it is lost.]\n\n" + summary,
 	}
-	newFragMsgs := append([]openai.ChatCompletionMessage{summaryMsg}, tail...)
+}
 
+// compactedDisplay rebuilds the display copy after compaction: a notice
+// counting what went, then the user and assistant text of the kept tail.
+func compactedDisplay(displayed, tail []openai.ChatCompletionMessage) []openai.ChatCompletionMessage {
 	displayTail := []openai.ChatCompletionMessage{}
 	for _, m := range tail {
 		if (m.Role == "user" || m.Role == "assistant") && strings.TrimSpace(m.Content) != "" {
 			displayTail = append(displayTail, openai.ChatCompletionMessage{Role: m.Role, Content: m.Content})
 		}
 	}
-	removed := len(s.messages) - len(displayTail)
+	removed := len(displayed) - len(displayTail)
 	if removed < 0 {
 		removed = 0
 	}
-	newMessages := append([]openai.ChatCompletionMessage{{
+	return append([]openai.ChatCompletionMessage{{
 		Role:    "assistant",
 		Content: compactedNotice(removed),
 	}}, displayTail...)
-
-	s.historyMu.Lock()
-	newFrag := cogito.NewFragment(newFragMsgs...)
-	if s.fragment.Status != nil {
-		// Preserve the running token counters — but NOT LastUsage, which
-		// measured a request against the conversation this one just replaced.
-		// Left in place it outlives the history it describes: ContextTokens
-		// would keep reporting the pre-compaction size, so the footer's own
-		// "compacted 180k → 40k" notice would be contradicted by the gauge
-		// beside it. Zeroed, the fragment's estimate answers instead — the
-		// same number the notice quotes — until the next request reports a
-		// real one. The copy keeps this off the Status a reader may hold.
-		statusCopy := *s.fragment.Status
-		statusCopy.LastUsage = cogito.LLMUsage{}
-		newFrag.Status = &statusCopy
-	}
-	s.fragment = newFrag
-	s.messages = newMessages
-	s.historyMu.Unlock()
-	// Same reason, for a turn still in flight: the live figure was measured
-	// against the history that just went away.
-	s.live.reset()
-
-	after = estimateTokens(newFrag.Messages)
-	return before, after, nil
 }

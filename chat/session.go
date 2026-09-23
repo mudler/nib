@@ -1639,12 +1639,16 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 		}))
 	}
 
+	// Compacts between tool steps when the turn outgrows the trigger; see
+	// turnCompactor. Its summary reaches s.fragment only through commitRun.
+	midTurn := s.newTurnCompactor(turnCtx)
+
 	cogitoOpts = append(cogitoOpts,
 		// Rewrites what goes on the wire, never s.fragment. Installed here
 		// rather than in toolOptions because toolOptions is shared with Warm,
 		// whose contract is that a priming request advertises exactly the tool
 		// schemas a real turn advertises — a message manipulator is neither.
-		cogito.WithMessagesManipulator(s.pruneMessages),
+		cogito.WithMessagesManipulator(midTurn.manipulate),
 		cogito.WithAgentManager(s.agentManager),
 		cogito.WithAgentSpawnCallback(func(a *cogito.AgentState) {
 			s.emitAgentEvent(a)
@@ -1694,6 +1698,7 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 			runFragment.Status = &statusCopy
 		}
 		var newFragment cogito.Fragment
+		midTurn.reset()
 		newFragment, err = cogito.ExecuteTools(llm, runFragment, cogitoOpts...)
 		if err != nil && !errors.Is(err, cogito.ErrNoToolSelected) {
 			// Interrupt (turnCtx cancelled) surfaces here as a context error;
@@ -1818,9 +1823,7 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 						s.turnRetryMu.Lock()
 						s.turnRetryTotal++
 						s.turnRetryMu.Unlock()
-						s.historyMu.Lock()
-						s.fragment = resume
-						s.historyMu.Unlock()
+						s.commitRun(midTurn, resume)
 						continue
 					}
 				}
@@ -1859,9 +1862,7 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 			if turnCtx.Err() == nil {
 				note = failedTurnNote(err)
 			}
-			s.historyMu.Lock()
-			s.fragment = keepFailedTurn(s.fragment, newFragment, note)
-			s.historyMu.Unlock()
+			s.commitRun(midTurn, keepFailedTurn(s.fragment, newFragment, note))
 			return "", err
 		}
 
@@ -1893,13 +1894,10 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 			s.addUsage(newFragment.Status.CumulativeUsage)
 		}
 
-		s.historyMu.Lock()
-		s.fragment = newFragment
-		s.messages = append(s.messages, openai.ChatCompletionMessage{
+		s.commitRun(midTurn, newFragment, openai.ChatCompletionMessage{
 			Role:    "assistant",
 			Content: response,
 		})
-		s.historyMu.Unlock()
 
 		s.runMu.Lock()
 		done := s.goalDone
