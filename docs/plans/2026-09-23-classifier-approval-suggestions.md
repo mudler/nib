@@ -183,14 +183,11 @@ and fish-style ghost text.
 - [ ] **Step 4: Run** `go test ./tui/...` — PASS.
 - [ ] **Step 5: Commit** `feat(tui): show reply suggestions as ghost text, Tab to accept`.
 
-### Task 6: Setup wizard offer
+### Task 6: Setup wizard offer (removed)
 
-**Files:**
-- Modify: `setup/probe.go`, `setup/wizard.go`, tests
-
-- [ ] **Step 1: Failing test:** when the probed model list contains a name with `gliner` (case-insensitive), the saved config gets `classifier.model` set to it after the user accepts; declining leaves `classifier` empty; `approval_mode` is never changed.
-- [ ] **Step 2–4:** implement and pass `go test ./setup/`.
-- [ ] **Step 5: Commit** `feat(setup): offer to configure a GLiNER classifier`.
+Built, then removed in review: the offer matched model names containing
+`gliner`, which is model-specific code. `/classifier` sets the classifier
+at runtime instead.
 
 ### Task 7: Documentation
 

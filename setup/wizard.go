@@ -42,10 +42,6 @@ type model struct {
 
 	probing  bool
 	probeErr error
-	// classifierModel is a GLiNER model the endpoint serves, offered for
-	// the classifier block; useClassifier is the user's yes.
-	classifierModel string
-	useClassifier   bool
 
 	savedPath string
 	saveErr   error
@@ -53,10 +49,7 @@ type model struct {
 	quitting  bool
 }
 
-type probeResultMsg struct {
-	err    error
-	models []string
-}
+type probeResultMsg struct{ err error }
 
 // Run launches the interactive wizard. It returns the resulting config, whether
 // it was saved, and any fatal error. Cancellation (Esc/Ctrl+C) returns
@@ -129,8 +122,7 @@ func (m *model) collect() {
 func (m model) probeCmd() tea.Cmd {
 	ctx, cfg := m.ctx, m.cfg
 	return func() tea.Msg {
-		models, err := ProbeModels(ctx, cfg.APIKey, cfg.BaseURL)
-		return probeResultMsg{err: err, models: models}
+		return probeResultMsg{err: Probe(ctx, cfg.Model, cfg.APIKey, cfg.BaseURL)}
 	}
 }
 
@@ -141,8 +133,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case probeResultMsg:
 		m.probing = false
 		m.probeErr = msg.err
-		m.classifierModel = FindClassifierModel(msg.models)
-		m.useClassifier = false
 		return m, nil
 	case tea.KeyMsg:
 		if msg.Type == tea.KeyCtrlC {
@@ -218,16 +208,7 @@ func (m model) updateProbe(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "esc":
 		m.quitting = true
 		return m, tea.Quit
-	case "c":
-		if m.classifierModel != "" {
-			m.useClassifier = !m.useClassifier
-		}
-		return m, nil
 	case "enter", "s":
-		m.cfg.Classifier = types.ClassifierConfig{}
-		if m.useClassifier {
-			m.cfg.Classifier.Model = m.classifierModel
-		}
 		path, err := Save(m.cfg)
 		m.savedPath, m.saveErr = path, err
 		m.saved = err == nil
@@ -309,16 +290,7 @@ func (m model) viewProbe() string {
 		b.WriteString(theme.Error.Render("⚠ Could not reach the endpoint:") + "\n")
 		b.WriteString(theme.Help.Render("  "+m.probeErr.Error()) + "\n")
 	}
-	hint := "enter/s save · e edit · esc cancel"
-	if m.classifierModel != "" {
-		mark := "[ ]"
-		if m.useClassifier {
-			mark = "[x]"
-		}
-		b.WriteString("\n" + theme.Help.Render(fmt.Sprintf("%s use %s as the classifier (classify approval mode and reply suggestions)", mark, m.classifierModel)) + "\n")
-		hint = "c toggle classifier · " + hint
-	}
-	b.WriteString("\n" + theme.Hint.Render(hint))
+	b.WriteString("\n" + theme.Hint.Render("enter/s save · e edit · esc cancel"))
 	return b.String()
 }
 

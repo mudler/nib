@@ -244,13 +244,6 @@ level with the tool name, category and confidence.
 - The suggestions are cleared when a new turn starts or the session changes.
 - Errors and an empty result show nothing. Errors are logged at debug level.
 
-## Setup offer
-
-When the setup wizard's probe lists the endpoint's models and one of them has
-a name that contains `gliner`, the wizard offers to configure the
-`classifier` block with that endpoint and model. The wizard does not change
-`approval_mode`. This phase is last and optional.
-
 ## Testing
 
 - `classify/systemone`: `httptest` server with the JSON shapes from
@@ -285,6 +278,5 @@ Suggestions section), then run `make sync-readme` and commit both files.
 1. `classify` interface + SystemOne client + config.
 2. Approver + `classify` mode + `Shift+Tab` + `/approve` + status bar.
 3. Suggester + TUI ghost text.
-4. Setup wizard offer.
 
 Each phase ships working and tested on its own.

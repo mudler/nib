@@ -694,8 +694,7 @@ the classifier is slow or unreachable, you get the prompt
 The classifier is any server that speaks the SystemOne API
 (`POST {base_url}/systemone`), for example LocalAI with a GLiNER model on the
 vllm-cpp backend. Configure it with the `classifier` block (see
-[Configuration](#configuration)). If `nib setup` finds a GLiNER model on your
-endpoint, it offers to configure it for you.
+[Configuration](#configuration)), or at runtime with `/classifier`.
 
 ### Switching modes
 
