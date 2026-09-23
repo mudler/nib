@@ -184,7 +184,9 @@ func normalizeMaxResults(n int) int {
 
 // searchWeb runs a DuckDuckGo HTML search and returns structured results.
 func (ws *webServer) search(ctx context.Context, _ *mcp.CallToolRequest, in webSearchInput) (*mcp.CallToolResult, webSearchOutput, error) {
-	out := webSearchOutput{Query: in.Query}
+	// Results must never marshal as null: the output schema declares an
+	// array, and the MCP client rejects the whole call when validation fails.
+	out := webSearchOutput{Query: in.Query, Results: []webSearchResult{}}
 	if strings.TrimSpace(in.Query) == "" {
 		out.Error = "query is required"
 		return nil, out, nil

@@ -167,6 +167,11 @@ func TestSearchWebNon200(t *testing.T) {
 	if out.Error == "" {
 		t.Error("expected an error for a non-200 response")
 	}
+	// The output schema declares results as an array; a nil slice marshals
+	// as null and the MCP client rejects the whole call.
+	if out.Results == nil {
+		t.Error("Results is nil on the error path, want an empty slice")
+	}
 }
 
 func TestSearchWebDefaultsAndCaps(t *testing.T) {

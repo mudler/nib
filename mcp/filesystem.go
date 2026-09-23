@@ -464,6 +464,7 @@ func globFiles(ctx context.Context, req *mcp.CallToolRequest, input globFilesInp
 
 		if err != nil {
 			return nil, globFilesOutput{
+				Files:   []string{},
 				Success: false,
 				Error:   err.Error(),
 			}, nil
@@ -474,6 +475,7 @@ func globFiles(ctx context.Context, req *mcp.CallToolRequest, input globFilesInp
 		files, err := filepath.Glob(pattern)
 		if err != nil {
 			return nil, globFilesOutput{
+				Files:   []string{},
 				Success: false,
 				Error:   err.Error(),
 			}, nil
@@ -617,6 +619,7 @@ func grepFiles(ctx context.Context, req *mcp.CallToolRequest, input grepFilesInp
 	re, err := regexp.Compile(input.Pat)
 	if err != nil {
 		return nil, grepFilesOutput{
+			Matches: []string{},
 			Success: false,
 			Error:   fmt.Sprintf("invalid regex pattern: %s", err.Error()),
 		}, nil
@@ -637,6 +640,7 @@ func grepFiles(ctx context.Context, req *mcp.CallToolRequest, input grepFilesInp
 
 	if err != nil {
 		return nil, grepFilesOutput{
+			Matches: []string{},
 			Success: false,
 			Error:   err.Error(),
 		}, nil
