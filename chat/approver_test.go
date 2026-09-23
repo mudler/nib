@@ -121,7 +121,7 @@ func TestApproverStateIsCapped(t *testing.T) {
 
 func classifySession(f *fakeClassifier, onCall func(ToolCallRequest) ToolCallResponse) *Session {
 	s := newDecideSession("classify", onCall)
-	s.approver = NewApprover(f, types.AutoApproveConfig{}, "/w")
+	s.setClassifierState(&classifierState{approver: NewApprover(f, types.AutoApproveConfig{}, "/w")})
 	return s
 }
 
@@ -197,7 +197,7 @@ func TestDecideClassifyExternalSourceSkipsClassifier(t *testing.T) {
 	s := newTestSessionWithExternalSource(t)
 	f := verdictFor("build_test", 1)
 	s.approvalMode = "classify"
-	s.approver = NewApprover(f, types.AutoApproveConfig{}, "/w")
+	s.setClassifierState(&classifierState{approver: NewApprover(f, types.AutoApproveConfig{}, "/w")})
 	asked := false
 	s.callbacks.OnToolCall = func(ToolCallRequest) ToolCallResponse {
 		asked = true
@@ -237,7 +237,7 @@ func TestSetApprovalModeClassifyNeedsClassifier(t *testing.T) {
 	if s.ApprovalMode() != "prompt" {
 		t.Fatalf("mode = %q, want prompt kept", s.ApprovalMode())
 	}
-	s.approver = NewApprover(verdictFor("inspect", 1), types.AutoApproveConfig{}, "")
+	s.setClassifierState(&classifierState{approver: NewApprover(verdictFor("inspect", 1), types.AutoApproveConfig{}, "")})
 	if err := s.SetApprovalMode("classify"); err != nil || s.ApprovalMode() != "classify" || !s.HasClassifier() {
 		t.Fatalf("err = %v, mode = %q", err, s.ApprovalMode())
 	}

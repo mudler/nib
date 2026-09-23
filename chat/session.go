@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/mudler/nib/auth"
-	"github.com/mudler/nib/classify"
 	_ "github.com/mudler/nib/classify/systemone" // the SystemOne classifier API
 	"github.com/mudler/nib/endpoint"
 	"github.com/mudler/nib/hooks"
@@ -75,12 +74,9 @@ type Session struct {
 	externalSources      map[string]provenance.Envelope
 	externalToolNames    map[string]bool // tools supplied by configured/plugin MCP servers
 	provenanceClassifier provenance.Classifier
-	// approver applies auto_approve with the small classification model
-	// (classifier:) in approval_mode "classify"; suggester predicts the
-	// user's next reply with it. Both nil when no classifier is configured.
-	approver     *Approver
-	suggester    Suggester
-	suggestDelay time.Duration
+	// cls is the small classification model (classifier:) and what is
+	// built on it; nil when none is configured. See classifierState.
+	cls atomic.Pointer[classifierState]
 
 	agentMu    sync.Mutex
 	agentStart map[string]time.Time // sub-agent ID -> spawn time, for elapsed
@@ -462,10 +458,9 @@ func NewSession(ctx context.Context, cfg types.Config, callbacks Callbacks, tran
 	}
 	// A broken classifier block costs the features built on it, not the
 	// session: it is reported with the rejected endpoints.
-	smallClassifier, err := classify.New(cfg)
+	smallClassifier, err := buildClassifier(cfg)
 	if err != nil {
 		configErrs = append(configErrs, err)
-		smallClassifier = nil
 	}
 
 	// Session tracing: wrap the LLM so every call is appended to the transcript.
@@ -577,21 +572,13 @@ func NewSession(ctx context.Context, cfg types.Config, callbacks Callbacks, tran
 	for _, name := range cfg.BuiltinTools {
 		s.toolAllow[name] = true
 	}
-	if smallClassifier != nil {
-		s.approver = NewApprover(smallClassifier, cfg.AutoApprove, cfg.WorkingDir)
-		if !cfg.Suggestions.Disabled {
-			s.suggester = NewClassifierSuggester(smallClassifier, cfg.Suggestions)
-			s.suggestDelay = cfg.Suggestions.Delay
-		}
-	}
-	for _, name := range cfg.AutoApprove.Allow {
-		if !classify.ValidCategory(name) {
-			s.configErrs = append(s.configErrs, fmt.Errorf("auto_approve.allow: unknown category %q (known: %s)", name, strings.Join(classify.Categories, ", ")))
-		}
+	s.cls.Store(smallClassifier)
+	if err := validateAutoApprove(cfg.AutoApprove); err != nil {
+		s.configErrs = append(s.configErrs, err)
 	}
 	s.autoApprove.Store(cfg.ApprovalMode == "auto")
 	s.approvalMode = cfg.ApprovalMode
-	if cfg.ApprovalMode == "classify" && s.approver == nil {
+	if cfg.ApprovalMode == "classify" && smallClassifier == nil {
 		s.configErrs = append(s.configErrs, fmt.Errorf("approval_mode: classify needs a classifier block; using prompt"))
 		s.approvalMode = "prompt"
 	}
@@ -726,8 +713,8 @@ func (s *Session) decideToolCall(req ToolCallRequest) cogito.ToolCallDecision {
 	}
 	// The classifier can only spare the user a prompt: a call it does not
 	// approve, or cannot judge, is asked about as usual, with its verdict.
-	if mode == "classify" && s.approver != nil {
-		v := s.approver.Judge(s.ctx, req)
+	if st := s.classifier(); mode == "classify" && st != nil {
+		v := st.approver.Judge(s.ctx, req)
 		if v.Approved {
 			if s.callbacks.OnAutoApproved != nil {
 				s.callbacks.OnAutoApproved(req, v)

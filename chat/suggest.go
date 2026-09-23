@@ -146,7 +146,8 @@ func (s *classifierSuggester) Suggest(ctx context.Context, in SuggestInput) ([]S
 // Suggest predicts the user's next reply from the conversation so far. It
 // returns nil, nil when suggestions are off or there is nothing to reply to.
 func (s *Session) Suggest(ctx context.Context) ([]Suggestion, error) {
-	if s.suggester == nil {
+	st := s.classifier()
+	if st == nil || st.suggester == nil {
 		return nil, nil
 	}
 	s.historyMu.Lock()
@@ -164,17 +165,20 @@ func (s *Session) Suggest(ctx context.Context) ([]Suggestion, error) {
 	if in.LastAssistant == "" {
 		return nil, nil
 	}
-	return s.suggester.Suggest(ctx, in)
+	return st.suggester.Suggest(ctx, in)
 }
 
 // SuggestionsEnabled reports whether Suggest can return anything.
-func (s *Session) SuggestionsEnabled() bool { return s.suggester != nil }
+func (s *Session) SuggestionsEnabled() bool {
+	st := s.classifier()
+	return st != nil && st.suggester != nil
+}
 
 // SuggestionDelay is how long the session must wait on the user, with no
 // key press, before the UI asks for a suggestion.
 func (s *Session) SuggestionDelay() time.Duration {
-	if s.suggestDelay > 0 {
-		return s.suggestDelay
+	if st := s.classifier(); st != nil && st.suggestDelay > 0 {
+		return st.suggestDelay
 	}
 	return defaultSuggestDelay
 }

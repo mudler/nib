@@ -19,10 +19,11 @@ import (
 // /yolo. "classify" without a configured classifier is refused, and the mode
 // stays as it was.
 func (s *Session) SetApprovalMode(mode string) error {
-	if mode == "classify" && s.approver == nil {
+	s.approvalMu.Lock()
+	if mode == "classify" && s.cls.Load() == nil {
+		s.approvalMu.Unlock()
 		return fmt.Errorf("classify mode needs a classifier: configure the classifier block")
 	}
-	s.approvalMu.Lock()
 	s.approvalMode = mode
 	s.approvalMu.Unlock()
 	s.autoApprove.Store(mode == "auto")
@@ -40,7 +41,7 @@ func (s *Session) ApprovalMode() string {
 
 // HasClassifier reports whether a classifier is configured, so classify
 // mode and reply suggestions are available.
-func (s *Session) HasClassifier() bool { return s.approver != nil }
+func (s *Session) HasClassifier() bool { return s.classifier() != nil }
 
 // currentApprovalMode reads approvalMode under its lock; decideToolCall runs on
 // the turn goroutine while SetApprovalMode runs on the UI's.

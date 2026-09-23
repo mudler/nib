@@ -152,7 +152,8 @@ func TestSuggestStateIsTail(t *testing.T) {
 
 func TestSessionSuggestUsesHistory(t *testing.T) {
 	f := &suggestClassifier{probs: map[string]float64{"go on": 0.9}}
-	s := &Session{suggester: NewClassifierSuggester(f, types.SuggestionsConfig{})}
+	s := &Session{}
+	s.setClassifierState(&classifierState{suggester: NewClassifierSuggester(f, types.SuggestionsConfig{})})
 	s.messages = []openai.ChatCompletionMessage{
 		{Role: "user", Content: "go on"},
 		{Role: "assistant", Content: "Step one done. Next?"},
