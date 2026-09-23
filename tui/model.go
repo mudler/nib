@@ -501,6 +501,8 @@ type Model struct {
 	toolResponseChan chan chat.ToolCallResponse
 	toolResultChan   chan chat.ToolResult
 	autoApprovedChan chan autoApprovedMsg
+	// suggest is the reply autosuggestion shown in the composer.
+	suggest suggestState
 	// reasoningChan carries BOTH step-boundary reasoning (Callbacks.OnReasoning,
 	// the COMPLETE block for a step) and live streamed reasoning deltas
 	// (Callbacks.OnStream's "reasoning" kind), as a single ordered stream of
@@ -1015,6 +1017,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
+		// Any key means the user is replying: no suggestion is fetched for
+		// this wait. One that already arrived stays, to match what they type.
+		m.suggest.armed = false
 		// Any key but Ctrl+C disarms an armed exit and clears a one-shot hint.
 		if msg.Type != tea.KeyCtrlC && (m.exitArmed || m.hint != "") {
 			m.disarmExit()
@@ -1356,6 +1361,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 
 		case tea.KeyTab:
+			if m.acceptSuggestion() {
+				return m, nil
+			}
 			if m.completion.active {
 				if ins, ok := m.completion.accept(); ok {
 					m.textarea.SetValue(ins)
@@ -1730,6 +1738,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.updateViewport()
 		// Nothing queued started a turn: the composer is the user's again.
 		m.ringBell()
+		if cmd := m.armSuggestion(msg.err == nil); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
 
 	case parkMsg:
 		if msg.parked {
@@ -2106,6 +2117,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		// Continue listening for more agent events
 		cmds = append(cmds, m.listenAgentEvents())
+
+	case suggestTickMsg:
+		return m, m.fetchSuggestion(msg)
+
+	case suggestResultMsg:
+		m.takeSuggestion(msg)
+		return m, nil
 
 	case autoApprovedMsg:
 		m.appendMessage(ChatMessage{Role: "agent", Content: autoApprovedLine(msg)})
@@ -3010,7 +3028,7 @@ func (m Model) renderComposer(w int) string {
 	case m.modelPicker.active, m.providerPicker.active, m.loginForm.active, m.loginWait.active:
 		// no input: the picker/login dialog handles all keys.
 	default:
-		composer.WriteString(m.textarea.View())
+		composer.WriteString(m.composerView())
 	}
 	return composer.String()
 }
