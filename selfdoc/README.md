@@ -657,6 +657,19 @@ In the **TUI**, approval is a single keypress (no Enter):
 
 (`y`/`a`/`A` still work as aliases for `1`/`2`/`3`.)
 
+In the **CLI** (`--cli`) the prompt is line-based: type `y`, `a`, `all`, `n`, or a free-form
+change, then Enter. Read-only calls (reads, searches, safe read-only shell) already skip the
+prompt by default; set `approval_mode: strict` to be prompted for those too. To skip prompting
+entirely, set `approval_mode: auto` in your config, or run with `--yolo`
+(env: `NIB_YOLO=1`) to auto-approve every tool call. The `allowed_tools` setting
+only skips prompts for the named tools. When
+`prompt_injection_protection.enabled: true`, web, browser, attachment, and configured MCP
+results are tracked as untrusted external data. A separate, tool-free LLM pass
+identifies exact prompt-injection spans for redaction before they reach the main
+agent; classification failures withhold the external text. Subsequent
+consequential calls require fresh approval under turn-wide and narrower grants.
+Session-wide auto-approval skips that prompt, but pre-tool hooks still run.
+
 ### Classifier approval (`classify` mode)
 
 With `approval_mode: classify`, a small classifier looks at each call that
@@ -668,9 +681,13 @@ prompt, and the transcript shows a line such as
 `auto-approved · build_test 0.93 · $ go test ./...`.
 
 Anything else prompts as usual, and the prompt shows the verdict
-(`classifier: destructive (0.82)`). The classifier never denies a call. It
+(`classifier: destructive (0.82)`). Two kinds of call never go to the
+classifier and always prompt, because it could not judge all of the call: a
+bash script that is not one simple command (`&&`, `;`, `|`, `$( )`, …) and a
+call longer than 2 KiB. The classifier never denies a call. It
 runs only where a prompt would have: hooks, grants, read-only calls and the
-external-data boundary of `prompt_injection_protection` all come first. If
+external-data boundary of `prompt_injection_protection` all come first. That
+boundary exists only with `prompt_injection_protection.enabled: true`. If
 the classifier is slow or unreachable, you get the prompt
 (`classifier: unavailable`).
 
@@ -686,23 +703,10 @@ endpoint, it offers to configure it for you.
   and back. Without a classifier it skips `classify`.
 - `/approve prompt|strict|allowlist|classify|auto` sets a mode for this
   session, in the TUI and the CLI. Bare `/approve` shows the current one.
-- The header shows a `classify` badge, or the `yolo` badge in `auto`.
+- The header shows the mode as a badge when it is not `prompt` (`yolo` in `auto`).
 
 These changes last for the session. `/settings approval_mode …` also writes
 the mode to the config file.
-
-In the **CLI** (`--cli`) the prompt is line-based: type `y`, `a`, `all`, `n`, or a free-form
-change, then Enter. Read-only calls (reads, searches, safe read-only shell) already skip the
-prompt by default; set `approval_mode: strict` to be prompted for those too. To skip prompting
-entirely, set `approval_mode: auto` in your config, or run with `--yolo`
-(env: `NIB_YOLO=1`) to auto-approve every tool call. The `allowed_tools` setting
-only skips prompts for the named tools. When
-`prompt_injection_protection.enabled: true`, web, browser, attachment, and configured MCP
-results are tracked as untrusted external data. A separate, tool-free LLM pass
-identifies exact prompt-injection spans for redaction before they reach the main
-agent; classification failures withhold the external text. Subsequent
-consequential calls require fresh approval under turn-wide and narrower grants.
-Session-wide auto-approval skips that prompt, but pre-tool hooks still run.
 
 ## MCP Servers
 
