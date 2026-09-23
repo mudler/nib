@@ -72,6 +72,10 @@ type ToolCallRequest struct {
 	// showing the call as a diff before it runs. Nil for other tools and for
 	// files that cannot be diffed.
 	Change *FileChange
+	// Verdict is the classifier's opinion of the call in approval_mode
+	// "classify", e.g. "destructive (0.82)" or "unavailable". Empty when no
+	// classifier judged it.
+	Verdict string
 }
 
 // ToolResult is the outcome of a tool execution, surfaced to the UI after the
@@ -142,6 +146,9 @@ type Callbacks struct {
 	// under-report rather than invent spend.
 	OnStream   func(ev StreamEvent)
 	OnToolCall func(req ToolCallRequest) ToolCallResponse
+	// OnAutoApproved, when set, is told about each call the classifier
+	// approved without asking, so a UI can show what it let through.
+	OnAutoApproved func(req ToolCallRequest, v Verdict)
 	// OnStepContent is called with the assistant text that accompanied a tool
 	// selection ("I'll search for X now…") at the step boundary, before the
 	// selected tools run — so a UI can commit the commentary in chronological

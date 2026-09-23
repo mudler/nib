@@ -28,7 +28,7 @@ func TestSelfKnowledgeSuffixCustomProgramName(t *testing.T) {
 
 func TestGetPromptIncludesSelfKnowledge(t *testing.T) {
 	cfg := Config{
-		Prompt:     "test prompt",
+		Prompt:      "test prompt",
 		ProgramName: "nib",
 	}
 	got := cfg.GetPrompt()

@@ -412,7 +412,7 @@ func runCtx(ctx context.Context, o Options) int {
 	// "yolo" mode auto-approves every tool call. The flag or env var force
 	// "auto" approval, overriding whatever the config file set.
 	if *yoloFlag || envTrue(os.Getenv("NIB_YOLO")) {
-		cfg.ApprovalMode = "auto"
+		cfg.ApprovalMode = types.ApprovalAuto
 	}
 
 	// --resume mirrors /resume's own semantics but resolved up front, before

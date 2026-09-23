@@ -1,6 +1,9 @@
 package render
 
-import "github.com/mudler/nib/internal/textdiff"
+import (
+	"github.com/mudler/nib/internal/textdiff"
+	"github.com/mudler/nib/types"
+)
 
 // Role identifies the speaker or origin of a Message.
 type Role string
@@ -233,9 +236,12 @@ type ViewState struct {
 	Cwd         string
 	Brand       string
 	AutoApprove bool
-	Loading     bool
-	Status      string
-	Spinner     string
+	// ApprovalMode is the session's approval_mode, for the header badge.
+	// Every mode but prompt draws one; yolo has AutoApprove.
+	ApprovalMode types.ApprovalMode
+	Loading      bool
+	Status       string
+	Spinner      string
 	// Speed is the live generation rate, already rendered, shown after the
 	// status on the working indicator line; "" when the model is not
 	// generating right now.

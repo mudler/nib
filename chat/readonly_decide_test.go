@@ -2,6 +2,7 @@ package chat
 
 import (
 	"context"
+	"github.com/mudler/nib/types"
 	"testing"
 
 	"github.com/mudler/nib/provenance"
@@ -20,7 +21,7 @@ func enableProvenance(s *Session) *Session {
 
 // newDecideSession builds a minimal Session exercising only decideToolCall's
 // approval logic — no MCP/agent wiring needed.
-func newDecideSession(mode string, onCall func(ToolCallRequest) ToolCallResponse) *Session {
+func newDecideSession(mode types.ApprovalMode, onCall func(ToolCallRequest) ToolCallResponse) *Session {
 	s := &Session{
 		allowedTools:     map[string]bool{},
 		approvalMode:     mode,

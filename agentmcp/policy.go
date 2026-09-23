@@ -10,15 +10,15 @@ import (
 // without prompting. A denial surfaces to the model as a normal denied-tool
 // result, which it explains in its next (spoken) reply.
 type policy struct {
-	mode       string
+	mode       types.ApprovalMode
 	allowed    map[string]bool
 	askDefault string
 }
 
 func newPolicy(cfg types.Config) policy {
 	mode := cfg.ApprovalMode
-	if mode == "" || mode == "prompt" {
-		mode = "auto" // no terminal to prompt at
+	if mode.OrDefault() == types.ApprovalPrompt {
+		mode = types.ApprovalAuto // no terminal to prompt at
 	}
 	allowed := make(map[string]bool, len(cfg.AllowedTools))
 	for _, t := range cfg.AllowedTools {
@@ -28,7 +28,7 @@ func newPolicy(cfg types.Config) policy {
 }
 
 func (p policy) decide(req chat.ToolCallRequest) chat.ToolCallResponse {
-	if p.mode == "allowlist" && !p.allowed[req.Name] {
+	if p.mode == types.ApprovalAllowlist && !p.allowed[req.Name] {
 		return chat.ToolCallResponse{Approved: false}
 	}
 	return chat.ToolCallResponse{Approved: true}

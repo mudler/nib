@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -71,5 +72,37 @@ func TestCLIUnhandledKindDefaultsToNotAvailable(t *testing.T) {
 	}
 	if errOut != "" {
 		t.Fatalf("/goal must not reach the model: stderr %q", errOut)
+	}
+}
+
+// /approve sets the approval mode in the REPL instead of reaching the model.
+func TestCLIApproveSetsMode(t *testing.T) {
+	out, errOut := runCLIScript(t, unreachableCfg, "/approve auto\n/approve\nexit\n")
+	if !strings.Contains(out, fmt.Sprintf(theme.ApproveModeNotice, "auto")) {
+		t.Fatalf("expected the mode notice, got %q", out)
+	}
+	if errOut != "" {
+		t.Fatalf("/approve must not reach the model: stderr %q", errOut)
+	}
+}
+
+// Without a classifier, /approve classify is refused with a reason.
+func TestCLIApproveClassifyNeedsClassifier(t *testing.T) {
+	out, _ := runCLIScript(t, unreachableCfg, "/approve classify\nexit\n")
+	if !strings.Contains(out, "classifier") {
+		t.Fatalf("expected a refusal naming the classifier, got %q", out)
+	}
+}
+
+// /classifier sets, shows and removes the classifier in the REPL.
+func TestCLIClassifierSetsAndShows(t *testing.T) {
+	out, errOut := runCLIScript(t, unreachableCfg, "/classifier\n/classifier config gliner\n/classifier\n/classifier off\nexit\n")
+	for _, want := range []string{theme.ClassifierNone, "gliner @ ", theme.ClassifierOffNotice} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output lacks %q: %q", want, out)
+		}
+	}
+	if errOut != "" {
+		t.Fatalf("/classifier must not reach the model: stderr %q", errOut)
 	}
 }

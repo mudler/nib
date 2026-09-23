@@ -500,6 +500,13 @@ type Model struct {
 	toolRequestChan  chan chat.ToolCallRequest
 	toolResponseChan chan chat.ToolCallResponse
 	toolResultChan   chan chat.ToolResult
+	autoApprovedChan chan autoApprovedMsg
+	// suggest is the reply autosuggestion shown in the composer.
+	suggest suggestState
+	// classifierOverride is the /classifier choice for this session, kept
+	// over config.yaml's classifier block across session rebuilds. Nil
+	// means none was made.
+	classifierOverride *types.ClassifierConfig
 	// reasoningChan carries BOTH step-boundary reasoning (Callbacks.OnReasoning,
 	// the COMPLETE block for a step) and live streamed reasoning deltas
 	// (Callbacks.OnStream's "reasoning" kind), as a single ordered stream of
@@ -739,6 +746,7 @@ func NewModel(ctx context.Context, cfg types.Config, height int, shellJobs *wizm
 		toolRequestChan:    make(chan chat.ToolCallRequest),
 		toolResponseChan:   make(chan chat.ToolCallResponse),
 		toolResultChan:     make(chan chat.ToolResult, 64),
+		autoApprovedChan:   make(chan autoApprovedMsg, 64),
 		askRequestChan:     make(chan chat.AskRequest),
 		askResponseChan:    make(chan string),
 		wakeupChan:         make(chan chat.WakeupRequest, 8),
@@ -982,6 +990,12 @@ func (m Model) initSession() tea.Cmd {
 				default:
 				}
 			},
+			OnAutoApproved: func(req chat.ToolCallRequest, v chat.Verdict) {
+				select {
+				case m.autoApprovedChan <- autoApprovedMsg{req: req, verdict: v}:
+				default:
+				}
+			},
 			OnToolResult: func(res chat.ToolResult) {
 				select {
 				case m.toolResultChan <- res:
@@ -1007,6 +1021,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
+		// Any key means the user is replying: no suggestion is fetched for
+		// this wait. One that already arrived stays, to match what they type.
+		m.suggest.armed = false
 		// Any key but Ctrl+C disarms an armed exit and clears a one-shot hint.
 		if msg.Type != tea.KeyCtrlC && (m.exitArmed || m.hint != "") {
 			m.disarmExit()
@@ -1110,7 +1127,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.modelPicker.backspace()
 			case tea.KeyEnter:
 				if choice, ok := m.modelPicker.choice(); ok {
-					if target := m.modelPicker.target; target != nil {
+					if target := m.modelPicker.target; target != nil && m.modelPicker.forClassifier {
+						m.useClassifier(target.ID, choice, false)
+					} else if target != nil {
 						if err := m.session.SwitchProvider(target.ID, choice); err != nil {
 							m.appendMessage(ChatMessage{Role: "error", Content: err.Error()})
 						} else {
@@ -1324,6 +1343,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.updateViewport()
 			return m, nil
 
+		case tea.KeyShiftTab:
+			// Cycle the approval mode: configured → classify → auto.
+			// Not while a picker or the completion popup owns the keys.
+			if !m.sessionReady || m.completion.active {
+				break
+			}
+			m.cycleApprovalMode()
+			// The prompt on screen is one auto would not have raised.
+			if m.awaitingApproval && m.session.AutoApprove() {
+				return m.resolveApproval(chat.ToolCallResponse{Approved: true})
+			}
+			m.updateViewportFollow()
+			return m, nil
+
 		case tea.KeyCtrlT:
 			// Toggle the todo panel.
 			if !m.sessionReady {
@@ -1334,6 +1367,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 
 		case tea.KeyTab:
+			if m.acceptSuggestion() {
+				return m, nil
+			}
 			if m.completion.active {
 				if ins, ok := m.completion.accept(); ok {
 					m.textarea.SetValue(ins)
@@ -1438,7 +1474,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// behind the run (as slash commands otherwise are) left every tool
 			// call of that run still asking, and inside the approval prompt it
 			// went to the model as an adjustment to the call.
-			if slash.Resolve(input, m.cfg.Commands, m.cfg.Skills, m.cfg.Agents).Kind == slash.KindYolo {
+			if k := slash.Resolve(input, m.cfg.Commands, m.cfg.Skills, m.cfg.Agents).Kind; k == slash.KindYolo || k == slash.KindApprove {
 				m.pushHistory(input)
 				m.textarea.Reset()
 				m.completion.sync("")
@@ -1525,6 +1561,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case sessionReadyMsg:
+		// A new session: suggestions from the old one answer nothing here.
+		m.resetSuggestion()
 		if msg.err != nil {
 			m.err = msg.err
 			// Every other footer-state mutator routes through updateViewport
@@ -1541,6 +1579,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.session.SetAutoApprove(*m.carryAutoApprove)
 			m.carryAutoApprove = nil
 		}
+		m.applyClassifierOverride()
 		if m.boot != nil {
 			m.boot.markReady(&m)
 			// A resumed session already has a conversation to show; the
@@ -1555,7 +1594,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.appendMessage(ChatMessage{Role: "agent", Content: fmt.Sprintf("Reloaded %d durable loop(s).", n)})
 		}
 		// Start listening for callbacks
-		cmds = append(cmds, m.listenStatus(), m.listenReasoningEvents(), m.listenToolRequest(), m.listenToolResult(), m.listenAskRequest(), m.listenAgentEvents(), m.shellTick(), m.loopTick(), m.listenWakeup(), m.listenCronFire(), m.listenPark(), m.listenCompact(), m.listenPrune())
+		cmds = append(cmds, m.listenStatus(), m.listenReasoningEvents(), m.listenToolRequest(), m.listenToolResult(), m.listenAutoApproved(), m.listenAskRequest(), m.listenAgentEvents(), m.shellTick(), m.loopTick(), m.listenWakeup(), m.listenCronFire(), m.listenPark(), m.listenCompact(), m.listenPrune())
 
 	case bootTickMsg:
 		if m.boot != nil {
@@ -1708,6 +1747,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.updateViewport()
 		// Nothing queued started a turn: the composer is the user's again.
 		m.ringBell()
+		if cmd := m.armSuggestion(msg.err == nil); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
 
 	case parkMsg:
 		if msg.parked {
@@ -2085,6 +2127,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Continue listening for more agent events
 		cmds = append(cmds, m.listenAgentEvents())
 
+	case suggestTickMsg:
+		return m, m.fetchSuggestion(msg)
+
+	case suggestResultMsg:
+		m.takeSuggestion(msg)
+		return m, nil
+
+	case autoApprovedMsg:
+		m.appendMessage(ChatMessage{Role: "agent", Content: autoApprovedLine(msg)})
+		m.updateViewportFollow()
+		return m, m.listenAutoApproved()
+
 	case toolResultMsg:
 		res := chat.ToolResult(msg)
 		if res.AgentID == "" {
@@ -2292,6 +2346,19 @@ func (m *Model) dispatchResolved(input string) tea.Cmd {
 			m.appendMessage(ChatMessage{Role: "agent", Content: "Goal cleared."})
 		} else {
 			m.appendMessage(ChatMessage{Role: "agent", Content: "No goal to clear."})
+		}
+		return nil
+	case slash.KindApprove:
+		m.setApprovalMode(action.Mode)
+		return nil
+	case slash.KindClassifier:
+		switch {
+		case action.ClassifierOff:
+			m.useClassifier("", "", true)
+		case action.Endpoint != "":
+			m.useClassifier(action.Endpoint, action.Model, false)
+		default:
+			m.openProviderPicker(pickerClassifier)
 		}
 		return nil
 	case slash.KindYolo:
@@ -2980,7 +3047,7 @@ func (m Model) renderComposer(w int) string {
 	case m.modelPicker.active, m.providerPicker.active, m.loginForm.active, m.loginWait.active:
 		// no input: the picker/login dialog handles all keys.
 	default:
-		composer.WriteString(m.textarea.View())
+		composer.WriteString(m.composerView())
 	}
 	return composer.String()
 }
@@ -3357,10 +3424,16 @@ func (m Model) viewState() render.ViewState {
 		Cwd:         shortenPath(currentDir()),
 		Brand:       theme.BrandName,
 		AutoApprove: m.session != nil && m.session.AutoApprove(),
-		Loading:     m.loading,
-		Status:      status,
-		Spinner:     m.spinner.View(),
-		Speed:       m.liveSpeed(),
+		ApprovalMode: func() types.ApprovalMode {
+			if m.session == nil {
+				return ""
+			}
+			return m.session.ApprovalMode()
+		}(),
+		Loading: m.loading,
+		Status:  status,
+		Spinner: m.spinner.View(),
+		Speed:   m.liveSpeed(),
 		Reasoning: render.Reasoning{
 			Text:      m.reasoning,
 			Collapsed: m.reasoningCollapsed,

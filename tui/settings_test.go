@@ -203,7 +203,8 @@ func TestSettingsCompletionKeys(t *testing.T) {
 		t.Fatalf("verb completion = %+v, %v", it, ok)
 	}
 
-	c.sync("/settings thresh")
+	// Several blocks have a threshold now; a dotted prefix picks one.
+	c.sync("/settings compaction.thresh")
 	if !c.active || len(c.matches) != 1 {
 		t.Fatalf("matches = %+v", c.matches)
 	}
@@ -480,5 +481,22 @@ func TestSettingModelAndBaseURLOnANamedEndpointSayNotInUse(t *testing.T) {
 	m.dispatchResolved("/settings model something-else")
 	if msg := lastMessage(t, m); msg.Role == "error" || strings.Contains(msg.Content, "applies on next start") || !strings.Contains(msg.Content, "not in use") {
 		t.Fatalf("model notice = %+v, want a not-in-use override", msg)
+	}
+}
+
+// Without a classifier, classify is refused before anything is written, so
+// the file and the running config keep the mode that is in effect.
+func TestSettingsApprovalModeClassifyRefusedWithoutClassifier(t *testing.T) {
+	m, path := newSettingsTestModel(t)
+	m.session = &chat.Session{}
+	m.dispatchResolved("/settings approval_mode classify")
+	if data, _ := os.ReadFile(path); strings.Contains(string(data), "classify") {
+		t.Fatalf("classify written without a classifier:\n%s", data)
+	}
+	if m.cfg.ApprovalMode == "classify" {
+		t.Fatal("running config switched to classify")
+	}
+	if msg := lastMessage(t, m); msg.Role != "error" {
+		t.Fatalf("want an error, got %+v", msg)
 	}
 }

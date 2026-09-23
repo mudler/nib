@@ -160,6 +160,14 @@ type Config struct {
 	// redaction, and approval hardening for untrusted external data. It is
 	// disabled by default to preserve existing behavior.
 	PromptInjectionProtection PromptInjectionProtectionConfig `yaml:"prompt_injection_protection,omitempty"`
+	// Classifier is the small classification model behind approval_mode
+	// "classify" and the TUI's reply suggestions. It is unrelated to
+	// PromptInjectionProtection.Classifier, which is an LLM.
+	Classifier ClassifierConfig `yaml:"classifier,omitempty"`
+	// AutoApprove is the policy approval_mode "classify" applies.
+	AutoApprove AutoApproveConfig `yaml:"auto_approve,omitempty"`
+	// Suggestions controls the TUI's reply suggestions.
+	Suggestions SuggestionsConfig `yaml:"suggestions,omitempty"`
 	// CodexAppServer optionally routes security-classifier LLM calls through a
 	// local Codex app-server. This permits use of an existing ChatGPT login
 	// without exposing its OAuth credentials to nib. The default executable is
@@ -199,12 +207,9 @@ type Config struct {
 
 	Hooks []HookConfig `yaml:"hooks"`
 
-	// ApprovalMode controls tool-call gating:
-	//   "" / "prompt"  ask the user, but auto-approve read-only calls
-	//   "strict"       ask the user for every call (no read-only auto-approval)
-	//   "allowlist"    auto-approve only the tools in AllowedTools, prompt the rest
-	//   "auto"         approve every tool call
-	ApprovalMode string `yaml:"approval_mode"`
+	// ApprovalMode controls tool-call gating. See ApprovalMode's constants;
+	// empty means ApprovalPrompt.
+	ApprovalMode ApprovalMode `yaml:"approval_mode"`
 	// AllowedTools are tool names pre-approved without prompting (always honored;
 	// the basis of "allowlist" mode).
 	AllowedTools []string `yaml:"allowed_tools"`
@@ -312,6 +317,45 @@ type UIConfig struct {
 	// back to the user (turn done, approval or answer needed). Zero value
 	// (false) = the bell rings.
 	NoBell bool `yaml:"no_bell,omitempty"`
+}
+
+// ClassifierConfig names the small classification model. It is configured
+// when Endpoint or Model is set.
+type ClassifierConfig struct {
+	// Endpoint names an entry under endpoints:. Empty uses the top-level
+	// base_url and api_key. The entry's own model is never used.
+	Endpoint string `yaml:"endpoint,omitempty"`
+	// Model is sent as the request's model field. Optional.
+	Model string `yaml:"model,omitempty"`
+	// API selects the wire protocol. Empty or "systemone".
+	API string `yaml:"api,omitempty"`
+	// Timeout bounds each request. 0 means 2s.
+	Timeout time.Duration `yaml:"timeout,omitempty"`
+}
+
+// Configured reports whether a classifier is set up.
+func (c ClassifierConfig) Configured() bool { return c.Endpoint != "" || c.Model != "" }
+
+// AutoApproveConfig is the policy approval_mode "classify" applies.
+type AutoApproveConfig struct {
+	// Allow lists the categories that may approve without a prompt.
+	// Empty means inspect and build_test.
+	Allow []string `yaml:"allow,omitempty"`
+	// Threshold is the minimum confidence of the top category. 0 means 0.85.
+	Threshold float64 `yaml:"threshold,omitempty"`
+}
+
+// SuggestionsConfig controls the TUI's reply suggestions. They are on
+// whenever a classifier is configured, unless Disabled.
+type SuggestionsConfig struct {
+	Disabled bool `yaml:"disabled,omitempty"`
+	// Threshold is the minimum probability a suggestion needs. 0 means 0.5.
+	Threshold float64 `yaml:"threshold,omitempty"`
+	// Delay is how long the session waits on the user, with no key press,
+	// before it asks for a suggestion. 0 means 500ms.
+	Delay time.Duration `yaml:"delay,omitempty"`
+	// Replies are stock candidate replies. Empty means the built-in set.
+	Replies []string `yaml:"replies,omitempty"`
 }
 
 type PromptInjectionProtectionConfig struct {

@@ -21,21 +21,23 @@ type Kind int
 // Command verbs — typed constants to avoid string literals scattered
 // through the switch in Resolve and its helpers.
 const (
-	cmdSkill    = "skill"
-	cmdAgent    = "agent"
-	cmdCompact  = "compact"
-	cmdModels   = "models"
-	cmdModel    = "model"
-	cmdLoop     = "loop"
-	cmdYolo     = "yolo"
-	cmdGoal     = "goal"
-	cmdResume   = "resume"
-	cmdLogin    = "login"
-	cmdLogout   = "logout"
-	cmdAttach   = "attach"
-	cmdSettings = "settings"
-	cmdEndpoint = "endpoint"
-	cmdAbout    = "about"
+	cmdSkill      = "skill"
+	cmdAgent      = "agent"
+	cmdCompact    = "compact"
+	cmdModels     = "models"
+	cmdModel      = "model"
+	cmdLoop       = "loop"
+	cmdYolo       = "yolo"
+	cmdApprove    = "approve"
+	cmdClassifier = "classifier"
+	cmdGoal       = "goal"
+	cmdResume     = "resume"
+	cmdLogin      = "login"
+	cmdLogout     = "logout"
+	cmdAttach     = "attach"
+	cmdSettings   = "settings"
+	cmdEndpoint   = "endpoint"
+	cmdAbout      = "about"
 
 	// /attach sub-verbs
 	cmdAttachClear = "clear"
@@ -88,6 +90,8 @@ const (
 	KindEndpoint               // switch endpoint (Endpoint empty = open the picker)
 	KindModelReset             // drop the saved model override for the current endpoint
 	KindAbout                  // print version, config paths, and tool inventory
+	KindApprove                // set the approval mode (Mode), or show it when Mode is empty
+	KindClassifier             // set the classifier (Endpoint, Model), turn it off, or pick one
 )
 
 // AttachOp enumerates the /attach sub-operations.
@@ -102,11 +106,15 @@ const (
 // Action is the resolved result of a submitted input line.
 type Action struct {
 	Kind   Kind
-	Text   string // for KindSend: the message to send
-	Skill  string // for KindLoadSkill: the skill name
-	Err    string // for KindError
-	Model  string // for KindModelSet: the model to switch to
-	YoloOn *bool  // for KindYolo: nil = toggle, non-nil = set explicitly (on/off)
+	Text   string             // for KindSend: the message to send
+	Skill  string             // for KindLoadSkill: the skill name
+	Err    string             // for KindError
+	Model  string             // for KindModelSet: the model to switch to
+	YoloOn *bool              // for KindYolo: nil = toggle, non-nil = set explicitly (on/off)
+	Mode   types.ApprovalMode // for KindApprove: the approval mode, empty = show the current one
+	// ClassifierOff is /classifier off. KindClassifier also uses Endpoint
+	// and Model; both empty opens the picker.
+	ClassifierOff bool
 
 	// Resume actions:
 	ResumeAll bool   // KindResume: widen the picker to sessions from any cwd
@@ -213,6 +221,29 @@ func Resolve(input string, cmds []types.CommandConfig, skills []types.Skill, age
 			return Action{Kind: KindYolo, YoloOn: &off}
 		default:
 			return Action{Kind: KindError, Err: theme.YoloUsage}
+		}
+	case cmdApprove:
+		if strings.TrimSpace(rest) == "" {
+			return Action{Kind: KindApprove}
+		}
+		mode, ok := types.ParseApprovalMode(rest)
+		if !ok {
+			return Action{Kind: KindError, Err: theme.ApproveUsage}
+		}
+		return Action{Kind: KindApprove, Mode: mode}
+	case cmdClassifier:
+		args := strings.Fields(rest)
+		switch {
+		case len(args) == 0:
+			return Action{Kind: KindClassifier}
+		case len(args) == 1 && strings.EqualFold(args[0], "off"):
+			return Action{Kind: KindClassifier, ClassifierOff: true}
+		case len(args) == 1:
+			return Action{Kind: KindClassifier, Endpoint: args[0]}
+		case len(args) == 2:
+			return Action{Kind: KindClassifier, Endpoint: args[0], Model: args[1]}
+		default:
+			return Action{Kind: KindError, Err: theme.ClassifierUsage}
 		}
 	case cmdGoal:
 		return resolveGoal(rest)

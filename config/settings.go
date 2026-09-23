@@ -58,7 +58,12 @@ type Setting struct {
 var settingDocs = map[string]string{
 	"ui.hide_hud":                             "hide the footer clock, cpu and memory badges",
 	"ui.no_bell":                              "do not ring the terminal bell when nib needs you",
-	"approval_mode":                           "tool-call gating: prompt, strict, allowlist or auto",
+	"approval_mode":                           "tool-call gating: prompt, strict, allowlist, classify or auto",
+	"classifier.endpoint":                     "named endpoint that serves the classifier",
+	"classifier.model":                        "classifier model (e.g. a GLiNER SystemOne model)",
+	"auto_approve.threshold":                  "min classifier confidence to auto-approve (0 = 0.85)",
+	"suggestions.disabled":                    "turn off reply suggestions",
+	"suggestions.threshold":                   "min confidence to show a suggestion (0 = 0.5)",
 	"model":                                   "the model new sessions start on",
 	"provider":                                "the main LLM transport (openai, codex, ...)",
 	"base_url":                                "the OpenAI-compatible endpoint",
@@ -94,7 +99,7 @@ var settingValues = map[string]struct {
 	values []string
 	strict bool
 }{
-	"approval_mode":    {[]string{"prompt", "strict", "allowlist", "auto"}, true},
+	"approval_mode":    {types.ApprovalModeNames(), true},
 	"reasoning_effort": {[]string{"none", "low", "medium", "high"}, false},
 	"log_level":        {[]string{"debug", "info", "warn", "error"}, false},
 	"provider":         {[]string{"openai", "codex"}, false},
