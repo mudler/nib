@@ -21,23 +21,24 @@ type Kind int
 // Command verbs — typed constants to avoid string literals scattered
 // through the switch in Resolve and its helpers.
 const (
-	cmdSkill      = "skill"
-	cmdAgent      = "agent"
-	cmdCompact    = "compact"
-	cmdModels     = "models"
-	cmdModel      = "model"
-	cmdLoop       = "loop"
-	cmdYolo       = "yolo"
-	cmdApprove    = "approve"
-	cmdClassifier = "classifier"
-	cmdGoal       = "goal"
-	cmdResume     = "resume"
-	cmdLogin      = "login"
-	cmdLogout     = "logout"
-	cmdAttach     = "attach"
-	cmdSettings   = "settings"
-	cmdEndpoint   = "endpoint"
-	cmdAbout      = "about"
+	cmdSkill       = "skill"
+	cmdAgent       = "agent"
+	cmdCompact     = "compact"
+	cmdModels      = "models"
+	cmdModel       = "model"
+	cmdLoop        = "loop"
+	cmdYolo        = "yolo"
+	cmdApprove     = "approve"
+	cmdClassifier  = "classifier"
+	cmdGoal        = "goal"
+	cmdResume      = "resume"
+	cmdLogin       = "login"
+	cmdLogout      = "logout"
+	cmdAttach      = "attach"
+	cmdSettings    = "settings"
+	cmdEndpoint    = "endpoint"
+	cmdEndpointAdd = "add"
+	cmdAbout       = "about"
 
 	// /attach sub-verbs
 	cmdAttachClear = "clear"
@@ -89,6 +90,7 @@ const (
 	KindLogout                   // log out of a provider (Provider empty = list)
 	KindSettings                 // list, show, set or unset a config key (SettingKey etc.)
 	KindEndpoint                 // switch endpoint (Endpoint empty = open the picker)
+	KindEndpointAdd              // open the add-endpoint form
 	KindModelReset               // drop the saved model override for the current endpoint
 	KindModelDefault             // save Model (empty = the one in use) as the endpoint's default
 	KindAbout                    // print version, config paths, and tool inventory
@@ -280,6 +282,10 @@ func Resolve(input string, cmds []types.CommandConfig, skills []types.Skill, age
 			return Action{Kind: KindAttach, AttachOp: AttachStage, AttachPath: rest, Transcribe: transcribe}
 		}
 	case cmdEndpoint:
+		sub, after := splitVerb(rest)
+		if sub == cmdEndpointAdd {
+			return Action{Kind: KindEndpointAdd, Endpoint: strings.TrimSpace(after)}
+		}
 		return Action{Kind: KindEndpoint, Endpoint: strings.TrimSpace(rest)}
 	case cmdAbout:
 		return Action{Kind: KindAbout}

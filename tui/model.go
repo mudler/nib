@@ -508,6 +508,9 @@ type Model struct {
 	loginForm      loginForm
 	loginWait      loginWait
 
+	// /endpoint add: template picker then form.
+	endpointForm endpointFormState
+
 	// Pending message queue: text typed while a run is in flight. Entries are
 	// editable until they fire (FIFO) into the live run at step boundaries.
 	// queueSel is the entry highlighted for ^e/^x when the composer is empty.
@@ -1170,6 +1173,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.loginForm.active {
 			return m.handleLoginFormKey(msg)
+		}
+		if m.endpointForm.active {
+			return m.handleEndpointFormKey(msg)
 		}
 		if m.providerPicker.active {
 			return m.handleProviderPickerKey(msg)
@@ -2507,6 +2513,9 @@ func (m *Model) dispatchResolved(input string) tea.Cmd {
 			return nil
 		}
 		return m.useEndpoint(e)
+	case slash.KindEndpointAdd:
+		m.openEndpointForm()
+		return nil
 	case slash.KindResume:
 		return m.startResume(action.ResumeAll, action.ResumeID)
 	case slash.KindSettings:
@@ -3150,7 +3159,7 @@ func (m Model) renderComposer(w int) string {
 	case m.awaitingResume:
 		// no input: unlike ask_user, /resume has no free-text fallback — the
 		// picker lives in the viewport dialog block and swallows every key.
-	case m.modelPicker.active, m.providerPicker.active, m.loginForm.active, m.loginWait.active:
+	case m.modelPicker.active, m.providerPicker.active, m.loginForm.active, m.loginWait.active, m.endpointForm.active:
 		// no input: the picker/login dialog handles all keys.
 	default:
 		composer.WriteString(m.composerView())
@@ -3427,6 +3436,9 @@ func (m Model) currentDialogs() []render.Dialog {
 	if m.loginForm.active {
 		dialogs = append(dialogs, m.loginForm.dialog())
 	}
+	if m.endpointForm.active {
+		dialogs = append(dialogs, m.endpointForm.dialog())
+	}
 	if m.loginWait.active {
 		dialogs = append(dialogs, m.loginWait.dialog())
 	}
@@ -3446,7 +3458,7 @@ func (m Model) showingViewport() bool {
 		return false
 	}
 	return len(m.messages) > 0 || m.loading || m.awaitingApproval || m.awaitingAsk || m.awaitingResume || m.modelPicker.active ||
-		m.providerPicker.active || m.loginForm.active || m.loginWait.active
+		m.providerPicker.active || m.loginForm.active || m.loginWait.active || m.endpointForm.active
 }
 
 // reasoningBoxHit reports whether a terminal-relative mouse Y lands inside
@@ -3893,6 +3905,8 @@ func (m Model) helpLine() string {
 		return theme.ProviderPickerKeyHint
 	case m.loginForm.active:
 		return theme.LoginFormHint
+	case m.endpointForm.active:
+		return theme.EndpointFormHint
 	case m.loginWait.active:
 		return theme.LoginWaitHint
 	case m.parked:

@@ -246,6 +246,8 @@ func TestResolveEndpoint(t *testing.T) {
 		{"/endpoint config", KindEndpoint, "config"},
 		{"/endpoint @work-vllm", KindEndpoint, "@work-vllm"},
 		{"/endpoint  regolo  ", KindEndpoint, "regolo"},
+		{"/endpoint add", KindEndpointAdd, ""},
+		{"/endpoint add ", KindEndpointAdd, ""},
 	} {
 		got := Resolve(tc.in, nil, nil, nil)
 		if got.Kind != tc.wantKind || got.Endpoint != tc.wantID {

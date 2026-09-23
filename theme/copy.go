@@ -122,6 +122,30 @@ const (
 	// %s are the typed ID).
 	LoginNotAProvider = "%s is a config.yaml endpoint, not a login provider · use /endpoint %s instead"
 
+	// EndpointAddTitle is the dialog title for the endpoint template picker.
+	EndpointAddTitle = "add endpoint"
+	// EndpointAddHint is the key hint for the endpoint template picker.
+	EndpointAddHint = "↑↓ move · enter select · esc cancel"
+	// EndpointFormTitle is the dialog title for the add-endpoint form
+	// (a %s for the template name).
+	EndpointFormTitle = "add %s endpoint"
+	// EndpointFormHint is the key hint for the add-endpoint form.
+	EndpointFormHint = "tab next field · enter save · esc cancel"
+	// EndpointFieldNameLabel is the label for the Name field.
+	EndpointFieldNameLabel = "Name"
+	// EndpointFormURLLabel is the label for the Base URL field.
+	EndpointFormURLLabel = "Base URL"
+	// EndpointFormModelLabel is the label for the Model field.
+	EndpointFormModelLabel = "Model"
+	// EndpointFormKeyLabel is the label for the API key field.
+	EndpointFormKeyLabel = "API key"
+	// EndpointAdded is the confirmation message after an endpoint is added
+	// (a %s for the endpoint name).
+	EndpointAdded = "endpoint added: %s · use /endpoint %s to switch to it"
+	// EndpointAddRow is the sentinel entry in the endpoint picker that opens
+	// the add-endpoint form.
+	EndpointAddRow = "+ add new endpoint"
+
 	CLIWelcome = "a calm assistant for your terminal."
 	CLIExit    = "ctrl+c or 'exit' to leave · 'help' for commands"
 
