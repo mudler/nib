@@ -3,7 +3,6 @@ package tui
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -252,9 +251,8 @@ func TestModelPickerNavigationAndEnterSwitch(t *testing.T) {
 	if m.modelPicker.active || m.session.Model() != "model-b" {
 		t.Fatalf("Enter picker=%+v model=%q, want closed on model-b", m.modelPicker, m.session.Model())
 	}
-	// The pick is on the config.yaml default endpoint and model-a is what the
-	// file names, so the confirmation also says the pick outlives the session.
-	wantSwitch := "model: model-b · " + fmt.Sprintf(theme.ModelOverridesConfigNotice, "model-a")
+	// A /model pick is not saved, and the confirmation says so.
+	wantSwitch := "model: model-b · " + theme.ModelSessionOnly
 	if msg := lastMessage(t, m); msg.Role != "agent" || msg.Content != wantSwitch {
 		t.Fatalf("switch confirmation = %+v, want %q", msg, wantSwitch)
 	}
@@ -420,7 +418,7 @@ func TestModelPickerDialogStates(t *testing.T) {
 			t.Fatalf("kind = %v, want DialogModelPicker", d.Kind)
 		}
 		// /model's picker also points at /login, the only way to switch provider.
-		if want := theme.ModelPickerKeyHint + " · " + theme.ModelPickerLoginHint; d.Hint != want {
+		if want := theme.ModelPickerSessionKeyHint + " · " + theme.ModelPickerLoginHint; d.Hint != want {
 			t.Fatalf("hint = %q, want %q", d.Hint, want)
 		}
 		if !strings.Contains(d.Title, theme.ModelPickerSearchLabel) {

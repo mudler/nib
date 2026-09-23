@@ -1179,22 +1179,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case tea.KeyBackspace:
 				m.modelPicker.backspace()
 			case tea.KeyEnter:
-				if choice, ok := m.modelPicker.choice(); ok {
-					if target := m.modelPicker.target; target != nil && m.modelPicker.forClassifier {
-						m.useClassifier(target.ID, choice, false)
-					} else if target != nil {
-						if err := m.session.SwitchProvider(target.ID, choice); err != nil {
-							m.appendMessage(ChatMessage{Role: "error", Content: err.Error()})
-						} else {
-							m.appendMessage(ChatMessage{Role: "agent", Content: "provider: " + target.Name + " · model: " + choice + " · " + theme.ProviderSavedDefault})
-						}
-					} else if err := m.session.SetModel(choice); err != nil {
-						m.appendMessage(ChatMessage{Role: "error", Content: err.Error()})
-					} else {
-						m.appendMessage(ChatMessage{Role: "agent", Content: m.modelSwitchNotice(choice)})
-					}
-					m.refreshContextTokens()
-					m.modelPicker.close()
+				m.pickModel(false)
+			case tea.KeyCtrlS:
+				// Only /model's own picker has a session-only pick to
+				// promote: a provider switch is saved already, and a
+				// classifier pick has its own save rules.
+				if m.modelPicker.target == nil {
+					m.pickModel(true)
 				}
 			case tea.KeySpace:
 				m.modelPicker.appendQuery(" ")
@@ -1647,6 +1638,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// boot log would hide it until the first message is sent.
 			if len(m.messages) > 0 {
 				m.boot.collapsed = true
+				m.updateViewport()
+			}
+		}
+		// A resumed session whose model could not be restored says so in the
+		// transcript: the collapsed boot log would hide the note.
+		if m.cfg.InitialModel != "" {
+			if note := m.session.StartupNote(); note != "" {
+				m.appendMessage(ChatMessage{Role: "error", Content: note})
 				m.updateViewport()
 			}
 		}
@@ -2358,6 +2357,21 @@ func (m *Model) dispatchResolved(input string) tea.Cmd {
 			m.appendMessage(ChatMessage{Role: "agent", Content: "model: " + model + " · " + theme.ModelResetNotice})
 		}
 		return nil
+	case slash.KindModelDefault:
+		notice, err := m.session.SetDefaultModel(m.ctx, action.Model)
+		var unserved *chat.UnservedModelError
+		switch {
+		case errors.As(err, &unserved):
+			m.appendMessage(
+				ChatMessage{Role: "error", Content: unserved.Headline()},
+				ChatMessage{Role: "agent", Content: fencedListing(unserved.Listing())})
+		case err != nil:
+			m.appendMessage(ChatMessage{Role: "error", Content: err.Error()})
+		default:
+			m.appendMessage(ChatMessage{Role: "agent", Content: notice + " · " + theme.ProviderSavedDefault})
+		}
+		m.refreshContextTokens()
+		return nil
 	case slash.KindModelSet:
 		notice, err := m.session.SwitchModel(m.ctx, action.Model)
 		var unserved *chat.UnservedModelError
@@ -2374,7 +2388,7 @@ func (m *Model) dispatchResolved(input string) tea.Cmd {
 		case err != nil:
 			m.appendMessage(ChatMessage{Role: "error", Content: err.Error()})
 		default:
-			m.appendMessage(ChatMessage{Role: "agent", Content: notice})
+			m.appendMessage(ChatMessage{Role: "agent", Content: notice + " · " + theme.ModelSessionOnly})
 		}
 		m.refreshContextTokens()
 		return nil

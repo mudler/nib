@@ -151,8 +151,8 @@ func (m *Model) bootProvider() string {
 //
 // The note is gated on actual divergence — Model() != ActiveEndpointConfigModel()
 // — not on which endpoint is active. A /login pick or a named endpoint is the
-// usual way the two diverge, but SetModel now persists a pick uniformly on
-// every endpoint, including config.yaml's own default: a saved pick can
+// usual way the two diverge, but /model default saves a model on every
+// endpoint, including config.yaml's own default: a saved pick can
 // shadow config.yaml's model while the session never left the default
 // endpoint at all, and gating on endpoint identity would hide exactly that
 // case. See endpointOverrides in tui/settings.go for the same correction

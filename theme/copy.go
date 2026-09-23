@@ -45,6 +45,9 @@ const (
 	ModelPickerNoMatches   = "no matching models."
 	ModelPickerSearchLabel = "search:"
 	ModelPickerKeyHint     = "type to filter · ↑↓ move · enter select · esc cancel"
+	// ModelPickerSessionKeyHint is /model's own key hint: Enter switches this
+	// session only, ctrl+s also saves the model as the endpoint's default.
+	ModelPickerSessionKeyHint = "type to filter · ↑↓ move · enter use in this session · ctrl+s use and save as default · esc cancel"
 	// ModelPickerTypeName replaces the key hint when the provider being
 	// switched to offers no model list: the typed query itself is the model.
 	ModelPickerTypeName  = "type the model name · enter use it · esc cancel"
@@ -65,24 +68,18 @@ const (
 	// model applies again.
 	ModelResetNotice = "reset to the endpoint's own model"
 
-	// ModelOverridesConfigNotice follows "model: <name>" in /model's success
-	// notice on config.yaml's DEFAULT endpoint, when the pick differs from
-	// what config.yaml itself declares (%s). SetModel persists a pick
-	// uniformly on every endpoint, including the default one, so the pick
-	// does outlive the session and shadow config.yaml on the next start —
-	// this says so now, instead of leaving the user to discover it only at
-	// the next boot's note. Only shown when /model reset would actually
-	// undo it (see SettingsModelOverrideNoReset for the case it would not).
-	ModelOverridesConfigNotice = "overrides config.yaml's %s until /model reset"
+	// ModelSessionOnly follows "model: <name>" in /model's success notice:
+	// a /model pick is not saved, so other sessions and the next start keep
+	// the endpoint's own model.
+	ModelSessionOnly = "this session only · /model default saves it"
 
 	// BootModelOverride is the dim note on the boot log's model line when the
 	// running model diverges from config.yaml's own (a %s for config.yaml's
 	// model): both are configured, and only one is used, so the log says
 	// which. The cause is always the same shape — a pick saved in
 	// provider.json shadowing config.yaml — whether it came from a /login
-	// provider, a named endpoint, or a /model pick on config.yaml's own
-	// default endpoint, so one wording covers all three instead of naming
-	// /login specifically and being wrong for the other two.
+	// provider, a named endpoint picked with a model, or a /model pick saved
+	// by an older nib, so one wording covers all of them.
 	BootModelOverride = "(config.yaml: %s, overridden by a saved pick)"
 
 	// /login provider picker, API-key form and OAuth wait dialog
@@ -252,7 +249,7 @@ const (
 	CompGoalName       = "goal"
 	CompGoalDesc       = "set a goal nib checks before stopping"
 	CompModelName      = "model"
-	CompModelDesc      = "switch model (current provider)"
+	CompModelDesc      = "switch model for this session (current provider)"
 	CompModelsName     = "models"
 	CompModelsDesc     = "list the current provider's models"
 	CompAttachName     = "attach"

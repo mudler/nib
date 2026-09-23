@@ -590,8 +590,10 @@ func NewSession(ctx context.Context, cfg types.Config, callbacks Callbacks, tran
 	}
 	s.hooks.Fire(ctx, hooks.EventSessionStart, "", map[string]any{"event": "SessionStart"})
 
-	// An endpoint picked in an earlier session is the default.
+	// An endpoint picked in an earlier session is the default. A resumed
+	// session then goes back to the endpoint and model it was using.
 	s.restoreStartupEndpoint()
+	s.restoreResumedModel(cfg.InitialEndpoint, cfg.InitialModel)
 
 	// A zero MaxContextTokens means "unset" (config.go no longer defaults it).
 	// The default applies immediately so compaction and the gauge always have
@@ -2400,12 +2402,10 @@ func (s *Session) currentLLM() (cogito.LLM, string) {
 // currentLLM); the switch applies from the next turn. Safe to call from another
 // goroutine while a turn is running.
 //
-// The pick is recorded for the current endpoint via endpoint.WriteSaved,
-// uniformly across every endpoint (including the config.yaml default): the
-// next session starts back on this model rather than silently reverting to
-// whatever config.yaml or the endpoint's own definition says. A failed write
-// is only logged — the switch already happened, and a state-file problem
-// should not be reported as if the model change itself failed.
+// The pick applies to this session only and is not written to provider.json.
+// Every nib process reads that file at startup, so a pick saved there would
+// switch every session started afterwards, including ones running in other
+// terminals. An endpoint pick (SwitchProvider) is still saved.
 func (s *Session) SetModel(name string) error {
 	provider := s.resolvedSessionProvider()
 	provider.Model = name
@@ -2413,18 +2413,15 @@ func (s *Session) SetModel(name string) error {
 		xlog.Error("could not switch model", "model", name, "error", err)
 		return err
 	}
-	id := s.EndpointID()
-	if err := endpoint.WriteSaved(s.savedPath, endpoint.Saved{ID: id, Model: name}); err != nil {
-		xlog.Warn("could not save the endpoint default", "endpoint", id, "error", err)
-	}
 	return nil
 }
 
-// ResetModel drops the saved model override for the current endpoint, so the
-// model the endpoint itself names applies again, and reports the model now
-// in use. This is the escape hatch from a sticky pick: nib never edits
-// config.yaml, so the yaml's own model is restored by forgetting the pick
-// rather than by rewriting anything on disk that config.yaml owns.
+// ResetModel puts the session back on the model the current endpoint itself
+// names, and reports that model. It also drops a model saved for the
+// endpoint in provider.json (an endpoint pick made with a model, or a /model
+// pick saved by an older nib), so the next session starts on the endpoint's
+// own model too: nib never edits config.yaml, so the yaml's own model is
+// restored by forgetting the pick rather than by rewriting config.yaml.
 func (s *Session) ResetModel() (string, error) {
 	id := s.EndpointID()
 	p, err := s.endpoints.Config(id)

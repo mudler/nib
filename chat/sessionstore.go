@@ -19,10 +19,14 @@ import (
 // Session.ExportHistory), plus the metadata the /resume picker lists by
 // (Title, Cwd, Updated, message count).
 type SessionRecord struct {
-	ID       string                         `json:"id"`
-	Title    string                         `json:"title"`
-	Cwd      string                         `json:"cwd"`
-	Model    string                         `json:"model"`
+	ID    string `json:"id"`
+	Title string `json:"title"`
+	Cwd   string `json:"cwd"`
+	Model string `json:"model"`
+	// Endpoint is the picker entry Model was running on (see
+	// Session.EndpointID), so resume puts the model back on the same
+	// endpoint. Empty in records saved before it was kept.
+	Endpoint string                         `json:"endpoint,omitempty"`
 	Created  time.Time                      `json:"created"`
 	Updated  time.Time                      `json:"updated"`
 	Messages []openai.ChatCompletionMessage `json:"messages"`

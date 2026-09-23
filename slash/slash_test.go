@@ -255,6 +255,12 @@ func TestResolveEndpoint(t *testing.T) {
 }
 
 func TestResolveModelReset(t *testing.T) {
+	if got := Resolve("/model default", nil, nil, nil); got.Kind != KindModelDefault || got.Model != "" {
+		t.Fatalf("Resolve(\"/model default\") = %+v, want KindModelDefault with no model", got)
+	}
+	if got := Resolve("/model default  qwen ", nil, nil, nil); got.Kind != KindModelDefault || got.Model != "qwen" {
+		t.Fatalf("Resolve(\"/model default qwen\") = %+v, want KindModelDefault qwen", got)
+	}
 	if got := Resolve("/model reset", nil, nil, nil); got.Kind != KindModelReset {
 		t.Fatalf("Resolve(\"/model reset\") = %v, want KindModelReset", got.Kind)
 	}
