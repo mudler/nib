@@ -121,7 +121,7 @@ func TestSettingParse(t *testing.T) {
 	if _, err := mode.Parse("sometimes"); err == nil || !strings.Contains(err.Error(), "allowlist") {
 		t.Errorf("approval_mode must reject an unknown mode and list the valid ones, got %v", err)
 	}
-	if got := mode.Values; strings.Join(got, ",") != "prompt,strict,allowlist,auto" {
+	if got := mode.Values; strings.Join(got, ",") != "prompt,strict,allowlist,classify,auto" {
 		t.Errorf("approval_mode values = %v", got)
 	}
 	if got := hud.Values; strings.Join(got, ",") != "on,off" {
