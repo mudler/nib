@@ -227,6 +227,12 @@ func (m *Model) setSetting(s config.Setting, raw string) {
 		m.appendMessage(ChatMessage{Role: "error", Content: err.Error()})
 		return
 	}
+	// Refuse a mode the session cannot run before it reaches the file, or
+	// every later start would warn and fall back.
+	if s.Key == "approval_mode" && v == "classify" && m.session != nil && !m.session.HasClassifier() {
+		m.appendMessage(ChatMessage{Role: "error", Content: theme.ClassifyNeedsClassifier})
+		return
+	}
 	path := m.settingsPath()
 	before, _, err := config.FileSettings(path)
 	if err != nil {

@@ -214,6 +214,9 @@ const (
 	ApproveUsage = "usage: /approve [prompt|strict|allowlist|classify|auto]"
 	// ApproveModeNotice reports the approval mode after /approve or Shift+Tab.
 	ApproveModeNotice = "approval mode: %s"
+	// ClassifyNeedsClassifier refuses approval_mode classify when no
+	// classifier block is configured.
+	ClassifyNeedsClassifier = "classify mode needs a classifier: configure the classifier block first"
 	// ClassifyBadge is the header badge in approval_mode classify.
 	ClassifyBadge = "classify"
 	// AutoApprovedNotice is the transcript line for a call the classifier
