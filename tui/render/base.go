@@ -305,8 +305,9 @@ func (Base) Header(v ViewState) string {
 	left := theme.Brand.Render(v.Brand)
 	if v.AutoApprove {
 		left += "  " + theme.Yolo.Render(theme.YoloBadge)
-	} else if v.ApprovalMode == "classify" {
-		left += "  " + theme.Meta.Render(theme.ClassifyBadge)
+	} else if v.ApprovalMode != "" && v.ApprovalMode != "prompt" {
+		// strict, allowlist and classify change what prompts; say so.
+		left += "  " + theme.Meta.Render(v.ApprovalMode)
 	}
 
 	// Middle: stat segments, each with a separator dot. Built left-to-right

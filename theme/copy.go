@@ -217,8 +217,6 @@ const (
 	// ClassifyNeedsClassifier refuses approval_mode classify when no
 	// classifier block is configured.
 	ClassifyNeedsClassifier = "classify mode needs a classifier: configure the classifier block first"
-	// ClassifyBadge is the header badge in approval_mode classify.
-	ClassifyBadge = "classify"
 	// AutoApprovedNotice is the transcript line for a call the classifier
 	// approved without asking: category, confidence, the call.
 	AutoApprovedNotice = "auto-approved · %s %.2f · %s"

@@ -157,3 +157,12 @@ func TestAutoApprovedLineInTranscript(t *testing.T) {
 		t.Fatalf("line = %q", msg.Content)
 	}
 }
+
+func TestHeaderShowsEveryNonPromptMode(t *testing.T) {
+	for _, mode := range []string{"strict", "allowlist", "classify"} {
+		h := render.Base{}.Header(render.ViewState{Brand: "nib", ApprovalMode: mode, Width: 80})
+		if !strings.Contains(h, mode) {
+			t.Errorf("header lacks the %s badge: %q", mode, h)
+		}
+	}
+}

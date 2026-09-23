@@ -234,7 +234,7 @@ type ViewState struct {
 	Brand       string
 	AutoApprove bool
 	// ApprovalMode is the session's approval_mode, for the header badge.
-	// Only "classify" draws one; yolo has AutoApprove.
+	// Every mode but prompt draws one; yolo has AutoApprove.
 	ApprovalMode string
 	Loading      bool
 	Status       string
