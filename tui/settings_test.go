@@ -203,7 +203,8 @@ func TestSettingsCompletionKeys(t *testing.T) {
 		t.Fatalf("verb completion = %+v, %v", it, ok)
 	}
 
-	c.sync("/settings thresh")
+	// Several blocks have a threshold now; a dotted prefix picks one.
+	c.sync("/settings compaction.thresh")
 	if !c.active || len(c.matches) != 1 {
 		t.Fatalf("matches = %+v", c.matches)
 	}

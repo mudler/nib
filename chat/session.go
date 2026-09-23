@@ -15,6 +15,8 @@ import (
 	"time"
 
 	"github.com/mudler/nib/auth"
+	"github.com/mudler/nib/classify"
+	_ "github.com/mudler/nib/classify/systemone" // the SystemOne classifier API
 	"github.com/mudler/nib/endpoint"
 	"github.com/mudler/nib/hooks"
 	"github.com/mudler/nib/internal"
@@ -65,7 +67,7 @@ type Session struct {
 	allowedBashPrefixes  map[string]bool  // bash first-word grants ("git" → simple `git …` auto-approved)
 	autoApprove          atomic.Bool      // approval_mode: auto, or the /yolo toggle — approve every tool call
 	allowAllTurn         bool             // user chose "allow all this turn"; reset each top-level turn
-	approvalMode         string           // raw approval_mode: "" / "prompt" / "strict" / "allowlist" / "auto"; guarded by approvalMu
+	approvalMode         string           // raw approval_mode: "" / "prompt" / "strict" / "allowlist" / "classify" / "auto"; guarded by approvalMu
 	approvalMu           sync.RWMutex     // guards approvalMode: /settings changes it while a turn reads it
 	readOnlyCommands     readOnlyCommands // bash commands auto-approved in prompt mode
 	hooks                *hooks.Dispatcher
@@ -73,6 +75,11 @@ type Session struct {
 	externalSources      map[string]provenance.Envelope
 	externalToolNames    map[string]bool // tools supplied by configured/plugin MCP servers
 	provenanceClassifier provenance.Classifier
+	// classifier is the small classification model (classifier:), nil
+	// when none is configured. approver applies auto_approve with it in
+	// approval_mode "classify".
+	classifier classify.Classifier
+	approver   *Approver
 
 	agentMu    sync.Mutex
 	agentStart map[string]time.Time // sub-agent ID -> spawn time, for elapsed
@@ -452,6 +459,13 @@ func NewSession(ctx context.Context, cfg types.Config, callbacks Callbacks, tran
 	if err != nil {
 		return nil, err
 	}
+	// A broken classifier block costs the features built on it, not the
+	// session: it is reported with the rejected endpoints.
+	smallClassifier, err := classify.New(cfg)
+	if err != nil {
+		configErrs = append(configErrs, err)
+		smallClassifier = nil
+	}
 
 	// Session tracing: wrap the LLM so every call is appended to the transcript.
 	// Tracing is only ever on because someone asked for it, so a recorder that
@@ -562,8 +576,21 @@ func NewSession(ctx context.Context, cfg types.Config, callbacks Callbacks, tran
 	for _, name := range cfg.BuiltinTools {
 		s.toolAllow[name] = true
 	}
+	if smallClassifier != nil {
+		s.classifier = smallClassifier
+		s.approver = NewApprover(smallClassifier, cfg.AutoApprove, cfg.WorkingDir)
+	}
+	for _, name := range cfg.AutoApprove.Allow {
+		if !classify.ValidCategory(name) {
+			s.configErrs = append(s.configErrs, fmt.Errorf("auto_approve.allow: unknown category %q (known: %s)", name, strings.Join(classify.Categories, ", ")))
+		}
+	}
 	s.autoApprove.Store(cfg.ApprovalMode == "auto")
 	s.approvalMode = cfg.ApprovalMode
+	if cfg.ApprovalMode == "classify" && s.approver == nil {
+		s.configErrs = append(s.configErrs, fmt.Errorf("approval_mode: classify needs a classifier block; using prompt"))
+		s.approvalMode = "prompt"
+	}
 	s.readOnlyCommands = newReadOnlyCommands(cfg.ReadOnlyCommands)
 	// Wire reloadable state (skills server, config MCP clients, agents, hooks,
 	// system prompt) through the same path used for live reloads.
@@ -687,9 +714,23 @@ func (s *Session) decideToolCall(req ToolCallRequest) cogito.ToolCallDecision {
 	// In the default prompt mode, auto-approve calls that only observe state.
 	// Not applied in allowlist (explicitly restrictive), strict (prompt for
 	// everything), or auto (already approved above). Hooks above still win.
-	if mode := s.currentApprovalMode(); (mode == "" || mode == "prompt") &&
+	// classify mode is prompt mode with a classifier in front of the prompt.
+	mode := s.currentApprovalMode()
+	if (mode == "" || mode == "prompt" || mode == "classify") &&
 		IsReadOnly(req.Name, req.Arguments, s.readOnlyCommands) {
 		return cogito.ToolCallDecision{Approved: true}
+	}
+	// The classifier can only spare the user a prompt: a call it does not
+	// approve, or cannot judge, is asked about as usual, with its verdict.
+	if mode == "classify" && s.approver != nil {
+		v := s.approver.Judge(s.ctx, req)
+		if v.Approved {
+			if s.callbacks.OnAutoApproved != nil {
+				s.callbacks.OnAutoApproved(req, v)
+			}
+			return cogito.ToolCallDecision{Approved: true}
+		}
+		req.Verdict = v.String()
 	}
 	if s.callbacks.OnToolCall == nil {
 		return cogito.ToolCallDecision{Approved: true}

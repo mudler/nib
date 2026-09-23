@@ -1,6 +1,10 @@
 package chat
 
-import "github.com/mudler/nib/types"
+import (
+	"fmt"
+
+	"github.com/mudler/nib/types"
+)
 
 // Live setters for the config keys the TUI's /settings command can apply to a
 // running session. Each one touches exactly one piece of state under the lock
@@ -8,16 +12,35 @@ import "github.com/mudler/nib/types"
 // runs, unlike Reload, which reconnects MCP clients and must run at turn start.
 
 // SetApprovalMode switches tool-call gating to mode ("" / "prompt", "strict",
-// "allowlist" or "auto"), as approval_mode does at startup: "auto" turns the
-// approve-everything switch on, and any other mode turns it off, so a /yolo
-// toggled on earlier does not outlive an explicit change of mode. Grants the
-// user already made (allowedTools, bash prefixes) are kept, as with /yolo.
-func (s *Session) SetApprovalMode(mode string) {
+// "allowlist", "classify" or "auto"), as approval_mode does at startup: "auto"
+// turns the approve-everything switch on, and any other mode turns it off, so
+// a /yolo toggled on earlier does not outlive an explicit change of mode.
+// Grants the user already made (allowedTools, bash prefixes) are kept, as with
+// /yolo. "classify" without a configured classifier is refused, and the mode
+// stays as it was.
+func (s *Session) SetApprovalMode(mode string) error {
+	if mode == "classify" && s.approver == nil {
+		return fmt.Errorf("classify mode needs a classifier: configure the classifier block")
+	}
 	s.approvalMu.Lock()
 	s.approvalMode = mode
 	s.approvalMu.Unlock()
 	s.autoApprove.Store(mode == "auto")
+	return nil
 }
+
+// ApprovalMode is the current approval_mode ("" means prompt). A /yolo
+// toggle does not change it; AutoApprove reports that separately.
+func (s *Session) ApprovalMode() string {
+	if m := s.currentApprovalMode(); m != "" {
+		return m
+	}
+	return "prompt"
+}
+
+// HasClassifier reports whether a classifier is configured, so classify
+// mode and reply suggestions are available.
+func (s *Session) HasClassifier() bool { return s.approver != nil }
 
 // currentApprovalMode reads approvalMode under its lock; decideToolCall runs on
 // the turn goroutine while SetApprovalMode runs on the UI's.

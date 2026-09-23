@@ -349,7 +349,9 @@ func (m *Model) applyLiveSettings(changed []config.Setting) {
 		}
 	}
 	if approval {
-		m.session.SetApprovalMode(m.cfg.ApprovalMode)
+		if err := m.session.SetApprovalMode(m.cfg.ApprovalMode); err != nil {
+			m.appendMessage(ChatMessage{Role: "error", Content: err.Error()})
+		}
 	}
 	if compaction {
 		m.session.SetCompaction(m.cfg.Compaction)
