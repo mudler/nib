@@ -118,6 +118,27 @@ func (m Model) currentTurnGen() int32 {
 	return m.turnGen.Load()
 }
 
+// startThinking sets the model into a thinking state, picking a random funny
+// line and tip for this turn unless ui.no_funny is on. Every site that
+// previously assigned m.startThinking() calls this instead.
+func (m *Model) startThinking() {
+	m.status = "Thinking…"
+	if m.cfg.UI.NoFunny {
+		m.thinkingLine = ""
+		m.tip = ""
+		return
+	}
+	m.thinkingLine = theme.RandomThinkingLine()
+	m.tip = theme.RandomTip()
+}
+
+// stopThinking clears the funny line and tip set by startThinking, called
+// when a turn ends (responseMsg, parkMsg, compactResultMsg).
+func (m *Model) stopThinking() {
+	m.thinkingLine = ""
+	m.tip = ""
+}
+
 // appendStreamedContent applies one live "content" delta (Callbacks.OnStream,
 // via reasoningEventContentDelta) to the transcript: the FIRST delta of a
 // turn starts a new in-progress assistant message, and every delta after that
@@ -319,6 +340,14 @@ type Model struct {
 	loops     *loop.Registry
 	loopsPath string // .nib/loops.json for durable jobs
 	status    string
+	// thinkingLine is the funny one-liner shown in place of the plain
+	// "thinking" verb while the agent works. Picked at random each turn
+	// by startThinking(); empty when ui.no_funny is on.
+	thinkingLine string
+	// tip is the usage hint shown as a dim line beneath the spinner.
+	// Picked at random each turn by startThinking(); empty when
+	// ui.no_funny is on.
+	tip string
 	reasoning string
 	// reasoningCollapsed caps the live thinking trace to a few trailing lines
 	// so it does not flood the transcript. Per-session, persists across
@@ -1651,6 +1680,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.parked = false
 		m.interruptArmed = false
 		m.status = ""
+		m.stopThinking()
 		m.endThoughtStep()
 		m.reasoningResetPending = false
 		// The turn is over: move the generation now, not only at the next
@@ -1786,6 +1816,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Same as responseMsg: events this step sent before it parked
 			// must not land in the box after this reset.
 			m.bumpTurnGen()
+			m.stopThinking()
 			if m.isWorking() {
 				m.status = "Working in the background — type to add a follow-up"
 			} else {
@@ -1799,7 +1830,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Parked == the agent is idle waiting; release the next queued
 			// follow-up now (flips back to loading via releaseQueueFront).
 			if m.releaseQueueFront() {
-				m.status = "Thinking…"
+				m.startThinking()
 			} else {
 				m.ringBell()
 			}
@@ -1809,7 +1840,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.parked = false
 			m.loading = true
 			m.interruptArmed = false
-			m.status = "Thinking…"
+			m.startThinking()
 			// Invalidate any orphan poll wake-up. A poll wake-up only exists to
 			// nudge the run if it stays stuck on background work; once that work
 			// completes it injects its own result and resumes us here, so a
@@ -1825,6 +1856,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case compactResultMsg:
 		m.loading = false
 		m.status = ""
+		m.stopThinking()
 		if msg.err != nil {
 			m.appendMessage(ChatMessage{Role: "error", Content: "compaction failed: " + msg.err.Error()})
 		} else if msg.before == msg.after {
@@ -1951,13 +1983,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.parked = false
 			m.loading = true
 			m.interruptArmed = false
-			m.status = "Thinking…"
+			m.startThinking()
 			m.updateViewport()
 		} else if m.sessionReady && m.session != nil && !m.loading && !m.awaitingApproval && !m.awaitingAsk && !m.awaitingResume {
 			m.appendMessage(ChatMessage{Role: "user", Content: prompt})
 			m.loading = true
 			m.interruptArmed = false
-			m.status = "Thinking…"
+			m.startThinking()
 			m.updateViewport()
 			cmds = append(cmds, m.sendMessage(text))
 		}
@@ -2833,7 +2865,7 @@ func (m Model) resolveAsk(answer string) (tea.Model, tea.Cmd) {
 	m.pendingAsk = nil
 	m.askList = nil
 	m.loading = true
-	m.status = "Thinking…"
+	m.startThinking()
 	m.updateViewportFollow()
 	m.askResponseChan <- answer
 	return m, nil
@@ -3409,8 +3441,15 @@ func (m Model) footerRows() []render.FooterRow {
 // View will render from.
 func (m Model) viewState() render.ViewState {
 	status := m.status
-	if status == "" || status == "Thinking..." {
-		status = theme.VerbThinking
+	tip := ""
+	if status == "" || status == "Thinking…" {
+		if m.thinkingLine != "" {
+			status = m.thinkingLine
+		} else {
+			status = theme.VerbThinking
+		}
+		// Tip only shows while thinking
+		tip = m.tip
 	}
 
 	help := theme.Help.Render(m.helpLine())
@@ -3441,6 +3480,7 @@ func (m Model) viewState() render.ViewState {
 		},
 		Dialogs: m.currentDialogs(),
 		Help:    help,
+		Tip:     tip,
 		Badges:  m.footerBadges(lipgloss.Width(help)),
 		Clock:   m.hudClock,
 		CPU:     m.hudCPU,

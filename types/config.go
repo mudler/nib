@@ -317,6 +317,10 @@ type UIConfig struct {
 	// back to the user (turn done, approval or answer needed). Zero value
 	// (false) = the bell rings.
 	NoBell bool `yaml:"no_bell,omitempty"`
+	// NoFunny disables the funny thinking lines and tips shown beneath the
+	// spinner while the agent is thinking. Zero value (false) = funny lines
+	// and tips shown.
+	NoFunny bool `yaml:"no_funny,omitempty"`
 }
 
 // ClassifierConfig names the small classification model. It is configured

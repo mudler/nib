@@ -79,7 +79,7 @@ func (m *Model) releaseQueueFront() bool {
 	m.parked = false
 	m.loading = true
 	m.interruptArmed = false
-	m.status = "Thinking…"
+	m.startThinking()
 	return true
 }
 
