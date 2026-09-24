@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 )
@@ -95,4 +96,36 @@ func (m *Manager) Close() error {
 		}
 	}
 	return nil
+}
+
+// Status returns a human-readable report of configured and running servers.
+func (m *Manager) Status() string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var b strings.Builder
+	if len(m.configs) == 0 {
+		return "No language servers configured."
+	}
+	langs := make([]string, 0, len(m.configs))
+	for lang := range m.configs {
+		langs = append(langs, lang)
+	}
+	sort.Strings(langs)
+	for _, lang := range langs {
+		cfg := m.configs[lang]
+		fullCmd := cfg.Command
+		if len(cfg.Args) > 0 {
+			fullCmd += " " + strings.Join(cfg.Args, " ")
+		}
+		state := "not running"
+		if entry, ok := m.servers[lang]; ok {
+			if entry.err != nil {
+				state = "error: " + entry.err.Error()
+			} else if entry.client != nil {
+				state = "running"
+			}
+		}
+		fmt.Fprintf(&b, "  %s: %s [%s]\n", lang, fullCmd, state)
+	}
+	return b.String()
 }

@@ -18,7 +18,7 @@ func TestLSPToolDefinitionDescription(t *testing.T) {
 	if desc == "" {
 		t.Fatal("description is empty")
 	}
-	for _, want := range []string{"definition", "references", "symbols"} {
+	for _, want := range []string{"definition", "references", "symbols", "hover", "diagnostics", "rename", "code_actions", "status"} {
 		if !strings.Contains(desc, want) {
 			t.Errorf("description should mention %q", want)
 		}
@@ -60,5 +60,33 @@ func TestURItoPath(t *testing.T) {
 		if got != tc.want {
 			t.Errorf("uriToPath(%q) = %q, want %q", tc.uri, got, tc.want)
 		}
+	}
+}
+
+func TestFormatHoverNil(t *testing.T) {
+	got := formatHover(nil)
+	if got != "no hover information" {
+		t.Errorf("formatHover(nil) = %q, want \"no hover information\"", got)
+	}
+}
+
+func TestFormatDiagnosticsEmpty(t *testing.T) {
+	got := formatDiagnostics(nil)
+	if got != "no diagnostics" {
+		t.Errorf("formatDiagnostics(nil) = %q, want \"no diagnostics\"", got)
+	}
+}
+
+func TestFormatWorkspaceEditNil(t *testing.T) {
+	got := formatWorkspaceEdit(nil)
+	if got != "no changes" {
+		t.Errorf("formatWorkspaceEdit(nil) = %q, want \"no changes\"", got)
+	}
+}
+
+func TestFormatCodeActionsEmpty(t *testing.T) {
+	got := formatCodeActions(nil)
+	if got != "no code actions available" {
+		t.Errorf("formatCodeActions(nil) = %q, want \"no code actions available\"", got)
 	}
 }

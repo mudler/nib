@@ -549,18 +549,37 @@ func NewSession(ctx context.Context, cfg types.Config, callbacks Callbacks, tran
 		provenanceClassifier: classifier,
 	}
 
-	// Start LSP servers if any are configured. The manager owns the
-	// processes and closes them in Close().
-	if len(cfg.LSP) > 0 {
-		configs := make(map[string]lsp.ServerConfig, len(cfg.LSP))
-		for lang, s := range cfg.LSP {
-			configs[lang] = lsp.ServerConfig{
-				Command: s.Command,
-				Args:    s.Args,
-				Env:     s.Env,
+	// Build the LSP server set: explicit config first, then auto-detect
+	// any servers on PATH that aren't already explicitly configured.
+	lspConfigs := make(map[string]lsp.ServerConfig)
+	for lang, s := range cfg.LSP {
+		lspConfigs[lang] = lsp.ServerConfig{
+			Command: s.Command,
+			Args:    s.Args,
+			Env:     s.Env,
+		}
+	}
+	autoDetect := true
+	if cfg.LSPAutoDetect != nil {
+		autoDetect = *cfg.LSPAutoDetect
+	}
+	if autoDetect {
+		explicit := make(map[string]bool, len(lspConfigs))
+		for lang := range lspConfigs {
+			explicit[lang] = true
+		}
+		detected := lsp.AutoDetect(explicit)
+		for lang, dc := range detected {
+			lspConfigs[lang] = dc
+		}
+		if len(detected) > 0 {
+			for _, line := range lsp.DetectedServers(explicit) {
+				xlog.Info("Language server detected: " + line)
 			}
 		}
-		s.lspManager = lsp.NewManager(configs, cfg.WorkingDir)
+	}
+	if len(lspConfigs) > 0 {
+		s.lspManager = lsp.NewManager(lspConfigs, cfg.WorkingDir)
 	}
 	// Resume/rehydration: seed a prior conversation so the very next SendMessage
 	// continues with full memory of it, behaving identically to a session that

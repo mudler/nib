@@ -37,6 +37,9 @@ type TextDocumentClientCapabilities struct {
 	References     *struct{} `json:"references,omitempty"`
 	DocumentSymbol *struct{} `json:"documentSymbol,omitempty"`
 	Hover          *struct{} `json:"hover,omitempty"`
+	Rename         *struct{} `json:"rename,omitempty"`
+	CodeAction     *struct{} `json:"codeAction,omitempty"`
+	PublishDiagnostics *struct{} `json:"publishDiagnostics,omitempty"`
 }
 
 // TextDocumentIdentifier identifies a document by URI.
@@ -72,6 +75,73 @@ type Symbol struct {
 	Range          Range    `json:"range"`
 	SelectionRange Range    `json:"selectionRange"`
 	Children       []Symbol `json:"children,omitempty"`
+}
+
+// HoverParams requests hover information at a position.
+type HoverParams = TextDocumentPositionParams
+
+// Hover is the result of a textDocument/hover request.
+type Hover struct {
+	Contents MarkupContent `json:"contents"`
+	Range    *Range        `json:"range,omitempty"`
+}
+
+// MarkupContent is markdown or plaintext content.
+type MarkupContent struct {
+	Kind  string `json:"kind"` // "markdown" or "plaintext"
+	Value string `json:"value"`
+}
+
+// CodeAction describes a refactoring or fix-it action.
+type CodeAction struct {
+	Title string `json:"title"`
+	Kind  string `json:"kind,omitempty"`
+	Edit  *WorkspaceEdit `json:"edit,omitempty"`
+}
+
+// WorkspaceEdit is the result of a rename — a set of edits per file.
+type WorkspaceEdit struct {
+	Changes map[string][]TextEdit `json:"changes,omitempty"`
+}
+
+// TextEdit is a range replacement.
+type TextEdit struct {
+	Range   Range  `json:"range"`
+	NewText string `json:"newText"`
+}
+
+// Diagnostic is a compiler/linter message for a range.
+type Diagnostic struct {
+	Range    Range  `json:"range"`
+	Severity int    `json:"severity"`
+	Code     string `json:"code,omitempty"`
+	Source   string `json:"source,omitempty"`
+	Message  string `json:"message"`
+}
+
+// Diagnostic severities (LSP spec).
+const (
+	SeverityError       = 1
+	SeverityWarning     = 2
+	SeverityInformation = 3
+	SeverityHint        = 4
+)
+
+// CodeActionParams requests code actions for a range.
+type CodeActionParams struct {
+	TextDocument TextDocumentIdentifier `json:"textDocument"`
+	Range        Range                  `json:"range"`
+	Context      struct {
+		Diagnostics []Diagnostic `json:"diagnostics,omitempty"`
+		Only         []string     `json:"only,omitempty"`
+	} `json:"context"`
+}
+
+// RenameParams requests a symbol rename.
+type RenameParams struct {
+	TextDocument TextDocumentIdentifier `json:"textDocument"`
+	Position     Position               `json:"position"`
+	NewName       string                `json:"newName"`
 }
 
 // LSP symbol kinds (subset of the LSP SymbolKind enum).

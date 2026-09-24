@@ -241,7 +241,14 @@ type Config struct {
 	// LSP configures language servers for the lsp tool. When non-empty,
 	// the lsp tool is exposed; when empty it is not registered at all.
 	// Keys are language IDs: "go", "typescript", "python", "rust", etc.
+	// Explicit entries override auto-detected servers for the same language.
 	LSP map[string]LSPServerConfig `yaml:"lsp,omitempty"`
+
+	// LSPAutoDetect, when true, scans PATH for known language server
+	// binaries (gopls, typescript-language-server, pyright, rust-analyzer,
+	// clangd, etc.) and registers any found that aren't already in LSP.
+	// Default: true.
+	LSPAutoDetect *bool `yaml:"lsp_auto_detect,omitempty"`
 	// TraceDir, when non-empty, enables session tracing: each LLM call's raw
 	// request/response is appended to <TraceDir>/trace.ndjson, and the session's
 	// token totals are written to <TraceDir>/usage.json when it closes. Set at

@@ -302,6 +302,105 @@ func (c *Client) DidClose(ctx context.Context, file string) error {
 	return c.notify("textDocument/didClose", params)
 }
 
+// Hover requests hover information at a position.
+// line is 1-indexed.
+func (c *Client) Hover(ctx context.Context, file string, line, col int) (*Hover, error) {
+	params := TextDocumentPositionParams{
+		TextDocument: TextDocumentIdentifier{URI: fileURI(file)},
+		Position:     Position{Line: line - 1, Character: col},
+	}
+	var raw json.RawMessage
+	if err := c.call("textDocument/hover", params, &raw); err != nil {
+		return nil, err
+	}
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil, nil
+	}
+	var hover Hover
+	if err := json.Unmarshal(raw, &hover); err != nil {
+		return nil, err
+	}
+	return &hover, nil
+}
+
+// Diagnostics fetches diagnostics for a file. Not all servers support
+// pull-based diagnostics (textDocument/diagnostic); for those we return
+// an empty list. This is best-effort.
+func (c *Client) Diagnostics(ctx context.Context, file string) ([]Diagnostic, error) {
+	params := DocumentSymbolParams{
+		TextDocument: TextDocumentIdentifier{URI: fileURI(file)},
+	}
+	var raw json.RawMessage
+	if err := c.call("textDocument/diagnostic", params, &raw); err != nil {
+		// Many servers don't support pull diagnostics. Return empty
+		// rather than erroring so the tool is still useful.
+		return nil, nil
+	}
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil, nil
+	}
+	var diags []Diagnostic
+	if err := json.Unmarshal(raw, &diags); err != nil {
+		// Might be a RelatedFullDocumentDiagnosticReport with .items
+		var report struct {
+			Items []Diagnostic `json:"items"`
+		}
+		if err2 := json.Unmarshal(raw, &report); err2 == nil {
+			return report.Items, nil
+		}
+		return nil, err
+	}
+	return diags, nil
+}
+
+// Rename requests a symbol rename at a position.
+// line is 1-indexed.
+func (c *Client) Rename(ctx context.Context, file string, line, col int, newName string) (*WorkspaceEdit, error) {
+	params := RenameParams{
+		TextDocument: TextDocumentIdentifier{URI: fileURI(file)},
+		Position:     Position{Line: line - 1, Character: col},
+		NewName:       newName,
+	}
+	var raw json.RawMessage
+	if err := c.call("textDocument/rename", params, &raw); err != nil {
+		return nil, err
+	}
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil, nil
+	}
+	var edit WorkspaceEdit
+	if err := json.Unmarshal(raw, &edit); err != nil {
+		return nil, err
+	}
+	return &edit, nil
+}
+
+// CodeActions requests available code actions for a position.
+// line is 1-indexed.
+func (c *Client) CodeActions(ctx context.Context, file string, line, col int) ([]CodeAction, error) {
+	// Use a zero-length range at the position — servers will return
+	// actions applicable there.
+	params := CodeActionParams{
+		TextDocument: TextDocumentIdentifier{URI: fileURI(file)},
+		Range: Range{
+			Start: Position{Line: line - 1, Character: col},
+			End:   Position{Line: line - 1, Character: col},
+		},
+	}
+	var raw json.RawMessage
+	if err := c.call("textDocument/codeAction", params, &raw); err != nil {
+		return nil, err
+	}
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil, nil
+	}
+	var actions []CodeAction
+	if err := json.Unmarshal(raw, &actions); err != nil {
+		return nil, err
+	}
+	return actions, nil
+}
+
 func parseLocations(raw json.RawMessage) ([]Location, error) {
 	var locs []Location
 	if err := json.Unmarshal(raw, &locs); err == nil {

@@ -12,10 +12,11 @@ import (
 )
 
 type lspArgs struct {
-	Action string `json:"action" jsonschema:"one of: definition, references, symbols"`
-	File   string `json:"file,omitempty" jsonschema:"path to the source file (relative to the workspace or absolute). Required for all actions."`
-	Line   int    `json:"line,omitempty" jsonschema:"1-indexed line number. Required for definition and references."`
-	Symbol string `json:"symbol,omitempty" jsonschema:"substring of the symbol on that line; used to resolve the column. Required for definition and references."`
+	Action string `json:"action" jsonschema:"one of: definition, references, symbols, hover, diagnostics, rename, code_actions, status"`
+	File   string `json:"file,omitempty" jsonschema:"path to the source file (relative to the workspace or absolute). Required for all actions except status."`
+	Line   int    `json:"line,omitempty" jsonschema:"1-indexed line number. Required for definition, references, hover, rename, and code_actions."`
+	Symbol string `json:"symbol,omitempty" jsonschema:"substring of the symbol on that line; used to resolve the column. Required for definition, references, hover, rename, and code_actions."`
+	NewName string `json:"new_name,omitempty" jsonschema:"new name for the symbol. Required for rename."`
 }
 
 type lspTool struct {
@@ -26,7 +27,12 @@ type lspTool struct {
 func (t *lspTool) Run(args map[string]any) (string, any, error) {
 	action, _ := args["action"].(string)
 	if action == "" {
-		return "lsp error: 'action' is required (definition, references, or symbols)", nil, nil
+		return "lsp error: 'action' is required (definition, references, symbols, hover, diagnostics, rename, code_actions, status)", nil, nil
+	}
+
+	// status doesn't need a file — handle it before the file check.
+	if action == "status" {
+		return t.manager.Status(), nil, nil
 	}
 
 	file, _ := args["file"].(string)
@@ -90,8 +96,61 @@ func (t *lspTool) Run(args map[string]any) (string, any, error) {
 		}
 		return formatSymbols(syms), nil, nil
 
+	case "hover":
+		if line == 0 || symbol == "" {
+			return "lsp error: hover requires 'file', 'line', and 'symbol'", nil, nil
+		}
+		col, err = resolveColumn(resolved, line, symbol)
+		if err != nil {
+			return "lsp error: " + err.Error(), nil, nil
+		}
+		hover, err := client.Hover(ctx, resolved, line, col)
+		if err != nil {
+			return "lsp error: " + err.Error(), nil, nil
+		}
+		return formatHover(hover), nil, nil
+
+	case "diagnostics":
+		diags, err := client.Diagnostics(ctx, resolved)
+		if err != nil {
+			return "lsp error: " + err.Error(), nil, nil
+		}
+		return formatDiagnostics(diags), nil, nil
+
+	case "rename":
+		if line == 0 || symbol == "" {
+			return "lsp error: rename requires 'file', 'line', and 'symbol'", nil, nil
+		}
+		newName, _ := args["new_name"].(string)
+		if newName == "" {
+			return "lsp error: rename requires 'new_name'", nil, nil
+		}
+		col, err = resolveColumn(resolved, line, symbol)
+		if err != nil {
+			return "lsp error: " + err.Error(), nil, nil
+		}
+		edit, err := client.Rename(ctx, resolved, line, col, newName)
+		if err != nil {
+			return "lsp error: " + err.Error(), nil, nil
+		}
+		return formatWorkspaceEdit(edit), nil, nil
+
+	case "code_actions":
+		if line == 0 || symbol == "" {
+			return "lsp error: code_actions requires 'file', 'line', and 'symbol'", nil, nil
+		}
+		col, err = resolveColumn(resolved, line, symbol)
+		if err != nil {
+			return "lsp error: " + err.Error(), nil, nil
+		}
+		actions, err := client.CodeActions(ctx, resolved, line, col)
+		if err != nil {
+			return "lsp error: " + err.Error(), nil, nil
+		}
+		return formatCodeActions(actions), nil, nil
+
 	default:
-		return "lsp error: unknown action '" + action + "' (use definition, references, or symbols)", nil, nil
+		return "lsp error: unknown action '" + action + "' (use definition, references, symbols, hover, diagnostics, rename, code_actions, or status)", nil, nil
 	}
 }
 
@@ -188,18 +247,92 @@ func uriToPath(uri string) string {
 	return uri
 }
 
+func formatHover(hover *lsp.Hover) string {
+	if hover == nil {
+		return "no hover information"
+	}
+	return hover.Contents.Value
+}
+
+func formatDiagnostics(diags []lsp.Diagnostic) string {
+	if len(diags) == 0 {
+		return "no diagnostics"
+	}
+	var b strings.Builder
+	for _, d := range diags {
+		severity := "info"
+		switch d.Severity {
+		case lsp.SeverityError:
+			severity = "error"
+		case lsp.SeverityWarning:
+			severity = "warning"
+		case lsp.SeverityInformation:
+			severity = "info"
+		case lsp.SeverityHint:
+			severity = "hint"
+		}
+		start := d.Range.Start
+		b.WriteString(fmt.Sprintf("%d:%d %s: %s", start.Line+1, start.Character+1, severity, d.Message))
+		if d.Source != "" {
+			b.WriteString(" (" + d.Source + ")")
+		}
+		b.WriteString("\n")
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+func formatWorkspaceEdit(edit *lsp.WorkspaceEdit) string {
+	if edit == nil || len(edit.Changes) == 0 {
+		return "no changes"
+	}
+	var b strings.Builder
+	for uri, edits := range edit.Changes {
+		path := uriToPath(uri)
+		fmt.Fprintf(&b, "%s:\n", path)
+		for _, te := range edits {
+			s := te.Range.Start
+			e := te.Range.End
+			fmt.Fprintf(&b, "  %d:%d-%d:%d: %q\n", s.Line+1, s.Character+1, e.Line+1, e.Character+1, te.NewText)
+		}
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+func formatCodeActions(actions []lsp.CodeAction) string {
+	if len(actions) == 0 {
+		return "no code actions available"
+	}
+	var b strings.Builder
+	for i, a := range actions {
+		if i > 0 {
+			b.WriteString("\n")
+		}
+		if a.Kind != "" {
+			fmt.Fprintf(&b, "[%s] %s", a.Kind, a.Title)
+		} else {
+			b.WriteString(a.Title)
+		}
+	}
+	return b.String()
+}
+
 func lspToolDefinition(mgr *lsp.Manager, resolvePath func(string) string) cogito.ToolDefinitionInterface {
 	return cogito.NewToolDefinition[map[string]any](
 		&lspTool{manager: mgr, resolvePath: resolvePath}, lspArgs{},
 		"lsp",
-		"Symbol-aware code navigation using a Language Server. Provides three actions:\n\n"+
+		"Symbol-aware code navigation using a Language Server. Actions:\n\n"+
 			"definition — go-to-definition: pass file, line (1-indexed), and symbol (a substring on that line) "+
 			"to find where the symbol is declared.\n"+
 			"references — find all callsites: same parameters as definition, returns every file:line that references the symbol.\n"+
-			"symbols — document outline: pass file only, returns all top-level symbols with their kinds and line numbers.\n\n"+
+			"symbols — document outline: pass file only, returns all top-level symbols with their kinds and line numbers.\n"+
+			"hover — type/signature info: pass file, line, and symbol to get the hover (type, doc) at that position.\n"+
+			"diagnostics — pass file to get compiler/linter diagnostics (errors, warnings) for that file.\n"+
+			"rename — pass file, line, symbol, and new_name to get a preview of all edits a rename would make.\n"+
+			"code_actions — pass file, line, and symbol to get available refactoring/fix-it actions at that position.\n"+
+			"status — no parameters; shows all configured language servers and whether they are running.\n\n"+
 			"When a language server is available, prefer 'lsp references' over grep for finding callsites — "+
-			"it follows imports, interface methods, and re-exports that text search misses.\n"+
-			"The tool is only present when at least one server is configured under 'lsp:' in config.yaml.",
+			"it follows imports, interface methods, and re-exports that text search misses. "+
+			"Prefer 'lsp hover' over guessing types. The tool is present when at least one server is configured or auto-detected.",
 	)
 }
 
