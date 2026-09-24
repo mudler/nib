@@ -955,7 +955,7 @@ func (m Model) initSession() tea.Cmd {
 				}
 			},
 			OnCronCreate: func(req chat.CronRequest) string {
-				j, err := m.loops.Add(req.Expr, req.Prompt, req.Recurring, req.Durable)
+				j, err := m.loops.Add(req.Expr, req.Prompt, req.Recurring, req.Durable, loop.MonitorConfig{Script: req.MonitorScript, URL: req.MonitorURL})
 				if err != nil {
 					return "cron rejected: " + err.Error()
 				}

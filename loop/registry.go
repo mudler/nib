@@ -19,8 +19,25 @@ type Job struct {
 	Paused    bool      `json:"paused,omitempty"`
 	Created   time.Time `json:"created"`
 
+	// Monitor fields (optional): when set, the job runs a script or fetches a
+	// URL at fire time and only dispatches the agent when the output changed
+	// (its SHA-256 differs from LastOutputHash). LastOutputHash/LastOutput/
+	// LastChangedAt persist across restarts for durable jobs.
+	MonitorScript  string    `json:"monitor_script,omitempty"`
+	MonitorURL     string    `json:"monitor_url,omitempty"`
+	LastOutputHash string    `json:"last_output_hash,omitempty"`
+	LastOutput     string    `json:"last_output,omitempty"`
+	LastChangedAt  time.Time `json:"last_changed_at,omitempty"`
+
 	sched Schedule  `json:"-"`
 	next  time.Time `json:"-"`
+}
+
+// MonitorConfig is the monitor mode of a job: at most one of Script or URL is
+// set. An empty config means monitor mode is off and the job fires normally.
+type MonitorConfig struct {
+	Script string
+	URL    string
 }
 
 // Registry is a thread-safe store of cron jobs with an injectable clock.
@@ -44,8 +61,12 @@ func (r *Registry) SetClock(now func() time.Time) {
 }
 
 // Add parses expr, registers a job, and returns it. Returns an error if the
-// expression is invalid.
-func (r *Registry) Add(expr, prompt string, recurring, durable bool) (Job, error) {
+// expression is invalid. monitor (optional) attaches monitor mode: at most one
+// of Script/URL may be set; both set returns an error.
+func (r *Registry) Add(expr, prompt string, recurring, durable bool, monitor MonitorConfig) (Job, error) {
+	if monitor.Script != "" && monitor.URL != "" {
+		return Job{}, fmt.Errorf("monitor: set at most one of script or url")
+	}
 	sched, err := Parse(expr)
 	if err != nil {
 		return Job{}, err
@@ -59,17 +80,42 @@ func (r *Registry) Add(expr, prompt string, recurring, durable bool) (Job, error
 		return Job{}, fmt.Errorf("cron %q never fires", expr)
 	}
 	j := Job{
-		ID:        fmt.Sprintf("loop-%d", r.seq),
-		Expr:      expr,
-		Prompt:    prompt,
-		Recurring: recurring,
-		Durable:   durable,
-		Created:   now,
-		sched:     sched,
-		next:      next,
+		ID:            fmt.Sprintf("loop-%d", r.seq),
+		Expr:          expr,
+		Prompt:        prompt,
+		Recurring:     recurring,
+		Durable:       durable,
+		Created:       now,
+		MonitorScript: monitor.Script,
+		MonitorURL:    monitor.URL,
+		sched:         sched,
+		next:          next,
 	}
 	r.jobs = append(r.jobs, j)
 	return j, nil
+}
+
+// SetMonitorState records the latest monitor output for the job with id and
+// returns whether the output changed (the new hash differs from the stored
+// one). changedAt is the timestamp to record as the last change time when the
+// output changed. Returns false when the job does not exist.
+func (r *Registry) SetMonitorState(id, hash, output string, changedAt time.Time) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for i := range r.jobs {
+		if r.jobs[i].ID == id {
+			if r.jobs[i].LastOutputHash != hash {
+				r.jobs[i].LastOutputHash = hash
+				r.jobs[i].LastOutput = output
+				r.jobs[i].LastChangedAt = changedAt
+				return true
+			}
+			// No change: keep LastOutput/LastChangedAt as-is, only the
+			// hash is current; avoid mutating LastChangedAt.
+			return false
+		}
+	}
+	return false
 }
 
 // List returns a copy of the current jobs, sorted by next-fire time.
