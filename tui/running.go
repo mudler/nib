@@ -38,10 +38,11 @@ func (m *Model) startTool(ts chat.ToolStart) {
 	m.running = append(m.running, runningTool{name: ts.Name, args: ts.Arguments, started: time.Now()})
 }
 
-// finishTool drops the running entry a result belongs to. There is no call id
-// to match on, so it takes the oldest entry with the same name and arguments,
-// or failing that the oldest with the same name.
-func (m *Model) finishTool(res chat.ToolResult) {
+// finishTool drops the running entry a result belongs to and returns the
+// elapsed time the call ran for (zero when no matching entry was found).
+// There is no call id to match on, so it takes the oldest entry with the
+// same name and arguments, or failing that the oldest with the same name.
+func (m *Model) finishTool(res chat.ToolResult) time.Duration {
 	at := -1
 	for i, r := range m.running {
 		if r.name == res.Name && r.args == res.Arguments {
@@ -57,9 +58,12 @@ func (m *Model) finishTool(res chat.ToolResult) {
 			}
 		}
 	}
-	if at >= 0 {
-		m.running = append(m.running[:at:at], m.running[at+1:]...)
+	if at < 0 {
+		return 0
 	}
+	took := time.Since(m.running[at].started)
+	m.running = append(m.running[:at:at], m.running[at+1:]...)
+	return took
 }
 
 // clearRunning forgets every running call: the turn ended, so none of them

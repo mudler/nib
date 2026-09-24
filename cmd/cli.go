@@ -329,7 +329,7 @@ func RunCLI(ctx context.Context, cfg types.Config, streams Streams, shellJobs *w
 		},
 		OnReasoning: func(reasoning string) {
 			spin.stop()
-			fmt.Fprintln(out, theme.ReasoningHeader())
+			fmt.Fprintln(out, theme.ReasoningHeader("", 0))
 			for _, line := range strings.Split(strings.TrimRight(reasoning, "\n"), "\n") {
 				fmt.Fprintln(out, "  "+theme.Reasoning.Render(line))
 			}

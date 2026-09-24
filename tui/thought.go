@@ -18,6 +18,10 @@ import (
 // the transcript from the session history, which has no thought entries.
 
 // foldReasoning moves the live trace (m.reasoning) into a thought entry.
+// foldReasoning folds the accumulated reasoning text into a transcript
+// entry (a "thought for Xs" line), so the live reasoning box closes and
+// the trace is preserved in the scrollback.
+//
 // While a reply is streaming the entry goes before the streaming message, so
 // that message stays the tail and streamingActive stays true.
 func (m *Model) foldReasoning() {
@@ -40,6 +44,15 @@ func (m *Model) foldReasoning() {
 	}
 	m.appendMessage(entry)
 	m.stepThought = len(m.messages)
+}
+
+// reasoningElapsed returns the time the live reasoning trace has been
+// running so far, or zero when reasoning has not started.
+func (m Model) reasoningElapsed() time.Duration {
+	if m.reasoningSince.IsZero() {
+		return 0
+	}
+	return time.Since(m.reasoningSince)
 }
 
 // stepThoughtEntry returns the thought entry this step already folded into,
