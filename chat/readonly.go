@@ -11,6 +11,8 @@ var readOnlyTools = map[string]bool{
 	"glob":             true,
 	"index":            true,
 	"repo_map":         true,
+	"tree":             true,
+	"lsp":              true,
 	"bash_jobs":        true,
 	"bash_job_output":  true,
 	"bash_job_wait":    true,

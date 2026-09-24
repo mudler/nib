@@ -21,6 +21,7 @@ import (
 	"github.com/mudler/nib/internal"
 	"github.com/mudler/nib/llmprovider"
 	"github.com/mudler/nib/llmprovider/copilot"
+	"github.com/mudler/nib/lsp"
 	"github.com/mudler/nib/manage"
 	wizmcp "github.com/mudler/nib/mcp"
 	"github.com/mudler/nib/plugin"
@@ -182,6 +183,11 @@ type Session struct {
 	workingDir         string
 	metadata           map[string]string // global per-request metadata; merged with per-agent overrides
 	reasoningEffort    string            // OpenAI reasoning_effort sent on every request (e.g. "none")
+
+	// lspManager owns the LSP server processes, one per language. It is
+	// nil when no servers are configured, which suppresses the lsp tool.
+	// Set once in NewSession; read-only afterwards. Closed in Close().
+	lspManager *lsp.Manager
 
 	// changes holds pre-call file snapshots of in-flight write/edit calls,
 	// so their results can be shown as diffs.
@@ -553,6 +559,39 @@ func NewSession(ctx context.Context, cfg types.Config, callbacks Callbacks, tran
 		tracer:               tracer,
 		traceDir:             cfg.TraceDir,
 		provenanceClassifier: classifier,
+	}
+
+	// Build the LSP server set: explicit config first, then auto-detect
+	// any servers on PATH that aren't already explicitly configured.
+	lspConfigs := make(map[string]lsp.ServerConfig)
+	for lang, s := range cfg.LSP {
+		lspConfigs[lang] = lsp.ServerConfig{
+			Command: s.Command,
+			Args:    s.Args,
+			Env:     s.Env,
+		}
+	}
+	autoDetect := true
+	if cfg.LSPAutoDetect != nil {
+		autoDetect = *cfg.LSPAutoDetect
+	}
+	if autoDetect {
+		explicit := make(map[string]bool, len(lspConfigs))
+		for lang := range lspConfigs {
+			explicit[lang] = true
+		}
+		detected := lsp.AutoDetect(explicit)
+		for lang, dc := range detected {
+			lspConfigs[lang] = dc
+		}
+		if len(detected) > 0 {
+			for _, line := range lsp.DetectedServers(explicit) {
+				xlog.Info("Language server detected: " + line)
+			}
+		}
+	}
+	if len(lspConfigs) > 0 {
+		s.lspManager = lsp.NewManager(lspConfigs, cfg.WorkingDir)
 	}
 	// Resume/rehydration: seed a prior conversation so the very next SendMessage
 	// continues with full memory of it, behaving identically to a session that
@@ -1464,6 +1503,15 @@ func (s *Session) toolOptions(turnCtx context.Context, goal, mainModel string) [
 		)))
 	}
 
+	// Wire the LSP tool so the assistant can do symbol-aware navigation
+	// (definition, references, symbols) when a language server is configured.
+	if s.lspManager != nil && s.toolEnabled("lsp") {
+		opts = append(opts, cogito.WithTools(lspToolDefinition(
+			s.lspManager,
+			func(p string) string { return resolveWorkspacePath(s.workingDir, p) },
+		)))
+	}
+
 	// Wire the native self-configuration tools so the assistant can manage its
 	// own plugins, skills, and MCP servers. requestReload re-wires the live
 	// session on the next turn after any mutating op.
@@ -2289,6 +2337,9 @@ func (s *Session) Close() error {
 	for _, c := range s.cfgClients {
 		_ = c.Close()
 	}
+	if s.lspManager != nil {
+		_ = s.lspManager.Close()
+	}
 	// The durable half of the exit summary. In tmux-widget mode the pane
 	// vanishes before anyone can read the printed line, and a benchmark harness
 	// wants to parse this rather than scrape a terminal.
@@ -2381,7 +2432,7 @@ func (s *Session) ToolCount() int {
 		"schedule_wakeup",
 		"cron", "cron_list", "cron_delete", "cron_pause", "cron_resume", "cron_trigger",
 		"read_image", "transcribe_audio", "read_video",
-		"memory", "index", "repo_map", "todo_write",
+		"memory", "index", "repo_map", "tree", "lsp", "todo_write",
 	}
 	for _, name := range builtins {
 		if s.toolEnabled(name) && !(name == "ask_user" && s.AutoApprove()) {
