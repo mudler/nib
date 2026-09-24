@@ -237,6 +237,11 @@ type Config struct {
 	// also requires the ast-grep binary on PATH; it reports a clear error
 	// when the binary is missing.
 	ASTGrepEnabled bool `yaml:"ast_grep_enabled,omitempty"`
+
+	// LSP configures language servers for the lsp tool. When non-empty,
+	// the lsp tool is exposed; when empty it is not registered at all.
+	// Keys are language IDs: "go", "typescript", "python", "rust", etc.
+	LSP map[string]LSPServerConfig `yaml:"lsp,omitempty"`
 	// TraceDir, when non-empty, enables session tracing: each LLM call's raw
 	// request/response is appended to <TraceDir>/trace.ndjson, and the session's
 	// token totals are written to <TraceDir>/usage.json when it closes. Set at
@@ -507,6 +512,14 @@ type CodexAppServerConfig struct {
 	Command string   `yaml:"command,omitempty"`
 	Args    []string `yaml:"args,omitempty"`
 	Model   string   `yaml:"model,omitempty"`
+}
+
+// LSPServerConfig describes how to start a language server for one
+// language. Keys in Config.LSP are language IDs ("go", "typescript", etc.).
+type LSPServerConfig struct {
+	Command string            `yaml:"command"`
+	Args    []string          `yaml:"args,omitempty"`
+	Env     map[string]string `yaml:"env,omitempty"`
 }
 
 // ComputerConfig configures the built-in computer_use MCP server. When Enabled,

@@ -50,6 +50,7 @@ func toolGuidance(builtinTools []string) string {
 	tree := toolExposed(builtinTools, "tree")
 	repoMap := toolExposed(builtinTools, "repo_map")
 	astGrep := toolExposed(builtinTools, "ast_grep")
+	lspTool := toolExposed(builtinTools, "lsp")
 
 	paragraphs := []string{actGuidance}
 
@@ -140,6 +141,16 @@ func toolGuidance(builtinTools []string) string {
 				"metavariables ($NAME captures a node, $_ matches any single node, $$$NAME captures zero or more) "+
 				"and it finds every match across the codebase. Use it when grep matches too much or too little "+
 				"because the same identifier appears in different contexts. Requires the ast-grep binary on PATH.")
+	}
+
+	if lspTool {
+		paragraphs = append(paragraphs,
+			"When a language server is available (the lsp tool is present), prefer it over grep for "+
+				"symbol-aware work: use 'lsp references' to find every callsite of a function or method "+
+				"(grep misses renamed calls and false-matches on substrings), 'lsp definition' to jump to a "+
+				"declaration, 'lsp symbols' for a file's outline. For finding where a symbol is used across "+
+				"the project, 'lsp references' is authoritative; grep is a fallback only when no server is "+
+				"configured for that language.")
 	}
 
 	if read {
