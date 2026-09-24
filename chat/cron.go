@@ -7,6 +7,8 @@ type cronArgs struct {
 	Prompt    string `json:"prompt" jsonschema:"the task to run at each fire — a slash command like /foo or a plain instruction"`
 	Recurring bool   `json:"recurring" jsonschema:"true = fire on every match (default); false = fire once then auto-delete"`
 	Durable   bool   `json:"durable" jsonschema:"true = persist across restarts to .nib/loops.json; false = session-only (default)"`
+	MonitorScript string `json:"monitor_script" jsonschema:"optional. A shell command whose stdout is hashed each tick; the agent runs only when the hash changes. Mutually exclusive with monitor_url."`
+	MonitorURL    string `json:"monitor_url" jsonschema:"optional. A URL whose response body is hashed each tick. Mutually exclusive with monitor_script."`
 }
 
 type cronTool struct{ create func(CronRequest) string }
@@ -19,10 +21,12 @@ func (t *cronTool) Run(args map[string]any) (string, any, error) {
 		recurring = v
 	}
 	durable, _ := args["durable"].(bool)
+	monitorScript, _ := args["monitor_script"].(string)
+	monitorURL, _ := args["monitor_url"].(string)
 	if t.create == nil {
 		return "Scheduling is not available in this session.", nil, nil
 	}
-	return t.create(CronRequest{Expr: expr, Prompt: prompt, Recurring: recurring, Durable: durable}), nil, nil
+	return t.create(CronRequest{Expr: expr, Prompt: prompt, Recurring: recurring, Durable: durable, MonitorScript: monitorScript, MonitorURL: monitorURL}), nil, nil
 }
 
 func cronToolDefinition(create func(CronRequest) string) cogito.ToolDefinitionInterface {

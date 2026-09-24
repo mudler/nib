@@ -16,7 +16,7 @@ func TestCronCallbackRegistersJob(t *testing.T) {
 	reg := loop.NewRegistry()
 	cb := chat.Callbacks{
 		OnCronCreate: func(req chat.CronRequest) string {
-			j, err := reg.Add(req.Expr, req.Prompt, req.Recurring, req.Durable)
+			j, err := reg.Add(req.Expr, req.Prompt, req.Recurring, req.Durable, loop.MonitorConfig{Script: req.MonitorScript, URL: req.MonitorURL})
 			if err != nil {
 				return "rejected: " + err.Error()
 			}

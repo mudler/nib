@@ -31,10 +31,10 @@ func newLoopTestModel() Model {
 
 func TestStopLoopAll(t *testing.T) {
 	m := newLoopTestModel()
-	if _, err := m.loops.Add("*/5 * * * *", "/a", true, false); err != nil {
+	if _, err := m.loops.Add("*/5 * * * *", "/a", true, false, loop.MonitorConfig{}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := m.loops.Add("*/5 * * * *", "/b", true, false); err != nil {
+	if _, err := m.loops.Add("*/5 * * * *", "/b", true, false, loop.MonitorConfig{}); err != nil {
 		t.Fatal(err)
 	}
 	got := m.stopLoop("")
@@ -48,7 +48,7 @@ func TestStopLoopAll(t *testing.T) {
 
 func TestStopLoopByID(t *testing.T) {
 	m := newLoopTestModel()
-	j, err := m.loops.Add("*/5 * * * *", "/a", true, false)
+	j, err := m.loops.Add("*/5 * * * *", "/a", true, false, loop.MonitorConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,7 +65,7 @@ func TestListLoops(t *testing.T) {
 	if got := m.listLoops(); got != "No active loops." {
 		t.Fatalf("empty listLoops = %q", got)
 	}
-	j, err := m.loops.Add("*/5 * * * *", "/a", true, false)
+	j, err := m.loops.Add("*/5 * * * *", "/a", true, false, loop.MonitorConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -145,7 +145,7 @@ func TestLoopsFooterRow(t *testing.T) {
 	if _, ok := loopsFooterRow(r, 0); ok {
 		t.Fatal("empty registry should report nothing to show")
 	}
-	r.Add("*/5 * * * *", "/foo", true, false)
+	r.Add("*/5 * * * *", "/foo", true, false, loop.MonitorConfig{})
 	row, ok := loopsFooterRow(r, 0)
 	if !ok {
 		t.Fatal("expected a row with one job")
@@ -157,7 +157,7 @@ func TestLoopsFooterRow(t *testing.T) {
 
 func TestListLoopsMarksPaused(t *testing.T) {
 	m := newLoopTestModel()
-	j, _ := m.loops.Add("*/5 * * * *", "/a", true, false)
+	j, _ := m.loops.Add("*/5 * * * *", "/a", true, false, loop.MonitorConfig{})
 	m.loops.Pause(j.ID)
 	if got := m.listLoops(); !strings.Contains(got, "(paused)") {
 		t.Fatalf("listLoops = %q, want the paused job marked", got)
@@ -182,7 +182,7 @@ func TestLoopTickSavesAfterDurableFire(t *testing.T) {
 	m.loopsPath = filepath.Join(t.TempDir(), "loops.json")
 	now := time.Date(2026, 6, 6, 10, 0, 0, 0, time.Local)
 	m.loops.SetClock(func() time.Time { return now })
-	if _, err := m.loops.Add("*/5 * * * *", "/a", false, true); err != nil {
+	if _, err := m.loops.Add("*/5 * * * *", "/a", false, true, loop.MonitorConfig{}); err != nil {
 		t.Fatal(err)
 	}
 	if err := m.loops.Save(m.loopsPath); err != nil {
