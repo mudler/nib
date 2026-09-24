@@ -2230,8 +2230,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		res := chat.ToolResult(msg)
 		if res.AgentID == "" {
 			// Root agent: the running block gives way to the finished one.
-			m.finishTool(res)
-			m.appendMessage(toolMessage(res))
+			elapsed := m.finishTool(res)
+			m.appendMessage(toolMessage(res, elapsed))
 			m.updateViewport()
 		} else {
 			// Sub-agent: append a compact, body-less line to its inline thread.
@@ -3566,6 +3566,7 @@ func (m Model) viewState() render.ViewState {
 			Text:      m.reasoning,
 			Collapsed: m.reasoningCollapsed,
 			MaxLines:  theme.ReasoningMaxLines,
+			Elapsed:   m.reasoningElapsed(),
 		},
 		Dialogs: m.currentDialogs(),
 		Help:    help,

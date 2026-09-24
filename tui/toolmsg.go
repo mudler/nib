@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/mudler/nib/chat"
 	"github.com/mudler/nib/theme"
@@ -15,9 +16,24 @@ import (
 // line count (the file is for the model, not the reader); a write with no diff
 // to show gets a bare header rather than its "success true" envelope; anything
 // else shows its previewed output. The header is marked with the outcome.
-func toolMessage(res chat.ToolResult) ChatMessage {
+func toolMessage(res chat.ToolResult, elapsed time.Duration) ChatMessage {
 	msg := ChatMessage{Role: "tool", Name: res.Name, Arguments: res.Arguments, Status: render.ToolStatusOK}
 	failed, detail := chat.ToolOutcome(res.Result)
+	elapsedStr := ""
+	if elapsed > 0 {
+		elapsedStr = theme.Elapsed(elapsed)
+	}
+	metaWithElapsed := func(meta string) {
+		if elapsedStr == "" {
+			msg.Meta = meta
+			return
+		}
+		if meta == "" {
+			msg.Meta = elapsedStr
+			return
+		}
+		msg.Meta = meta + " " + theme.Sep + " " + elapsedStr
+	}
 	if failed {
 		msg.Status = render.ToolStatusFailed
 		msg.Meta = detail
@@ -30,11 +46,13 @@ func toolMessage(res chat.ToolResult) ChatMessage {
 		} else {
 			msg.Content = chat.PreviewResult(res.Name, res.Result, toolOutputKeepLines)
 		}
+		metaWithElapsed(msg.Meta)
 		return msg
 	}
 	if res.Change != nil {
 		setChange(&msg, res.Change)
 		if msg.Diff != nil {
+			metaWithElapsed(msg.Meta)
 			return msg
 		}
 	}
@@ -43,11 +61,14 @@ func toolMessage(res chat.ToolResult) ChatMessage {
 		if n := readLineCount(res.Result); n > 0 {
 			msg.Meta = fmt.Sprintf(theme.ToolLineCount, n)
 		}
+		metaWithElapsed(msg.Meta)
 		return msg
 	case "write":
+		metaWithElapsed(msg.Meta)
 		return msg
 	}
 	msg.Content = chat.PreviewResult(res.Name, res.Result, toolOutputKeepLines)
+	metaWithElapsed(msg.Meta)
 	return msg
 }
 

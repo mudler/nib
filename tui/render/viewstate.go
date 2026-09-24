@@ -1,6 +1,8 @@
 package render
 
 import (
+	"time"
+
 	"github.com/mudler/nib/internal/textdiff"
 	"github.com/mudler/nib/types"
 )
@@ -68,6 +70,10 @@ type Reasoning struct {
 	Text      string
 	Collapsed bool
 	MaxLines  int
+	// Elapsed is the time the live reasoning trace has been running so
+	// far, shown as a counter in the header while reasoning is in
+	// progress. Zero means no counter is shown.
+	Elapsed time.Duration
 }
 
 // DialogKind identifies which modal dialog is being shown.

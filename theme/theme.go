@@ -10,6 +10,7 @@ package theme
 import (
 	"os"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/lipgloss"
 )
@@ -209,9 +210,17 @@ var (
 // ReasoningHeader renders the labeled header that tags a block of model
 // thinking, so it reads as a distinct channel from the assistant's answer:
 // an accent glyph (✻ / * in restricted mode) and a dim, non-italic label.
-// The body beneath is rendered with the Reasoning style by the caller.
-func ReasoningHeader() string {
-	return Gutter.Render(ReasoningGlyph) + " " + Help.Render("reasoning")
+// The body beneath is rendered with the Reasoning style by the caller. label
+// is the header text; "" falls back to the plain "reasoning".
+func ReasoningHeader(label string, elapsed time.Duration) string {
+	if label == "" {
+		label = "reasoning"
+	}
+	head := Gutter.Render(ReasoningGlyph) + " " + Help.Render(label)
+	if elapsed > 0 {
+		head += " " + SepStyle.Render("·") + " " + Help.Render(Elapsed(elapsed))
+	}
+	return head
 }
 
 // Hairline renders the dim horizontal rule that closes the header: the
