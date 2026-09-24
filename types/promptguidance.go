@@ -47,7 +47,7 @@ func toolGuidance(builtinTools []string) string {
 	glob := toolExposed(builtinTools, "glob")
 	grep := toolExposed(builtinTools, "grep")
 	index := toolExposed(builtinTools, "index")
-	astGrep := toolExposed(builtinTools, "ast_grep")
+	repoMap := toolExposed(builtinTools, "repo_map")
 
 	paragraphs := []string{actGuidance}
 
@@ -100,6 +100,15 @@ func toolGuidance(builtinTools []string) string {
 		paragraphs = append(paragraphs, "index returns a compact outline of a source file — imports, types, functions, and their line ranges — for a fraction of what reading it costs. Use it on a large source file when you need only part of it: the outline tells you which lines to read. When you need a file of ordinary size, read it directly, without an index call.")
 	}
 
+	if repoMap {
+		paragraphs = append(paragraphs,
+			"repo_map returns a bird's-eye map of the whole codebase: a token-budgeted tree of the definitions "+
+				"(types, functions, methods, classes) in every indexable file, each with its file and starting line. "+
+				"Use it once, early, to learn which file owns a symbol without grepping, then read or index that file for the details. "+
+				"It costs a fraction of reading every file, and when it would exceed its budget it drops the files with the fewest definitions and notes how many it omitted. "+
+				"Do not call repo_map on a single file you already know; that is what index is for.")
+	}
+
 	if read {
 		p := "read returns the whole file by default. "
 		if index {
@@ -138,14 +147,6 @@ func toolGuidance(builtinTools []string) string {
 
 	if toolExposed(builtinTools, "todo_write") {
 		paragraphs = append(paragraphs, "Use the todo_write tool to plan multi-step tasks (3+ steps) before starting work. Send the COMPLETE todo list on every call — it replaces the entire list, not a delta. Skip it for trivial tasks. Mark an item in_progress when you begin it and completed when done. Keep exactly one item in_progress at a time. Update the list after EACH completed step, not just at the end.")
-	}
-
-	if astGrep {
-		paragraphs = append(paragraphs,
-			"ast_grep searches code by structure, not text: pass an AST pattern with "+
-				"metavariables ($NAME captures a node, $_ matches any single node, $$$NAME captures zero or more) "+
-				"and it finds every match across the codebase. Use it when grep matches too much or too little "+
-				"because the same identifier appears in different contexts. Requires the ast-grep binary on PATH.")
 	}
 
 	return strings.Join(paragraphs, "\n\n")
