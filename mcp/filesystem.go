@@ -28,6 +28,11 @@ type fileSystem struct {
 	root string
 	mu   sync.Mutex
 	seen map[string]bool
+
+	// limits and artifacts are set by StartFileSystemMCPServer so the read
+	// tool can apply the same output-limiting pipeline as bash.
+	limits    *OutputLimitsPolicy
+	artifacts *ArtifactStore
 }
 
 // newFileSystem creates a filesystem handler with an empty seen-file set,
@@ -74,6 +79,11 @@ func (f *fileSystem) read(ctx context.Context, req *mcp.CallToolRequest, input r
 	readFileOutput,
 	error,
 ) {
+	// artifact://N paths serve spilled tool output from the in-memory store.
+	if id, ok := ParseArtifactURI(input.Path); ok {
+		return f.readArtifact(ctx, req, input, id)
+	}
+
 	input.Path = f.resolve(input.Path)
 	res, out, err := readFile(ctx, req, input)
 	// An outline is not the file's contents: edit matches exact text, so it
@@ -81,7 +91,75 @@ func (f *fileSystem) read(ctx context.Context, req *mcp.CallToolRequest, input r
 	if out.Success && !out.Outline {
 		f.markSeen(input.Path)
 	}
+	// Apply output limits to non-outline reads. Outlines are already
+	// compact; limiting them would only mangle the structure.
+	if out.Success && !out.Outline && f.limits != nil {
+		out.Content = LimitOutput(out.Content, "read", f.limits.Resolved(), f.artifacts)
+		res = nil // rebuild result below
+	}
 	return res, out, err
+}
+
+// readArtifact serves an artifact from the store, with the same offset/limit
+// paging as a file read. The content is line-numbered just like a file.
+func (f *fileSystem) readArtifact(ctx context.Context, req *mcp.CallToolRequest, input readFileInput, id int64) (
+	*mcp.CallToolResult,
+	readFileOutput,
+	error,
+) {
+	if f.artifacts == nil {
+		return nil, readFileOutput{
+			Success: false,
+			Error:   "artifact store is not available",
+		}, nil
+	}
+	a := f.artifacts.Get(id)
+	if a == nil {
+		return nil, readFileOutput{
+			Success: false,
+			Error:   fmt.Sprintf("artifact %d not found", id),
+		}, nil
+	}
+
+	lines := strings.Split(a.Content, "\n")
+	totalLines := len(lines)
+
+	offset := input.Offset
+	if offset < 0 {
+		offset = 0
+	}
+	if offset >= totalLines {
+		return nil, readFileOutput{
+			Content:    "",
+			TotalLines: totalLines,
+			Success:    true,
+		}, nil
+	}
+
+	endIndex := totalLines
+	if input.Limit > 0 {
+		endIndex = offset + input.Limit
+		if endIndex > totalLines {
+			endIndex = totalLines
+		}
+	}
+
+	width := len(fmt.Sprintf("%d", totalLines))
+	if width < 4 {
+		width = 4
+	}
+
+	var formattedLines []string
+	for i := offset; i < endIndex; i++ {
+		formattedLines = append(formattedLines, fmt.Sprintf("%*d| %s", width, i+1, lines[i]))
+	}
+
+	content := strings.Join(formattedLines, "\n")
+	return nil, readFileOutput{
+		Content:    content,
+		TotalLines: totalLines,
+		Success:    true,
+	}, nil
 }
 
 // write writes a file and records it as seen: after writing, the agent knows
@@ -137,7 +215,7 @@ type readFileOutput struct {
 // A whole read of a file this long costs tens of thousands of tokens, and the
 // model usually wants one function of it. Explicit offset/limit always return
 // lines.
-const outlineMinLines = 2000
+const outlineMinLines = 1000
 
 // outlineRead returns the outline read result for a large source file, or false
 // when codeindex cannot index it and the read must return lines.
@@ -656,7 +734,7 @@ func grepFiles(ctx context.Context, req *mcp.CallToolRequest, input grepFilesInp
 // StartFileSystemMCPServer starts the filesystem MCP server. When root is
 // non-empty, relative paths are rooted at it; an empty root preserves the
 // legacy process-cwd behavior.
-func StartFileSystemMCPServer(ctx context.Context, transport mcp.Transport, root string) error {
+func StartFileSystemMCPServer(ctx context.Context, transport mcp.Transport, root string, limits *OutputLimitsPolicy, artifacts *ArtifactStore) error {
 	// Create MCP server for filesystem operations
 	server := mcp.NewServer(&mcp.Implementation{
 		Name:    "filesystem",
@@ -665,6 +743,8 @@ func StartFileSystemMCPServer(ctx context.Context, transport mcp.Transport, root
 
 	// Per-server state gating edits behind a prior read or write of the file.
 	fs := newFileSystem(root)
+	fs.limits = limits
+	fs.artifacts = artifacts
 
 	// Add tool for reading files
 	mcp.AddTool(server, &mcp.Tool{

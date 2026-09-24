@@ -26,7 +26,7 @@ var settingsVerb = "/" + theme.CompSettingsName + " "
 // arm in applyLiveSettings. Everything else is read once at startup (the model
 // and endpoint build the client, log_level configures the logger, browser and
 // agent options wire tools), so it is saved and reported as "next start".
-var liveSettingPrefixes = []string{"ui.", "approval_mode", "compaction.", "tool_output_pruning.", "classifier.", "auto_approve.", "suggestions."}
+var liveSettingPrefixes = []string{"ui.", "approval_mode", "compaction.", "tool_output_pruning.", "tool_output_limits.", "classifier.", "auto_approve.", "suggestions."}
 
 func isLiveSetting(key string) bool {
 	for _, p := range liveSettingPrefixes {
@@ -343,7 +343,7 @@ func (m *Model) applyLiveSettings(changed []config.Setting) {
 	if m.session == nil {
 		return
 	}
-	var approval, compaction, pruning, classifier bool
+	var approval, compaction, pruning, outputLimits, classifier bool
 	for _, s := range changed {
 		switch {
 		case strings.HasPrefix(s.Key, "classifier."):
@@ -359,6 +359,8 @@ func (m *Model) applyLiveSettings(changed []config.Setting) {
 			compaction = true
 		case strings.HasPrefix(s.Key, "tool_output_pruning."):
 			pruning = true
+		case strings.HasPrefix(s.Key, "tool_output_limits."):
+			outputLimits = true
 		}
 	}
 	if classifier {
@@ -380,6 +382,9 @@ func (m *Model) applyLiveSettings(changed []config.Setting) {
 	}
 	if pruning {
 		m.session.SetToolOutputPruning(m.cfg.ToolOutputPruning)
+	}
+	if outputLimits {
+		m.session.SetToolOutputLimits(m.cfg.ToolOutputLimits)
 	}
 }
 

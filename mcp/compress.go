@@ -4,18 +4,19 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+
+	"github.com/mudler/nib/types"
 )
 
-// bashOutputBudget caps the bytes of stdout or stderr returned by the bash
-// tools. Output beyond this is elided, keeping a head and a tail so the model
-// sees both the start (command headers, test names) and the end (errors, exit
-// status). 16 KB ≈ 4 K tokens — generous enough for normal command output,
-// tight enough to stop a build log from flooding the context.
-const bashOutputBudget = 16 * 1024
-
-// bashHeadBudget is how many bytes of the head to retain when output exceeds
-// the budget. The tail gets the rest.
-const bashHeadBudget = 4 * 1024
+// Default output-limit constants, used when the config block is absent or a
+// field is zero. They are kept here rather than in types/config.go because
+// they are the mcp package's policy, not the config struct's.
+const (
+	defaultBudget       = 16 * 1024 // ~4K tokens
+	defaultHeadBudget   = 4 * 1024
+	defaultMaxLineLen   = 2000
+	defaultSpillThreshold = 64 * 1024
+)
 
 // ansiRe matches CSI sequences, OSC sequences, and a few common single-char
 // escapes (cursor save/restore, charset designation). Enough to clean typical
@@ -27,31 +28,134 @@ var ansiRe = regexp.MustCompile(
 		"|\x1b[=>]", // Keypad mode
 )
 
-// bashTruncationWarning is prepended to output that was truncated. It tells the
+// truncationWarning is prepended to output that was truncated. It tells the
 // model what happened and what to do instead, so it can self-correct on the
 // next call rather than blindly re-running the same broad command.
-const bashTruncationWarning = "⚠ Output was %s (%d bytes) — truncated to the first %s and last %s. To see what you need, re-run with a more targeted command: grep for a pattern, use head/tail with a line count, write to a file and read specific sections, or use bash_background + bash_job_output for paging."
+const truncationWarning = "⚠ Output was %s (%d bytes) — truncated to the first %s and last %s. To see what you need, re-run with a more targeted command: grep for a pattern, use head/tail with a line count, write to a file and read specific sections, or use bash_background + bash_job_output for paging."
 
-// compressOutput strips ANSI escape codes, collapses runs of repeated lines,
-// and applies a head+tail budget so that a single command cannot flood the
-// context with megabytes of output.
-func compressOutput(s string) string {
+// artifactSpillNotice is appended when the full output has been saved as an
+// artifact. It tells the model how to page through the full output.
+const artifactSpillNotice = "\n📦 Full output saved as %s — use the read tool with this path to page through it (with offset/limit)."
+
+// OutputLimits is the resolved tool-output limits policy. Zero values are
+// replaced with defaults by ResolveOutputLimits.
+type OutputLimits struct {
+	Disabled              bool
+	Budget                int
+	HeadBudget            int
+	MaxLineLength         int
+	ArtifactSpillThreshold int
+}
+
+// ResolveOutputLimits fills zero fields with defaults, matching the
+// whole-block defaulting in config/config.go.
+func ResolveOutputLimits(cfg types.ToolOutputLimitsConfig) OutputLimits {
+	l := OutputLimits{
+		Disabled:               cfg.Disabled,
+		Budget:                 cfg.Budget,
+		HeadBudget:             cfg.HeadBudget,
+		MaxLineLength:          cfg.MaxLineLength,
+		ArtifactSpillThreshold: cfg.ArtifactSpillThreshold,
+	}
+	if l.Budget == 0 {
+		l.Budget = defaultBudget
+	}
+	if l.HeadBudget == 0 {
+		l.HeadBudget = defaultHeadBudget
+	}
+	if l.MaxLineLength == 0 {
+		l.MaxLineLength = defaultMaxLineLen
+	}
+	if l.ArtifactSpillThreshold == 0 {
+		l.ArtifactSpillThreshold = defaultSpillThreshold
+	}
+	// -1 means "off": no artifact spill, output is truncated but never saved.
+	if l.ArtifactSpillThreshold < 0 {
+		l.ArtifactSpillThreshold = 0
+	}
+	if l.HeadBudget > l.Budget {
+		l.HeadBudget = l.Budget / 4
+	}
+	return l
+}
+
+// LimitOutput applies the full output-limiting pipeline to s:
+//  1. Strip ANSI escape codes
+//  2. Collapse runs of repeated lines
+//  3. Truncate lines longer than MaxLineLength
+//  4. If the result fits the budget, return it as-is
+//  5. If it exceeds the budget, keep head+tail and prepend a warning
+//  6. If it exceeds the spill threshold, save the full output as an
+//     artifact and append a recovery notice
+//
+// toolName is the name of the calling tool ("bash", "read", etc.), used
+// only for artifact metadata. store may be nil, in which case no artifact
+// is saved (the output is still truncated).
+func LimitOutput(s, toolName string, limits OutputLimits, store *ArtifactStore) string {
+	if limits.Disabled {
+		return s
+	}
+
 	s = ansiRe.ReplaceAllString(s, "")
 	s = collapseRepeats(s)
-	if len(s) <= bashOutputBudget {
+	s = truncateLongLines(s, limits.MaxLineLength)
+
+	if len(s) <= limits.Budget {
 		return s
 	}
 
 	total := len(s)
-	tailBudget := bashOutputBudget - bashHeadBudget
-	head := s[:bashHeadBudget]
+	tailBudget := limits.Budget - limits.HeadBudget
+	if tailBudget < 0 {
+		tailBudget = 0
+	}
+	head := s[:limits.HeadBudget]
 	tail := s[total-tailBudget:]
-	elided := total - bashHeadBudget - tailBudget
+	elided := total - limits.HeadBudget - tailBudget
 
-	return fmt.Sprintf(bashTruncationWarning+"\n… %d bytes elided\n%s\n… … …\n%s",
+	out := fmt.Sprintf(truncationWarning+"\n… %d bytes elided\n%s\n… … …\n%s",
 		humanBytes(total), total,
-		humanBytes(bashHeadBudget), humanBytes(tailBudget),
+		humanBytes(limits.HeadBudget), humanBytes(tailBudget),
 		elided, head, tail)
+
+	// Artifact spill: save the full output if it exceeds the threshold and
+	// a store is available.
+	if limits.ArtifactSpillThreshold > 0 && total >= limits.ArtifactSpillThreshold && store != nil {
+		uri := store.Save(toolName, s)
+		out += fmt.Sprintf(artifactSpillNotice, uri)
+	}
+
+	return out
+}
+
+// truncateLongLines truncates each line to maxLen characters. Lines that are
+// cut get a " …" suffix so the model can tell the line continues.
+func truncateLongLines(s string, maxLen int) string {
+	if maxLen <= 0 {
+		return s
+	}
+	lines := strings.Split(s, "\n")
+	for i, line := range lines {
+		// Count runes, not bytes, so multi-byte characters are not split.
+		runes := []rune(line)
+		if len(runes) > maxLen {
+			lines[i] = string(runes[:maxLen]) + " …"
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+// compressOutput is the legacy entry point for bash output. It applies the
+// default limits with no artifact store. Kept for backward compatibility
+// with existing tests.
+func compressOutput(s string) string {
+	return LimitOutput(s, "bash", OutputLimits{
+		Budget:     defaultBudget,
+		HeadBudget: defaultHeadBudget,
+		MaxLineLength: defaultMaxLineLen,
+		// No artifact spill in the legacy path.
+		ArtifactSpillThreshold: 0,
+	}, nil)
 }
 
 // collapseRepeats replaces runs of 3+ identical consecutive lines with the

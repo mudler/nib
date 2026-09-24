@@ -90,7 +90,7 @@ func runApprovalSession(t *testing.T, cfg types.Config, in io.Reader) (error, st
 	defer cancel()
 
 	shellJobs := wizmcp.NewShellJobs()
-	transports, err := wizmcp.StartTransports(ctx, cfg, shellJobs)
+	transports, err := wizmcp.StartTransports(ctx, cfg, shellJobs, nil, nil)
 	if err != nil {
 		t.Fatalf("StartTransports: %v", err)
 	}

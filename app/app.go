@@ -465,7 +465,14 @@ func runCtx(ctx context.Context, o Options) int {
 	// and the TUI lists them (footer) and backgrounds the foreground one (Ctrl+B).
 	shellJobs := mcp.NewShellJobs()
 
-	transports, err := mcp.StartTransports(ctx, cfg, shellJobs)
+	// Output limits policy and artifact store: shared between the MCP tool
+	// servers (bash, filesystem) and the Session. The Session's SetToolOutputLimits
+	// updates the policy at runtime; the artifact store collects spilled tool
+	// output the model can page through via artifact://N references.
+	outputLimits := mcp.NewOutputLimitsPolicy(cfg.ToolOutputLimits)
+	artifacts := mcp.NewArtifactStore()
+
+	transports, err := mcp.StartTransports(ctx, cfg, shellJobs, outputLimits, artifacts)
 	if err != nil {
 		fmt.Fprintf(o.stderr(), "Error starting MCP servers: %v\n", err)
 		return 1

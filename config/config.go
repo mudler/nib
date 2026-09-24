@@ -436,5 +436,16 @@ func withDefaults(cfg types.Config) types.Config {
 			MinResultTokens: 200,
 		}
 	}
+	// Tool-output limits: same whole-block defaulting as pruning. A zero
+	// Budget is meaningful (uses the built-in default), so the block is
+	// only treated as absent when every field is zero.
+	if cfg.ToolOutputLimits == (types.ToolOutputLimitsConfig{}) {
+		cfg.ToolOutputLimits = types.ToolOutputLimitsConfig{
+			Budget:                16 * 1024,
+			HeadBudget:            4 * 1024,
+			MaxLineLength:         2000,
+			ArtifactSpillThreshold: 64 * 1024,
+		}
+	}
 	return cfg
 }

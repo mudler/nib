@@ -148,12 +148,13 @@ func (j *bgJob) snapshot() (done bool, code int, errMsg string) {
 }
 
 // toOutput renders the job as a bash-tool result.
-func (j *bgJob) toOutput(script string) executeCommandOutput {
+func (j *bgJob) toOutput(script string, limits *OutputLimitsPolicy, artifacts *ArtifactStore) executeCommandOutput {
 	_, code, errMsg := j.snapshot()
+	l := limits.Resolved()
 	return executeCommandOutput{
 		Script:   script,
-		Stdout:   compressOutput(j.stdout.String()),
-		Stderr:   compressOutput(j.stderr.String()),
+		Stdout:   LimitOutput(j.stdout.String(), "bash", l, artifacts),
+		Stderr:   LimitOutput(j.stderr.String(), "bash", l, artifacts),
 		ExitCode: code,
 		Success:  code == 0 && errMsg == "",
 		Error:    errMsg,
@@ -573,19 +574,20 @@ type bgOutputResult struct {
 }
 
 // outputResult renders a job for bash_job_output and bash_job_wait.
-func outputResult(j *bgJob, offset, limit int) bgOutputResult {
+func outputResult(j *bgJob, offset, limit int, limits *OutputLimitsPolicy, artifacts *ArtifactStore) bgOutputResult {
 	if limit <= 0 || limit > bgMaxPage {
 		limit = bgMaxPage
 	}
 	done, code, errMsg := j.snapshot()
 	stdout, start, total := j.stdout.page(offset, limit)
+	l := limits.Resolved()
 	res := bgOutputResult{
 		JobID:      j.id,
 		Status:     j.status(),
 		Done:       done,
 		ExitCode:   code,
-		Stdout:     compressOutput(stdout),
-		Stderr:     compressOutput(j.stderr.String()),
+		Stdout:     LimitOutput(stdout, "bash_job_output", l, artifacts),
+		Stderr:     LimitOutput(j.stderr.String(), "bash_job_output", l, artifacts),
 		Error:      errMsg,
 		Offset:     start,
 		NextOffset: start + len(stdout),
@@ -623,7 +625,7 @@ type bgKillOutput struct {
 // registerBackgroundShellTools wires the explicit background-shell tools onto
 // server, backed by the shared manager mgr. Jobs run under srvCtx so they keep
 // running after the tool call (and the turn) returns.
-func registerBackgroundShellTools(srvCtx context.Context, server *mcp.Server, mgr *bgJobManager) {
+func registerBackgroundShellTools(srvCtx context.Context, server *mcp.Server, mgr *bgJobManager, limits *OutputLimitsPolicy, artifacts *ArtifactStore) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "bash_background",
 		Description: "Run a shell script in the background and return immediately with a job_id. Use this for long-running commands (servers, builds, watchers, downloads) so the conversation isn't blocked. Read progress with bash_job_output and stop it with bash_job_kill.",
@@ -651,7 +653,7 @@ func registerBackgroundShellTools(srvCtx context.Context, server *mcp.Server, mg
 		if !ok {
 			return nil, bgOutputResult{JobID: in.JobID, Status: "unknown", Error: "no such job"}, nil
 		}
-		return nil, outputResult(j, in.Offset, in.Limit), nil
+		return nil, outputResult(j, in.Offset, in.Limit, limits, artifacts), nil
 	})
 
 	mcp.AddTool(server, &mcp.Tool{
@@ -669,10 +671,10 @@ func registerBackgroundShellTools(srvCtx context.Context, server *mcp.Server, mg
 		if !ok {
 			return nil, bgOutputResult{JobID: in.JobID, Status: "unknown", Error: "no such job"}, nil
 		}
-		res := outputResult(j, 0, 0)
+		res := outputResult(j, 0, 0, limits, artifacts)
 		// Read from the tail: after a wait the end of the output matters most.
 		if res.TotalBytes > bgMaxPage {
-			res = outputResult(j, res.TotalBytes-bgMaxPage, 0)
+			res = outputResult(j, res.TotalBytes-bgMaxPage, 0, limits, artifacts)
 		}
 		res.TimedOut = !res.Done
 		return nil, res, nil
