@@ -1443,6 +1443,13 @@ func (s *Session) toolOptions(turnCtx context.Context, goal, mainModel string) [
 			func(p string) string { return resolveWorkspacePath(s.workingDir, p) })))
 	}
 
+	// Wire the tree tool so the assistant can see a directory's layout before
+	// searching it — a shallow listing that hides build output and VCS metadata.
+	if s.toolEnabled("tree") {
+		opts = append(opts, cogito.WithTools(treeToolDefinition(
+			func(p string) string { return resolveWorkspacePath(s.workingDir, p) })))
+	}
+
 	// Wire the native self-configuration tools so the assistant can manage its
 	// own plugins, skills, and MCP servers. requestReload re-wires the live
 	// session on the next turn after any mutating op.
@@ -2354,7 +2361,7 @@ func (s *Session) ToolCount() int {
 		"schedule_wakeup",
 		"cron", "cron_list", "cron_delete", "cron_pause", "cron_resume", "cron_trigger",
 		"read_image", "transcribe_audio", "read_video",
-		"memory", "index", "todo_write",
+		"memory", "index", "tree", "todo_write",
 	}
 	for _, name := range builtins {
 		if s.toolEnabled(name) && !(name == "ask_user" && s.AutoApprove()) {

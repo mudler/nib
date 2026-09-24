@@ -47,6 +47,7 @@ func toolGuidance(builtinTools []string) string {
 	glob := toolExposed(builtinTools, "glob")
 	grep := toolExposed(builtinTools, "grep")
 	index := toolExposed(builtinTools, "index")
+	tree := toolExposed(builtinTools, "tree")
 
 	paragraphs := []string{actGuidance}
 
@@ -95,6 +96,15 @@ func toolGuidance(builtinTools []string) string {
 	// came last and spoke more firmly, the model never called index. Telling
 	// it to index every unseen file overcorrected: it indexed instead of
 	// reading. index is for large files, where it saves a full read.
+	if tree {
+		paragraphs = append(paragraphs,
+			"tree renders a shallow directory listing (two levels by default, "+
+				"twelve entries per directory) so you can see the layout of a path. "+
+				"Call it on a directory you have not yet looked at, to find where things are, "+
+				"before grepping or reading. It hides build output and VCS metadata; "+
+				"use glob when you need every match for a pattern, and read or index for a file's contents.")
+	}
+
 	if index {
 		paragraphs = append(paragraphs, "index returns a compact outline of a source file — imports, types, functions, and their line ranges — for a fraction of what reading it costs. Use it on a large source file when you need only part of it: the outline tells you which lines to read. When you need a file of ordinary size, read it directly, without an index call.")
 	}
