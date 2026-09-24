@@ -4,8 +4,8 @@ import "testing"
 
 func TestPresets(t *testing.T) {
 	ps := Presets()
-	if len(ps) != 12 {
-		t.Fatalf("want 12 presets, got %d", len(ps))
+	if len(ps) != 13 {
+		t.Fatalf("want 13 presets, got %d", len(ps))
 	}
 
 	seen := map[string]bool{}

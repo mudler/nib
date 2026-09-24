@@ -34,7 +34,7 @@ func configDirIn(root string) (string, error) {
 	return configDir()
 }
 
-// Save writes the LLM connection fields (model, api_key, base_url) into
+// Save writes the LLM connection fields (provider, model, api_key, base_url) into
 // <configDir>/config.yaml, preserving any keys that already exist in the file.
 // It returns the path written. The file uses mode 0600 because it holds a key.
 //
@@ -57,6 +57,7 @@ func Save(cfg types.Config) (string, error) {
 		_ = yaml.Unmarshal(data, &existing)
 	}
 	existing["model"] = cfg.Model
+	existing["provider"] = cfg.Provider
 	existing["api_key"] = cfg.APIKey
 	existing["base_url"] = cfg.BaseURL
 

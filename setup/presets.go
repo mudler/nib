@@ -2,6 +2,7 @@ package setup
 
 // Preset is a provider template that prefills connection fields in the wizard.
 type Preset struct {
+	Provider     string // transport ID; empty uses the OpenAI-compatible transport
 	Name         string // display name shown in the picker
 	BaseURL      string // prefilled, editable; "" means the OpenAI SDK default
 	DefaultModel string // prefilled model field
@@ -23,6 +24,7 @@ func Presets() []Preset {
 		{Name: "xAI (Grok)", BaseURL: "https://api.x.ai/v1", DefaultModel: "grok-3-mini", DefaultKey: "", KeyRequired: true},
 		{Name: "OpenRouter", BaseURL: "https://openrouter.ai/api/v1", DefaultModel: "anthropic/claude-3.5-sonnet", DefaultKey: "", KeyRequired: true},
 		{Name: "Mistral", BaseURL: "https://api.mistral.ai/v1", DefaultModel: "mistral-large-latest", DefaultKey: "", KeyRequired: true},
+		{Name: "ChatGPT / OpenAI OAuth", Provider: "openai-codex", DefaultModel: "gpt-5-codex"},
 		{Name: "Custom", BaseURL: "", DefaultModel: "", DefaultKey: "", KeyRequired: false},
 	}
 }

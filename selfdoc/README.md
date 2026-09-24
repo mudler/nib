@@ -98,6 +98,15 @@ go install github.com/mudler/nib@latest
 
 **2. Configure** a model — `~/.config/nib/config.yaml`:
 
+For a ChatGPT/OpenAI OAuth login, run `nib --setup` and choose
+**ChatGPT / OpenAI OAuth**. Select a model, press Enter to sign in in your
+browser, then save. This option does not ask for an API key; credentials are
+stored separately from `config.yaml` and refreshed automatically. The
+**OpenAI** setup option uses an API key instead. You can also run
+`nib login openai-codex` and set `provider: openai-codex` in your config.
+
+For an API-key or local endpoint configuration:
+
 ```yaml
 model: gpt-4o-mini
 api_key: your-api-key

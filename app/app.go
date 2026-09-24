@@ -458,6 +458,7 @@ func runCtx(ctx context.Context, o Options) int {
 				return 0 // user cancelled
 			}
 			cfg.Model, cfg.APIKey, cfg.BaseURL = newCfg.Model, newCfg.APIKey, newCfg.BaseURL
+			cfg.Provider = newCfg.Provider
 		}
 	}
 

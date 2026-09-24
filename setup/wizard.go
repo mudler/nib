@@ -3,10 +3,15 @@ package setup
 import (
 	"context"
 	"fmt"
+	"os/exec"
+	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/mudler/nib/auth"
+	"github.com/mudler/nib/provider"
 	"github.com/mudler/nib/theme"
 	"github.com/mudler/nib/types"
 )
@@ -40,8 +45,11 @@ type model struct {
 
 	keyRequired bool
 
-	probing  bool
-	probeErr error
+	probing     bool
+	probeErr    error
+	loginPrompt string
+	cancelLogin context.CancelFunc
+	startLogin  func(context.Context, *auth.Store, provider.Definition) (*auth.LoginFlow, error)
 
 	savedPath string
 	saveErr   error
@@ -55,6 +63,8 @@ type probeResultMsg struct{ err error }
 // it was saved, and any fatal error. Cancellation (Esc/Ctrl+C) returns
 // saved=false with a nil error and the unchanged existing config.
 func Run(ctx context.Context, existing types.Config) (types.Config, bool, error) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	p := tea.NewProgram(newModel(ctx, existing))
 	res, err := p.Run()
 	if err != nil {
@@ -84,10 +94,11 @@ func newModel(ctx context.Context, existing types.Config) model {
 	inputs[fieldAPIKey].EchoCharacter = '•'
 
 	return model{
-		ctx:     ctx,
-		step:    stepProvider,
-		presets: Presets(),
-		inputs:  inputs,
+		ctx:        ctx,
+		step:       stepProvider,
+		presets:    Presets(),
+		inputs:     inputs,
+		startLogin: auth.StartLogin,
 		// Only the root override carries over from the existing config: the
 		// three editable fields come from the inputs (see collect), while Save
 		// needs to know which root to write into. Everything else stays zero.
@@ -96,10 +107,50 @@ func newModel(ctx context.Context, existing types.Config) model {
 }
 
 func (m *model) applyPreset(p Preset) {
+	m.cfg.Provider = p.Provider
+	if m.cfg.Provider == "" {
+		m.cfg.Provider = "openai"
+	}
 	m.inputs[fieldBaseURL].SetValue(p.BaseURL)
 	m.inputs[fieldModel].SetValue(p.DefaultModel)
 	m.inputs[fieldAPIKey].SetValue(p.DefaultKey)
 	m.keyRequired = p.KeyRequired
+}
+
+func (m model) oauth() bool { return m.cfg.Provider == "openai-codex" }
+
+func (m *model) loginCmd() tea.Cmd {
+	dir, err := configDirIn(m.cfg.BaseDir)
+	if err != nil {
+		m.probing, m.probeErr = false, err
+		return nil
+	}
+	ctx, cancel := context.WithCancel(m.ctx)
+	m.cancelLogin = cancel
+	def, _ := provider.Get(m.cfg.Provider)
+	flow, err := m.startLogin(ctx, auth.NewStore(filepath.Join(dir, "credentials.json")), def)
+	if err != nil {
+		cancel()
+		m.probing, m.probeErr = false, err
+		return nil
+	}
+	m.loginPrompt = flow.Prompt
+	return func() tea.Msg {
+		defer cancel()
+		// The URL remains visible if no browser opener is installed.
+		opener := "xdg-open"
+		if runtime.GOOS == "darwin" {
+			opener = "open"
+		}
+		if flow.URL != "" {
+			cmd := exec.Command(opener, flow.URL)
+			if cmd.Start() == nil {
+				go cmd.Wait()
+			}
+		}
+		_, err := flow.Complete(ctx)
+		return probeResultMsg{err: err}
+	}
 }
 
 func (m *model) focusField(i int) {
@@ -136,6 +187,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case tea.KeyMsg:
 		if msg.Type == tea.KeyCtrlC {
+			if m.cancelLogin != nil {
+				m.cancelLogin()
+			}
 			m.quitting = true
 			return m, tea.Quit
 		}
@@ -170,6 +224,9 @@ func (m model) updateProvider(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.applyPreset(m.presets[m.cursor])
 		m.step = stepFields
 		m.focusField(fieldBaseURL)
+		if m.oauth() {
+			m.focusField(fieldModel)
+		}
 		return m, textinput.Blink
 	}
 	return m, nil
@@ -181,15 +238,26 @@ func (m model) updateFields(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.step = stepProvider
 		return m, nil
 	case "tab", "down":
+		if m.oauth() {
+			return m, nil
+		}
 		m.focusField((m.focus + 1) % len(m.inputs))
 		return m, textinput.Blink
 	case "shift+tab", "up":
+		if m.oauth() {
+			return m, nil
+		}
 		m.focusField((m.focus - 1 + len(m.inputs)) % len(m.inputs))
 		return m, textinput.Blink
 	case "enter":
 		m.collect()
 		m.step = stepProbe
 		m.probing = true
+		m.probeErr = nil
+		if m.oauth() {
+			cmd := m.loginCmd()
+			return m, cmd
+		}
 		return m, m.probeCmd()
 	}
 	var cmd tea.Cmd
@@ -198,6 +266,11 @@ func (m model) updateFields(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m model) updateProbe(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if msg.String() == "esc" && m.cancelLogin != nil {
+		m.cancelLogin()
+		m.quitting = true
+		return m, tea.Quit
+	}
 	if m.probing {
 		return m, nil
 	}
@@ -209,6 +282,9 @@ func (m model) updateProbe(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.quitting = true
 		return m, tea.Quit
 	case "enter", "s":
+		if m.oauth() && m.probeErr != nil {
+			return m, nil
+		}
 		path, err := Save(m.cfg)
 		m.savedPath, m.saveErr = path, err
 		m.saved = err == nil
@@ -265,21 +341,42 @@ func (m model) viewFields() string {
 	labels := []string{"Base URL", "Model", "API key"}
 	var b strings.Builder
 	b.WriteString(theme.Brand.Render("nib setup") + "\n")
-	b.WriteString(theme.Help.Render("Edit the connection details, then press enter to test.") + "\n\n")
+	if m.oauth() {
+		b.WriteString(theme.Help.Render("Choose a model, then press enter to sign in with OpenAI in your browser.") + "\n\n")
+	} else {
+		b.WriteString(theme.Help.Render("Edit the connection details, then press enter to test.") + "\n\n")
+	}
 	for i, ti := range m.inputs {
+		if m.oauth() && i != fieldModel {
+			continue
+		}
 		b.WriteString(theme.LabelYou.Render(labels[i]) + "\n")
 		b.WriteString(ti.View() + "\n\n")
 	}
 	if m.keyRequired && strings.TrimSpace(m.inputs[fieldAPIKey].Value()) == "" {
 		b.WriteString(theme.Help.Render("This provider requires an API key.") + "\n\n")
 	}
-	b.WriteString(theme.Hint.Render("tab/" + theme.ScrollKeys + " move · enter test & continue · esc back"))
+	if m.oauth() {
+		b.WriteString(theme.Hint.Render("enter sign in · esc back"))
+	} else {
+		b.WriteString(theme.Hint.Render("tab/" + theme.ScrollKeys + " move · enter test & continue · esc back"))
+	}
 	return b.String()
 }
 
 func (m model) viewProbe() string {
 	var b strings.Builder
 	b.WriteString(theme.Brand.Render("nib setup") + "\n\n")
+	if m.oauth() {
+		if m.probing {
+			b.WriteString(m.loginPrompt + "\n\nWaiting for sign-in…\n\nesc cancel")
+		} else if m.probeErr != nil {
+			b.WriteString(theme.Error.Render("Sign-in failed: "+m.probeErr.Error()) + "\n\ne edit & retry · esc cancel")
+		} else {
+			b.WriteString(theme.Done.Render("✓ Signed in with OpenAI") + "\n\nenter/s save · e edit · esc cancel")
+		}
+		return b.String()
+	}
 	if m.probing {
 		b.WriteString(theme.Help.Render("Testing connection…"))
 		return b.String()
@@ -300,7 +397,7 @@ func (m model) viewSaved() string {
 	if m.saveErr != nil {
 		b.WriteString(theme.Error.Render("Could not write config: "+m.saveErr.Error()) + "\n\n")
 		b.WriteString(theme.Help.Render("Add this to your config manually:") + "\n")
-		b.WriteString(fmt.Sprintf("  model: %s\n  api_key: %s\n  base_url: %s\n", m.cfg.Model, m.cfg.APIKey, m.cfg.BaseURL))
+		b.WriteString(fmt.Sprintf("  provider: %s\n  model: %s\n  api_key: %s\n  base_url: %s\n", m.cfg.Provider, m.cfg.Model, m.cfg.APIKey, m.cfg.BaseURL))
 		b.WriteString("\n" + theme.Hint.Render("e edit · any key quit"))
 		return b.String()
 	}
