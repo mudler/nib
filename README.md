@@ -759,7 +759,7 @@ are saved to the config file.
 
 nib speaks the [Model Context Protocol](https://modelcontextprotocol.io/). A set of
 tools is built in — `bash`, the filesystem tools (`read`, `write`, `edit`, `glob`,
-`grep`), and the web tools (`web_fetch`, `web_search`); add any external server with
+`grep`, `tree`), and the web tools (`web_fetch`, `web_search`); add any external server with
 the `nib mcp` CLI or directly in your config.
 
 ### `nib mcp` CLI
