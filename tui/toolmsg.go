@@ -17,7 +17,7 @@ import (
 // to show gets a bare header rather than its "success true" envelope; anything
 // else shows its previewed output. The header is marked with the outcome.
 func toolMessage(res chat.ToolResult, elapsed time.Duration) ChatMessage {
-	msg := ChatMessage{Role: "tool", Name: res.Name, Arguments: res.Arguments, Status: render.ToolStatusOK}
+	msg := ChatMessage{Role: "tool", Name: res.Name, Arguments: res.Arguments, Status: render.ToolStatusOK, Images: res.Images}
 	failed, detail := chat.ToolOutcome(res.Result)
 	elapsedStr := ""
 	if elapsed > 0 {

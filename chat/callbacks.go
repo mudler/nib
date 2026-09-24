@@ -78,6 +78,21 @@ type ToolCallRequest struct {
 	Verdict string
 }
 
+// ToolImage carries raw image bytes produced by a tool (e.g. computer_use
+// screenshots, browser_vision captures). The TUI renders them inline when
+// the terminal supports a graphics protocol; otherwise they degrade to a
+// text placeholder.
+type ToolImage struct {
+	// ID is a stable identifier assigned at extraction time, used as the
+	// kitty image ID for transmit-once tracking. Must not change across
+	// render passes.
+	ID int
+	// Data is the raw image bytes.
+	Data []byte
+	// MIME is the MIME type (e.g. "image/png").
+	MIME string
+}
+
 // ToolResult is the outcome of a tool execution, surfaced to the UI after the
 // tool runs.
 type ToolResult struct {
@@ -89,6 +104,11 @@ type ToolResult struct {
 	// the result as a diff. Nil for other tools, failed calls, and files that
 	// cannot be diffed.
 	Change *FileChange
+	// Images carries image bytes produced by the tool (e.g. computer_use
+	// screenshots, browser_vision captures). The TUI renders them inline
+	// when the terminal supports a graphics protocol; otherwise they are
+	// shown as a text placeholder.
+	Images []ToolImage
 }
 
 // ToolStart announces an approved root-agent tool call that is about to run,
