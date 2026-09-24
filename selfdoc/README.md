@@ -99,10 +99,14 @@ go install github.com/mudler/nib@latest
 **2. Configure** a model — `~/.config/nib/config.yaml`:
 
 For a ChatGPT/OpenAI OAuth login, run `nib --setup` and choose
-**ChatGPT / OpenAI OAuth**. Select a model, press Enter to sign in in your
-browser, then save. This option does not ask for an API key; credentials are
+**ChatGPT / OpenAI OAuth**. Press Enter to sign in in your browser. After
+sign-in, nib fetches the models available to your account. Choose one with
+the arrow keys and press Enter to save; press `r` to refresh or retry loading
+the list. Once setup is complete, press Enter to start nib.
+If chat initialization fails, nib displays the error; press Ctrl+C twice to exit.
+This option does not ask for an API key; credentials are
 stored separately from `config.yaml` and refreshed automatically. The
-**OpenAI** setup option uses an API key instead. You can also run
+**OpenAI** setup option, immediately above it in the wizard, uses an API key instead. You can also run
 `nib login openai-codex` and set `provider: openai-codex` in your config.
 
 For an API-key or local endpoint configuration:
@@ -810,7 +814,9 @@ are saved to the config file.
 nib speaks the [Model Context Protocol](https://modelcontextprotocol.io/). A set of
 tools is built in — `bash`, the filesystem tools (`read`, `write`, `edit`, `glob`,
 `grep`, `tree`), and the web tools (`web_fetch`, `web_search`); add any external server with
-the `nib mcp` CLI or directly in your config.
+the `nib mcp` CLI or directly in your config. MCP startup handshakes have a
+10-second timeout. A server that fails to connect is skipped and reported
+in the startup log, so the rest of nib can start.
 
 ### `nib mcp` CLI
 

@@ -7,10 +7,12 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/mudler/nib/auth"
+	"github.com/mudler/nib/llmprovider"
 	"github.com/mudler/nib/provider"
 	"github.com/mudler/nib/theme"
 	"github.com/mudler/nib/types"
@@ -22,6 +24,7 @@ const (
 	stepProvider step = iota
 	stepFields
 	stepProbe
+	stepModels
 	stepSaved
 )
 
@@ -51,6 +54,10 @@ type model struct {
 	cancelLogin context.CancelFunc
 	startLogin  func(context.Context, *auth.Store, provider.Definition) (*auth.LoginFlow, error)
 
+	models      []string
+	modelCursor int
+	listModels  func(context.Context, types.ModelProviderConfig, *auth.Store) ([]string, error)
+
 	savedPath string
 	saveErr   error
 	saved     bool
@@ -58,6 +65,10 @@ type model struct {
 }
 
 type probeResultMsg struct{ err error }
+type modelsResultMsg struct {
+	models []string
+	err    error
+}
 
 // Run launches the interactive wizard. It returns the resulting config, whether
 // it was saved, and any fatal error. Cancellation (Esc/Ctrl+C) returns
@@ -99,6 +110,7 @@ func newModel(ctx context.Context, existing types.Config) model {
 		presets:    Presets(),
 		inputs:     inputs,
 		startLogin: auth.StartLogin,
+		listModels: llmprovider.ListModels,
 		// Only the root override carries over from the existing config: the
 		// three editable fields come from the inputs (see collect), while Save
 		// needs to know which root to write into. Everything else stays zero.
@@ -184,6 +196,25 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case probeResultMsg:
 		m.probing = false
 		m.probeErr = msg.err
+		if m.oauth() && msg.err == nil {
+			m.step = stepModels
+			cmd := m.modelsCmd()
+			return m, cmd
+		}
+		return m, nil
+	case modelsResultMsg:
+		m.probing = false
+		m.probeErr = msg.err
+		m.models = msg.models
+		m.modelCursor = 0
+		if msg.err == nil && len(msg.models) == 0 {
+			m.probeErr = fmt.Errorf("the provider returned no available models")
+		}
+		for i, name := range m.models {
+			if name == m.cfg.Model {
+				m.modelCursor = i
+			}
+		}
 		return m, nil
 	case tea.KeyMsg:
 		if msg.Type == tea.KeyCtrlC {
@@ -200,6 +231,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateFields(msg)
 		case stepProbe:
 			return m.updateProbe(msg)
+		case stepModels:
+			return m.updateModels(msg)
 		case stepSaved:
 			return m.updateSaved(msg)
 		}
@@ -260,6 +293,9 @@ func (m model) updateFields(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, m.probeCmd()
 	}
+	if m.oauth() {
+		return m, nil
+	}
 	var cmd tea.Cmd
 	m.inputs[m.focus], cmd = m.inputs[m.focus].Update(msg)
 	return m, cmd
@@ -282,7 +318,7 @@ func (m model) updateProbe(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.quitting = true
 		return m, tea.Quit
 	case "enter", "s":
-		if m.oauth() && m.probeErr != nil {
+		if m.oauth() {
 			return m, nil
 		}
 		path, err := Save(m.cfg)
@@ -297,6 +333,9 @@ func (m model) updateProbe(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m model) updateSaved(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.saveErr != nil && msg.String() == "e" {
 		m.step = stepFields
+		if m.oauth() {
+			m.step = stepModels
+		}
 		m.saved = false
 		return m, textinput.Blink
 	}
@@ -312,6 +351,8 @@ func (m model) View() string {
 		return m.viewFields()
 	case stepProbe:
 		return m.viewProbe()
+	case stepModels:
+		return m.viewModels()
 	case stepSaved:
 		return m.viewSaved()
 	}
@@ -342,25 +383,19 @@ func (m model) viewFields() string {
 	var b strings.Builder
 	b.WriteString(theme.Brand.Render("nib setup") + "\n")
 	if m.oauth() {
-		b.WriteString(theme.Help.Render("Choose a model, then press enter to sign in with OpenAI in your browser.") + "\n\n")
-	} else {
-		b.WriteString(theme.Help.Render("Edit the connection details, then press enter to test.") + "\n\n")
+		b.WriteString(theme.Help.Render("Press enter to sign in with OpenAI in your browser. Then choose an available model.") + "\n\n")
+		b.WriteString(theme.Hint.Render("enter sign in · esc back"))
+		return b.String()
 	}
+	b.WriteString(theme.Help.Render("Edit the connection details, then press enter to test.") + "\n\n")
 	for i, ti := range m.inputs {
-		if m.oauth() && i != fieldModel {
-			continue
-		}
 		b.WriteString(theme.LabelYou.Render(labels[i]) + "\n")
 		b.WriteString(ti.View() + "\n\n")
 	}
 	if m.keyRequired && strings.TrimSpace(m.inputs[fieldAPIKey].Value()) == "" {
 		b.WriteString(theme.Help.Render("This provider requires an API key.") + "\n\n")
 	}
-	if m.oauth() {
-		b.WriteString(theme.Hint.Render("enter sign in · esc back"))
-	} else {
-		b.WriteString(theme.Hint.Render("tab/" + theme.ScrollKeys + " move · enter test & continue · esc back"))
-	}
+	b.WriteString(theme.Hint.Render("tab/" + theme.ScrollKeys + " move · enter test & continue · esc back"))
 	return b.String()
 }
 
@@ -402,7 +437,92 @@ func (m model) viewSaved() string {
 		return b.String()
 	}
 	b.WriteString(theme.Done.Render("✓ Saved to "+m.savedPath) + "\n")
-	b.WriteString(theme.Help.Render("Starting nib…"))
-	b.WriteString("\n\n" + theme.Hint.Render("press enter to continue"))
+	b.WriteString(theme.Help.Render("Setup complete."))
+	b.WriteString("\n\n" + theme.Hint.Render("press enter to start nib"))
+	return b.String()
+}
+
+// modelsCmd uses the credentials saved by login and bounds the lookup so the
+// picker remains cancellable even when the provider is unreachable.
+func (m *model) modelsCmd() tea.Cmd {
+	m.probing, m.probeErr = true, nil
+	ctx, cancel := context.WithTimeout(m.ctx, 10*time.Second)
+	m.cancelLogin = cancel
+	cfg, list := m.cfg, m.listModels
+	return func() tea.Msg {
+		defer cancel()
+		dir, err := configDirIn(cfg.BaseDir)
+		if err != nil {
+			return modelsResultMsg{err: err}
+		}
+		models, err := list(ctx, cfg.ResolvedMainModel(), auth.NewStore(filepath.Join(dir, "credentials.json")))
+		return modelsResultMsg{models: models, err: err}
+	}
+}
+
+func (m model) updateModels(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if msg.String() == "esc" {
+		if m.cancelLogin != nil {
+			m.cancelLogin()
+		}
+		m.quitting = true
+		return m, tea.Quit
+	}
+	if m.probing {
+		return m, nil
+	}
+	if msg.String() == "r" {
+		cmd := m.modelsCmd()
+		return m, cmd
+	}
+	if m.probeErr != nil || len(m.models) == 0 {
+		return m, nil
+	}
+	switch msg.String() {
+	case "up", "k":
+		if m.modelCursor > 0 {
+			m.modelCursor--
+		}
+	case "down", "j":
+		if m.modelCursor < len(m.models)-1 {
+			m.modelCursor++
+		}
+	case "enter":
+		m.cfg.Model = m.models[m.modelCursor]
+		path, err := Save(m.cfg)
+		m.savedPath, m.saveErr, m.saved = path, err, err == nil
+		m.step = stepSaved
+	}
+	return m, nil
+}
+
+func (m model) viewModels() string {
+	var b strings.Builder
+	b.WriteString(theme.Brand.Render("nib setup") + "\n\n")
+	b.WriteString(theme.Done.Render("✓ Signed in with OpenAI") + "\n\n")
+	if m.probing {
+		b.WriteString("Loading available models…\n\nesc cancel")
+	} else if m.probeErr != nil {
+		b.WriteString(theme.Error.Render("Could not load models: "+m.probeErr.Error()) + "\n\nr retry · esc cancel")
+	} else {
+		b.WriteString("Choose a model:\n\n")
+		// Keep the selected entry visible without filling the terminal.
+		start := max(0, m.modelCursor-7)
+		end := min(len(m.models), start+8)
+		if start > 0 {
+			b.WriteString("  …\n")
+		}
+		for i := start; i < end; i++ {
+			marker := "( )"
+			if i == m.modelCursor {
+				marker = "(•)"
+			}
+			b.WriteString(marker + " " + m.models[i] + "\n")
+		}
+		if end < len(m.models) {
+			b.WriteString("  …\n")
+		}
+		b.WriteString("\n" + theme.Hint.Render(theme.ScrollKeys+" move · enter save · r refresh · esc cancel"))
+	}
 	return b.String()
 }

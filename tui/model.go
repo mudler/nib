@@ -1624,6 +1624,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.resetSuggestion()
 		if msg.err != nil {
 			m.err = msg.err
+			if m.boot != nil {
+				m.boot.collapsed = true
+			}
+			m.appendMessage(ChatMessage{Role: "error", Content: "Startup failed: " + msg.err.Error()})
 			// Every other footer-state mutator routes through updateViewport
 			// (see e.g. the responseMsg branch below) so the footer budget
 			// picks up the new error line immediately; this branch used to
@@ -3152,6 +3156,8 @@ func (m Model) renderComposer(w int) string {
 		composer.WriteString("\n")
 	}
 	switch {
+	case !m.sessionReady && m.err != nil:
+		composer.WriteString(theme.Error.Render("Startup failed. Press Ctrl+C twice to exit."))
 	case !m.sessionReady:
 		composer.WriteString(theme.Help.Render(theme.Starting))
 	case m.showLogs:

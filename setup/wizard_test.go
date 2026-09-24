@@ -15,20 +15,20 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Selecting the Ollama preset (index 3) should move to the fields step and
+// Selecting the Ollama preset (index 4) should move to the fields step and
 // prefill the base URL and model from that preset.
 func TestProviderSelectionPrefillsFields(t *testing.T) {
 	m := newModel(context.Background(), types.Config{})
 
-	// Move cursor down 3 times: Anthropic(0) -> OpenAI(1) -> Local(2) -> Ollama(3).
+	// Move past Anthropic, OpenAI, ChatGPT / OpenAI OAuth, and Local to Ollama.
 	var mi tea.Model
-	for i := 0; i < 3; i++ {
+	for i := 0; i < 4; i++ {
 		mi, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
 		m = mi.(model)
 	}
 
-	if m.cursor != 3 {
-		t.Fatalf("cursor = %d, want 3", m.cursor)
+	if m.cursor != 4 {
+		t.Fatalf("cursor = %d, want 4", m.cursor)
 	}
 
 	// Enter selects the preset and advances to the fields step.
@@ -62,8 +62,8 @@ func oauthModel(t *testing.T) model {
 
 func TestOAuthSetupSavesProviderAndSeparateCredentials(t *testing.T) {
 	m := oauthModel(t)
-	if m.focus != fieldModel || strings.Contains(m.View(), "API key") || strings.Contains(m.View(), "Base URL") {
-		t.Fatal("OAuth setup should show and focus only the model field")
+	if strings.Contains(m.View(), "gpt-5-codex") || strings.Contains(m.View(), "API key") || strings.Contains(m.View(), "Base URL") {
+		t.Fatal("OAuth setup should request sign-in before model selection")
 	}
 	m.startLogin = func(ctx context.Context, store *auth.Store, def provider.Definition) (*auth.LoginFlow, error) {
 		if def.ID != "openai-codex" || store.Path != filepath.Join(m.cfg.BaseDir, "credentials.json") {
@@ -79,7 +79,26 @@ func TestOAuthSetupSavesProviderAndSeparateCredentials(t *testing.T) {
 	if !m.probing || !strings.Contains(m.View(), "test authorization instructions") || cmd == nil {
 		t.Fatal("login should display instructions while waiting")
 	}
+	m.listModels = func(ctx context.Context, cfg types.ModelProviderConfig, store *auth.Store) ([]string, error) {
+		if cfg.Provider != "openai-codex" {
+			t.Fatal("wrong model provider")
+		}
+		if _, ok, err := store.Get("openai-codex"); err != nil || !ok {
+			t.Fatal("models requested before credentials saved")
+		}
+		return []string{"model-first", "model-selected"}, nil
+	}
+	mi, cmd = m.Update(cmd())
+	m = mi.(model)
+	if m.step != stepModels || !m.probing || cmd == nil {
+		t.Fatal("login must start model discovery")
+	}
 	mi, _ = m.Update(cmd())
+	m = mi.(model)
+	if !strings.Contains(m.View(), "model-selected") {
+		t.Fatal("available models missing")
+	}
+	mi, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
 	m = mi.(model)
 	mi, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = mi.(model)
@@ -94,7 +113,7 @@ func TestOAuthSetupSavesProviderAndSeparateCredentials(t *testing.T) {
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Provider != "openai-codex" || cfg.Model == "" || strings.Contains(string(data), "test-token") {
+	if cfg.Provider != "openai-codex" || cfg.Model != "model-selected" || strings.Contains(string(data), "test-token") {
 		t.Fatal("provider/model must persist without OAuth tokens in config.yaml")
 	}
 	if _, ok, err := auth.NewStore(filepath.Join(m.cfg.BaseDir, "credentials.json")).Get("openai-codex"); err != nil || !ok {
@@ -175,9 +194,9 @@ func TestKeyRequiredTracksPreset(t *testing.T) {
 		t.Errorf("OpenAI preset should set keyRequired=true")
 	}
 
-	// Ollama (index 3) does not.
+	// Ollama (index 4) does not.
 	m2 := newModel(context.Background(), types.Config{})
-	for i := 0; i < 3; i++ {
+	for i := 0; i < 4; i++ {
 		mi2, _ := m2.Update(tea.KeyMsg{Type: tea.KeyDown})
 		m2 = mi2.(model)
 	}
@@ -185,5 +204,68 @@ func TestKeyRequiredTracksPreset(t *testing.T) {
 	m2 = mi2.(model)
 	if m2.keyRequired {
 		t.Errorf("Ollama preset should leave keyRequired=false")
+	}
+}
+
+func TestOAuthModelDiscoveryFailureRetry(t *testing.T) {
+	for _, empty := range []bool{false, true} {
+		m := oauthModel(t)
+		m.collect()
+		calls := 0
+		m.listModels = func(context.Context, types.ModelProviderConfig, *auth.Store) ([]string, error) {
+			calls++
+			if calls == 1 {
+				if empty {
+					return nil, nil
+				}
+				return nil, errors.New("offline")
+			}
+			return []string{"available-model"}, nil
+		}
+		mi, cmd := m.Update(probeResultMsg{})
+		m = mi.(model)
+		// Saving while discovery is pending must do nothing.
+		mi, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+		m = mi.(model)
+		if m.saved {
+			t.Fatal("saved while loading")
+		}
+		mi, _ = m.Update(cmd())
+		m = mi.(model)
+		if m.probeErr == nil || !strings.Contains(m.View(), "r retry") {
+			t.Fatal("missing discovery failure")
+		}
+		mi, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+		m = mi.(model)
+		if m.saved || m.step != stepModels {
+			t.Fatal("failed discovery must not save")
+		}
+		mi, cmd = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("r")})
+		m = mi.(model)
+		mi, _ = m.Update(cmd())
+		m = mi.(model)
+		if m.probeErr != nil || len(m.models) != 1 {
+			t.Fatal("retry did not load models")
+		}
+	}
+}
+
+func TestOAuthModelDiscoveryCancel(t *testing.T) {
+	for _, key := range []tea.KeyType{tea.KeyEsc, tea.KeyCtrlC} {
+		m := oauthModel(t)
+		m.collect()
+		m.listModels = func(ctx context.Context, _ types.ModelProviderConfig, _ *auth.Store) ([]string, error) {
+			if ctx.Err() == nil {
+				t.Fatal("lookup context not cancelled")
+			}
+			return nil, ctx.Err()
+		}
+		mi, cmd := m.Update(probeResultMsg{})
+		m = mi.(model)
+		mi, _ = m.Update(tea.KeyMsg{Type: key})
+		if !mi.(model).quitting || mi.(model).saved {
+			t.Fatal("cancel must exit without saving")
+		}
+		cmd()
 	}
 }

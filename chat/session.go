@@ -487,12 +487,13 @@ func NewSession(ctx context.Context, cfg types.Config, callbacks Callbacks, tran
 	clients := []*mcp.ClientSession{}
 
 	for _, transport := range transports {
-		session, err := client.Connect(ctx, transport, nil)
+		session, err := connectMCP(ctx, client, transport, mcpConnectTimeout)
 		if err != nil {
 			// A single MCP server that fails to start (e.g. a plugin whose
 			// binary isn't on PATH) must not prevent the whole session from
 			// coming up. Skip it and continue with the rest.
 			xlog.Warn("Skipping MCP server that failed to connect", "error", err)
+			configErrs = append(configErrs, fmt.Errorf("built-in MCP server could not connect: %w", err))
 			continue
 		}
 		clients = append(clients, session)
@@ -2133,21 +2134,10 @@ func (s *Session) ReconcileMCPServers(desired map[string]types.MCPServer) error 
 			continue
 		}
 		transport := wizmcp.TransportForServer(srv)
-		// Deliberately pass s.ctx (the session's long-lived context) directly,
-		// with no per-connect timeout. The go-sdk's mcp.Client.Connect stores the
-		// context it is given for the connection's ENTIRE lifetime (not just the
-		// initial handshake): it derives a cancellable context from it and uses
-		// that to drive the background "hanging GET" SSE listener and reconnect
-		// machinery. A timeout- (or otherwise short-lived) context here would tear
-		// down that background listener shortly after connecting, so a later tool
-		// call that needs to re-establish its SSE stream fails with the real,
-		// user-reported error chain: `hanging GET: failed to reconnect ...
-		// context canceled` on a server that is otherwise connected and healthy.
-		// This mirrors the built-in host-tool connect path in NewSession, which
-		// also hands Connect the raw session context.
-		sess, err := s.mcpClient.Connect(s.ctx, transport, nil)
+		sess, err := connectMCP(s.ctx, s.mcpClient, transport, mcpConnectTimeout)
 		if err != nil {
 			xlog.Warn("self-config: MCP server failed to connect", "name", name, "error", err)
+			s.configErrs = append(s.configErrs, fmt.Errorf("MCP server %q could not connect: %w", name, err))
 			continue
 		}
 		s.cfgClients[name] = sess
@@ -2175,7 +2165,7 @@ func (s *Session) SetSkills(skills []types.Skill) error {
 			xlog.Warn("self-config: skills MCP server error", "error", err)
 		}
 	}()
-	sess, err := s.mcpClient.Connect(s.ctx, clientT, nil)
+	sess, err := connectMCP(s.ctx, s.mcpClient, clientT, mcpConnectTimeout)
 	if err != nil {
 		return err
 	}

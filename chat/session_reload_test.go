@@ -58,6 +58,9 @@ func TestReconcileMCPServersSkipsUnconnectable(t *testing.T) {
 	if len(s.cfgClients) != 0 {
 		t.Fatalf("expected unconnectable server to be skipped, got %d", len(s.cfgClients))
 	}
+	if len(s.configErrs) != 1 || !strings.Contains(s.configErrs[0].Error(), "broken") {
+		t.Fatalf("failed server must be named in startup warnings: %v", s.configErrs)
+	}
 }
 
 // TestReconcileMCPServersKeepsConnectionAliveForToolCalls is a regression test
