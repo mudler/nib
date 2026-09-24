@@ -173,6 +173,10 @@ Running out of input ends the session, so a piped question is answered and nib e
 `Ctrl+D` does the same thing interactively. `Ctrl+C` still exits non-zero, so a script can
 tell an interrupted run from a finished one.
 
+To clear the current conversation in `--cli` mode, type `clear` (without a
+slash). In the TUI, exit and launch `nib` again without `--resume` to start a fresh
+conversation. This does not delete saved session recordings.
+
 #### What a piped run may and may not do
 
 A piped run still uses tools, but only the ones that cannot change anything. In the default
@@ -619,6 +623,10 @@ agents:
 # Optional: log verbosity (debug, info, warn, error; default error). The TUI
 # writes logs to nib.log in the nib config dir (~/.config/nib/nib.log) so they
 # do not draw over the screen; --cli and nib mcp write them to stderr.
+# Set debug and restart to log startup stages, including MCP connections.
+# OAuth response diagnostics include event counts and output item types,
+# not raw response bodies. Repeated empty or incomplete Responses API replies
+# stop after the model-call retries instead of restarting the whole turn.
 # LOG_FORMAT=json switches to JSON lines.
 log_level: error
 
@@ -796,6 +804,11 @@ the mode to the config file.
 
 ### Changing the classifier at runtime
 
+`/classifier` requires a SystemOne endpoint with a `base_url`, such as LocalAI.
+ChatGPT/OpenAI OAuth does not provide this API. When using OAuth for chat,
+configure a separate named classifier endpoint and select it with
+`/classifier <endpoint> <model>`.
+
 - `/classifier` opens a picker: pick one of your endpoints (config.yaml's own,
   or a named one), then one of the models it lists. In the CLI, bare
   `/classifier` shows the one in use.
@@ -814,9 +827,16 @@ are saved to the config file.
 nib speaks the [Model Context Protocol](https://modelcontextprotocol.io/). A set of
 tools is built in — `bash`, the filesystem tools (`read`, `write`, `edit`, `glob`,
 `grep`, `tree`), and the web tools (`web_fetch`, `web_search`); add any external server with
-the `nib mcp` CLI or directly in your config. MCP startup handshakes have a
-10-second timeout. A server that fails to connect is skipped and reported
+the `nib mcp` CLI or directly in your config. MCP servers connect in parallel,
+with at most 10 connection attempts in flight. After one second, a pending
+connection shows a warning naming the slow server on the TUI startup screen,
+regardless of log level. It also logs the warning at `warn` level. Each handshake has a 10-second timeout. A server that fails to connect is skipped and reported
 in the startup log, so the rest of nib can start.
+
+The built-in web tools use the main model and its saved login credentials,
+including ChatGPT/OpenAI OAuth. The optional prompt-injection classifier also
+uses saved credentials. Invalid web-model configuration fails startup immediately
+with an error. Ctrl+C cancels pending built-in MCP connections.
 
 ### `nib mcp` CLI
 

@@ -8,11 +8,14 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strings"
 
 	"github.com/mudler/cogito"
+	"github.com/mudler/nib/auth"
 	"github.com/mudler/nib/llmprovider"
+	"github.com/mudler/nib/plugin"
 	"github.com/mudler/nib/types"
 	openai "github.com/sashabaranov/go-openai"
 )
@@ -70,7 +73,7 @@ func ClassifierForConfig(cfg types.Config) (Classifier, error) {
 		return nil, nil
 	}
 	model := cfg.ResolvedClassifierModel()
-	llm, err := llmprovider.New(model)
+	llm, err := llmprovider.NewWithStore(model, auth.NewStore(filepath.Join(plugin.BaseDirIn(cfg.BaseDir), "credentials.json")))
 	if err != nil {
 		return nil, fmt.Errorf("create prompt-injection classifier: %w", err)
 	}

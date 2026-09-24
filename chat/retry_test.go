@@ -500,3 +500,14 @@ func TestTurnRetryStatusIsClearedAfterTheWait(t *testing.T) {
 		t.Fatalf("last status = %q, want %q; statuses seen: %v", rec.lines[len(rec.lines)-1], retryResumeStatus, rec.lines)
 	}
 }
+
+func TestMalformedResponsesDoNotRetryWholeTurn(t *testing.T) {
+	for _, message := range []string{
+		"failed to select tool: openai-responses: completed without an assistant message (id=resp_1, status=completed, output_types=[])",
+		"openai-responses: incomplete response (id=resp_2, reason=max_output_tokens)",
+	} {
+		if got := classifyBackendError(errors.New(message)); got != errFatal {
+			t.Fatalf("malformed response classified as %v", got)
+		}
+	}
+}

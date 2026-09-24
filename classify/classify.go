@@ -104,7 +104,7 @@ func New(cfg types.Config) (Classifier, error) {
 		return nil, err
 	}
 	if base == "" {
-		return nil, fmt.Errorf("classifier: no base_url to reach it")
+		return nil, fmt.Errorf("classifier: %s requires an endpoint with base_url (for example LocalAI); ChatGPT/OpenAI OAuth does not provide the SystemOne API. Configure a named classifier endpoint and use /classifier <endpoint> <model>", api)
 	}
 	timeout := c.Timeout
 	if timeout <= 0 {

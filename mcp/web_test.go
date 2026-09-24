@@ -2,6 +2,8 @@ package mcp
 
 import (
 	"context"
+	"github.com/mudler/nib/auth"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -41,5 +43,18 @@ func TestWebServerRegistersTools(t *testing.T) {
 		if !found[name] {
 			t.Errorf("tool %q not registered", name)
 		}
+	}
+}
+
+func TestWebServerUsesSavedOAuthCredentials(t *testing.T) {
+	t.Setenv("OPENAI_CODEX_OAUTH_TOKEN", "")
+	root := t.TempDir()
+	store := auth.NewStore(filepath.Join(root, "credentials.json"))
+	if err := store.Save(auth.Credential{ProviderID: "openai-codex", Kind: auth.CredentialOAuth, AccessToken: "test-token"}); err != nil {
+		t.Fatal(err)
+	}
+	server, err := newWebMCPServer(types.Config{BaseDir: root, Provider: "openai-codex", Model: "test-model", PromptInjectionProtection: types.PromptInjectionProtectionConfig{Enabled: true}})
+	if err != nil || server == nil {
+		t.Fatalf("web server failed to use stored OAuth credentials: %v", err)
 	}
 }

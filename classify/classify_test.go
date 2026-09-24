@@ -1,6 +1,8 @@
 package classify_test
 
 import (
+	_ "github.com/mudler/nib/classify/systemone"
+	"strings"
 	"testing"
 
 	"github.com/mudler/nib/classify"
@@ -56,5 +58,12 @@ func TestValidCategory(t *testing.T) {
 	}
 	if classify.ValidCategory("safe") {
 		t.Fatal("safe is not a category")
+	}
+}
+
+func TestOAuthClassifierExplainsRequiredAPI(t *testing.T) {
+	_, err := classify.New(types.Config{Provider: "openai-codex", Model: "chat-model", Classifier: types.ClassifierConfig{Model: "classifier-model"}})
+	if err == nil || !strings.Contains(err.Error(), "SystemOne") || !strings.Contains(err.Error(), "/classifier <endpoint> <model>") {
+		t.Fatalf("missing actionable classifier error: %v", err)
 	}
 }

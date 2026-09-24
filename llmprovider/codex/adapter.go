@@ -9,9 +9,8 @@
 //   - Codex identity headers (originator, version, chatgpt-account-id from JWT)
 //   - include: ["reasoning.encrypted_content"]
 //
-// Response decoding reuses the openairesponses package — the SSE stream's
-// terminal response.completed event carries the full response object in the
-// same JSON shape as a non-streaming Responses API response.
+// Response decoding reuses the openairesponses package, merging completed
+// output items from the SSE stream with its terminal response metadata.
 package codex
 
 import (
@@ -23,10 +22,12 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 
 	"github.com/mudler/cogito"
 	"github.com/mudler/nib/llmprovider/openairesponses"
+	"github.com/mudler/xlog"
 	openai "github.com/sashabaranov/go-openai"
 )
 
@@ -416,72 +417,125 @@ func translateToolChoice(choice any) any {
 // SSE response parsing
 // ---------------------------------------------------------------------------
 
-// extractCompletedResponse reads an SSE stream, finds the terminal
-// response.completed event, and returns its response field as JSON.
+// extractCompletedResponse retains completed output items as well as the final
+// response metadata. Some streams omit output from their terminal snapshot.
 func extractCompletedResponse(sseBody []byte) ([]byte, error) {
 	scanner := bufio.NewScanner(bytes.NewReader(sseBody))
 	scanner.Buffer(make([]byte, 0, 1024*1024), 10*1024*1024)
-
+	items := map[int]json.RawMessage{}
+	eventCounts := map[string]int{}
 	var dataLines []string
-
-	for scanner.Scan() {
-		line := scanner.Text()
-
-		if line == "" {
-			// Event boundary — process accumulated data
-			if len(dataLines) > 0 {
-				data := strings.Join(dataLines, "\n")
-				dataLines = dataLines[:0]
-
-				if data == "[DONE]" {
+	process := func() ([]byte, error) {
+		data := strings.Join(dataLines, "\n")
+		dataLines = dataLines[:0]
+		if data == "" || data == "[DONE]" {
+			return nil, nil
+		}
+		var ev struct {
+			Type        string          `json:"type"`
+			OutputIndex int             `json:"output_index"`
+			Item        json.RawMessage `json:"item"`
+			Response    json.RawMessage `json:"response"`
+			Code        string          `json:"code"`
+			Message     string          `json:"message"`
+			Error       *struct {
+				Code    string `json:"code"`
+				Message string `json:"message"`
+			} `json:"error"`
+		}
+		if err := json.Unmarshal([]byte(data), &ev); err != nil {
+			return nil, fmt.Errorf("codex: parse SSE event: %w", err)
+		}
+		eventCounts[ev.Type]++
+		switch ev.Type {
+		case "response.output_item.done":
+			if len(ev.Item) > 0 && string(ev.Item) != "null" {
+				items[ev.OutputIndex] = ev.Item
+			}
+		case "response.completed", "response.failed", "response.incomplete":
+			if len(ev.Response) == 0 || string(ev.Response) == "null" {
+				return nil, fmt.Errorf("codex: %s event has no response", ev.Type)
+			}
+			var response map[string]json.RawMessage
+			if err := json.Unmarshal(ev.Response, &response); err != nil {
+				return nil, fmt.Errorf("codex: parse terminal response: %w", err)
+			}
+			// Preserve failure/incomplete status for the shared response parser;
+			// never turn earlier output into a successful response after failure.
+			if ev.Type != "response.completed" {
+				status := strings.TrimPrefix(ev.Type, "response.")
+				response["status"], _ = json.Marshal(status)
+				return json.Marshal(response)
+			}
+			var output []json.RawMessage
+			if raw := response["output"]; len(raw) > 0 {
+				if err := json.Unmarshal(raw, &output); err != nil {
+					return nil, fmt.Errorf("codex: parse terminal output: %w", err)
+				}
+			}
+			xlog.Debug("Codex response stream completed", "event_counts", eventCounts, "streamed_output_items", len(items), "terminal_output_items", len(output))
+			// The terminal output is authoritative for items it includes. Match
+			// by item ID to avoid duplicating tool calls from both event types.
+			seen := map[string]bool{}
+			for _, item := range output {
+				var id struct {
+					ID string `json:"id"`
+				}
+				_ = json.Unmarshal(item, &id)
+				if id.ID != "" {
+					seen[id.ID] = true
+				}
+			}
+			indices := make([]int, 0, len(items))
+			for index := range items {
+				indices = append(indices, index)
+			}
+			slices.Sort(indices)
+			for _, index := range indices {
+				item := items[index]
+				var id struct {
+					ID string `json:"id"`
+				}
+				_ = json.Unmarshal(item, &id)
+				if id.ID != "" && seen[id.ID] {
 					continue
 				}
-
-				var ev struct {
-					Type     string          `json:"type"`
-					Response json.RawMessage `json:"response"`
-					Error    *struct {
-						Code    string `json:"code"`
-						Message string `json:"message"`
-					} `json:"error"`
+				if id.ID == "" && index < len(output) {
+					continue
 				}
-				if err := json.Unmarshal([]byte(data), &ev); err == nil {
-					switch ev.Type {
-					case "response.completed":
-						if len(ev.Response) > 0 {
-							return ev.Response, nil
-						}
-					case "response.failed", "error":
-						if ev.Error != nil && ev.Error.Message != "" {
-							return nil, fmt.Errorf("codex: API error %s: %s", ev.Error.Code, ev.Error.Message)
-						}
-					}
+				output = append(output, item)
+				if id.ID != "" {
+					seen[id.ID] = true
 				}
 			}
-			continue
+			response["output"], _ = json.Marshal(output)
+			return json.Marshal(response)
+		case "error":
+			if ev.Error != nil {
+				ev.Code, ev.Message = ev.Error.Code, ev.Error.Message
+			}
+			return nil, fmt.Errorf("codex: API error %s: %s", ev.Code, ev.Message)
 		}
-
-		if strings.HasPrefix(line, "data: ") {
-			dataLines = append(dataLines, strings.TrimPrefix(line, "data: "))
+		return nil, nil
+	}
+	for scanner.Scan() {
+		line := scanner.Text()
+		if line == "" {
+			response, err := process()
+			if response != nil || err != nil {
+				return response, err
+			}
 		} else if strings.HasPrefix(line, "data:") {
-			dataLines = append(dataLines, strings.TrimPrefix(line, "data:"))
+			dataLines = append(dataLines, strings.TrimPrefix(strings.TrimPrefix(line, "data:"), " "))
 		}
 	}
-
-	// Process any remaining data after last event
-	if len(dataLines) > 0 {
-		data := strings.Join(dataLines, "\n")
-		if data != "[DONE]" {
-			var ev struct {
-				Type     string          `json:"type"`
-				Response json.RawMessage `json:"response"`
-			}
-			if err := json.Unmarshal([]byte(data), &ev); err == nil && ev.Type == "response.completed" && len(ev.Response) > 0 {
-				return ev.Response, nil
-			}
-		}
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("codex: read SSE stream: %w", err)
 	}
-
+	response, err := process()
+	if response != nil || err != nil {
+		return response, err
+	}
 	return nil, fmt.Errorf("codex: no response.completed event in SSE stream")
 }
 

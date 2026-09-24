@@ -427,10 +427,27 @@ func runCtx(ctx context.Context, o Options) int {
 	if cfg.LogLevel == "" {
 		cfg.LogLevel = "error"
 	}
-	// xlog's own NewLogger writes to stdout, which is the MCP stdio transport
-	// in --mcp mode and the program output in --cli mode, so log to stderr.
-	// The TUI modes redirect it again below, once the mode is known.
+	// Select the log destination before setup and built-in server initialization,
+	// so startup failures and stalls are diagnosable from the TUI log too.
+	mode := selectMode(modeInputs{
+		cli:    *cliFlag,
+		tui:    *tuiFlag,
+		tmux:   *tmuxFlag,
+		height: *heightFlag,
+		inTmux: cmd.IsInTmux(),
+	})
 	xlog.SetLogger(newLogger(o.stderr(), cfg.LogLevel))
+	// The TUI owns the terminal: a log line written to stdout or stderr lands
+	// on top of the rendered frame and corrupts it. Send logs to a file.
+	if !mcpMode && mode != modeCLI {
+		if f := openLogFile(cfg.BaseDir); f != nil {
+			defer f.Close()
+			xlog.SetLogger(newLogger(f, cfg.LogLevel))
+		} else {
+			xlog.SetLogger(newLogger(io.Discard, cfg.LogLevel))
+		}
+	}
+	xlog.Debug("Starting nib", "provider", cfg.Provider, "model", cfg.Model)
 
 	isTTY := false
 	if f, ok := o.stdin().(*os.File); ok {
@@ -466,12 +483,15 @@ func runCtx(ctx context.Context, o Options) int {
 	// and the TUI lists them (footer) and backgrounds the foreground one (Ctrl+B).
 	shellJobs := mcp.NewShellJobs()
 
+	xlog.Debug("Initializing built-in MCP servers")
 	transports, err := mcp.StartTransports(ctx, cfg, shellJobs)
 	if err != nil {
+		xlog.Error("Built-in MCP initialization failed", "error", err)
 		fmt.Fprintf(o.stderr(), "Error starting MCP servers: %v\n", err)
 		return 1
 	}
 
+	xlog.Debug("Built-in MCP servers initialized", "count", len(transports))
 	if mcpMode {
 		if err := cmd.RunMCP(ctx, cfg, mcpArgs, shellJobs, transports...); err != nil {
 			fmt.Fprintf(o.stderr(), "Error: %v\n", err)
@@ -485,14 +505,6 @@ func runCtx(ctx context.Context, o Options) int {
 	// output would just resolve the defaults twice.
 	streams := cmd.Streams{In: o.Stdin, Out: o.Stdout, Err: o.Stderr}
 
-	mode := selectMode(modeInputs{
-		cli:    *cliFlag,
-		tui:    *tuiFlag,
-		tmux:   *tmuxFlag,
-		height: *heightFlag,
-		inTmux: cmd.IsInTmux(),
-	})
-
 	// Only CLI mode can honor injected streams. Rendering the TUI into a
 	// buffer or a pipe is not something to attempt and half-succeed at, so say
 	// so instead of quietly using /dev/tty and leaving the embedder's writer
@@ -500,17 +512,6 @@ func runCtx(ctx context.Context, o Options) int {
 	if name := decideStreamRefusal(mode, injectedReader(o.Stdin), injectedWriter(o.Stdout)); name != "" {
 		fmt.Fprintf(o.stderr(), "%s: %s was injected as a non-terminal stream, which the TUI cannot render into. Re-run with --cli to use the injected streams.\n", o.name(), name)
 		return 1
-	}
-
-	// The TUI owns the terminal: a log line written to stdout or stderr lands
-	// on top of the rendered frame and corrupts it. Send logs to a file.
-	if mode != modeCLI {
-		if f := openLogFile(cfg.BaseDir); f != nil {
-			defer f.Close()
-			xlog.SetLogger(newLogger(f, cfg.LogLevel))
-		} else {
-			xlog.SetLogger(newLogger(io.Discard, cfg.LogLevel))
-		}
 	}
 
 	switch mode {

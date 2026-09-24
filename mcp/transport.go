@@ -16,6 +16,12 @@ import (
 // failure, so it is not reported. Whether a server sees that or its client
 // closing first depends on goroutine timing.
 func StartTransports(ctx context.Context, cfg types.Config, shellJobs *ShellJobs) ([]mcp.Transport, error) {
+	// Validate the web model before launching any servers. Returning an error
+	// here avoids advertising a pipe whose server exited before connecting.
+	webServer, err := newWebMCPServer(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("initialize web MCP server: %w", err)
+	}
 	if shellJobs == nil {
 		shellJobs = NewShellJobsInDir(cfg.WorkingDir)
 	}
@@ -41,7 +47,7 @@ func StartTransports(ctx context.Context, cfg types.Config, shellJobs *ShellJobs
 	webMCPServerTransport, webMCPServerClient := mcp.NewInMemoryTransports()
 
 	go func() {
-		if err := StartWebMCPServer(ctx, webMCPServerTransport, cfg); err != nil && !errors.Is(err, context.Canceled) {
+		if err := webServer.Run(ctx, webMCPServerTransport); err != nil && !errors.Is(err, context.Canceled) {
 			fmt.Fprintf(os.Stderr, "Web MCP server error: %v\n", err)
 		}
 	}()

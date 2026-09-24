@@ -3,6 +3,7 @@ package chat
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -47,5 +48,44 @@ func TestConnectMCPKeepsSuccessfulConnectionAlive(t *testing.T) {
 	defer stop()
 	if err := session.Ping(callCtx, nil); err != nil {
 		t.Fatalf("connection expired after successful handshake: %v", err)
+	}
+}
+
+func TestConnectMCPAbsentInMemoryServer(t *testing.T) {
+	for _, parentCancel := range []bool{false, true} {
+		t.Run(fmt.Sprintf("cancel=%v", parentCancel), func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			serverT, clientT := mcp.NewInMemoryTransports()
+			// Close the unused peer even on failure so a regression cannot leak the
+			// blocked test goroutine into other tests.
+			peer, err := serverT.Connect(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer peer.Close()
+			client := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "1"}, nil)
+			timeout := 30 * time.Millisecond
+			if parentCancel {
+				timeout = time.Hour
+			}
+			done := make(chan error, 1)
+			go func() { _, err := connectMCP(ctx, client, clientT, timeout); done <- err }()
+			if parentCancel {
+				cancel()
+			}
+			select {
+			case err := <-done:
+				want := context.DeadlineExceeded
+				if parentCancel {
+					want = context.Canceled
+				}
+				if !errors.Is(err, want) {
+					t.Fatalf("got %v, want %v", err, want)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("connect remained blocked with no server reading the in-memory pipe")
+			}
+		})
 	}
 }

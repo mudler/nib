@@ -2,8 +2,11 @@ package mcp
 
 import (
 	"context"
+	"path/filepath"
 
+	"github.com/mudler/nib/auth"
 	"github.com/mudler/nib/llmprovider"
+	"github.com/mudler/nib/plugin"
 	"github.com/mudler/nib/provenance"
 	"github.com/mudler/nib/types"
 
@@ -14,18 +17,26 @@ import (
 // web_fetch reuses the session's main model and request options (model, API key,
 // base URL, metadata, and reasoning effort) for its extraction pass.
 func StartWebMCPServer(ctx context.Context, transport mcp.Transport, cfg types.Config) error {
+	server, err := newWebMCPServer(cfg)
+	if err != nil {
+		return err
+	}
+	return server.Run(ctx, transport)
+}
+
+func newWebMCPServer(cfg types.Config) (*mcp.Server, error) {
 	server := mcp.NewServer(&mcp.Implementation{
 		Name:    "web",
 		Version: "v1.0.0",
 	}, nil)
 
-	llm, err := llmprovider.New(cfg.ResolvedMainModel())
+	llm, err := llmprovider.NewWithStore(cfg.ResolvedMainModel(), auth.NewStore(filepath.Join(plugin.BaseDirIn(cfg.BaseDir), "credentials.json")))
 	if err != nil {
-		return err
+		return nil, err
 	}
 	classifier, err := provenance.ClassifierForConfig(cfg)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	ws := &webServer{
 		llm:        llm,
@@ -42,5 +53,5 @@ func StartWebMCPServer(ctx context.Context, transport mcp.Transport, cfg types.C
 		Description: "Search the web via DuckDuckGo. Returns up to max_results (default 5) structured results with title, url, and snippet.",
 	}, ws.search)
 
-	return server.Run(ctx, transport)
+	return server, nil
 }

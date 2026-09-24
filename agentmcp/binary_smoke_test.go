@@ -31,12 +31,25 @@ func TestBinaryE2EStdio(t *testing.T) {
 	llm := fakeLLM(t, "Two plus two is four.")
 	defer llm.Close()
 
+	// Isolate config and persisted provider selections as well as the model
+	// URL. Otherwise the developer's OAuth provider or MCP servers can redirect
+	// this supposedly local smoke test to real services.
+	xdg := t.TempDir()
+	root := filepath.Join(xdg, "nib")
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "config.yaml"), []byte("provider: openai\nlog_level: error\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	cmd := exec.Command(bin, "mcp")
+	cmd.Dir = t.TempDir()
 	cmd.Env = append(os.Environ(),
+		"XDG_CONFIG_HOME="+xdg,
+		"NIB_TRACE_DIR=",
 		"MODEL=fake",
 		"API_KEY=sk-test",
 		"BASE_URL="+llm.URL+"/v1",
-		"LOG_LEVEL=error",
 	)
 	cmd.Stderr = os.Stderr // surface server logs, keep stdout clean for JSON-RPC
 

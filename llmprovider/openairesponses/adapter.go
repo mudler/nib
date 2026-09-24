@@ -18,6 +18,7 @@ import (
 	"strings"
 
 	"github.com/mudler/cogito"
+	"github.com/mudler/xlog"
 	openai "github.com/sashabaranov/go-openai"
 )
 
@@ -281,13 +282,16 @@ func firstNonEmpty(a, b string) string {
 // ---------------------------------------------------------------------------
 
 type responsesAPIResponse struct {
-	ID     string                `json:"id"`
-	Object string                `json:"object"`
-	Model  string                `json:"model"`
-	Output []responsesOutputItem `json:"output"`
-	Usage  responsesAPIUsage     `json:"usage"`
-	Status string                `json:"status"`
-	Error  *responsesAPIError    `json:"error"`
+	ID                string                `json:"id"`
+	Object            string                `json:"object"`
+	Model             string                `json:"model"`
+	Output            []responsesOutputItem `json:"output"`
+	Usage             responsesAPIUsage     `json:"usage"`
+	Status            string                `json:"status"`
+	IncompleteDetails *struct {
+		Reason string `json:"reason"`
+	} `json:"incomplete_details"`
+	Error *responsesAPIError `json:"error"`
 }
 
 type responsesOutputItem struct {
@@ -301,8 +305,9 @@ type responsesOutputItem struct {
 }
 
 type responsesOutputContent struct {
-	Type string `json:"type"`
-	Text string `json:"text"`
+	Type    string `json:"type"`
+	Text    string `json:"text"`
+	Refusal string `json:"refusal"`
 }
 
 type responsesAPIUsage struct {
@@ -326,6 +331,13 @@ func (l *LLM) translateResponse(body []byte, requestModel string) (cogito.LLMRep
 		return cogito.LLMReply{}, cogito.LLMUsage{}, fmt.Errorf("openai-responses: API error %s: %s", ar.Error.Code, ar.Error.Message)
 	}
 
+	if ar.Status == "failed" || ar.Status == "incomplete" {
+		reason := "unspecified"
+		if ar.IncompleteDetails != nil {
+			reason = ar.IncompleteDetails.Reason
+		}
+		return cogito.LLMReply{}, cogito.LLMUsage{}, fmt.Errorf("openai-responses: %s response (id=%s, reason=%s)", ar.Status, ar.ID, reason)
+	}
 	var textParts []string
 	var toolCalls []openai.ToolCall
 
@@ -336,6 +348,8 @@ func (l *LLM) translateResponse(body []byte, requestModel string) (cogito.LLMRep
 				for _, c := range item.Content {
 					if c.Type == "output_text" {
 						textParts = append(textParts, c.Text)
+					} else if c.Type == "refusal" {
+						textParts = append(textParts, c.Refusal)
 					}
 				}
 			}
@@ -357,7 +371,14 @@ func (l *LLM) translateResponse(body []byte, requestModel string) (cogito.LLMRep
 		finishReason = openai.FinishReasonToolCalls
 	}
 	if content == "" && len(toolCalls) == 0 {
-		return cogito.LLMReply{}, cogito.LLMUsage{}, ErrNoResponse
+		itemTypes := make([]string, 0, len(ar.Output))
+		for _, item := range ar.Output {
+			itemTypes = append(itemTypes, item.Type)
+		}
+		// Structural metadata only: never log prompts, generated text, tool
+		// arguments, tokens, or raw response bodies.
+		xlog.Debug("Responses API returned no usable output", "response_id", ar.ID, "status", ar.Status, "model", ar.Model, "output_types", itemTypes, "output_tokens", ar.Usage.OutputTokens)
+		return cogito.LLMReply{}, cogito.LLMUsage{}, fmt.Errorf("%w (id=%s, status=%s, output_types=%v)", ErrNoResponse, ar.ID, ar.Status, itemTypes)
 	}
 
 	response := openai.ChatCompletionResponse{

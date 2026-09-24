@@ -119,6 +119,10 @@ var statusRe = regexp.MustCompile(`status(?: code:)? (\d{3})\b`)
 // the request itself is wrong, so the same call fails the same way again.
 // Everything that matches no marker is retried — see classifyBackendError.
 var fatalMarkers = []string{
+	// The provider adapter still has no usable output after cogito's own
+	// retries. Repeating the entire turn cannot repair the response shape.
+	"openai-responses: completed without an assistant message",
+	"openai-responses: incomplete response",
 	// cogito's text for a tool call to a tool the model hallucinated;
 	// not a backend error, and the model will not self-correct on retry.
 	"not found",

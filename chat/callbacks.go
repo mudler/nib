@@ -134,8 +134,12 @@ type CronRequest struct {
 
 // Callbacks defines the interface for UI interactions.
 type Callbacks struct {
-	OnStatus    func(status string)
-	OnReasoning func(reasoning string)
+	// OnMCPConnectSlow reports a connection still pending after one second.
+	// It runs during startup as well as reload, potentially concurrently for
+	// multiple servers. UIs should show it independently of the log level.
+	OnMCPConnectSlow func(name string)
+	OnStatus         func(status string)
+	OnReasoning      func(reasoning string)
 	// OnStream, when set, receives live token-level deltas during generation
 	// (reasoning/answer/tool-selection) so a UI can render progress as it
 	// happens. Setting it opts the session into cogito's streaming path; the

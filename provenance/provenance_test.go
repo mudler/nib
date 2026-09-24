@@ -2,7 +2,9 @@ package provenance
 
 import (
 	"context"
+	"github.com/mudler/nib/auth"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -84,5 +86,18 @@ func TestClassificationFailureFailsClosed(t *testing.T) {
 	}
 	if !strings.Contains(e.ModelText(), `source="src-7"`) {
 		t.Fatalf("missing boundary metadata: %q", e.ModelText())
+	}
+}
+
+func TestClassifierForConfigUsesSavedOAuthCredentials(t *testing.T) {
+	t.Setenv("OPENAI_CODEX_OAUTH_TOKEN", "")
+	root := t.TempDir()
+	store := auth.NewStore(filepath.Join(root, "credentials.json"))
+	if err := store.Save(auth.Credential{ProviderID: "openai-codex", Kind: auth.CredentialOAuth, AccessToken: "test-token"}); err != nil {
+		t.Fatal(err)
+	}
+	classifier, err := ClassifierForConfig(types.Config{BaseDir: root, Provider: "openai-codex", Model: "test-model", PromptInjectionProtection: types.PromptInjectionProtectionConfig{Enabled: true}})
+	if err != nil || classifier == nil {
+		t.Fatalf("saved OAuth credentials not used: classifier=%T err=%v", classifier, err)
 	}
 }

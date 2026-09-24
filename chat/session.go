@@ -447,10 +447,12 @@ func NewSession(ctx context.Context, cfg types.Config, callbacks Callbacks, tran
 	// "reasoning_content" key). LocalAIClient parses both.
 	credStore := auth.NewStore(filepath.Join(plugin.BaseDirIn(cfg.BaseDir), "credentials.json"))
 	mainProvider := cfg.ResolvedMainModel()
+	xlog.Debug("Creating main model client", "provider", mainProvider.Provider, "model", mainProvider.Model)
 	llm, err := llmprovider.NewWithStore(mainProvider, credStore)
 	if err != nil {
 		return nil, fmt.Errorf("create main LLM: %w", err)
 	}
+	xlog.Debug("Initializing endpoints and classifiers")
 	endpoints, configErrs := endpoint.New(cfg, credStore)
 	classifier, err := provenance.ClassifierForConfig(cfg)
 	if err != nil {
@@ -486,17 +488,37 @@ func NewSession(ctx context.Context, cfg types.Config, callbacks Callbacks, tran
 	client := mcp.NewClient(&mcp.Implementation{Name: "aish", Version: "v1.0.0"}, nil)
 	clients := []*mcp.ClientSession{}
 
-	for _, transport := range transports {
-		session, err := connectMCP(ctx, client, transport, mcpConnectTimeout)
-		if err != nil {
-			// A single MCP server that fails to start (e.g. a plugin whose
-			// binary isn't on PATH) must not prevent the whole session from
-			// coming up. Skip it and continue with the rest.
-			xlog.Warn("Skipping MCP server that failed to connect", "error", err)
-			configErrs = append(configErrs, fmt.Errorf("built-in MCP server could not connect: %w", err))
+	jobs := make([]mcpConnectJob, 0, len(transports)+len(cfg.MCPServers))
+	for i, transport := range transports {
+		jobs = append(jobs, mcpConnectJob{name: fmt.Sprintf("built-in %d", i+1), transport: transport, onSlow: callbacks.OnMCPConnectSlow})
+	}
+	names := slices.Sorted(maps.Keys(cfg.MCPServers))
+	for _, name := range names {
+		jobs = append(jobs, mcpConnectJob{name: name, transport: wizmcp.TransportForServer(cfg.MCPServers[name]), onSlow: callbacks.OnMCPConnectSlow})
+	}
+	results := connectMCPBatch(ctx, client, jobs)
+	if ctx.Err() != nil {
+		for _, result := range results {
+			if result.session != nil {
+				_ = result.session.Close()
+			}
+		}
+		return nil, ctx.Err()
+	}
+	cfgClients := map[string]*mcp.ClientSession{}
+	cfgServers := map[string]types.MCPServer{}
+	for i, result := range results {
+		if result.err != nil {
+			xlog.Warn("Skipping MCP server that failed to connect", "name", jobs[i].name, "error", result.err)
+			configErrs = append(configErrs, fmt.Errorf("MCP server %q could not connect: %w", jobs[i].name, result.err))
 			continue
 		}
-		clients = append(clients, session)
+		if i < len(transports) {
+			clients = append(clients, result.session)
+		} else {
+			name := jobs[i].name
+			cfgClients[name], cfgServers[name] = result.session, cfg.MCPServers[name]
+		}
 	}
 
 	s := &Session{
@@ -534,8 +556,8 @@ func NewSession(ctx context.Context, cfg types.Config, callbacks Callbacks, tran
 		reasoningEffort:      mainProvider.ReasoningEffort,
 		mcpClient:            client,
 		computerEnabled:      cfg.Computer.Enabled,
-		cfgClients:           map[string]*mcp.ClientSession{},
-		cfgServers:           map[string]types.MCPServer{},
+		cfgClients:           cfgClients,
+		cfgServers:           cfgServers,
 		configurator:         manage.NewIn(cfg.BaseDir),
 		memoryStore:          NewMemoryStore(filepath.Join(plugin.BaseDirIn(cfg.BaseDir), "memory")),
 		todoList:             NewTodoList(),
@@ -586,13 +608,14 @@ func NewSession(ctx context.Context, cfg types.Config, callbacks Callbacks, tran
 	s.readOnlyCommands = newReadOnlyCommands(cfg.ReadOnlyCommands)
 	// Wire reloadable state (skills server, config MCP clients, agents, hooks,
 	// system prompt) through the same path used for live reloads.
-	if err := s.Reload(cfg); err != nil {
-		xlog.Warn("self-config: initial reload", "error", err)
-	}
+	xlog.Debug("Loading configured MCP servers and skills")
+	s.reloadSettings(cfg)
+	xlog.Debug("Running session-start hooks")
 	s.hooks.Fire(ctx, hooks.EventSessionStart, "", map[string]any{"event": "SessionStart"})
 
 	// An endpoint picked in an earlier session is the default. A resumed
 	// session then goes back to the endpoint and model it was using.
+	xlog.Debug("Restoring saved provider and model")
 	s.restoreStartupEndpoint()
 	s.restoreResumedModel(cfg.InitialEndpoint, cfg.InitialModel)
 
@@ -606,6 +629,7 @@ func NewSession(ctx context.Context, cfg types.Config, callbacks Callbacks, tran
 		s.compaction.MaxContextTokens = defaultContextTokens
 	}
 
+	xlog.Debug("Chat session ready")
 	return s, nil
 }
 
@@ -2129,19 +2153,23 @@ func (s *Session) ReconcileMCPServers(desired map[string]types.MCPServer) error 
 			delete(s.cfgServers, name)
 		}
 	}
-	for name, srv := range desired {
+
+	var jobs []mcpConnectJob
+	for _, name := range slices.Sorted(maps.Keys(desired)) {
 		if _, ok := s.cfgClients[name]; ok {
 			continue
 		}
-		transport := wizmcp.TransportForServer(srv)
-		sess, err := connectMCP(s.ctx, s.mcpClient, transport, mcpConnectTimeout)
-		if err != nil {
-			xlog.Warn("self-config: MCP server failed to connect", "name", name, "error", err)
-			s.configErrs = append(s.configErrs, fmt.Errorf("MCP server %q could not connect: %w", name, err))
+		jobs = append(jobs, mcpConnectJob{name: name, transport: wizmcp.TransportForServer(desired[name]), onSlow: s.callbacks.OnMCPConnectSlow})
+	}
+	results := connectMCPBatch(s.ctx, s.mcpClient, jobs)
+	for i, result := range results {
+		name := jobs[i].name
+		if result.err != nil {
+			xlog.Warn("self-config: MCP server failed to connect", "name", name, "error", result.err)
+			s.configErrs = append(s.configErrs, fmt.Errorf("MCP server %q could not connect: %w", name, result.err))
 			continue
 		}
-		s.cfgClients[name] = sess
-		s.cfgServers[name] = srv
+		s.cfgClients[name], s.cfgServers[name] = result.session, desired[name]
 	}
 	return nil
 }
@@ -2165,7 +2193,7 @@ func (s *Session) SetSkills(skills []types.Skill) error {
 			xlog.Warn("self-config: skills MCP server error", "error", err)
 		}
 	}()
-	sess, err := connectMCP(s.ctx, s.mcpClient, clientT, mcpConnectTimeout)
+	sess, err := connectNamedMCP(s.ctx, s.mcpClient, mcpConnectJob{name: "built-in skills", transport: clientT, onSlow: s.callbacks.OnMCPConnectSlow})
 	if err != nil {
 		return err
 	}
@@ -2180,6 +2208,13 @@ func (s *Session) SetSkills(skills []types.Skill) error {
 // run concurrently with a running turn or a live detached agent.
 func (s *Session) Reload(cfg types.Config) error {
 	_ = s.ReconcileMCPServers(cfg.MCPServers)
+	s.reloadSettings(cfg)
+	return nil
+}
+
+// reloadSettings applies non-config-server state. Startup has already connected
+// all servers in one bounded batch, so it must not retry failed ones here.
+func (s *Session) reloadSettings(cfg types.Config) {
 	_ = s.SetSkills(cfg.Skills)
 	s.agentDefs = toCogitoDefinitions(cfg.Agents)
 	s.agentModels = agentModelSet(s.agentDefs)
@@ -2204,7 +2239,6 @@ func (s *Session) Reload(cfg types.Config) error {
 	s.prunedMu.Lock()
 	s.pruning = cfg.ToolOutputPruning
 	s.prunedMu.Unlock()
-	return nil
 }
 
 // requestReload marks the session dirty; the next SendMessage applies it.

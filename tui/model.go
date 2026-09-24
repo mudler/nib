@@ -540,6 +540,7 @@ type Model struct {
 
 	// Channels for async communication with callbacks
 	statusChan       chan string
+	mcpSlowChan      chan string
 	toolRequestChan  chan chat.ToolCallRequest
 	toolResponseChan chan chat.ToolCallResponse
 	toolResultChan   chan chat.ToolResult
@@ -645,6 +646,7 @@ type parkMsg parkEvent
 
 // statusMsg is sent for status updates
 type statusMsg string
+type mcpSlowMsg string
 
 // reasoningEventKind distinguishes the kinds of streamed update carried on
 // reasoningChan.
@@ -791,6 +793,7 @@ func NewModel(ctx context.Context, cfg types.Config, height int, shellJobs *wizm
 		height:             height,
 		agentEventChan:     make(chan chat.AgentEvent, 16),
 		statusChan:         make(chan string, 10),
+		mcpSlowChan:        make(chan string, 10),
 		reasoningChan:      make(chan reasoningEvent, 256),
 		turnGen:            new(atomic.Int32),
 		toolRequestChan:    make(chan chat.ToolCallRequest),
@@ -852,6 +855,7 @@ func (m Model) Init() tea.Cmd {
 		textarea.Blink,
 		m.spinner.Tick,
 		m.initSession(),
+		m.listenSlowMCP(),
 	}
 	if m.boot != nil {
 		cmds = append(cmds, m.boot.nextBootCmd())
@@ -864,6 +868,12 @@ func (m Model) Init() tea.Cmd {
 func (m Model) initSession() tea.Cmd {
 	return func() tea.Msg {
 		callbacks := chat.Callbacks{
+			OnMCPConnectSlow: func(name string) {
+				select {
+				case m.mcpSlowChan <- name:
+				case <-m.ctx.Done():
+				}
+			},
 			OnStatus: func(status string) {
 				select {
 				case m.statusChan <- status:
@@ -2050,6 +2060,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		// If a wake-up fires mid-run (loading and not parked) it is dropped: the model drives self-pacing at turn end, so this is rare; cron loops queue instead (see releaseQueueFront).
 
+	case mcpSlowMsg:
+		warning := fmt.Sprintf("MCP server %q is taking a long time to connect (over 1 second).", string(msg))
+		if m.boot != nil && !m.boot.collapsed {
+			m.boot.entries = append(m.boot.entries, bootEntry{
+				ts: fmt.Sprintf("%05.3f", time.Since(m.boot.start).Seconds()),
+				ev: "mcp.slow", dt: warning, warn: true,
+			})
+		} else {
+			m.appendMessage(ChatMessage{Role: "error", Content: warning})
+		}
+		m.updateViewport()
+		cmds = append(cmds, m.listenSlowMCP())
 	case statusMsg:
 		m.status = string(msg)
 		m.updateViewport()
@@ -4432,4 +4454,17 @@ func openBrowser(url string) {
 		c, args = "xdg-open", []string{url}
 	}
 	_ = exec.Command(c, args...).Start()
+}
+
+// Listen from Init, before sessionReadyMsg: startup warnings must be visible
+// while NewSession is still waiting for its MCP connections.
+func (m Model) listenSlowMCP() tea.Cmd {
+	return func() tea.Msg {
+		select {
+		case name := <-m.mcpSlowChan:
+			return mcpSlowMsg(name)
+		case <-m.ctx.Done():
+			return nil
+		}
+	}
 }

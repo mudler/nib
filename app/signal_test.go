@@ -21,6 +21,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/mudler/nib/auth"
 )
 
 const (
@@ -331,5 +333,23 @@ func TestRunInstallsNoSignalHandler(t *testing.T) {
 	if !st.Signaled() || st.Signal() != syscall.SIGINT {
 		t.Fatalf("child exited %v (signaled=%v), want death by SIGINT: Run installed a handler\nstderr:\n%s",
 			st, st.Signaled(), p.stderrText())
+	}
+}
+
+func TestOAuthMCPStartupAndSIGINT(t *testing.T) {
+	xdg := childConfigDir(t, "provider: openai-codex\nmodel: test-model\nprompt_injection_protection:\n  enabled: true\n")
+	store := auth.NewStore(filepath.Join(xdg, "nib", "credentials.json"))
+	if err := store.Save(auth.Credential{ProviderID: "openai-codex", Kind: auth.CredentialOAuth, AccessToken: "test-token"}); err != nil {
+		t.Fatal(err)
+	}
+	p := startChild(t, "main", "mcp", xdg)
+	p.awaitServing(t, 5*time.Second)
+	if strings.Contains(p.stderrText(), "Web MCP server error") {
+		t.Fatalf("web initialization failed: %s", p.stderrText())
+	}
+	p.signal(t, syscall.SIGINT)
+	st := p.awaitExit(t, 5*time.Second)
+	if st.Signaled() {
+		t.Fatalf("MCP did not shut down cleanly: %v", st)
 	}
 }
