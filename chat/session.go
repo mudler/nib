@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -38,6 +39,7 @@ import (
 
 // Session represents a chat session with the AI assistant
 type Session struct {
+	cfg          types.Config
 	ctx          context.Context
 	turnMu       sync.Mutex
 	turnCancel   context.CancelFunc
@@ -371,17 +373,30 @@ func (s *Session) newAgentLLM(mainModel, requested string, temperature float32, 
 func (s *Session) resolvedSessionProvider() types.ModelProviderConfig {
 	s.modelMu.RLock()
 	defer s.modelMu.RUnlock()
+	var provider types.ModelProviderConfig
 	if s.mainProvider.Configured() {
-		return s.mainProvider
+		provider = s.mainProvider
+	} else {
+		provider = types.ModelProviderConfig{
+			Provider:        "openai",
+			Model:           s.llmModel,
+			APIKey:          s.apiKey,
+			BaseURL:         s.baseURL,
+			Metadata:        s.metadata,
+			ReasoningEffort: s.reasoningEffort,
+		}
 	}
-	return types.ModelProviderConfig{
-		Provider:        "openai",
-		Model:           s.llmModel,
-		APIKey:          s.apiKey,
-		BaseURL:         s.baseURL,
-		Metadata:        s.metadata,
-		ReasoningEffort: s.reasoningEffort,
+	resolved := llmprovider.ResolveReasoning(s.cfg, provider, provider.BaseURL)
+	if resolved.Effort != "" {
+		provider.ReasoningEffort = resolved.Effort
+		if resolved.Mode == "budget" && resolved.BudgetTokens > 0 {
+			if provider.Metadata == nil {
+				provider.Metadata = map[string]string{}
+			}
+			provider.Metadata["thinking_budget_tokens"] = strconv.Itoa(resolved.BudgetTokens)
+		}
 	}
+	return provider
 }
 
 // mergeMetadata overlays per-agent metadata on top of the global metadata,
@@ -499,6 +514,7 @@ func NewSession(ctx context.Context, cfg types.Config, callbacks Callbacks, tran
 	}
 
 	s := &Session{
+		cfg:                  cfg,
 		ctx:                  ctx,
 		llm:                  llm,
 		clients:              clients,

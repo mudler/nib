@@ -192,6 +192,12 @@ type Config struct {
 	// LFM2.5), so it's the reliable way to disable a reasoning model's thinking
 	// ("none"). Empty leaves the field unset.
 	ReasoningEffort string               `yaml:"reasoning_effort,omitempty"`
+	// ThinkingMode selects how reasoning effort is expressed on the wire:
+	// "effort" (default) sends reasoning_effort; "budget" sends a thinking
+	// budget token count (see ThinkingBudgets). Empty means "effort".
+	ThinkingMode      string             `yaml:"thinking_mode,omitempty"`
+	ThinkingBudgets   map[string]int     `yaml:"thinking_budgets,omitempty"`
+	ReasoningOverrides map[string]string `yaml:"reasoning_overrides,omitempty"`
 	MCPServers      map[string]MCPServer `yaml:"mcp_servers"`
 	AgentOptions    AgentOptions         `yaml:"agent_options"`
 	Compaction      CompactionConfig     `yaml:"compaction"`
@@ -385,6 +391,7 @@ type ModelProviderConfig struct {
 	BaseURL         string            `yaml:"base_url,omitempty"`
 	Metadata        map[string]string `yaml:"metadata,omitempty"`
 	ReasoningEffort string            `yaml:"reasoning_effort,omitempty"`
+	ThinkingMode    string            `yaml:"thinking_mode,omitempty"`
 	MaxTokens       int               `yaml:"max_tokens,omitempty"`
 	Command         string            `yaml:"command,omitempty"`
 	Args            []string          `yaml:"args,omitempty"`
@@ -392,7 +399,7 @@ type ModelProviderConfig struct {
 
 func (c ModelProviderConfig) Configured() bool {
 	return c.Provider != "" || c.Model != "" || c.APIKey != "" || c.APIKeyEnv != "" || c.BaseURL != "" ||
-		len(c.Metadata) != 0 || c.ReasoningEffort != "" || c.MaxTokens != 0 ||
+		len(c.Metadata) != 0 || c.ReasoningEffort != "" || c.ThinkingMode != "" || c.MaxTokens != 0 ||
 		c.Command != "" || len(c.Args) != 0
 }
 
@@ -428,6 +435,7 @@ func (c Config) ResolvedMainModel() ModelProviderConfig {
 		BaseURL:         c.BaseURL,
 		Metadata:        c.Metadata,
 		ReasoningEffort: c.ReasoningEffort,
+		ThinkingMode:    c.ThinkingMode,
 	}
 	m.APIKey, m.APIKeyEnv = m.ResolvedAPIKey(), ""
 	return m
