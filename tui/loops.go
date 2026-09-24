@@ -132,7 +132,7 @@ func (m *Model) startLoop(a slash.Action) tea.Cmd {
 
 	// Fixed interval: register a (non-durable) cron job + run the first now.
 	expr := durationToCron(a.Interval)
-	j, err := m.loops.Add(expr, a.Payload, true, false)
+	j, err := m.loops.Add(expr, a.Payload, true, false, loop.MonitorConfig{})
 	if err != nil {
 		m.appendMessage(ChatMessage{Role: "error", Content: "loop: " + err.Error()})
 		m.updateViewport()

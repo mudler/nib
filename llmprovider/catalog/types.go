@@ -47,6 +47,11 @@ type Compat struct {
 	// URL contains "openrouter.ai". When true and no explicit max_tokens is
 	// set, the field is omitted (OpenRouter routing omission).
 	IsOpenRouterHost bool `json:"isOpenRouterHost"`
+
+	// SupportedReasoningEfforts is the set of reasoning_effort values the
+	// model's backend accepts. When non-empty, a requested effort that the
+	// model does not support is clamped down to the nearest supported one.
+	SupportedReasoningEfforts []string `json:"supportedReasoningEfforts,omitempty"`
 }
 
 // MaxTokensField returns the wire field name for the output cap, defaulting

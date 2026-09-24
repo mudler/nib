@@ -272,3 +272,46 @@ func contains(lines []string, want string) bool {
 	}
 	return false
 }
+
+func TestEntriesReturnsRawEntries(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "sample.go")
+	if err := os.WriteFile(path, []byte(sampleGo), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	entries, _, err := Entries(path)
+	if err != nil {
+		t.Fatalf("Entries failed: %v", err)
+	}
+	if len(entries) == 0 {
+		t.Fatal("Entries returned no entries")
+	}
+
+	// Verify the return type is []Entry (not a formatted string).
+	// Some entries (imports, constants, vars) may have an empty
+	// Name (the detail is in the Detail field), so skip those when
+	// checking for non-empty names.
+	for _, e := range entries {
+		switch e.Section {
+		case SectionImport, SectionConst, SectionVar, SectionHeading, SectionPackage:
+			continue
+		}
+		if e.Name == "" {
+			t.Fatalf("entry has empty name: %+v", e)
+		}
+	}
+
+	// Spot-check that we got at least one Function entry, since sampleGo defines
+	// main, process, and the Validate method.
+	var hasFunc bool
+	for _, e := range entries {
+		if e.Section == SectionFunc {
+			hasFunc = true
+			break
+		}
+	}
+	if !hasFunc {
+		t.Fatalf("expected at least one Function entry, got: %+v", entries)
+	}
+}

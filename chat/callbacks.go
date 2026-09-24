@@ -124,10 +124,12 @@ type AskRequest struct {
 
 // CronRequest is a recurring/one-shot job the agent registers (cron tool).
 type CronRequest struct {
-	Expr      string
-	Prompt    string
-	Recurring bool
-	Durable   bool
+	Expr          string
+	Prompt        string
+	Recurring     bool
+	Durable       bool
+	MonitorScript string
+	MonitorURL    string
 }
 
 // Callbacks defines the interface for UI interactions.

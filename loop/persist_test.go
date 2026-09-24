@@ -12,10 +12,10 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	now := tm("2026-06-06 10:00")
 	r := NewRegistry()
 	r.SetClock(func() time.Time { return now })
-	if _, err := r.Add("*/5 * * * *", "/foo", true, true); err != nil { // durable
+	if _, err := r.Add("*/5 * * * *", "/foo", true, true, MonitorConfig{}); err != nil { // durable
 		t.Fatalf("add foo: %v", err)
 	}
-	if _, err := r.Add("0 9 * * *", "/bar", true, false); err != nil { // not durable — must NOT persist
+	if _, err := r.Add("0 9 * * *", "/bar", true, false, MonitorConfig{}); err != nil { // not durable — must NOT persist
 		t.Fatalf("add bar: %v", err)
 	}
 
@@ -43,7 +43,7 @@ func TestLoadPreservesCreated(t *testing.T) {
 	now := tm("2026-06-06 10:00")
 	r := NewRegistry()
 	r.SetClock(func() time.Time { return now })
-	if _, err := r.Add("*/5 * * * *", "/foo", true, true); err != nil {
+	if _, err := r.Add("*/5 * * * *", "/foo", true, true, MonitorConfig{}); err != nil {
 		t.Fatalf("add foo: %v", err)
 	}
 
@@ -100,7 +100,7 @@ func TestLoadMissingFileIsEmpty(t *testing.T) {
 func TestLoadKeepsPaused(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "loops.json")
 	r := NewRegistry()
-	job, _ := r.Add("*/5 * * * *", "/foo", true, true)
+	job, _ := r.Add("*/5 * * * *", "/foo", true, true, MonitorConfig{})
 	r.Pause(job.ID)
 	if err := r.Save(path); err != nil {
 		t.Fatalf("save: %v", err)

@@ -90,14 +90,17 @@ func SupportedExtensions() []string {
 	return exts
 }
 
-// Index parses a source file and returns its compact skeleton.
-func Index(path string) (string, error) {
+// Entries parses a source file and returns its raw skeleton entries. It is the
+// structural core of Index: Index calls this and formats the result, while
+// callers that want the entries themselves (the repo_map tool) use Entries
+// directly. hasError reports whether the tree-sitter parse produced errors.
+func Entries(path string) (entries []Entry, hasError bool, err error) {
 	fi, err := os.Stat(path)
 	if err != nil {
-		return "", fmt.Errorf("index %s: %w", path, err)
+		return nil, false, fmt.Errorf("index %s: %w", path, err)
 	}
 	if fi.Size() > maxFileSize {
-		return "", fmt.Errorf("index %s: file is %s, exceeds %s limit",
+		return nil, false, fmt.Errorf("index %s: file is %s, exceeds %s limit",
 			path, humanBytes(fi.Size()), humanBytes(maxFileSize))
 	}
 
@@ -111,13 +114,13 @@ func Index(path string) (string, error) {
 	}
 	mu.RUnlock()
 	if lang == nil {
-		return "", fmt.Errorf("index: no extractor for %s files (supported: %s)",
+		return nil, false, fmt.Errorf("index: no extractor for %s files (supported: %s)",
 			ext, strings.Join(SupportedExtensions(), ", "))
 	}
 
 	src, err := os.ReadFile(path)
 	if err != nil {
-		return "", fmt.Errorf("index %s: %w", path, err)
+		return nil, false, fmt.Errorf("index %s: %w", path, err)
 	}
 
 	p := lang.pool.Get().(*bonsai.Parser)
@@ -125,11 +128,20 @@ func Index(path string) (string, error) {
 
 	root, err := p.Parse(src)
 	if err != nil {
-		return "", fmt.Errorf("index %s: parse: %w", path, err)
+		return nil, false, fmt.Errorf("index %s: parse: %w", path, err)
 	}
 
-	entries := lang.extractor.Extract(root, src)
-	return formatEntries(entries, root.HasError()), nil
+	entries = lang.extractor.Extract(root, src)
+	return entries, root.HasError(), nil
+}
+
+// Index parses a source file and returns its compact skeleton.
+func Index(path string) (string, error) {
+	entries, hasError, err := Entries(path)
+	if err != nil {
+		return "", err
+	}
+	return formatEntries(entries, hasError), nil
 }
 
 func formatEntries(entries []Entry, hasError bool) string {

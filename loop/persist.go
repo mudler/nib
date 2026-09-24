@@ -58,9 +58,10 @@ func (r *Registry) Save(path string) error {
 	return nil
 }
 
-// restore puts back the stored Created timestamp and Paused flag of the job
-// with the given id. Used by Load, so a restart keeps both.
-func (r *Registry) restore(id string, created time.Time, paused bool) {
+// restore puts back the stored Created timestamp, Paused flag, and monitor
+// state of the job with the given id. Used by Load, so a restart keeps both.
+func (r *Registry) restore(id string, created time.Time, paused bool,
+	lastHash, lastOutput string, lastChanged time.Time) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for i := range r.jobs {
@@ -69,6 +70,9 @@ func (r *Registry) restore(id string, created time.Time, paused bool) {
 				r.jobs[i].Created = created
 			}
 			r.jobs[i].Paused = paused
+			r.jobs[i].LastOutputHash = lastHash
+			r.jobs[i].LastOutput = lastOutput
+			r.jobs[i].LastChangedAt = lastChanged
 			return
 		}
 	}
@@ -94,11 +98,11 @@ func (r *Registry) Load(path string) (int, error) {
 	}
 	loaded := 0
 	for _, j := range stored {
-		added, err := r.Add(j.Expr, j.Prompt, j.Recurring, true)
+		added, err := r.Add(j.Expr, j.Prompt, j.Recurring, true, MonitorConfig{Script: j.MonitorScript, URL: j.MonitorURL})
 		if err != nil {
 			continue // drop jobs that no longer parse or can never fire
 		}
-		r.restore(added.ID, j.Created, j.Paused)
+		r.restore(added.ID, j.Created, j.Paused, j.LastOutputHash, j.LastOutput, j.LastChangedAt)
 		loaded++
 	}
 	return loaded, nil

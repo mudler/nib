@@ -125,7 +125,7 @@ A piped run still uses tools, but only the ones that cannot change anything. In 
 approval mode nib auto-approves **read-only** tools without asking, so a piped question can
 read your files and inspect your repo to answer you:
 
-- read-only tools: `read`, `grep`, `glob`, `read_image`, `read_video`, `transcribe_audio`,
+- read-only tools: `read`, `grep`, `glob`, `tree`, `index`, `read_image`, `read_video`, `transcribe_audio`,
   `bash_jobs`, `bash_job_output`, `agent_logs`, `check_agent`, `get_agent_result`,
   `cron_list`
 - read-only shell commands, run through `bash` or `bash_background`: `ls`, `cat`, `head`, `tail`, `grep`, `rg`,
@@ -759,7 +759,7 @@ are saved to the config file.
 
 nib speaks the [Model Context Protocol](https://modelcontextprotocol.io/). A set of
 tools is built in — `bash`, the filesystem tools (`read`, `write`, `edit`, `glob`,
-`grep`), and the web tools (`web_fetch`, `web_search`); add any external server with
+`grep`, `tree`), and the web tools (`web_fetch`, `web_search`); add any external server with
 the `nib mcp` CLI or directly in your config.
 
 ### `nib mcp` CLI
