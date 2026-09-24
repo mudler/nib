@@ -2,7 +2,9 @@ package tui
 
 import (
 	"fmt"
+	"math"
 	"strings"
+	"time"
 
 	"github.com/mudler/nib/chat"
 	"github.com/mudler/nib/internal/textdiff"
@@ -118,6 +120,40 @@ func jobsFooterRow(jobs []agentJob) (render.FooterRow, bool) {
 	}
 	parts = append(parts, "(ctrl+b background · ctrl+o logs)")
 	return render.FooterRow{Text: strings.Join(parts, "  ·  "), Kind: render.FooterJobs}, true
+}
+
+// agentLiveStatsLine renders one collapsed line showing live token counts and
+// generation rates for all running sub-agents that have streamed. Each agent
+// that has a meter gets "type: Ntok · Rtok/s"; when more than one is live they
+// are joined with the separator. Returns "" when no agent has streamed yet.
+func (m Model) agentLiveStatsLine() string {
+	if m.agentSpeed == nil {
+		return ""
+	}
+	now := time.Now()
+	var parts []string
+	for _, j := range m.jobs {
+		if j.Status != chat.AgentStatusRunning {
+			continue
+		}
+		r, ok := m.agentSpeed.read(j.ID, now)
+		if !ok || r.Total <= 0 {
+			continue
+		}
+		typ := j.Type
+		if typ == "" {
+			typ = "agent"
+		}
+		s := typ + " " + theme.Meta.Render(chat.HumanTokens(int(math.Round(r.Total)))) + theme.Help.Render(" tokens")
+		if r.Live && r.Rate > 0 {
+			s += " " + theme.SepStyle.Render(theme.Sep) + " " + theme.Running.Render(formatRate(r.Rate)) + theme.Help.Render(" tok/s")
+		}
+		parts = append(parts, s)
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return theme.Hint.Render("  ") + strings.Join(parts, " "+theme.SepStyle.Render(theme.Sep)+" ") + "\n"
 }
 
 // approvalContent is what a tool-approval prompt shows above its menu.
