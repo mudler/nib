@@ -20,6 +20,27 @@ func TestRenderTree_BasicFormat(t *testing.T) {
 	}
 }
 
+func TestRenderTree_SymbolAnnotation(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main\n\ntype Config struct {\n\tName string\n}\n\nfunc NewConfig() *Config {\n\treturn &Config{}\n}\n"), 0644)
+	os.WriteFile(filepath.Join(dir, "readme.md"), []byte("# readme\n"), 0644)
+	out, err := renderTree(dir, 2, 12)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Source file should have bracketed symbol annotations
+	if !strings.Contains(out, "[") || !strings.Contains(out, "Config") || !strings.Contains(out, "NewConfig") {
+		t.Fatalf("expected symbol annotations for main.go in:\n%s", out)
+	}
+	// Non-source file should NOT have brackets
+	lines := strings.Split(out, "\n")
+	for _, line := range lines {
+		if strings.Contains(line, "readme.md") && strings.Contains(line, "[") {
+			t.Fatalf("readme.md should not have symbol annotations: %s", line)
+		}
+	}
+}
+
 func TestRenderTree_Truncation(t *testing.T) {
 	dir := t.TempDir()
 	for i := 0; i < 15; i++ {

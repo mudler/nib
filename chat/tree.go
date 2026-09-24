@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/mudler/cogito"
+	"github.com/mudler/nib/codeindex"
 )
 
 const (
@@ -142,7 +143,11 @@ func renderDirChildren(b *strings.Builder, dir, prefix string, depth, maxDepth, 
 			}
 		} else {
 			size := humanSize(fullSize(full))
-			b.WriteString(prefix + conn + name + "  " + size + "\n")
+			line := prefix + conn + name + "  " + size
+			if syms := fileSymbols(full); len(syms) > 0 {
+				line += "  [" + strings.Join(syms, ", ") + "]"
+			}
+			b.WriteString(line + "\n")
 		}
 	}
 	if original > perDir {
@@ -179,6 +184,49 @@ func humanSize(n int64) string {
 	}
 }
 
+var treeSupportedExts map[string]bool
+
+func init() {
+	treeSupportedExts = make(map[string]bool, len(codeindex.SupportedExtensions()))
+	for _, e := range codeindex.SupportedExtensions() {
+		treeSupportedExts[e] = true
+	}
+}
+
+// fileSymbols returns up to 5 top-level symbol names from a source file,
+// using codeindex to parse it. Returns nil for non-source files or on
+// error. This gives the LLM semantic context inline in the tree view
+// without a separate index call.
+func fileSymbols(path string) []string {
+	ext := strings.ToLower(filepath.Ext(path))
+	if !treeSupportedExts[ext] {
+		return nil
+	}
+	entries, _, err := codeindex.Entries(path)
+	if err != nil || len(entries) == 0 {
+		return nil
+	}
+	var syms []string
+	for _, e := range entries {
+		switch e.Section {
+		case codeindex.SectionPackage, codeindex.SectionImport, codeindex.SectionHeading:
+			continue
+		}
+		name := e.Name
+		if name == "" {
+			name = e.Detail
+		}
+		if name == "" {
+			continue
+		}
+		syms = append(syms, name)
+		if len(syms) >= 5 {
+			break
+		}
+	}
+	return syms
+}
+
 func treeToolDefinition(resolvePath func(string) string) cogito.ToolDefinitionInterface {
 	return cogito.NewToolDefinition[map[string]any](
 		&treeTool{resolvePath: resolvePath}, treeArgs{},
@@ -186,6 +234,7 @@ func treeToolDefinition(resolvePath func(string) string) cogito.ToolDefinitionIn
 		"Render a shallow directory listing of a path so you can see the layout before searching. "+
 			"Shows up to 2 levels of nesting by default, with at most 12 entries per directory "+
 			"(both configurable), file sizes, and gitignore/build artifacts hidden. "+
+			"Source files are annotated with their top symbols (types, functions, methods) in brackets. "+
 			"Use it to orient yourself in an unfamiliar directory instead of guessing filenames with glob or grep. "+
 			"For the contents of a single source file, read it (or index it if large) — tree lists names, not contents.",
 	)
