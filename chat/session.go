@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -39,7 +38,6 @@ import (
 
 // Session represents a chat session with the AI assistant
 type Session struct {
-	cfg          types.Config
 	ctx          context.Context
 	turnMu       sync.Mutex
 	turnCancel   context.CancelFunc
@@ -198,6 +196,11 @@ type Session struct {
 	// screenshots are only fed back to the model when a computer transport is
 	// actually registered. Fixed at construction (Computer config is runtime-only).
 	computerEnabled bool
+
+	// astGrepEnabled records whether the ast_grep tool is exposed this session.
+	// Mirrors Config.ASTGrepEnabled; fixed at construction. The tool also
+	// checks for the ast-grep binary at call time and reports a clear error.
+	astGrepEnabled bool
 
 	// prefixWarm records whether this session has actually issued a request that
 	// prefilled its prompt prefix (system prompt + tool schemas) on the server.
@@ -373,30 +376,17 @@ func (s *Session) newAgentLLM(mainModel, requested string, temperature float32, 
 func (s *Session) resolvedSessionProvider() types.ModelProviderConfig {
 	s.modelMu.RLock()
 	defer s.modelMu.RUnlock()
-	var provider types.ModelProviderConfig
 	if s.mainProvider.Configured() {
-		provider = s.mainProvider
-	} else {
-		provider = types.ModelProviderConfig{
-			Provider:        "openai",
-			Model:           s.llmModel,
-			APIKey:          s.apiKey,
-			BaseURL:         s.baseURL,
-			Metadata:        s.metadata,
-			ReasoningEffort: s.reasoningEffort,
-		}
+		return s.mainProvider
 	}
-	resolved := llmprovider.ResolveReasoning(s.cfg, provider, provider.BaseURL)
-	if resolved.Effort != "" {
-		provider.ReasoningEffort = resolved.Effort
-		if resolved.Mode == "budget" && resolved.BudgetTokens > 0 {
-			if provider.Metadata == nil {
-				provider.Metadata = map[string]string{}
-			}
-			provider.Metadata["thinking_budget_tokens"] = strconv.Itoa(resolved.BudgetTokens)
-		}
+	return types.ModelProviderConfig{
+		Provider:        "openai",
+		Model:           s.llmModel,
+		APIKey:          s.apiKey,
+		BaseURL:         s.baseURL,
+		Metadata:        s.metadata,
+		ReasoningEffort: s.reasoningEffort,
 	}
-	return provider
 }
 
 // mergeMetadata overlays per-agent metadata on top of the global metadata,
@@ -514,7 +504,6 @@ func NewSession(ctx context.Context, cfg types.Config, callbacks Callbacks, tran
 	}
 
 	s := &Session{
-		cfg:                  cfg,
 		ctx:                  ctx,
 		llm:                  llm,
 		clients:              clients,
@@ -549,6 +538,7 @@ func NewSession(ctx context.Context, cfg types.Config, callbacks Callbacks, tran
 		reasoningEffort:      mainProvider.ReasoningEffort,
 		mcpClient:            client,
 		computerEnabled:      cfg.Computer.Enabled,
+		astGrepEnabled:       cfg.ASTGrepEnabled,
 		cfgClients:           map[string]*mcp.ClientSession{},
 		cfgServers:           map[string]types.MCPServer{},
 		configurator:         manage.NewIn(cfg.BaseDir),
@@ -1459,10 +1449,11 @@ func (s *Session) toolOptions(turnCtx context.Context, goal, mainModel string) [
 			func(p string) string { return resolveWorkspacePath(s.workingDir, p) })))
 	}
 
-	// Wire the tree tool so the assistant can see a directory's layout before
-	// searching it — a shallow listing that hides build output and VCS metadata.
-	if s.toolEnabled("tree") {
-		opts = append(opts, cogito.WithTools(treeToolDefinition(
+	// Wire the ast-grep structural search tool. Gated by a config flag because
+	// it requires an external binary; toolEnabled checks the BuiltinTools
+	// allowlist on top of that.
+	if s.astGrepEnabled && s.toolEnabled("ast_grep") {
+		opts = append(opts, cogito.WithTools(astGrepToolDefinition(
 			func(p string) string { return resolveWorkspacePath(s.workingDir, p) })))
 	}
 
@@ -2377,7 +2368,8 @@ func (s *Session) ToolCount() int {
 		"schedule_wakeup",
 		"cron", "cron_list", "cron_delete", "cron_pause", "cron_resume", "cron_trigger",
 		"read_image", "transcribe_audio", "read_video",
-		"memory", "index", "tree", "todo_write",
+		"memory", "index", "todo_write",
+		"ast_grep",
 	}
 	for _, name := range builtins {
 		if s.toolEnabled(name) && !(name == "ask_user" && s.AutoApprove()) {

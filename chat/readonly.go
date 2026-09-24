@@ -21,6 +21,7 @@ var readOnlyTools = map[string]bool{
 	"read_image":       true,
 	"transcribe_audio": true,
 	"read_video":       true,
+	"ast_grep":         true,
 }
 
 // IsReadOnly reports whether a tool call only observes state and is therefore

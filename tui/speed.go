@@ -255,6 +255,26 @@ func (m Model) speedBadges() (full, narrow string) {
 // formatRate formats a rate in tokens per second (see chat.HumanRate).
 func formatRate(r float64) string { return chat.HumanRate(r) }
 
+// agentLiveSpeed renders the inline live counter for one running sub-agent:
+// the token count so far and the current generation rate, e.g.
+// "2.1k tokens · 51 tok/s". Returns "" when the agent has no meter or has
+// not streamed yet. It reads the meter without dropping it, so it stays
+// live for the next frame.
+func (m Model) agentLiveSpeed(id string) string {
+	if m.agentSpeed == nil {
+		return ""
+	}
+	r, ok := m.agentSpeed.read(id, time.Now())
+	if !ok || r.Total <= 0 {
+		return ""
+	}
+	parts := []string{theme.Meta.Render(chat.HumanTokens(int(math.Round(r.Total)))) + theme.Help.Render(" tokens")}
+	if r.Live && r.Rate > 0 {
+		parts = append(parts, theme.Running.Render(formatRate(r.Rate))+theme.Help.Render(" tok/s"))
+	}
+	return strings.Join(parts, " "+theme.SepStyle.Render(theme.Sep)+" ")
+}
+
 // agentMeters meters each sub-agent's stream on its own, for the rate and the
 // output count its landing line reports. OnStream records into it from the
 // session's goroutine and Update reads it, so it has its own lock.
@@ -279,6 +299,60 @@ func (a *agentMeters) record(id string, n int, now time.Time) {
 	}
 	a.mu.Unlock()
 	s.record(n, now)
+}
+
+// read returns the live reading for sub-agent id's meter without dropping it,
+// so the inline counter can render while the agent streams. ok is false when
+// the agent has no meter or it has not recorded anything.
+func (a *agentMeters) read(id string, now time.Time) (speedReading, bool) {
+	if a == nil {
+		return speedReading{}, false
+	}
+	a.mu.Lock()
+	s := a.meters[id]
+	a.mu.Unlock()
+	if s == nil {
+		return speedReading{}, false
+	}
+	return s.read(now)
+}
+
+// activeIDs returns the IDs of all meters that currently exist (i.e. sub-agents
+// that have streamed at least one chunk and have not finished).
+func (a *agentMeters) activeIDs() []string {
+	if a == nil {
+		return nil
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	ids := make([]string, 0, len(a.meters))
+	for id := range a.meters {
+		ids = append(ids, id)
+	}
+	return ids
+}
+
+// aggregateTokens returns the total tokens across all active sub-agent meters,
+// for the footer's aggregate counter. It does not drop any meter.
+func (a *agentMeters) aggregateTokens(now time.Time) (total float64, active int) {
+	if a == nil {
+		return 0, 0
+	}
+	a.mu.Lock()
+	ids := make([]string, 0, len(a.meters))
+	for id := range a.meters {
+		ids = append(ids, id)
+	}
+	a.mu.Unlock()
+	for _, id := range ids {
+		r, ok := a.read(id, now)
+		if !ok {
+			continue
+		}
+		total += r.Total
+		active++
+	}
+	return total, active
 }
 
 // finish drops sub-agent id's meter and returns what it measured: the tokens

@@ -47,7 +47,7 @@ func toolGuidance(builtinTools []string) string {
 	glob := toolExposed(builtinTools, "glob")
 	grep := toolExposed(builtinTools, "grep")
 	index := toolExposed(builtinTools, "index")
-	tree := toolExposed(builtinTools, "tree")
+	astGrep := toolExposed(builtinTools, "ast_grep")
 
 	paragraphs := []string{actGuidance}
 
@@ -91,45 +91,13 @@ func toolGuidance(builtinTools []string) string {
 		paragraphs = append(paragraphs, p)
 	}
 
-	// Navigation strategy: how to find things in an unfamiliar codebase, top
-	// down. Only worth saying when enough of the navigation tools are exposed
-	// to actually follow the recipe.
-	navCount := 0
-	for _, on := range []bool{tree, index, glob, grep, read} {
-		if on {
-			navCount++
-		}
-	}
-	if navCount >= 3 {
-		paragraphs = append(paragraphs,
-			"When you need to find something in the codebase, work from the top down: call tree on a directory you have not yet looked at to see its layout, then glob for files by name or grep for content you know is there. For a large source file, index it first to get its outline, then read only the lines you need. Do not start with grep when you do not know where to look — orient yourself with tree first.")
-	}
-
-	if tree {
-		paragraphs = append(paragraphs,
-			"tree renders a shallow directory listing (two levels by default, "+
-				"twelve entries per directory) so you can see the layout of a path. "+
-				"Call it on a directory you have not yet looked at, to find where things are, "+
-				"before grepping or reading. It hides build output and VCS metadata; "+
-				"use glob when you need every match for a pattern, and read or index for a file's contents.")
-	}
-
 	// index comes before read because it qualifies it. The read paragraph
 	// used to say "read a file once, in full" with no exception, and since it
 	// came last and spoke more firmly, the model never called index. Telling
 	// it to index every unseen file overcorrected: it indexed instead of
 	// reading. index is for large files, where it saves a full read.
-	if tree {
-		paragraphs = append(paragraphs,
-			"tree renders a shallow directory listing (two levels by default, "+
-				"twelve entries per directory) so you can see the layout of a path. "+
-				"Call it on a directory you have not yet looked at, to find where things are, "+
-				"before grepping or reading. It hides build output and VCS metadata; "+
-				"use glob when you need every match for a pattern, and read or index for a file's contents.")
-	}
-
 	if index {
-		paragraphs = append(paragraphs, "index returns a compact outline of a source file — imports, types, functions, and their line ranges — for a fraction of what reading it costs. Before reading a source file you suspect is large (over 200 lines), call index first: the outline tells you which lines to read, and you can then read only those ranges with offset and limit. For a file of ordinary size, read it directly without an index call.")
+		paragraphs = append(paragraphs, "index returns a compact outline of a source file — imports, types, functions, and their line ranges — for a fraction of what reading it costs. Use it on a large source file when you need only part of it: the outline tells you which lines to read. When you need a file of ordinary size, read it directly, without an index call.")
 	}
 
 	if read {
@@ -170,6 +138,14 @@ func toolGuidance(builtinTools []string) string {
 
 	if toolExposed(builtinTools, "todo_write") {
 		paragraphs = append(paragraphs, "Use the todo_write tool to plan multi-step tasks (3+ steps) before starting work. Send the COMPLETE todo list on every call — it replaces the entire list, not a delta. Skip it for trivial tasks. Mark an item in_progress when you begin it and completed when done. Keep exactly one item in_progress at a time. Update the list after EACH completed step, not just at the end.")
+	}
+
+	if astGrep {
+		paragraphs = append(paragraphs,
+			"ast_grep searches code by structure, not text: pass an AST pattern with "+
+				"metavariables ($NAME captures a node, $_ matches any single node, $$$NAME captures zero or more) "+
+				"and it finds every match across the codebase. Use it when grep matches too much or too little "+
+				"because the same identifier appears in different contexts. Requires the ast-grep binary on PATH.")
 	}
 
 	return strings.Join(paragraphs, "\n\n")

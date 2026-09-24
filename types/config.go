@@ -233,6 +233,10 @@ type Config struct {
 	// matches that command at any arguments. User entries are merged with, not
 	// replacing, the built-in set.
 	ReadOnlyCommands []string `yaml:"read_only_commands"`
+	// ASTGrepEnabled exposes the ast_grep structural-search tool. The tool
+	// also requires the ast-grep binary on PATH; it reports a clear error
+	// when the binary is missing.
+	ASTGrepEnabled bool `yaml:"ast_grep_enabled,omitempty"`
 	// TraceDir, when non-empty, enables session tracing: each LLM call's raw
 	// request/response is appended to <TraceDir>/trace.ndjson, and the session's
 	// token totals are written to <TraceDir>/usage.json when it closes. Set at
