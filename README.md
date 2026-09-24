@@ -106,6 +106,47 @@ base_url: https://api.openai.com/v1   # or your local endpoint, e.g. http://loca
 
 **3. Press `Ctrl+Space`** in your terminal (or just run `nib`). That's it.
 
+### Nix
+
+With Nix's `nix-command` and `flakes` experimental features enabled, run nib
+directly from this repository (once the flake is published):
+
+```bash
+nix run github:mudler/nib -- --help
+nix profile add github:mudler/nib
+```
+
+From a local checkout:
+
+```bash
+nix run . -- --help
+nix build .                 # executable: ./result/bin/nib
+nix develop                # Go 1.26, gopls, gotools, Delve, Git, and Make
+nix develop -c make test
+nix flake check             # build nib and run the Go tests
+nix fmt                     # format the Nix files
+```
+
+The default package is also available as `.#nib`. The flake supports
+`x86_64-linux`, `aarch64-linux`, and `aarch64-darwin`. Intel macOS is excluded
+because nixpkgs unstable no longer supports it. Each output builds natively
+for its selected platform;
+building another platform requires a suitable builder. Builds disable CGO:
+Linux executables are fully static and can be copied out of the Nix store;
+macOS executables still link Apple's system libraries, as required by Go's
+macOS runtime. The development shell also defaults to `CGO_ENABLED=0`; use
+`CGO_ENABLED=1 go test -race ./...` for the race detector. On Linux, the shell
+also includes procps for the process-management tests.
+
+The flake uses only nixpkgs, pinned in `flake.lock`, with the standard
+`buildGoModule` builder and `mkShell`. To update nixpkgs, run
+`nix flake update nixpkgs`. After changing Go dependencies, set `vendorHash`
+in `flake.nix` to `pkgs.lib.fakeHash`, run `nix build`, and replace it with the
+`got: sha256-...` hash reported by Nix. Commit the updated hash with `go.mod`
+and `go.sum`. New files must be tracked by Git for local Git flake builds to
+include them. After documentation edits, run `make sync-readme` and commit
+both README copies.
+
 ## Usage
 
 Run `nib` to open the TUI, or press `Ctrl+Space` from your shell. Use `--cli` for a plain,
