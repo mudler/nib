@@ -1,8 +1,10 @@
 package chat
 
 import (
+	"os"
 	"path/filepath"
 
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/mudler/cogito"
 )
 
@@ -36,7 +38,7 @@ func (t *readImageTool) Run(args map[string]any) (string, any, error) {
 	if err != nil {
 		return "read_image failed: " + err.Error(), nil, nil
 	}
-	return out, nil, nil
+	return out, buildImageResultData(path), nil
 }
 
 func readImageToolDefinition(describe func(path, question string) (string, error)) cogito.ToolDefinitionInterface {
@@ -90,6 +92,8 @@ func (t *readVideoTool) Run(args map[string]any) (string, any, error) {
 	if err != nil {
 		return "read_video failed: " + err.Error(), nil, nil
 	}
+	// Videos are multi-frame; we don't extract a single image for inline
+	// display from them. Only image-producing tools set ResultData.
 	return out, nil, nil
 }
 
@@ -97,4 +101,33 @@ func readVideoToolDefinition(describe func(path, question string) (string, error
 	return cogito.NewToolDefinition[map[string]any](&readVideoTool{describe: describe}, readVideoArgs{},
 		"read_video",
 		"Read a video file from the workspace and return a text description of it. Provide `question` to ask something specific; omit for a general description. Returns model-generated text.")
+}
+
+// buildImageResultData reads the raw bytes of an image file and wraps them in
+// an *mcp.CallToolResult so that extractToolImages (in session.go) can pull
+// raw bytes out for inline TUI rendering. This runs alongside the text
+// description returned by the vision model — the description goes to the model
+// as the tool result text, and the raw bytes travel through ResultData to
+// the TUI for inline display.
+func buildImageResultData(path string) any {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	mime := "image/png"
+	switch ext := filepath.Ext(path); ext {
+	case ".jpg", ".jpeg":
+		mime = "image/jpeg"
+	case ".gif":
+		mime = "image/gif"
+	case ".webp":
+		mime = "image/webp"
+	case ".bmp":
+		mime = "image/bmp"
+	}
+	return &mcp.CallToolResult{
+		Content: []mcp.Content{
+			&mcp.ImageContent{Data: data, MIMEType: mime},
+		},
+	}
 }

@@ -1704,6 +1704,7 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 					Arguments: argsJSON,
 					AgentID:   s.agentLogs.agentFor(status.ToolArguments.ID),
 					Change:    change,
+					Images:    extractToolImages(status.ResultData),
 				})
 			}
 		}),

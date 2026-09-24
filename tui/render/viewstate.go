@@ -7,6 +7,21 @@ import (
 	"github.com/mudler/nib/types"
 )
 
+// ImageRef carries image data for inline terminal rendering. The
+// Presenter passes it to the termimg package which emits the
+// appropriate escape sequence (kitty or iTerm2) or a text fallback.
+type ImageRef struct {
+	// ID is a stable identifier across render passes, used as the kitty
+	// image ID for transmit-once tracking.
+	ID int
+	// Data is the raw image bytes. For kitty, this must be PNG.
+	Data []byte
+	// MIME is the MIME type of the image (e.g. "image/png").
+	MIME string
+	// Source describes where the image came from.
+	Source string
+}
+
 // Role identifies the speaker or origin of a Message.
 type Role string
 
@@ -51,6 +66,16 @@ type Message struct {
 	// looking ahead at the next raw message, which a Presenter never sees, so
 	// it cannot be derived from prev/Role alone.
 	HugNext bool
+	// Images carries image data for inline rendering. When non-empty, the
+	// Presenter renders the images below the tool body using a terminal
+	// graphics protocol (kitty or iTerm2) when available, or a text
+	// placeholder otherwise.
+	Images []ImageRef
+	// ImageOut is pre-rendered terminal escape sequences for inline
+	// images. The model computes this via ImageManager before calling
+	// the Presenter; ToolBlock appends it after the body. This keeps the
+	// render layer stateless — it doesn't need access to the ImageManager.
+	ImageOut string
 	// Arriving is how far the entry still is from its full ink: 1 when it
 	// has just joined the transcript, 0 (the zero value) once it is fully in.
 	// A Presenter fades the entry's chrome by it (see theme.Fading).

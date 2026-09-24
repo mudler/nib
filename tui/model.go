@@ -40,6 +40,7 @@ import (
 	"github.com/mudler/nib/plugin"
 	"github.com/mudler/nib/slash"
 	"github.com/mudler/nib/tui/render"
+	"github.com/mudler/nib/tui/termimg"
 )
 
 // ChatMessage represents a message in the chat history
@@ -59,6 +60,11 @@ type ChatMessage struct {
 	Meta   string
 	Status render.ToolStatus
 	Diff   *textdiff.Diff
+	// Images carries image bytes produced by the tool (computer_use
+	// screenshots, browser_vision captures, read_image raw bytes) or
+	// user-attached images. The render layer renders them inline when
+	// the terminal supports a graphics protocol.
+	Images []chat.ToolImage
 	// arrived is when the entry joined the transcript; its chrome fades in
 	// from it (see arriving). Zero means drawn at full ink.
 	arrived time.Time
@@ -187,6 +193,15 @@ type Model struct {
 	// that builds a Model directly must go through newTestModel so this is
 	// never nil when updateViewport or View run.
 	presenter render.Presenter
+	// imageMgr manages inline terminal image rendering (kitty/iTerm2
+	// graphics protocols). It tracks kitty transmit-once state and enforces
+	// the image budget. nil-safe: when the terminal has no graphics
+	// protocol, images degrade to text placeholders.
+	imageMgr *termimg.ImageManager
+	// imgCounter is the next stable image ID to assign. Used by
+	// toImageRefs to give each image a unique ID for kitty transmit
+	// tracking.
+	imgCounter int
 	// Chat state
 	messages     []ChatMessage
 	session      *chat.Session
@@ -610,6 +625,7 @@ type responseMsg struct {
 	content string
 	err     error
 	blocked []attachments.Blocked
+	images  []chat.ToolImage
 }
 
 // modelListMsg is the result of an asynchronous model-picker endpoint lookup.
@@ -776,6 +792,7 @@ func NewModel(ctx context.Context, cfg types.Config, height int, shellJobs *wizm
 		textarea:           ta,
 		spinner:            s,
 		presenter:          p,
+		imageMgr:           termimg.NewImageManager(),
 		reasoningCollapsed: true,
 		footerCache:        &footerCache{},
 		messages:           []ChatMessage{},
@@ -2561,6 +2578,11 @@ func (m *Model) dispatchResolved(input string) tea.Cmd {
 		m.loading = true
 		m.interruptArmed = false
 		m.status = ""
+		// Attach user-supplied image files to the ChatMessage so the
+		// viewport can render them inline alongside the user's text.
+		if imgs := attachmentImages(files); len(imgs) > 0 {
+			m.messages[len(m.messages)-1].Images = imgs
+		}
 		if len(files) == 0 {
 			return m.sendMessage(action.Text)
 		}
@@ -2681,8 +2703,39 @@ func (m Model) sendWithAttachmentsCmd(text string, files []string, overrides map
 	m.bumpTurnGen()
 	return func() tea.Msg {
 		reply, blocked, err := m.session.SendWithAttachments(m.ctx, text, files, overrides)
-		return responseMsg{content: reply, err: err, blocked: blocked}
+		return responseMsg{content: reply, err: err, blocked: blocked, images: attachmentImages(files)}
 	}
+}
+
+// attachmentImages reads image files from disk so the TUI can display them
+// inline alongside the user's message. Non-image files and unreadable files
+// are silently skipped.
+func attachmentImages(files []string) []chat.ToolImage {
+	var imgs []chat.ToolImage
+	id := 0
+	for _, f := range files {
+		if attachments.Sniff(f) != attachments.KindImage {
+			continue
+		}
+		data, err := os.ReadFile(f)
+		if err != nil {
+			continue
+		}
+		mime := "image/png"
+		switch ext := filepath.Ext(f); ext {
+		case ".jpg", ".jpeg":
+			mime = "image/jpeg"
+		case ".gif":
+			mime = "image/gif"
+		case ".webp":
+			mime = "image/webp"
+		case ".bmp":
+			mime = "image/bmp"
+		}
+		id++
+		imgs = append(imgs, chat.ToolImage{ID: id, Data: data, MIME: mime})
+	}
+	return imgs
 }
 
 // shellTickMsg drives a periodic refresh of the shell-jobs footer.
@@ -3339,6 +3392,88 @@ func (m *Model) sameAgentMsg(idx int, agentID string) bool {
 // dropTransientErrors removes stale turn-level error lines from the
 // transcript. Called when a reply arrives: the run recovered, so a failure
 // recorded earlier in the session should not keep showing.
+
+// toImageRefs converts chat.ToolImage values to render.ImageRef values,
+// assigning each a stable ID for kitty transmit tracking.
+func (m *Model) toImageRefs(imgs []chat.ToolImage) []render.ImageRef {
+	if len(imgs) == 0 {
+		return nil
+	}
+	refs := make([]render.ImageRef, len(imgs))
+	for i, img := range imgs {
+		m.imgCounter++
+		refs[i] = render.ImageRef{
+			ID:     m.imgCounter,
+			Data:   img.Data,
+			MIME:   img.MIME,
+			Source: "tool",
+		}
+	}
+	return refs
+}
+
+// renderImageOut produces the terminal escape sequences for inline image
+// display. Returns "" when the terminal has no graphics protocol or when
+// there are no images. The model calls this once per tool block per render
+// pass and passes the result via Message.ImageOut to the Presenter, keeping
+// the render layer stateless.
+func (m *Model) renderImageOut(imgs []chat.ToolImage, width int) string {
+	if m.imageMgr == nil || len(imgs) == 0 || m.imageMgr.Protocol() == termimg.ProtocolNone {
+		return ""
+	}
+	m.imageMgr.BeginPass()
+	var b strings.Builder
+	for _, img := range imgs {
+		// Prepare (decode, resize, PNG-encode) the image data. For
+		// kitty this is required (PNG only); for iTerm2 it's a no-op
+		// passthrough if already PNG, and a best-effort conversion
+		// otherwise.
+		data, mime := termimg.PrepareImage(img.Data, img.MIME)
+		// Use a content-hash as the stable kitty image ID so the
+		// transmit-once optimization works across render passes. A
+		// new ID every frame would re-transmit the full base64 data
+		// each time, defeating the purpose.
+		id := imageIDFromData(data)
+		ref := termimg.ImageRef{
+			ID:     id,
+			Data:   data,
+			MIME:   mime,
+			Source: "tool",
+		}
+		// Approximate cell dimensions: assume ~2:1 pixel-to-cell ratio
+		// and cap width to terminal width. The terminal handles final
+		// scaling.
+		cols := width
+		rows := max(cols/3, 4)
+		seq, ok := m.imageMgr.RenderImage(ref, cols, rows)
+		if !ok {
+			b.WriteString("  " + termimg.TextPlaceholder(0, 0) + "\n")
+		} else {
+			b.WriteString(seq)
+		}
+	}
+	// Evict images beyond the budget.
+	for _, id := range m.imageMgr.EvictedIDs() {
+		b.WriteString(termimg.EncodeKittyDelete(id))
+	}
+	return b.String()
+}
+
+// imageIDFromData derives a stable positive integer from image bytes.
+// The hash is folded into the positive int32 range to fit kitty's image
+// ID space.
+func imageIDFromData(data []byte) int {
+	var h uint32
+	for _, b := range data {
+		h = h*31 + uint32(b)
+	}
+	id := int(h%0x7FFFFFFF) + 1 // 1-based, avoid 0
+	if id <= 0 {
+		id = 1
+	}
+	return id
+}
+
 func (m *Model) dropTransientErrors() {
 	kept := m.messages[:0]
 	reveal := m.revealIdx
@@ -3718,6 +3853,8 @@ func (m *Model) updateViewport() {
 				// the tool block after it, so a run of them reads as a list
 				// rather than a column of blank-separated lines.
 				HugNext: msg.bodyless() && i+1 < len(m.messages) && m.messages[i+1].Role == "tool",
+				Images:  m.toImageRefs(msg.Images),
+				ImageOut: m.renderImageOut(msg.Images, contentWidth),
 			}, prevRole, contentWidth))
 			m.toolSpans = append(m.toolSpans, toolSpan{start: toolStart, end: strings.Count(sb.String(), "\n"), index: i})
 			prevRole = render.RoleTool
@@ -4409,6 +4546,11 @@ func (m Model) quit() (tea.Model, tea.Cmd) {
 		m.session.Close()
 	}
 	m.cancel()
+	if m.imageMgr != nil {
+		if purge := m.imageMgr.PurgeAll(); purge != "" {
+			fmt.Fprint(os.Stdout, purge)
+		}
+	}
 	return m, tea.Quit
 }
 

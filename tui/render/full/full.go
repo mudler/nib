@@ -167,6 +167,7 @@ func (presenter) Message(m render.Message, prev render.Role, w int) string {
 		// name and its raw JSON arguments into a human summary is domain logic
 		// that stays model-side, same as markdown and the ask block.
 		body = render.ToolBlock(m, w)
+		body += m.ImageOut
 		if m.HugNext {
 			return body
 		}
