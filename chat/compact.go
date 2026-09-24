@@ -443,10 +443,14 @@ func stubbedView(msgs []openai.ChatCompletionMessage, already map[string]string)
 	return out
 }
 
-// summaryPieceKeep is how much of an over-long piece fitSummaryInput keeps: the
-// start of a message carries its role, the tool name and its arguments, which
-// is what a summary needs to record that the step happened.
-const summaryPieceKeep = 512
+// summaryHeadBudget and summaryTailBudget are how much of the head and tail of
+// an over-long piece fitSummaryInput keeps: the start of a message carries its
+// role, the tool name and its arguments (which records that the step happened),
+// while the tail carries trailing results a summary may still need.
+const (
+	summaryHeadBudget = 256
+	summaryTailBudget = 256
+)
 
 // fitSummaryInput joins pieces into at most maxTokens (byte/4) tokens. A
 // maxTokens of zero or less means no limit.
@@ -480,11 +484,16 @@ func fitSummaryInput(pieces []summaryPiece, maxTokens int) string {
 			if total <= limit {
 				return
 			}
-			if pieces[i].tool != tools || len(pieces[i].text) <= summaryPieceKeep*2 {
+			if pieces[i].tool != tools || len(pieces[i].text) <= summaryHeadBudget+summaryTailBudget {
 				continue
 			}
 			text := pieces[i].text
-			short := text[:summaryPieceKeep] + fmt.Sprintf("\n[... %d bytes omitted to fit the summary]\n", len(text)-summaryPieceKeep)
+			if len(text) <= summaryHeadBudget+summaryTailBudget {
+				continue
+			}
+			head := text[:summaryHeadBudget]
+			tail := text[len(text)-summaryTailBudget:]
+			short := head + fmt.Sprintf("\n[... %d bytes omitted to fit the summary]\n", len(text)-summaryHeadBudget-summaryTailBudget) + tail
 			total -= len(text) - len(short)
 			pieces[i].text = short
 		}

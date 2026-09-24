@@ -1,6 +1,10 @@
 package mcp
 
 import (
+	"fmt"
+	"regexp"
+	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -74,4 +78,77 @@ func ArtifactURI(id int64) string {
 	// "artifact://1" — the read tool recognizes this path and serves
 	// the stored content, with the same budget and paging as a file.
 	return formatArtifactURI(id)
+}
+
+// SearchResult is a single match from ArtifactStore.Search.
+type SearchResult struct {
+	ID   int64  // artifact ID
+	Line int    // 1-indexed line number of the match within the artifact
+	Text string // rendered snippet: context lines + matching line + context lines
+}
+
+// Search returns matching lines from all artifacts, sorted by artifact ID then
+// line number. The pattern is a Go regular expression, matched case-insensitive.
+// Each result includes 3 lines of context before and after the matching line.
+// Results are capped at 50 matches.
+func (s *ArtifactStore) Search(pattern string) ([]SearchResult, error) {
+	re, err := regexp.Compile("(?i)" + pattern)
+	if err != nil {
+		return nil, err
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	// Collect and sort artifact IDs for deterministic ordering.
+	ids := make([]int64, 0, len(s.items))
+	for id := range s.items {
+		ids = append(ids, id)
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+
+	var results []SearchResult
+	for _, id := range ids {
+		if len(results) >= 50 {
+			break
+		}
+		content := s.items[id].Content
+		lines := strings.Split(content, "\n")
+		for idx, line := range lines {
+			if len(results) >= 50 {
+				break
+			}
+			if !re.MatchString(line) {
+				continue
+			}
+			lineNum := idx + 1 // 1-indexed
+
+			startCtx := idx - 3
+			if startCtx < 0 {
+				startCtx = 0
+			}
+			endCtx := idx + 3
+			if endCtx >= len(lines) {
+				endCtx = len(lines) - 1
+			}
+
+			var b strings.Builder
+			for j := startCtx; j <= endCtx; j++ {
+				n := j + 1 // 1-indexed
+				if j == idx {
+					fmt.Fprintf(&b, "%d> %s\n", n, lines[j])
+				} else {
+					fmt.Fprintf(&b, "%d| %s\n", n, lines[j])
+				}
+			}
+
+			results = append(results, SearchResult{
+				ID:   id,
+				Line: lineNum,
+				Text: b.String(),
+			})
+		}
+	}
+
+	return results, nil
 }

@@ -49,6 +49,11 @@ type CompactionConfig struct {
 	// compaction with nothing to trigger on (see chat.ContextBudget). At the
 	// 4096 default the cap applies only below an 8192-token window.
 	ReserveTokens int `yaml:"reserve_tokens"`
+	// DisableArtifactSpill turns OFF saving the full conversation head as an
+	// artifact during compaction. Zero value (false) = spill ON (default):
+	// the head is saved and the summary includes an artifact://N reference.
+	// Set to true to disable — compaction runs as before, nothing saved.
+	DisableArtifactSpill bool `yaml:"disable_artifact_spill"`
 }
 
 // ToolOutputPruningConfig controls replacing stale or oversized tool results
