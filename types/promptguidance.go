@@ -47,6 +47,7 @@ func toolGuidance(builtinTools []string) string {
 	glob := toolExposed(builtinTools, "glob")
 	grep := toolExposed(builtinTools, "grep")
 	index := toolExposed(builtinTools, "index")
+	repoMap := toolExposed(builtinTools, "repo_map")
 
 	paragraphs := []string{actGuidance}
 
@@ -97,6 +98,15 @@ func toolGuidance(builtinTools []string) string {
 	// reading. index is for large files, where it saves a full read.
 	if index {
 		paragraphs = append(paragraphs, "index returns a compact outline of a source file — imports, types, functions, and their line ranges — for a fraction of what reading it costs. Use it on a large source file when you need only part of it: the outline tells you which lines to read. When you need a file of ordinary size, read it directly, without an index call.")
+	}
+
+	if repoMap {
+		paragraphs = append(paragraphs,
+			"repo_map returns a bird's-eye map of the whole codebase: a token-budgeted tree of the definitions "+
+				"(types, functions, methods, classes) in every indexable file, each with its file and starting line. "+
+				"Use it once, early, to learn which file owns a symbol without grepping, then read or index that file for the details. "+
+				"It costs a fraction of reading every file, and when it would exceed its budget it drops the files with the fewest definitions and notes how many it omitted. "+
+				"Do not call repo_map on a single file you already know; that is what index is for.")
 	}
 
 	if read {

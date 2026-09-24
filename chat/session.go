@@ -1443,6 +1443,15 @@ func (s *Session) toolOptions(turnCtx context.Context, goal, mainModel string) [
 			func(p string) string { return resolveWorkspacePath(s.workingDir, p) })))
 	}
 
+	// Wire the repo_map tool so the assistant can get a bird's-eye overview of
+	// the whole codebase in one token-budgeted call.
+	if s.toolEnabled("repo_map") {
+		opts = append(opts, cogito.WithTools(repoMapToolDefinition(
+			s.workingDir,
+			func(p string) string { return resolveWorkspacePath(s.workingDir, p) },
+		)))
+	}
+
 	// Wire the native self-configuration tools so the assistant can manage its
 	// own plugins, skills, and MCP servers. requestReload re-wires the live
 	// session on the next turn after any mutating op.
@@ -2354,7 +2363,7 @@ func (s *Session) ToolCount() int {
 		"schedule_wakeup",
 		"cron", "cron_list", "cron_delete", "cron_pause", "cron_resume", "cron_trigger",
 		"read_image", "transcribe_audio", "read_video",
-		"memory", "index", "todo_write",
+		"memory", "index", "repo_map", "todo_write",
 	}
 	for _, name := range builtins {
 		if s.toolEnabled(name) && !(name == "ask_user" && s.AutoApprove()) {
