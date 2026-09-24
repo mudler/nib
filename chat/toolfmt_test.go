@@ -105,7 +105,7 @@ func TestFormatToolCall_KnownTools(t *testing.T) {
 		{"cron_delete", "cron_delete", `{"id":"loop-1"}`, "cancel cron loop-1"},
 		{"spawn_agent", "spawn_agent", `{"agent_type":"researcher","task":"find docs"}`, "spawn researcher: find docs"},
 		{"check_agent", "check_agent", `{"agent_id":"a1b2"}`, "check agent a1b2"},
-		{"get_agent_result", "get_agent_result", `{"agent_id":"a1b2"}`, "result of agent a1b2"},
+		{"get_agent_result", "get_agent_result", `{"agent_id":"a1b2"}`, "waiting for agent a1b2"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

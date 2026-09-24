@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -3765,6 +3766,15 @@ func (m *Model) updateViewport() {
 		m.toolSpans = append(m.toolSpans, toolSpan{start: start, end: strings.Count(sb.String(), "\n"), index: i, running: true})
 	}
 
+	// Live sub-agent stats: one indented line per running agent that has
+	// streamed, showing its token count and generation rate. Collapsed
+	// by default (ctrl+o opens the full log viewer); the line keeps the
+	// user oriented without filling the transcript.
+	if line := m.agentLiveStatsLine(); line != "" {
+		sb.WriteString(line)
+		sb.WriteString("\n")
+	}
+
 	reasoningStart := strings.Count(sb.String(), "\n")
 	reasoningOut := presenter.Reasoning(vs, contentWidth)
 	sb.WriteString(reasoningOut)
@@ -4333,6 +4343,13 @@ func (m Model) footerBadges(helpWidth int) string {
 	}
 	if usage != "" {
 		badges = append(badges, badge{usage, 80})
+	}
+	// Aggregate sub-agent token spend while one or more are running. It
+	// complements the session usage badge (root agent) so the user can see
+	// what sub-agents are costing live.
+	if total, active := m.agentSpeed.aggregateTokens(time.Now()); total > 0 && active > 0 {
+		agentBadge := theme.Help.Render("agents ") + theme.Meta.Render(chat.HumanTokens(int(math.Round(total))))
+		badges = append(badges, badge{agentBadge, 85})
 	}
 	// ui.hide_hud drops the machine badges (clock, cpu, mem) and keeps the
 	// session ones above, which predict compaction and spend.
