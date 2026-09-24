@@ -47,6 +47,7 @@ func toolGuidance(builtinTools []string) string {
 	glob := toolExposed(builtinTools, "glob")
 	grep := toolExposed(builtinTools, "grep")
 	index := toolExposed(builtinTools, "index")
+	astGrep := toolExposed(builtinTools, "ast_grep")
 
 	paragraphs := []string{actGuidance}
 
@@ -137,6 +138,14 @@ func toolGuidance(builtinTools []string) string {
 
 	if toolExposed(builtinTools, "todo_write") {
 		paragraphs = append(paragraphs, "Use the todo_write tool to plan multi-step tasks (3+ steps) before starting work. Send the COMPLETE todo list on every call — it replaces the entire list, not a delta. Skip it for trivial tasks. Mark an item in_progress when you begin it and completed when done. Keep exactly one item in_progress at a time. Update the list after EACH completed step, not just at the end.")
+	}
+
+	if astGrep {
+		paragraphs = append(paragraphs,
+			"ast_grep searches code by structure, not text: pass an AST pattern with "+
+				"metavariables ($NAME captures a node, $_ matches any single node, $$$NAME captures zero or more) "+
+				"and it finds every match across the codebase. Use it when grep matches too much or too little "+
+				"because the same identifier appears in different contexts. Requires the ast-grep binary on PATH.")
 	}
 
 	return strings.Join(paragraphs, "\n\n")

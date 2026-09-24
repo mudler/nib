@@ -197,6 +197,11 @@ type Session struct {
 	// actually registered. Fixed at construction (Computer config is runtime-only).
 	computerEnabled bool
 
+	// astGrepEnabled records whether the ast_grep tool is exposed this session.
+	// Mirrors Config.ASTGrepEnabled; fixed at construction. The tool also
+	// checks for the ast-grep binary at call time and reports a clear error.
+	astGrepEnabled bool
+
 	// prefixWarm records whether this session has actually issued a request that
 	// prefilled its prompt prefix (system prompt + tool schemas) on the server.
 	// On CPU hardware that prefill costs tens of seconds on the first request and
@@ -533,6 +538,7 @@ func NewSession(ctx context.Context, cfg types.Config, callbacks Callbacks, tran
 		reasoningEffort:      mainProvider.ReasoningEffort,
 		mcpClient:            client,
 		computerEnabled:      cfg.Computer.Enabled,
+		astGrepEnabled:       cfg.ASTGrepEnabled,
 		cfgClients:           map[string]*mcp.ClientSession{},
 		cfgServers:           map[string]types.MCPServer{},
 		configurator:         manage.NewIn(cfg.BaseDir),
@@ -1440,6 +1446,14 @@ func (s *Session) toolOptions(turnCtx context.Context, goal, mainModel string) [
 	// files — a compact structural overview before deciding what to read.
 	if s.toolEnabled("index") {
 		opts = append(opts, cogito.WithTools(indexToolDefinition(
+			func(p string) string { return resolveWorkspacePath(s.workingDir, p) })))
+	}
+
+	// Wire the ast-grep structural search tool. Gated by a config flag because
+	// it requires an external binary; toolEnabled checks the BuiltinTools
+	// allowlist on top of that.
+	if s.astGrepEnabled && s.toolEnabled("ast_grep") {
+		opts = append(opts, cogito.WithTools(astGrepToolDefinition(
 			func(p string) string { return resolveWorkspacePath(s.workingDir, p) })))
 	}
 
@@ -2355,6 +2369,7 @@ func (s *Session) ToolCount() int {
 		"cron", "cron_list", "cron_delete", "cron_pause", "cron_resume", "cron_trigger",
 		"read_image", "transcribe_audio", "read_video",
 		"memory", "index", "todo_write",
+		"ast_grep",
 	}
 	for _, name := range builtins {
 		if s.toolEnabled(name) && !(name == "ask_user" && s.AutoApprove()) {
