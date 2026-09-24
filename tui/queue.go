@@ -83,11 +83,12 @@ func (m *Model) releaseQueueFront() bool {
 	return true
 }
 
-// flushQueueAsTurn dispatches queued entries as fresh turns, FIFO, until one
-// starts an async turn (returns a non-nil cmd) or the queue drains. Entries
-// that don't start a turn (a skill load or a resolve error) are handled inline
-// and the loop continues to the next entry. Used when a run ends with messages
-// still queued.
+// flushQueueAsTurn dispatches queued entries as fresh turns when a run ends.
+// Consecutive plain messages (no slash commands, no attachments) are combined
+// into a single turn so the assistant sees them together rather than handling
+// each as a separate round-trip. Non-send entries (skill loads, resolve errors)
+// are handled inline; attachment-bearing sends are dispatched individually.
+// The loop returns as soon as a turn starts.
 //
 // Undelivered follow-ups (released into the ended run but never consumed by
 // it) go first: they were typed — and echoed — before anything still queued,
@@ -98,15 +99,66 @@ func (m *Model) flushQueueAsTurn() tea.Cmd {
 	if m.queueHeld {
 		return nil
 	}
+	var texts []string
+
+	// dispatchAccumulated sends all collected plain-message texts as a single
+	// combined turn (texts joined with a blank line). Returns nil when nothing
+	// was accumulated, so callers can use it as a guard before handling a
+	// non-send entry.
+	dispatchAccumulated := func() tea.Cmd {
+		if len(texts) == 0 {
+			return nil
+		}
+		combined := strings.Join(texts, "\n\n")
+		texts = nil
+		m.loading = true
+		m.interruptArmed = false
+		m.status = ""
+		return m.sendMessage(combined)
+	}
+
+	// Undelivered follow-ups: already echoed, so collect without re-echoing.
 	for len(m.redispatch) > 0 {
 		input := m.redispatch[0]
+		action := slash.Resolve(input, m.cfg.Commands, m.cfg.Skills, m.cfg.Agents)
+		if action.Kind == slash.KindSend && len(action.Files) == 0 && len(m.pending) == 0 {
+			m.redispatch = m.redispatch[1:]
+			texts = append(texts, action.Text)
+			continue
+		}
+		// Non-send or attachment-bearing: flush accumulated sends first.
+		if cmd := dispatchAccumulated(); cmd != nil {
+			return cmd
+		}
 		m.redispatch = m.redispatch[1:]
 		if cmd := m.dispatchResolved(input); cmd != nil {
 			return cmd
 		}
 	}
+
+	// Queued entries: echo each, then collect plain sends to combine.
 	for len(m.queue) > 0 {
 		input := m.queue[0]
+		action := slash.Resolve(input, m.cfg.Commands, m.cfg.Skills, m.cfg.Agents)
+		if action.Kind == slash.KindSend && len(action.Files) == 0 && len(m.pending) == 0 {
+			if m.boot != nil && !m.boot.collapsed {
+				m.boot.collapsed = true
+			}
+			m.queue = m.queue[1:]
+			if m.queueSel > len(m.queue)-1 {
+				m.queueSel = len(m.queue) - 1
+			}
+			if m.queueSel < 0 {
+				m.queueSel = 0
+			}
+			m.appendMessage(ChatMessage{Role: "user", Content: input})
+			texts = append(texts, action.Text)
+			continue
+		}
+		// Non-send or attachment-bearing: flush accumulated sends first.
+		if cmd := dispatchAccumulated(); cmd != nil {
+			return cmd
+		}
 		m.queue = m.queue[1:]
 		if m.queueSel > len(m.queue)-1 {
 			m.queueSel = len(m.queue) - 1
@@ -118,7 +170,8 @@ func (m *Model) flushQueueAsTurn() tea.Cmd {
 			return cmd
 		}
 	}
-	return nil
+
+	return dispatchAccumulated()
 }
 
 // renderQueue renders the pending-message queue shown above the composer.
