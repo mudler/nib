@@ -102,16 +102,23 @@ func TestResponseMsgFlushesQueueAsNewTurn(t *testing.T) {
 	next, cmd := m.Update(responseMsg{content: "done"})
 	nm := next.(Model)
 
-	// Front entry becomes the next turn; the rest stay queued.
-	if len(nm.queue) != 1 || nm.queue[0] != "and another" {
-		t.Fatalf("queue after flush = %v, want [and another]", nm.queue)
+	// Consecutive plain messages combine into a single turn: the queue
+	// drains fully and one sendMessage command starts.
+	if len(nm.queue) != 0 {
+		t.Fatalf("queue after flush = %v, want empty (both combined into one turn)", nm.queue)
 	}
 	if !nm.loading {
 		t.Fatal("loading should be true: a new turn is starting")
 	}
-	last := nm.messages[len(nm.messages)-1]
-	if last.Role != "user" || last.Content != "next turn please" {
-		t.Fatalf("last message = %+v, want user/next turn please", last)
+	// Both messages are echoed to the transcript as separate user lines.
+	users := 0
+	for _, msg := range nm.messages {
+		if msg.Role == "user" {
+			users++
+		}
+	}
+	if users != 2 {
+		t.Fatalf("user transcript lines = %d, want 2 (both echoed)", users)
 	}
 	if cmd == nil {
 		t.Fatal("expected a sendMessage command for the flushed turn")
@@ -227,18 +234,19 @@ func TestRedispatchGoesFirstWithoutEcho(t *testing.T) {
 	if len(nm.redispatch) != 0 {
 		t.Fatalf("redispatch should be drained, got %v", nm.redispatch)
 	}
-	if len(nm.queue) != 1 || nm.queue[0] != "and another" {
-		t.Fatalf("queue = %v, want [and another] untouched", nm.queue)
+	if len(nm.queue) != 0 {
+		t.Fatalf("queue = %v, want empty (both combined into one turn)", nm.queue)
 	}
-	// No duplicate "you ·" line: the only user message is the original echo.
+	// The redispatched follow-up was already echoed; the queued entry is
+	// echoed now. No duplicate echo of the follow-up.
 	users := 0
 	for _, msg := range nm.messages {
 		if msg.Role == "user" {
 			users++
 		}
 	}
-	if users != 1 {
-		t.Fatalf("user transcript lines = %d, want 1 (no double echo)", users)
+	if users != 2 {
+		t.Fatalf("user transcript lines = %d, want 2 (original + queued echo, no duplicate)", users)
 	}
 	if !nm.loading {
 		t.Fatal("loading should be true: the re-dispatched turn is starting")

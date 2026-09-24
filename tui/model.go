@@ -1823,8 +1823,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.recordSession()
 		m.updateViewport()
 		// The run ended with messages still queued: dispatch them as fresh turns
-		// (resolving slash commands/skills) until one starts a turn or the queue
-		// drains; the remainder stay queued and flush on subsequent run ends.
+		// (resolving slash commands/skills). Consecutive plain messages combine
+		// into a single turn; the loop returns once a turn starts, and any
+		// remainder stays queued for the next run end.
 		if cmd := m.flushQueueAsTurn(); cmd != nil {
 			m.updateViewport()
 			return m, cmd
