@@ -1931,6 +1931,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.session != nil {
 			m.sessionUsage = m.session.Usage()
 		}
+		// Compaction is done: clear the "Compacting conversation…" status that
+		// OnStatus set. If the turn is still in progress (loading), restore the
+		// thinking status — a retry that streams a plain answer emits no status
+		// of its own, so the compaction line would otherwise stay on screen for
+		// the rest of the turn (see retryResumeStatus for the same pattern).
+		if m.loading {
+			m.startThinking()
+		} else {
+			m.status = ""
+		}
 		m.updateViewport()
 		return m, m.listenCompact()
 
