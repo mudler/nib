@@ -3,6 +3,7 @@ package chat
 import (
 	"fmt"
 
+	wizmcp "github.com/mudler/nib/mcp"
 	"github.com/mudler/nib/types"
 )
 
@@ -81,4 +82,27 @@ func (s *Session) SetToolOutputPruning(p types.ToolOutputPruningConfig) {
 	s.prunedMu.Lock()
 	s.pruning = p
 	s.prunedMu.Unlock()
+}
+
+// SetToolOutputLimits replaces the tool-output limits policy (budget,
+// per-line truncation, artifact spill). The artifact store is not affected:
+// artifacts already saved stay saved.
+func (s *Session) SetToolOutputLimits(l types.ToolOutputLimitsConfig) {
+	s.outputLimitsMu.Lock()
+	s.outputLimits = l
+	s.outputLimitsMu.Unlock()
+}
+
+// outputLimitsConfig returns a copy of the tool-output limits policy, read
+// under the lock SetToolOutputLimits writes it under.
+func (s *Session) outputLimitsConfig() types.ToolOutputLimitsConfig {
+	s.outputLimitsMu.RLock()
+	defer s.outputLimitsMu.RUnlock()
+	return s.outputLimits
+}
+
+// ArtifactStore returns the session's artifact store, or nil if the session
+// was not created through NewSession (e.g. a test Session).
+func (s *Session) ArtifactStore() *wizmcp.ArtifactStore {
+	return s.artifacts
 }

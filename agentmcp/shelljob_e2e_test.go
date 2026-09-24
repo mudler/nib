@@ -130,7 +130,7 @@ func TestVoiceE2EShellJobParkThenNotify(t *testing.T) {
 
 	// Real tool transports + the shared shell-job registry (as main.go wires it).
 	shellJobs := wizmcp.NewShellJobs()
-	transports, err := wizmcp.StartTransports(ctx, cfg, shellJobs)
+	transports, err := wizmcp.StartTransports(ctx, cfg, shellJobs, nil, nil)
 	if err != nil {
 		t.Fatalf("StartTransports: %v", err)
 	}

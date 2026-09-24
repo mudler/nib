@@ -810,7 +810,7 @@ func TestStartFileSystemMCPServer(t *testing.T) {
 
 	serverErrChan := make(chan error, 1)
 	go func() {
-		err := StartFileSystemMCPServer(ctx, serverTransport, "")
+		err := StartFileSystemMCPServer(ctx, serverTransport, "", nil, nil)
 		serverErrChan <- err
 	}()
 

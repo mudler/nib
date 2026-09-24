@@ -43,7 +43,7 @@ func getShellCommand() string {
 //     command keeps running and is readable via bash_job_output),
 //   - the per-call/turn context is cancelled, e.g. Ctrl+C interrupt (kill it),
 //   - the timeout elapses (kill it).
-func makeBashTool(srvCtx context.Context, mgr *bgJobManager) func(context.Context, *mcp.CallToolRequest, executeCommandInput) (*mcp.CallToolResult, executeCommandOutput, error) {
+func makeBashTool(srvCtx context.Context, mgr *bgJobManager, limits *OutputLimitsPolicy, artifacts *ArtifactStore) func(context.Context, *mcp.CallToolRequest, executeCommandInput) (*mcp.CallToolResult, executeCommandOutput, error) {
 	return func(callCtx context.Context, _ *mcp.CallToolRequest, input executeCommandInput) (
 		*mcp.CallToolResult,
 		executeCommandOutput,
@@ -64,11 +64,11 @@ func makeBashTool(srvCtx context.Context, mgr *bgJobManager) func(context.Contex
 
 		select {
 		case <-j.doneCh:
-			return nil, j.toOutput(input.Script), nil
+			return nil, j.toOutput(input.Script, limits, artifacts), nil
 
 		case <-j.detach:
 			// User backgrounded it: return what we have so far plus the job id.
-			out := j.toOutput(input.Script)
+			out := j.toOutput(input.Script, limits, artifacts)
 			out.Success = true
 			out.Error = ""
 			out.Backgrounded = true
@@ -78,7 +78,7 @@ func makeBashTool(srvCtx context.Context, mgr *bgJobManager) func(context.Contex
 		case <-timer.C:
 			j.cancel()
 			<-j.doneCh
-			out := j.toOutput(input.Script)
+			out := j.toOutput(input.Script, limits, artifacts)
 			out.Success = false
 			if out.ExitCode == 0 {
 				out.ExitCode = -1
@@ -91,7 +91,7 @@ func makeBashTool(srvCtx context.Context, mgr *bgJobManager) func(context.Contex
 		case <-callCtx.Done():
 			j.cancel()
 			<-j.doneCh
-			out := j.toOutput(input.Script)
+			out := j.toOutput(input.Script, limits, artifacts)
 			out.Success = false
 			if out.ExitCode == 0 {
 				out.ExitCode = -1
@@ -104,7 +104,7 @@ func makeBashTool(srvCtx context.Context, mgr *bgJobManager) func(context.Contex
 	}
 }
 
-func startBashMCPServer(ctx context.Context, transport mcp.Transport, mgr *bgJobManager) error {
+func startBashMCPServer(ctx context.Context, transport mcp.Transport, mgr *bgJobManager, limits *OutputLimitsPolicy, artifacts *ArtifactStore) error {
 	// Create MCP server for shell command execution
 	server := mcp.NewServer(&mcp.Implementation{
 		Name:    "shell",
@@ -116,11 +116,11 @@ func startBashMCPServer(ctx context.Context, transport mcp.Transport, mgr *bgJob
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "bash",
 		Description: "Execute a shell script and return the output, exit code, and any errors. The shell command can be configured via SHELL_CMD environment variable (default: 'sh'). Long commands can be backgrounded by the user (Ctrl+B); for commands you know are long-running, prefer bash_background.",
-	}, makeBashTool(ctx, mgr))
+	}, makeBashTool(ctx, mgr, limits, artifacts))
 
 	// Background-shell tools: bash_background / bash_jobs / bash_job_output /
 	// bash_job_kill. Jobs run under ctx (session lifetime), surviving turns.
-	registerBackgroundShellTools(ctx, server, mgr)
+	registerBackgroundShellTools(ctx, server, mgr, limits, artifacts)
 
 	// Run the server
 	if err := server.Run(ctx, transport); err != nil {

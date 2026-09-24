@@ -92,6 +92,38 @@ type ToolOutputPruningConfig struct {
 	MinResultTokens int `yaml:"min_result_tokens"`
 }
 
+// ToolOutputLimitsConfig caps how much output a single tool call can put into
+// the model's context. It applies to every tool that returns text — bash,
+// read, grep, web_fetch — not just the shell. When output exceeds the budget,
+// a head+tail slice is returned and the full output is saved as a session
+// artifact the model can page through with artifact:// references.
+//
+// Every field must stay comparable (bool/int): config defaulting decides the
+// block is absent by comparing it against the zero struct, which stops
+// compiling the moment a slice or map field is added here.
+type ToolOutputLimitsConfig struct {
+	// Disabled turns OFF all output limiting. Zero value (false) = limiting ON.
+	Disabled bool `yaml:"disabled"`
+	// Budget is the max bytes of tool output returned inline. Output beyond
+	// this is elided (head+tail) and the full text is saved as an artifact.
+	// 0 means the default (16 KB).
+	Budget int `yaml:"budget"`
+	// HeadBudget is how many bytes of the head to keep when truncating.
+	// The tail gets Budget - HeadBudget. 0 means the default (4 KB).
+	HeadBudget int `yaml:"head_budget"`
+	// MaxLineLength truncates individual lines longer than this. A single
+	// minified JS line or base64 blob should never flood context. 0 means
+	// the default (2000 chars).
+	MaxLineLength int `yaml:"max_line_length"`
+	// ArtifactSpillThreshold is the byte count at which the full output is
+	// saved as a session artifact. Output between Budget and this threshold
+	// is truncated inline; output above it is spilled to disk and the model
+	// gets a head+tail slice plus an artifact://N reference to page through.
+	// 0 means the default (64 KB). Set to -1 to disable artifact spill
+	// (output is truncated but never saved).
+	ArtifactSpillThreshold int `yaml:"artifact_spill_threshold"`
+}
+
 // AgentTypeConfig is a wiz-facing sub-agent type. It maps 1:1 to a
 // cogito.AgentDefinition. Zero-valued numeric fields mean "inherit".
 type AgentTypeConfig struct {
@@ -198,6 +230,10 @@ type Config struct {
 	// ToolOutputPruning shrinks what old tool results cost in the request
 	// without touching the stored conversation.
 	ToolOutputPruning ToolOutputPruningConfig `yaml:"tool_output_pruning"`
+	// ToolOutputLimits caps how much output a single tool call can return
+	// inline. Output beyond the budget is truncated (head+tail) and, above
+	// a threshold, saved as a session artifact the model can page through.
+	ToolOutputLimits ToolOutputLimitsConfig `yaml:"tool_output_limits"`
 	Agents            []AgentTypeConfig       `yaml:"agents"`
 
 	PromptFragments []string `yaml:"prompt_fragments"`

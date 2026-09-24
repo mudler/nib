@@ -15,15 +15,21 @@ import (
 // cancelled at exit returns context.Canceled, which is shutdown, not a
 // failure, so it is not reported. Whether a server sees that or its client
 // closing first depends on goroutine timing.
-func StartTransports(ctx context.Context, cfg types.Config, shellJobs *ShellJobs) ([]mcp.Transport, error) {
+func StartTransports(ctx context.Context, cfg types.Config, shellJobs *ShellJobs, limits *OutputLimitsPolicy, artifacts *ArtifactStore) ([]mcp.Transport, error) {
 	if shellJobs == nil {
 		shellJobs = NewShellJobsInDir(cfg.WorkingDir)
+	}
+	if limits == nil {
+		limits = NewOutputLimitsPolicy(cfg.ToolOutputLimits)
+	}
+	if artifacts == nil {
+		artifacts = NewArtifactStore()
 	}
 	// Set MCP servers
 	bashMCPServerTransport, bashMCPServerClient := mcp.NewInMemoryTransports()
 
 	go func() {
-		if err := startBashMCPServer(ctx, bashMCPServerTransport, shellJobs.mgr); err != nil && !errors.Is(err, context.Canceled) {
+		if err := startBashMCPServer(ctx, bashMCPServerTransport, shellJobs.mgr, limits, artifacts); err != nil && !errors.Is(err, context.Canceled) {
 			fmt.Fprintf(os.Stderr, "MCP server error: %v\n", err)
 		}
 	}()
@@ -32,7 +38,7 @@ func StartTransports(ctx context.Context, cfg types.Config, shellJobs *ShellJobs
 	filesystemMCPServerTransport, filesystemMCPServerClient := mcp.NewInMemoryTransports()
 
 	go func() {
-		if err := StartFileSystemMCPServer(ctx, filesystemMCPServerTransport, cfg.WorkingDir); err != nil && !errors.Is(err, context.Canceled) {
+		if err := StartFileSystemMCPServer(ctx, filesystemMCPServerTransport, cfg.WorkingDir, limits, artifacts); err != nil && !errors.Is(err, context.Canceled) {
 			fmt.Fprintf(os.Stderr, "Filesystem MCP server error: %v\n", err)
 		}
 	}()

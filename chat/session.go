@@ -241,6 +241,16 @@ type Session struct {
 	// just as un-stubbing it would.
 	prunedIDs map[string]string
 
+	// outputLimitsMu guards the tool-output limits policy (budget, per-line
+	// truncation, artifact spill). SetToolOutputLimits writes it from the UI
+	// goroutine; the MCP tool handlers read it from inside cogito's loop.
+	outputLimitsMu sync.RWMutex
+	outputLimits   types.ToolOutputLimitsConfig
+	// artifacts is the session-scoped store for spilled tool output. When a
+	// tool result exceeds the spill threshold, the full output is saved here
+	// and the model gets a head+tail slice plus an artifact://N reference.
+	artifacts *wizmcp.ArtifactStore
+
 	// overflowRetried counts context-overflow recoveries in the CURRENT turn.
 	// It exists so a retry can never become a loop, and so tests can assert on
 	// attempts rather than on a raw completion-call count that cogito's own
@@ -509,6 +519,8 @@ func NewSession(ctx context.Context, cfg types.Config, callbacks Callbacks, tran
 		cogitoOptions:        cfg.AgentOptions,
 		compaction:           cfg.Compaction,
 		pruning:              cfg.ToolOutputPruning,
+		outputLimits:         cfg.ToolOutputLimits,
+		artifacts:            wizmcp.NewArtifactStore(),
 		allowedTools:         make(map[string]bool),
 		toolAllow:            make(map[string]bool),
 		allowedBashPrefixes:  make(map[string]bool),
@@ -2205,6 +2217,12 @@ func (s *Session) Reload(cfg types.Config) error {
 	s.prunedMu.Lock()
 	s.pruning = cfg.ToolOutputPruning
 	s.prunedMu.Unlock()
+	// Tool-output limits: same reasoning as pruning — the MCP tool handlers
+	// read this from inside cogito's loop, so a reload that lands while a
+	// turn is winding down would otherwise be a data race.
+	s.outputLimitsMu.Lock()
+	s.outputLimits = cfg.ToolOutputLimits
+	s.outputLimitsMu.Unlock()
 	return nil
 }
 

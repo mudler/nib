@@ -10,11 +10,11 @@ import (
 func TestStartTransportsGatesComputer(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	off, err := StartTransports(ctx, types.Config{WorkingDir: t.TempDir()}, nil)
+	off, err := StartTransports(ctx, types.Config{WorkingDir: t.TempDir()}, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	on, err := StartTransports(ctx, types.Config{WorkingDir: t.TempDir(), Computer: types.ComputerConfig{Enabled: true, Command: "/bin/true"}}, nil)
+	on, err := StartTransports(ctx, types.Config{WorkingDir: t.TempDir(), Computer: types.ComputerConfig{Enabled: true, Command: "/bin/true"}}, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -26,11 +26,11 @@ func TestStartTransportsGatesComputer(t *testing.T) {
 func TestStartTransportsGatesBrowser(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	off, err := StartTransports(ctx, types.Config{WorkingDir: t.TempDir()}, nil)
+	off, err := StartTransports(ctx, types.Config{WorkingDir: t.TempDir()}, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	on, err := StartTransports(ctx, types.Config{WorkingDir: t.TempDir(), Browser: types.BrowserConfig{Enabled: true}}, nil)
+	on, err := StartTransports(ctx, types.Config{WorkingDir: t.TempDir(), Browser: types.BrowserConfig{Enabled: true}}, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

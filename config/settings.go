@@ -88,6 +88,11 @@ var settingDocs = map[string]string{
 	"tool_output_pruning.high_water_tokens":   "tool-output size at which pruning starts",
 	"tool_output_pruning.low_water_tokens":    "tool-output size pruning shrinks to",
 	"tool_output_pruning.min_result_tokens":   "results smaller than this are never pruned",
+	"tool_output_limits.disabled":                "turn off tool output truncation and artifact spill",
+	"tool_output_limits.budget":                  "max bytes of tool output returned inline (0 = 16 KB)",
+	"tool_output_limits.head_budget":             "bytes of head kept when truncating (0 = 4 KB)",
+	"tool_output_limits.max_line_length":          "truncate lines longer than this (0 = 2000 chars)",
+	"tool_output_limits.artifact_spill_threshold": "save full output as artifact above this (0 = 64 KB, -1 = off)",
 	"prompt_injection_protection.enabled":     "track and screen untrusted external data",
 	"browser.enabled":                         "enable the browser automation tools",
 	"browser.allow_private_urls":              "let the browser reach localhost and private networks",
@@ -120,7 +125,7 @@ var settingRanges = map[string]struct{ lo, hi float64 }{
 // types.ToolOutputPruningConfig: a lone key turns size pruning OFF). So the
 // first key written into an absent block seeds it with the defaults it was
 // standing in for, and the user's change lands on top of those.
-var blockDefaulted = []string{"tool_output_pruning"}
+var blockDefaulted = []string{"tool_output_pruning", "tool_output_limits"}
 
 // secretLeaves are key names whose values are credentials. They are neither
 // listed nor settable: /settings echoes its input into the transcript and the
