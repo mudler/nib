@@ -250,7 +250,7 @@ func TestToolGuidanceKeepsIndexForLargeFiles(t *testing.T) {
 	got := (&Config{Prompt: "BASE"}).GetPrompt()
 
 	for _, want := range []string{
-		"large source file",
+		"suspect is large (over 200 lines)",
 		"read it directly",
 		"read only the lines",
 	} {
@@ -258,12 +258,12 @@ func TestToolGuidanceKeepsIndexForLargeFiles(t *testing.T) {
 			t.Fatalf("index guidance missing %q:\n%s", want, got)
 		}
 	}
-	for _, unwanted := range []string{"index it first", "you have not seen"} {
+	for _, unwanted := range []string{"Use it on a large source file when you need only part of it"} {
 		if strings.Contains(got, unwanted) {
-			t.Fatalf("index guidance still makes index the first step (%q):\n%s", unwanted, got)
+			t.Fatalf("index guidance still uses the old non-directive wording (%q):\n%s", unwanted, got)
 		}
 	}
-	if strings.Index(got, "large source file") > strings.Index(got, "whole file by default") {
+	if strings.Index(got, "over 200 lines") > strings.Index(got, "whole file by default") {
 		t.Fatalf("index guidance must come before the read paragraph it qualifies:\n%s", got)
 	}
 }
@@ -274,5 +274,52 @@ func TestReadGuidanceOmitsIndexWhenNotExposed(t *testing.T) {
 	got := toolGuidance([]string{"read", "grep"})
 	if strings.Contains(got, "index") {
 		t.Fatalf("guidance names index, which is not exposed:\n%s", got)
+	}
+}
+
+// tree is a directory-listing tool. With every tool exposed (empty allowlist)
+// the tree paragraph must appear so the model knows to orient itself before
+// grepping or reading.
+func TestToolGuidanceTreeParagraph(t *testing.T) {
+	got := toolGuidance([]string{})
+
+	for _, want := range []string{
+		"tree renders a shallow directory listing",
+		"two levels by default",
+		"twelve entries per directory",
+		"before grepping or reading",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("tree guidance missing %q:\n%s", want, got)
+		}
+	}
+}
+
+// The navigation strategy paragraph renders only when at least three of the
+// five navigation tools (tree, index, glob, grep, read) are exposed: fewer
+// than that and the recipe it describes cannot be followed.
+func TestToolGuidanceNavigationStrategy(t *testing.T) {
+	got := toolGuidance([]string{"read", "glob", "grep", "bash"})
+
+	for _, want := range []string{
+		"work from the top down",
+		"orient yourself with tree first",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("navigation strategy missing %q:\n%s", want, got)
+		}
+	}
+}
+
+// With fewer than three navigation tools exposed the strategy paragraph must
+// be absent: it references tools the model does not have.
+func TestToolGuidanceNavigationStrategyNotEnoughTools(t *testing.T) {
+	got := toolGuidance([]string{"read", "bash"})
+
+	if strings.Contains(got, "work from the top down") {
+		t.Fatalf("navigation strategy should not render with only one nav tool:\n%s", got)
+	}
+	if strings.Contains(got, "orient yourself with tree first") {
+		t.Fatalf("navigation strategy should not render with only one nav tool:\n%s", got)
 	}
 }
