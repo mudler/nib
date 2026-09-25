@@ -580,7 +580,12 @@ log_level: error
 # compact when the prompt itself does not fit (kind "context"), lower the
 # requested output when only prompt + output does not fit ("budget"), or
 # lower the output cap when the output alone is above the model's maximum
-# ("output_cap"). It knows the wording of llama.cpp/LocalAI, vLLM, OpenAI,
+# ("output_cap"), and then retry the turn once. When the summary alone does
+# not make the history fit, nib stubs old tool outputs, then drops older turns
+# (saved as an artifact:// the model can read), and as a last resort compacts
+# without the model. If the retry still does not fit, the turn fails, but the
+# compaction is kept, so the next turn does not overflow again. It knows the
+# wording of llama.cpp/LocalAI, vLLM, OpenAI,
 # Anthropic and Gemini. overflow_patterns teaches it another backend without a
 # rebuild: the rows are tried before the built-in ones, first match wins. A
 # regex states its figures with the named groups window, total, input and

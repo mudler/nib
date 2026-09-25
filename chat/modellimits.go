@@ -95,9 +95,65 @@ func factoryOutputCap(llm cogito.LLM, provider types.ModelProviderConfig, store 
 
 // requestLimits reports the output cap and context window the turn's requests
 // are clamped against (see clampOutputTokens), read under one lock so a model
-// switch cannot pair one model's cap with another's window.
+// switch cannot pair one model's cap with another's window. A one-turn
+// override (turnOutputCap) lowers the cap, and never raises it.
 func (s *Session) requestLimits() (cap, window int) {
 	s.modelMu.RLock()
 	defer s.modelMu.RUnlock()
-	return s.outputCap, s.windowLocked()
+	cap = s.outputCap
+	if o := s.turnOutputCap; o > 0 && (cap <= 0 || o < cap) {
+		cap = o
+	}
+	return cap, s.windowLocked()
+}
+
+// setTurnOutputCap sets (or, with 0, clears) the current turn's output cap
+// override.
+func (s *Session) setTurnOutputCap(v int) {
+	s.modelMu.Lock()
+	s.turnOutputCap = v
+	s.modelMu.Unlock()
+}
+
+// lowerOutputCap lowers the output cap of model to max after the backend
+// said the requested output is above what it allows. It never raises the
+// cap. It reports whether the cap changed, so the caller retries only a
+// request that will differ. The client's own cap is lowered too, because it
+// is what a request carries when the window is unknown and nothing clamps.
+func (s *Session) lowerOutputCap(max int, model string) bool {
+	if max <= 0 {
+		return false
+	}
+	s.modelMu.Lock()
+	if s.llmModel != model || (s.outputCap > 0 && s.outputCap <= max) {
+		s.modelMu.Unlock()
+		return false
+	}
+	s.outputCap = max
+	llm := s.llm
+	s.modelMu.Unlock()
+	if setter, ok := llm.(maxTokensSetter); ok {
+		setter.SetMaxTokens(max)
+	}
+	return true
+}
+
+// budgetRetryOutput is the output reservation that fits a budget overflow:
+// the window less the input the backend counted, less outputSafetyMargin. The
+// backend's count is exact, which nib's estimate is not. It reports false when
+// the figures are missing or the result is below minOutputTokens: then the
+// prompt itself leaves no useful room, and only a smaller prompt helps.
+func budgetRetryOutput(info overflowInfo) (int, bool) {
+	input := info.Input
+	if input <= 0 && info.Total > 0 && info.Output > 0 {
+		input = info.Total - info.Output
+	}
+	if info.Window <= 0 || input <= 0 {
+		return 0, false
+	}
+	out := info.Window - input - outputSafetyMargin
+	if out < minOutputTokens {
+		return 0, false
+	}
+	return out, true
 }

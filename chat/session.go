@@ -241,6 +241,10 @@ type Session struct {
 	// LLM wrapper clamps each request's reservation against it (see
 	// clampOutputTokens).
 	outputCap int
+	// turnOutputCap, when above 0, lowers outputCap for the current turn
+	// only; guarded by modelMu. A budget overflow sets it from the figures
+	// the backend stated (see budgetRetryOutput), and each turn clears it.
+	turnOutputCap int
 
 	// prunedMu guards the tool-output pruning state below. The manipulator reads
 	// it from inside cogito's loop, and nothing here should assume which
@@ -1339,6 +1343,86 @@ func (s *Session) mcpToolFilter() func(*mcp.ClientSession, string) bool {
 	}
 }
 
+// fragmentTokens is the byte/4 estimate of the conversation, read under the
+// history lock.
+func (s *Session) fragmentTokens() int {
+	s.historyMu.Lock()
+	defer s.historyMu.Unlock()
+	return estimateTokens(s.fragment.Messages)
+}
+
+// noticesText is the message pendingNoticesMessage made for notices, or ""
+// when there were none.
+func noticesText(notices []string) string {
+	if len(notices) == 0 {
+		return ""
+	}
+	return pendingNoticesMessage(notices)
+}
+
+// dropFailedTurn removes a failed turn's own messages from msgs, a history
+// that overflow recovery compacted during the turn, and keeps the compaction.
+//
+// The turn's messages start at its user message (and the notices message
+// just before it, which the caller hands back to the pending list). When the
+// user message is still in msgs, everything from it on goes. When it is not,
+// the compaction's summary covers it, and every message after the summary
+// (the first non-system message) is the turn's own: the kept tail is a suffix
+// of the history, and the user message came before all of it. System messages
+// are kept wherever they are, since ensureSystemPrompt may have appended the
+// prompt after the tail.
+//
+// It reports false when the result would break the tool pairing; the caller
+// then falls back to the pre-turn history.
+func dropFailedTurn(msgs []openai.ChatCompletionMessage, user openai.ChatCompletionMessage, notices string) ([]openai.ChatCompletionMessage, bool) {
+	cut := -1
+	for i := len(msgs) - 1; i >= 0; i-- {
+		m := msgs[i]
+		if m.Role == user.Role && m.Content == user.Content && len(m.MultiContent) == len(user.MultiContent) {
+			cut = i
+			break
+		}
+	}
+	if cut >= 0 {
+		if notices != "" && cut > 0 && msgs[cut-1].Role == "user" && msgs[cut-1].Content == notices {
+			cut--
+		}
+	} else {
+		cut = len(msgs)
+		for i, m := range msgs {
+			if m.Role != "system" {
+				cut = i + 1
+				break
+			}
+		}
+	}
+	kept := append([]openai.ChatCompletionMessage(nil), msgs[:cut]...)
+	for _, m := range msgs[cut:] {
+		if m.Role == "system" {
+			kept = append(kept, m)
+		}
+	}
+	if len(kept) == 0 || validateToolPairing(kept) != nil {
+		return nil, false
+	}
+	return kept, true
+}
+
+// dropFailedDisplay removes a failed turn's user message, and anything after
+// it, from the display copy, as the pre-turn rollback does.
+func dropFailedDisplay(msgs []openai.ChatCompletionMessage, text string) []openai.ChatCompletionMessage {
+	for i := len(msgs) - 1; i >= 0; i-- {
+		if msgs[i].Role == "user" && msgs[i].Content == text {
+			return msgs[:i]
+		}
+	}
+	return msgs
+}
+
+// overflowTrim is the first step of overflow recovery. It is a variable so a
+// test can make it fail and reach the basicCompact fallback.
+var overflowTrim = func(s *Session, ctx context.Context) error { return s.iterativeTrim(ctx) }
+
 // buildUserFragment appends the user turn to the fragment, attaching multimodal
 // parts. cogito's AddMessage routes image parts into image_url MultiContent and
 // audio/video into the fragment's transient PendingNativeParts (send-once).
@@ -1586,11 +1670,17 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 	s.overflowMu.Lock()
 	s.overflowRetried = 0
 	s.overflowMu.Unlock()
+	// A budget overflow lowers the output reservation for one turn only.
+	s.setTurnOutputCap(0)
+	defer s.setTurnOutputCap(0)
 	s.turnRetryMu.Lock()
 	s.turnRetryTotal = 0
 	s.turnRetryMu.Unlock()
 	// Failed attempts in a row that made no progress; see turnRetryBudget.
 	stalled := 0
+	// Output-cap and budget overflows are retried at most once per turn each;
+	// neither compacts, so neither counts as an overflow recovery.
+	capRetried, budgetRetried := false, false
 	defer s.endTurn()
 	// Report this turn's own size while it runs; hand authority back to
 	// s.fragment (which compaction may since have shrunk) once it ends.
@@ -1644,6 +1734,9 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 		s.fragment = s.fragment.AddMessage("user", pendingNoticesMessage(notices))
 	}
 	s.fragment = buildUserFragment(s.fragment, text, parts)
+	// The turn's own message, so a failed turn can be cut out of a history
+	// that overflow recovery has since compacted (see dropFailedTurn).
+	turnUser := s.fragment.Messages[len(s.fragment.Messages)-1]
 	s.messages = append(s.messages, openai.ChatCompletionMessage{
 		Role:    "user",
 		Content: text,
@@ -1906,6 +1999,47 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 			// decides whether a 413 with no token wording is an overflow.
 			turnOverflow := s.classifyTurnOverflow(err)
 			logUnclassifiedRejection(err, turnOverflow)
+			announce := func(status string) {
+				if s.callbacks.OnStatus != nil {
+					s.callbacks.OnStatus(status)
+				}
+			}
+			if turnCtx.Err() == nil {
+				switch turnOverflow.Kind {
+				case KindOutputCap:
+					// The requested output alone is above the model's
+					// maximum. Compaction cannot fix that; a lower cap can.
+					// Once per turn, and only when the cap really drops, so
+					// the retry is not the same request again.
+					if !capRetried && s.lowerOutputCap(turnOverflow.Window, mainModel) {
+						capRetried = true
+						xlog.Warn("output cap above the model's maximum; lowered it and retrying", "cap", turnOverflow.Window)
+						announce("Output limit too large — lowering it and retrying…")
+						announce(retryResumeStatus)
+						continue
+					}
+				case KindBudget:
+					// The prompt fits, but prompt + reserved output does not.
+					// Never compact for this: lower the reservation for the
+					// rest of the turn, from the backend's exact figures.
+					if w, ok := learnedWindowFrom(err); ok {
+						s.rememberWindow(w, mainModel)
+					}
+					if out, ok := budgetRetryOutput(turnOverflow); ok && !budgetRetried {
+						budgetRetried = true
+						s.setTurnOutputCap(out)
+						xlog.Warn("prompt plus output reservation above the window; retrying with a smaller reservation", "max_tokens", out)
+						announce("Context window nearly full — reserving less output and retrying…")
+						announce(retryResumeStatus)
+						continue
+					}
+					// The prompt leaves less than minOutputTokens of room, or
+					// a smaller reservation did not fit either. Only a
+					// smaller prompt helps now, so this is a context
+					// overflow.
+					turnOverflow.Kind = KindContext
+				}
+			}
 			if turnCtx.Err() == nil && turnOverflow.Kind == KindContext {
 				if w, ok := learnedWindowFrom(err); ok {
 					s.rememberWindow(w, mainModel)
@@ -1915,41 +2049,45 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 				s.overflowMu.Unlock()
 
 				if first {
-					cb, ca, cerr := s.compactHistory(turnCtx)
-					switch {
-					case cerr != nil:
-						// Report the ORIGINAL overflow, not the summariser's
+					// The escalation chain: iterativeTrim (LLM compaction,
+					// then a smaller tail, a forced prune and a hard
+					// truncation), then basicCompact when none of that
+					// fits. The whole chain is ONE recovery attempt.
+					cb := s.fragmentTokens()
+					status := ""
+					if terr := overflowTrim(s, turnCtx); terr == nil {
+						status = "Context window exceeded — compacting and retrying…"
+					} else if turnCtx.Err() == nil {
+						// Report the ORIGINAL overflow, not the trim's
 						// failure: the first is the one the user can act on.
-						xlog.Warn("overflow recovery: compaction failed", "error", cerr)
-					case cb == ca:
-						// Nothing to summarise, so a retry would send a
-						// byte-identical request.
-					default:
+						xlog.Warn("overflow recovery: trimming failed, trying basic compaction", "error", terr)
+						if berr := s.basicCompact(turnCtx); berr == nil {
+							status = "Context window exceeded — using basic fallback compaction and retrying…"
+						} else {
+							xlog.Warn("overflow recovery: basic compaction failed", "error", berr)
+						}
+					}
+					if status != "" {
+						ca := s.fragmentTokens()
 						s.overflowMu.Lock()
 						s.overflowRetried++
 						s.overflowMu.Unlock()
-						// compactHistory rebuilt the fragment as [summary] +
-						// tail, and renderMessages skips system content, so the
-						// system prompt was dropped without even being
-						// represented in the summary. SendMessage's own guard
-						// sits ABOVE this loop, so the `continue` below would
-						// re-send the turn with no identity, no working
+						// Compaction rebuilt the fragment as [summary] + tail,
+						// and renderMessages skips system content, so the
+						// system prompt may have been dropped without even
+						// being represented in the summary. SendMessage's own
+						// guard sits ABOVE this loop, so the `continue` below
+						// would re-send the turn with no identity, no working
 						// directory, no skills index and none of the tool
 						// guidance. Re-apply the same guard here: it is a
 						// no-op whenever the prompt survived in the kept tail.
 						s.ensureSystemPrompt()
-						// Announced here, AFTER compaction, and only on the
+						// Announced here, AFTER the chain, and only on the
 						// branch that reaches the `continue` below. The status
-						// promises a retry, and the two branches above are the
-						// cases where no retry happens: the user would be told
-						// nib was retrying and then handed the bare overflow
-						// error, with no corrective status to withdraw the
-						// promise. Compaction is a whole LLM call, so this does
-						// cost the user a few silent seconds before the line
-						// appears — the alternative is a line that lies.
-						if s.callbacks.OnStatus != nil {
-							s.callbacks.OnStatus("Context window exceeded — compacting and retrying…")
-						}
+						// promises a retry; a chain that changed nothing makes
+						// none, and the user would be told nib was retrying
+						// and then handed the bare overflow error.
+						announce(status)
 						if s.callbacks.OnCompactDone != nil {
 							s.callbacks.OnCompactDone(cb, ca)
 						}
@@ -1957,9 +2095,7 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 						// the status back, or a retry that streams a plain
 						// answer leaves "compacting and retrying" on screen
 						// for the rest of the turn (see retryResumeStatus).
-						if s.callbacks.OnStatus != nil {
-							s.callbacks.OnStatus(retryResumeStatus)
-						}
+						announce(retryResumeStatus)
 						continue
 					}
 				}
@@ -2015,9 +2151,23 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 			// every later turn overflow too. Token usage is kept — the
 			// backend billed those tokens regardless.
 			if overflow {
+				recovered := s.overflowRetries() > 0
 				s.historyMu.Lock()
-				s.fragment = preTurnFragment
-				s.messages = preTurnMessages
+				// When recovery compacted, rolling back to preTurnFragment
+				// would undo that compaction: the next turn would start from
+				// the same history that overflowed, and overflow again. Keep
+				// the compaction and cut out only this turn's own messages.
+				kept, ok := []openai.ChatCompletionMessage(nil), false
+				if recovered {
+					kept, ok = dropFailedTurn(s.fragment.Messages, turnUser, noticesText(notices))
+				}
+				if ok {
+					s.fragment.Messages = kept
+					s.messages = dropFailedDisplay(s.messages, text)
+				} else {
+					s.fragment = preTurnFragment
+					s.messages = preTurnMessages
+				}
 				s.historyMu.Unlock()
 				// The rollback dropped the notices too; keep them for the next turn.
 				s.restorePendingNotices(notices)

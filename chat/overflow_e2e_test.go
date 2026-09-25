@@ -84,8 +84,8 @@ func TestOverflowRecoveryOverHTTP(t *testing.T) {
 
 	// Seed enough history that compaction has a head to summarise.
 	s.fragment = s.fragment.
-		AddMessage("user", "u1").AddMessage("assistant", "a1").
-		AddMessage("user", "u2").AddMessage("assistant", "a2")
+		AddMessage("user", "u1").AddMessage("assistant", "a1 "+overflowFiller).
+		AddMessage("user", "u2").AddMessage("assistant", "a2 "+overflowFiller)
 
 	got, err := s.SendMessage("what changed?")
 	if err != nil {
@@ -249,8 +249,8 @@ func TestOverflowRetryKeepsTheSystemPrompt(t *testing.T) {
 	// FIRST (the first turn's own add), then history accumulates after it.
 	s.ensureSystemPrompt()
 	s.fragment = s.fragment.
-		AddMessage("user", "u1").AddMessage("assistant", "a1").
-		AddMessage("user", "u2").AddMessage("assistant", "a2")
+		AddMessage("user", "u1").AddMessage("assistant", "a1 "+overflowFiller).
+		AddMessage("user", "u2").AddMessage("assistant", "a2 "+overflowFiller)
 	if got := s.fragment.Messages[0].Role; got != "system" {
 		t.Fatalf("seeded fragment starts with %q, not the system prompt: the bug would be hidden", got)
 	}
@@ -336,8 +336,8 @@ func TestOverflowRecoveryOverStreamedErrorChunk(t *testing.T) {
 	defer s.Close()
 
 	s.fragment = s.fragment.
-		AddMessage("user", "u1").AddMessage("assistant", "a1").
-		AddMessage("user", "u2").AddMessage("assistant", "a2")
+		AddMessage("user", "u1").AddMessage("assistant", "a1 "+overflowFiller).
+		AddMessage("user", "u2").AddMessage("assistant", "a2 "+overflowFiller)
 
 	got, err := s.SendMessage("what changed?")
 	if err != nil {
