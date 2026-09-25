@@ -286,6 +286,13 @@ type Session struct {
 	// the recorder: it shares no state with it, and holding the directory here
 	// keeps the report reachable independently of the recorder's lifetime.
 	traceDir string
+
+	// contextNudgePending is set when end-of-turn compaction succeeds, and
+	// cleared once the model re-reads a detected context file (AGENTS.md etc.)
+	// or the nudge fires — whichever comes first. When true, the next tool
+	// call in the following turn injects a one-time user-role nudge to
+	// re-read context files before acting. Guarded by historyMu.
+	contextNudgePending bool
 }
 
 // PrefixWarm reports whether this session has already issued a request that
@@ -1619,6 +1626,16 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 	})
 	s.historyMu.Unlock()
 
+	// Post-compaction context-file nudge: when end-of-turn compaction
+	// succeeded on the previous turn, contextNudgePending is set. Inject a
+	// one-time user-role reminder to re-read detected project instruction
+	// files (AGENTS.md, CLAUDE.md, etc.) before the model starts tool-calling.
+	// The tool call proceeds regardless — this is a soft nudge, not a gate.
+	// If the model already re-read the file in the previous turn, the flag
+	// was cleared by the read-tracking in the tool-call callback, and no
+	// nudge fires.
+	s.maybeInjectContextNudge()
+
 	// Snapshot the client and its model once for the whole turn: SetModel can
 	// swap them from another goroutine at any point in here (turnMu does not
 	// hold a turn), and a turn that changed model halfway would send its
@@ -1664,6 +1681,10 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 			if err != nil {
 				return cogito.ToolCallDecision{Approved: false}
 			}
+			// Track reads of project instruction files (AGENTS.md, etc.).
+			// Once the model has re-read any detected context file after
+			// compaction, the post-compaction nudge is no longer needed.
+			s.trackContextFileRead(tool.Name, string(args))
 			change := PreviewFileChange(s.workingDir, tool.Name, string(args))
 			decision := s.decideToolCall(ToolCallRequest{
 				Name:      tool.Name,
@@ -2068,8 +2089,19 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 		cb, ca, cerr := s.compactHistory(turnCtx)
 		if cerr != nil {
 			xlog.Warn("auto-compaction failed", "error", cerr)
-		} else if cb != ca && s.callbacks.OnCompactDone != nil {
-			s.callbacks.OnCompactDone(cb, ca)
+		} else if cb != ca {
+			// Compaction dropped the head of the conversation, which
+			// may have included the model's read of AGENTS.md and other
+			// project instruction files. The system prompt still
+			// mentions them, but the model may start tool-calling
+			// without re-reading. Flag for a one-time soft nudge at
+			// the start of the next turn.
+			s.historyMu.Lock()
+			s.contextNudgePending = true
+			s.historyMu.Unlock()
+			if s.callbacks.OnCompactDone != nil {
+				s.callbacks.OnCompactDone(cb, ca)
+			}
 		}
 	}
 
@@ -2398,6 +2430,69 @@ func (s *Session) ensureSystemPrompt() {
 	defer s.historyMu.Unlock()
 	if !fragmentHasSystemContent(s.fragment, s.systemPrompt) {
 		s.fragment = s.fragment.AddMessage("system", s.systemPrompt)
+	}
+}
+
+// maybeInjectContextNudge injects a one-time user-role nudge to re-read
+// project instruction files (AGENTS.md, CLAUDE.md, etc.) when the
+// conversation was compacted at the end of the previous turn and the model
+// has not yet re-read any of those files in the current turn. The nudge is
+// soft: it adds a user-role message to the fragment but does not block or
+// redirect the tool call that triggered it. If no context files are detected
+// in the working directory, the nudge is skipped.
+func (s *Session) maybeInjectContextNudge() {
+	s.historyMu.Lock()
+	pending := s.contextNudgePending
+	s.historyMu.Unlock()
+	if !pending {
+		return
+	}
+	files := types.DetectContextFiles(s.workingDir)
+	if len(files) == 0 {
+		s.historyMu.Lock()
+		s.contextNudgePending = false
+		s.historyMu.Unlock()
+		return
+	}
+	s.historyMu.Lock()
+	s.contextNudgePending = false
+	s.historyMu.Unlock()
+	listed := strings.Join(files, ", ")
+	s.fragment = s.fragment.AddMessage("user",
+		"Reminder: the conversation was just compacted. "+
+			"You may have lost track of project instructions. "+
+			"Re-read "+listed+" before continuing with tool calls, "+
+			"then proceed.")
+}
+
+// trackContextFileRead clears the post-compaction nudge flag when the model
+// calls the read tool on a path whose base name matches a detected project
+// instruction file (AGENTS.md, CLAUDE.md, NIB.md, GEMINI.md). This means:
+// if the model re-reads the context file on its own, no nudge fires.
+func (s *Session) trackContextFileRead(toolName, argsJSON string) {
+	if toolName != "read" {
+		return
+	}
+	s.historyMu.Lock()
+	pending := s.contextNudgePending
+	s.historyMu.Unlock()
+	if !pending {
+		return
+	}
+	var args struct {
+		Path string `json:"path"`
+	}
+	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil || args.Path == "" {
+		return
+	}
+	base := filepath.Base(args.Path)
+	for _, name := range types.ContextFileNames() {
+		if base == name {
+			s.historyMu.Lock()
+			s.contextNudgePending = false
+			s.historyMu.Unlock()
+			return
+		}
 	}
 }
 

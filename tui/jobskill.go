@@ -42,7 +42,7 @@ func (m Model) jobActivityTail(j jobRef) string {
 	case "agent":
 		var b strings.Builder
 		if job, ok := m.jobByID(j.ID); ok && strings.TrimSpace(job.Task) != "" {
-			b.WriteString("prompt:\n")
+			b.WriteString("task:\n")
 			b.WriteString(strings.TrimSpace(job.Task))
 			b.WriteString("\n\n")
 		}
