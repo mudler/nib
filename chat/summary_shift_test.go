@@ -110,8 +110,8 @@ func TestSummaryShiftConvergesWithAFixedOutputReservation(t *testing.T) {
 	if _, _, err := s.CompactHistory(); err != nil {
 		t.Fatalf("CompactHistory: %v", err)
 	}
-	if n := len(llm.reqs); n < 2 || n > maxSummaryAttempts {
-		t.Fatalf("summary calls = %d, want an overflow then a fitting retry", n)
+	if n := len(llm.reqs); n < 2 || n > 1+maxRollingChunks {
+		t.Fatalf("summary calls = %d, want an overflow then fitting chunks", n)
 	}
 	for i, r := range llm.reqs {
 		if r.MaxTokens != 4000 {
@@ -122,8 +122,8 @@ func TestSummaryShiftConvergesWithAFixedOutputReservation(t *testing.T) {
 	if len(orig)-start <= 2 {
 		t.Fatal("the boundary did not move: the kept tail is still KeepRecent long")
 	}
-	if !strings.Contains(llm.reqs[len(llm.reqs)-1].Messages[0].Content, "goal: fix the parser") {
-		t.Fatal("the shifted head lost the user's goal")
+	if !strings.Contains(llm.reqs[1].Messages[0].Content, "goal: fix the parser") {
+		t.Fatal("the first chunk lost the user's goal")
 	}
 }
 
@@ -257,7 +257,7 @@ func TestMidTurnCompactionShiftsTheBoundaryWhenTheSummaryOverflows(t *testing.T)
 	}
 }
 
-func TestMidTurnCompactionSkipsAHeadOfOnlyThePreviousSummary(t *testing.T) {
+func TestMidTurnCompactionRollsThePreviousSummaryIntoTheNewOne(t *testing.T) {
 	raw := longHistory(5)
 	// The request already carries a summary in place of the first 3 messages.
 	prev := openai.ChatCompletionMessage{Role: "user", Content: "PREV"}
@@ -268,14 +268,20 @@ func TestMidTurnCompactionSkipsAHeadOfOnlyThePreviousSummary(t *testing.T) {
 	s.compaction.SummaryMaxTokens = 1000
 	c := s.newTurnCompactor(context.Background())
 
+	// No step fits beside the previous summary, so the chunks cover it and
+	// then one cut-down step at a time, and the new summary replaces the
+	// whole head: the previous summary is merged, not kept beside it.
 	got := c.compact(raw, out, 3, 1, 0)
-	if len(llm.reqs) < 2 {
-		t.Fatalf("summary calls = %d, want the loop to shrink the head to the previous summary", len(llm.reqs))
+	if len(llm.reqs) < 3 {
+		t.Fatalf("summary calls = %d, want an overflow and then several chunks", len(llm.reqs))
 	}
-	if !reflect.DeepEqual(got, out) {
-		t.Fatal("a head of only the previous summary should leave the request unchanged")
+	if !strings.Contains(llm.reqs[1].Messages[0].Content, "PREV") {
+		t.Fatal("the first chunk does not start with the previous summary")
 	}
-	if c.covered != 0 {
-		t.Fatalf("covered = %d, want 0", c.covered)
+	if len(got) != 3 || !reflect.DeepEqual(got[1:], out[len(out)-2:]) {
+		t.Fatalf("want [summary] + the KeepRecent tail, got %d messages", len(got))
+	}
+	if want := len(raw) - 2; c.covered != want {
+		t.Fatalf("covered = %d, want %d", c.covered, want)
 	}
 }

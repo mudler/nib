@@ -107,7 +107,7 @@ func TestCompactHistoryFitsTheSummaryPromptInTheBudget(t *testing.T) {
 func TestCompactHistoryRetriesSmallerWhenTheSummaryOverflows(t *testing.T) {
 	// The backend tokenizes denser than byte/4, so a prompt the estimate says
 	// fits can still overflow. The backend's own figures say by how much, and
-	// the retry moves the boundary so the head it summarizes fits.
+	// the head is then summarized in chunks that fit.
 	frag := []openai.ChatCompletionMessage{{Role: "user", Content: "goal"}}
 	for i := range 6 {
 		frag = append(frag, toolTurn(fmt.Sprintf("c%d", i), fmt.Sprintf("f%d.go", i), strings.Repeat("x", 8000))...)
@@ -124,13 +124,13 @@ func TestCompactHistoryRetriesSmallerWhenTheSummaryOverflows(t *testing.T) {
 	if _, _, err := s.CompactHistory(); err != nil {
 		t.Fatalf("CompactHistory: %v", err)
 	}
-	if n := len(llm.prompts); n < 2 || n > maxSummaryAttempts {
-		t.Fatalf("summary calls = %d, want an overflow and then smaller retries", n)
+	if n := len(llm.prompts); n < 2 || n > 1+maxRollingChunks {
+		t.Fatalf("summary calls = %d, want an overflow and then smaller chunks", n)
 	}
 	if got := tokensOf(llm.prompts[len(llm.prompts)-1]); got > 1500 {
 		t.Fatalf("the accepted prompt is ~%d tokens, over the backend's 1500", got)
 	}
-	// The messages the head gave up are kept verbatim instead.
+	// The messages no chunk covered are kept verbatim instead.
 	checkVerbatimTail(t, orig, s.fragment.Messages)
 }
 

@@ -678,47 +678,147 @@ func (s *Session) summaryPromptLimit(output int) int {
 // (the pruned view of them). An empty head, with a nil error, means there was
 // nothing to compact.
 //
-// When the backend rejects the summary as too large, the boundary moves
-// earlier: keep grows until the head fits the retry target (see
-// summaryRetryTarget), or until only the smallest head is left, which
-// fitSummaryInput then truncates to the target. What leaves the head joins
-// the tail, verbatim: nothing is lost, and the next compaction can summarize
-// it. The loop stops on success, a non-overflow error, a cancelled context, a
-// target of zero or less, or after maxSummaryAttempts, and returns the last
-// error. It changes no session state other than the usage it counts.
+// The whole head goes out in one request first. When the backend rejects it
+// as too large, the head is summarized in chunks instead (see rollingCover),
+// each fitted to the retry target summaryRetryTarget derives from the
+// rejection. When the chunks cover the whole head, the result is the summary
+// and the original tail. When they stop at maxRollingChunks, the head ends
+// where they stopped and the rest joins the tail, verbatim: nothing is lost,
+// and the next compaction can summarize it. The loop stops on a non-overflow
+// error, a cancelled context, a target of zero or less, or after
+// maxSummaryAttempts overflows in a row, and returns the last error. It
+// changes no session state other than the usage it counts.
 func (s *Session) summarizeFitting(ctx context.Context, msgs []openai.ChatCompletionMessage, keep int, view func([]openai.ChatCompletionMessage) []openai.ChatCompletionMessage) (summary string, head, tail []openai.ChatCompletionMessage, err error) {
 	head, tail = splitForCompaction(msgs, keep)
 	if len(head) == 0 || len(renderMessages(view(head))) == 0 {
 		return "", nil, nil, nil
 	}
-	keep = len(tail)
-	prefix := tokensOf(summaryPrefix)
 	limit := s.summaryPromptLimit(s.summaryOutputTokens())
-	for attempt := 0; ; attempt++ {
-		summary, sent, serr := s.summarize(ctx, renderMessages(view(head)), limit)
-		if serr == nil {
-			return summary, head, tail, nil
-		}
-		if attempt+1 >= maxSummaryAttempts || !canRecoverFromOverflow(ctx, serr) {
-			return "", nil, nil, serr
-		}
-		target := summaryRetryTarget(serr, sent)
-		if target <= 0 {
-			return "", nil, nil, serr
-		}
-		limit = max(target-prefix, 1)
-		// Move the boundary earlier until the head fits the target. A head
-		// that renders nothing would leave nothing to summarize, so the
-		// smallest head kept is the smallest that still renders.
-		for estimateTokens(view(head))+prefix > target {
-			h, t := splitForCompaction(msgs, keep+1)
-			if len(h) == 0 || len(renderMessages(view(h))) == 0 {
-				break
-			}
-			keep++
-			head, tail = h, t
+	summary, sent, serr := s.summarize(ctx, renderMessages(view(head)), limit)
+	if serr == nil {
+		return summary, head, tail, nil
+	}
+	if maxSummaryAttempts <= 1 || !canRecoverFromOverflow(ctx, serr) {
+		return "", nil, nil, serr
+	}
+	target := summaryRetryTarget(serr, sent)
+	if target <= 0 {
+		return "", nil, nil, serr
+	}
+	summary, covered, err := s.rollingCover(ctx, head, view, target, 1)
+	if err != nil {
+		return "", nil, nil, err
+	}
+	// head is msgs[:len(head)], so what the chunks did not cover and the
+	// original tail are one contiguous run of msgs.
+	return summary, msgs[:covered], msgs[covered:], nil
+}
+
+// maxRollingChunks bounds how many chunks rollingCover summarizes for one
+// compaction. What is left after that stays verbatim.
+const maxRollingChunks = 8
+
+// rollingInstruction is the instruction for every chunk after the first: the
+// running summary comes first in the prompt, the chunk's messages after it.
+const rollingInstruction = compactInstruction + "\n\n" +
+	"A summary of the earlier part of this conversation is given first. " +
+	"Merge it with the new messages into one summary in the same format; " +
+	"keep every file path, identifier and decision from both."
+
+// rollingPrefix is the prompt a later chunk's rendered messages follow.
+func rollingPrefix(running string) string {
+	return rollingInstruction + "\n\n--- EARLIER SUMMARY ---\n" + running + "\n\n--- NEW MESSAGES ---\n"
+}
+
+// rollingSummary summarizes head in consecutive chunks, each fitted to a
+// prompt of target byte/4 tokens, and returns the one summary that stands
+// for all of head. It fails when maxRollingChunks chunks do not cover head;
+// summarizeFitting, which keeps the uncovered rest verbatim instead, uses
+// rollingCover directly.
+func (s *Session) rollingSummary(ctx context.Context, head []openai.ChatCompletionMessage, view func([]openai.ChatCompletionMessage) []openai.ChatCompletionMessage, target int) (summary string, err error) {
+	summary, covered, err := s.rollingCover(ctx, head, view, target, 0)
+	if err != nil {
+		return "", err
+	}
+	if covered < len(head) {
+		return "", fmt.Errorf("compaction summary covered %d of %d messages in %d chunks", covered, len(head), maxRollingChunks)
+	}
+	return summary, nil
+}
+
+// rollingCover summarizes head from oldest to newest in chunks, and returns
+// the running summary and how many of head's messages it stands for.
+//
+// Each chunk is the longest run that fits target: the first after the
+// compaction instruction, each later one after rollingInstruction and the
+// running summary, whose reply then replaces the running summary. A chunk
+// ends only where splitForCompaction could, so it never separates a tool
+// call from its results. A run too large for target on its own still forms
+// a chunk, and fitSummaryInput cuts it down. When the backend rejects a chunk
+// anyway, target drops by the stated overshoot (summaryRetryTarget) and the
+// chunk is rebuilt from the same start, so the rest moves on to the next
+// chunk. failures is how many overflows in a row the caller already had;
+// maxSummaryAttempts of them in a row stop it. It stops after
+// maxRollingChunks chunks, and on any error it returns nothing covered.
+func (s *Session) rollingCover(ctx context.Context, head []openai.ChatCompletionMessage, view func([]openai.ChatCompletionMessage) []openai.ChatCompletionMessage, target, failures int) (summary string, covered int, err error) {
+	viewed := view(head)
+	if len(viewed) != len(head) {
+		return "", 0, fmt.Errorf("compaction view changed the message count")
+	}
+	sizes := make([]int, len(viewed))
+	for i := range viewed {
+		for _, p := range renderMessages(viewed[i : i+1]) {
+			sizes[i] += len(p.text)
 		}
 	}
+	boundary := func(i int) bool {
+		return i == len(head) || (head[i].Role != "tool" && len(head[i-1].ToolCalls) == 0)
+	}
+
+	running := ""
+	start, chunks := 0, 0
+	for start < len(head) && chunks < maxRollingChunks {
+		prefix := summaryPrefix
+		if chunks > 0 {
+			prefix = rollingPrefix(running)
+		}
+		budget := target - tokensOf(prefix)
+		end, acc := 0, 0
+		for e := start + 1; e <= len(head); e++ {
+			acc += sizes[e-1]
+			if !boundary(e) {
+				continue
+			}
+			if end == 0 || acc/4 <= budget {
+				end = e
+			}
+			if acc/4 > budget {
+				break
+			}
+		}
+		pieces := renderMessages(viewed[start:end])
+		if len(pieces) == 0 {
+			start = end // nothing in it for a summary to cover
+			continue
+		}
+		reply, sent, serr := s.summarizeWith(ctx, prefix, pieces, max(budget, 1))
+		if serr == nil {
+			running, start, failures = reply, end, 0
+			chunks++
+			continue
+		}
+		failures++
+		if failures >= maxSummaryAttempts || !canRecoverFromOverflow(ctx, serr) {
+			return "", 0, serr
+		}
+		if target = summaryRetryTarget(serr, sent); target <= 0 {
+			return "", 0, serr
+		}
+	}
+	if chunks == 0 {
+		return "", 0, fmt.Errorf("compaction produced an empty summary")
+	}
+	return running, start, nil
 }
 
 // spillCompactionHead saves the rendered head a summary stands for as an
@@ -747,7 +847,13 @@ func (s *Session) spillCompactionHead(pieces []summaryPiece) string {
 // summaryOutputTokens. Ask would leave the reservation to the client, which
 // reserves the model's whole output cap.
 func (s *Session) summarize(ctx context.Context, pieces []summaryPiece, limit int) (summary string, sentTokens int, err error) {
-	prompt := summaryPrefix + fitSummaryInput(pieces, limit)
+	return s.summarizeWith(ctx, summaryPrefix, pieces, limit)
+}
+
+// summarizeWith is summarize with the instruction prefix the rendered pieces
+// follow in the prompt.
+func (s *Session) summarizeWith(ctx context.Context, prefix string, pieces []summaryPiece, limit int) (summary string, sentTokens int, err error) {
+	prompt := prefix + fitSummaryInput(pieces, limit)
 	sentTokens = tokensOf(prompt)
 	llm, _ := s.currentLLM()
 	reply, usage, aerr := llm.CreateChatCompletion(ctx, openai.ChatCompletionRequest{
