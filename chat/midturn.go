@@ -2,6 +2,7 @@ package chat
 
 import (
 	"context"
+	"strings"
 
 	"github.com/mudler/cogito"
 	"github.com/mudler/xlog"
@@ -145,6 +146,20 @@ func (c *turnCompactor) compact(msgs, out []openai.ChatCompletionMessage, base, 
 		return out
 	}
 
+	// Save the full untruncated head as a compaction artifact, the same
+	// as the end-of-turn path, so nothing is lost to the lossy summary.
+	var artifactURI string
+	cfg := c.s.compactionConfig()
+	if !cfg.DisableArtifactSpill && c.s.artifacts != nil {
+		var b strings.Builder
+		for _, p := range pieces {
+			b.WriteString(p.text)
+		}
+		if b.Len() > 0 {
+			artifactURI = c.s.artifacts.Save("compaction", b.String())
+		}
+	}
+
 	if c.s.callbacks.OnStatus != nil {
 		c.s.callbacks.OnStatus("Compacting conversation…")
 	}
@@ -163,7 +178,7 @@ func (c *turnCompactor) compact(msgs, out []openai.ChatCompletionMessage, base, 
 			replacement = append(replacement, m)
 		}
 	}
-	replacement = append(replacement, summaryMessage(summary, ""))
+	replacement = append(replacement, summaryMessage(summary, artifactURI))
 
 	covered := base + len(head) - repl
 	c.covered, c.last, c.replacement = covered, msgs[covered-1], replacement
