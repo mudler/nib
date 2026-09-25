@@ -93,13 +93,16 @@ func TestCompactHistoryFitsTheSummaryPromptInTheBudget(t *testing.T) {
 	if _, _, err := s.CompactHistory(); err != nil {
 		t.Fatalf("CompactHistory: %v", err)
 	}
-	if got := tokensOf(llm.prompts[0]); got > budget {
-		t.Fatalf("summary prompt is ~%d tokens, budget is %d", got, budget)
+	// The head is known not to fit, so it goes out in chunks from the start.
+	for i, p := range llm.prompts {
+		if got := tokensOf(p); got > budget {
+			t.Fatalf("summary prompt %d is ~%d tokens, budget is %d", i, got, budget)
+		}
 	}
 	if !strings.Contains(llm.prompts[0], "goal: fix the parser") {
 		t.Fatal("fitting the prompt dropped the user's goal")
 	}
-	if !strings.Contains(llm.prompts[0], "f5.go") {
+	if !strings.Contains(strings.Join(llm.prompts, ""), "f5.go") {
 		t.Fatal("fitting the prompt dropped the record of which tools ran")
 	}
 }

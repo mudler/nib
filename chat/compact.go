@@ -696,10 +696,13 @@ func (s *Session) summaryPromptLimit(output int) int {
 // (the pruned view of them). An empty head, with a nil error, means there was
 // nothing to compact.
 //
-// The whole head goes out in one request first. When the backend rejects it
-// as too large, the head is summarized in chunks instead (see rollingCover),
-// each fitted to the retry target summaryRetryTarget derives from the
-// rejection. When the chunks cover the whole head, the result is the summary
+// When the window is known and the rendered head is larger than the summary
+// prompt budget (summaryPromptLimit), the head is summarized in chunks fitted
+// to that budget from the start (see rollingCover): fitting it into one
+// request would cut and drop messages on purpose. Otherwise the whole head
+// goes out in one request first, and when the backend rejects it as too
+// large, the head is summarized in chunks instead, each fitted to the retry
+// target summaryRetryTarget derives from the rejection. When the chunks cover the whole head, the result is the summary
 // and the original tail. When they stop at maxRollingChunks, the head ends
 // where they stopped and the rest joins the tail, verbatim: nothing is lost,
 // and the next compaction can summarize it. The loop stops on a non-overflow
@@ -712,7 +715,14 @@ func (s *Session) summarizeFitting(ctx context.Context, msgs []openai.ChatComple
 		return "", nil, nil, nil
 	}
 	limit := s.summaryPromptLimit(s.summaryOutputTokens())
-	summary, sent, serr := s.summarize(ctx, renderMessages(view(head)), limit)
+	pieces := renderMessages(view(head))
+	if limit > 0 && piecesTokens(pieces) > limit {
+		// The head is known not to fit: fitSummaryInput would cut it down
+		// on purpose, so it goes out in chunks from the start instead. The
+		// target is the whole prompt, instruction included.
+		return s.rollingHead(ctx, msgs, head, view, limit+tokensOf(summaryPrefix), 0)
+	}
+	summary, sent, serr := s.summarize(ctx, pieces, limit)
 	if serr == nil {
 		return summary, head, tail, nil
 	}
@@ -723,13 +733,29 @@ func (s *Session) summarizeFitting(ctx context.Context, msgs []openai.ChatComple
 	if target <= 0 {
 		return "", nil, nil, serr
 	}
-	summary, covered, err := s.rollingCover(ctx, head, view, target, 1)
+	return s.rollingHead(ctx, msgs, head, view, target, 1)
+}
+
+// rollingHead summarizes head in chunks fitted to target (see rollingCover)
+// and splits msgs where the chunks stopped. failures is passed through to
+// rollingCover.
+func (s *Session) rollingHead(ctx context.Context, msgs, head []openai.ChatCompletionMessage, view func([]openai.ChatCompletionMessage) []openai.ChatCompletionMessage, target, failures int) (summary string, h, tail []openai.ChatCompletionMessage, err error) {
+	summary, covered, err := s.rollingCover(ctx, head, view, target, failures)
 	if err != nil {
 		return "", nil, nil, err
 	}
 	// head is msgs[:len(head)], so what the chunks did not cover and the
 	// original tail are one contiguous run of msgs.
 	return summary, msgs[:covered], msgs[covered:], nil
+}
+
+// piecesTokens is the byte/4 size of pieces joined.
+func piecesTokens(pieces []summaryPiece) int {
+	n := 0
+	for _, p := range pieces {
+		n += len(p.text)
+	}
+	return n / 4
 }
 
 // maxRollingChunks bounds how many chunks rollingCover summarizes for one

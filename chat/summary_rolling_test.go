@@ -280,3 +280,129 @@ func TestRollingSummaryCutsAMessageLargerThanTheTarget(t *testing.T) {
 		t.Fatal("the artifact must hold the over-large message in full")
 	}
 }
+
+// knownWindowSession is a session that knows the backend's 8192-token window,
+// where every summary reserves 4000 of it.
+func knownWindowSession(llm cogito.LLM, frag []openai.ChatCompletionMessage) *Session {
+	s := newCompactTestSession(llm, 2, frag, frag)
+	s.compaction.MaxContextTokens = 8192
+	s.compaction.SummaryMaxTokens = 4000
+	s.artifacts = mcp.NewArtifactStore()
+	return s
+}
+
+const (
+	cutMarker     = "bytes omitted to fit the summary"
+	droppedMarker = "earlier messages omitted to fit the summary"
+)
+
+func TestRollingStartsAtOnceForAHeadKnownToBeTooLarge(t *testing.T) {
+	frag := shortHistory(24) // ~13k tokens against a ~3.7k target
+	orig := cloneMessages(frag)
+	llm := &rollingLLM{limit: 8192}
+	s := knownWindowSession(llm, frag)
+
+	if _, _, err := s.CompactHistory(); err != nil {
+		t.Fatalf("CompactHistory: %v", err)
+	}
+	if len(llm.reqs) < 3 || llm.served != len(llm.reqs) {
+		t.Fatalf("requests = %d, served = %d: want several chunks and no overflow", len(llm.reqs), llm.served)
+	}
+	for i := range llm.reqs {
+		p := llm.prompt(i)
+		if strings.Contains(p, "BODY00") && strings.Contains(p, "BODY23") {
+			t.Fatalf("request %d carries the whole head", i)
+		}
+		if strings.Contains(p, cutMarker) || strings.Contains(p, droppedMarker) {
+			t.Fatalf("request %d was cut by fitSummaryInput", i)
+		}
+	}
+	all := ""
+	for i := range llm.reqs {
+		all += llm.prompt(i)
+	}
+	for i := range 24 {
+		if c := strings.Count(all, fmt.Sprintf("BODY%02d", i)); c != 1 {
+			t.Fatalf("BODY%02d appears in %d chunks, want 1", i, c)
+		}
+	}
+	got := s.fragment.Messages
+	if len(got) != 3 || !strings.Contains(got[0].Content, fmt.Sprintf("SUMMARY-%d", len(llm.reqs))) {
+		t.Fatalf("want [final summary] + the original tail, got %d messages", len(got))
+	}
+	if !reflect.DeepEqual(got[1:], orig[len(orig)-2:]) {
+		t.Fatal("the tail is not the original KeepRecent tail")
+	}
+}
+
+func TestRollingNotUsedForAHeadThatFits(t *testing.T) {
+	frag := shortHistory(2)
+	llm := &rollingLLM{limit: 8192}
+	s := knownWindowSession(llm, frag)
+	if _, _, err := s.CompactHistory(); err != nil {
+		t.Fatalf("CompactHistory: %v", err)
+	}
+	if len(llm.reqs) != 1 {
+		t.Fatalf("summary calls = %d, want 1", len(llm.reqs))
+	}
+	if !strings.HasPrefix(llm.prompt(0), summaryPrefix) || !strings.Contains(llm.prompt(0), "BODY01") {
+		t.Fatal("want the whole head in one normal summary call")
+	}
+}
+
+func TestRollingWithAnUnknownWindowStartsOnOverflow(t *testing.T) {
+	frag := shortHistory(24)
+	llm := &rollingLLM{limit: 8192}
+	s := knownWindowSession(llm, frag)
+	s.compaction.MaxContextTokens = 0
+
+	if _, _, err := s.CompactHistory(); err != nil {
+		t.Fatalf("CompactHistory: %v", err)
+	}
+	if len(llm.reqs) < 3 || llm.served != len(llm.reqs)-1 {
+		t.Fatalf("requests = %d, served = %d: want an overflow then chunks", len(llm.reqs), llm.served)
+	}
+	first := llm.prompt(0)
+	if !strings.Contains(first, "BODY00") || !strings.Contains(first, "BODY23") {
+		t.Fatal("the first request must carry the whole head")
+	}
+}
+
+func TestRollingProactiveCutsOnlyThePieceLargerThanTheTarget(t *testing.T) {
+	frag := shortHistory(24)
+	// One result alone is far larger than the target.
+	frag[4].Content = "HUGE" + strings.Repeat("y", 40000)
+	orig := cloneMessages(frag)
+	llm := &rollingLLM{limit: 8192}
+	s := knownWindowSession(llm, frag)
+
+	if _, _, err := s.CompactHistory(); err != nil {
+		t.Fatalf("CompactHistory: %v", err)
+	}
+	if llm.served != len(llm.reqs) {
+		t.Fatalf("requests = %d, served = %d: want no overflow", len(llm.reqs), llm.served)
+	}
+	cuts := 0
+	for i := range llm.reqs {
+		p := llm.prompt(i)
+		if strings.Contains(p, droppedMarker) {
+			t.Fatalf("request %d dropped whole messages", i)
+		}
+		if n := strings.Count(p, cutMarker); n > 0 {
+			cuts += n
+			if !strings.Contains(p, "tool: HUGE") {
+				t.Fatalf("request %d cut a piece other than the huge one", i)
+			}
+		}
+	}
+	if cuts != 1 {
+		t.Fatalf("cuts = %d, want exactly the one huge piece cut", cuts)
+	}
+	got := s.fragment.Messages
+	if len(got) != 3 || !reflect.DeepEqual(got[1:], orig[len(orig)-2:]) {
+		t.Fatalf("want [summary] + the original tail, got %d messages", len(got))
+	}
+	if !strings.Contains(s.artifacts.Get(1).Content, frag[4].Content) {
+		t.Fatal("the artifact must hold the over-large message in full")
+	}
+}

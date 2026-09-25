@@ -42,8 +42,11 @@ func TestIterativeTrimStep1CompactionFits(t *testing.T) {
 	if err := s.iterativeTrim(context.Background()); err != nil {
 		t.Fatalf("iterativeTrim: %v", err)
 	}
-	if llm.calls != 1 {
-		t.Fatalf("want 1 summary call, got %d", llm.calls)
+	// The head (u1..a2) is larger than the summary prompt budget, so step 1
+	// summarizes it in exactly 2 rolling chunks. The [summary, u3, a3]
+	// shape below shows it was step 1 (KeepRecent 2), not the shrunk keep.
+	if llm.calls != 2 {
+		t.Fatalf("want 2 summary chunk calls from step 1, got %d", llm.calls)
 	}
 	got := trimFragment(s)
 	if len(got) != 3 || !strings.Contains(got[0].Content, "SUMMARY-TEXT") {
@@ -67,11 +70,25 @@ func TestIterativeTrimNoOpFallsThroughToShrinkKeep(t *testing.T) {
 	// KeepRecent 10 > len(frag): compactHistory has nothing to compact.
 	s := newCompactTestSession(llm, 10, frag, frag)
 
+	// Step 1 on its own: nothing to compact, so no summary call and no change.
+	if _, _, err := s.compactHistory(context.Background()); err != nil {
+		t.Fatalf("compactHistory: %v", err)
+	}
+	if llm.calls != 0 {
+		t.Fatalf("want 0 summary calls from step 1, got %d", llm.calls)
+	}
+	if got := trimFragment(s); len(got) != len(frag) {
+		t.Fatalf("step 1 changed the fragment: %d messages", len(got))
+	}
+
 	if err := s.iterativeTrim(context.Background()); err != nil {
 		t.Fatalf("iterativeTrim: %v", err)
 	}
-	if llm.calls != 1 {
-		t.Fatalf("want exactly 1 summary call (from the shrunk keep), got %d", llm.calls)
+	// Step 1 makes no call, so every call comes from the shrunk keep: its
+	// head is larger than the summary prompt budget and goes out in exactly
+	// 2 rolling chunks.
+	if llm.calls != 2 {
+		t.Fatalf("want exactly 2 summary chunk calls (from the shrunk keep), got %d", llm.calls)
 	}
 	got := trimFragment(s)
 	if len(got) >= len(frag) || !strings.Contains(got[0].Content, "SUMMARY-TEXT") {
