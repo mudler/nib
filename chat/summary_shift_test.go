@@ -164,7 +164,9 @@ func TestSummaryGivesUpAfterMaxAttempts(t *testing.T) {
 	s.artifacts = mcp.NewArtifactStore()
 
 	_, _, err := s.CompactHistory()
-	if !isContextOverflow(err) {
+	// The prompt fits beside the reservation's window, so the catalog reads
+	// these rejections as budget overflows, not context overflows.
+	if !isWindowOverflow(err) {
 		t.Fatalf("want the last overflow, got %v", err)
 	}
 	if len(llm.reqs) != maxSummaryAttempts {

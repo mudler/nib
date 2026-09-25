@@ -1,0 +1,10 @@
+{
+  "provider": "Gemini / Vertex",
+  "source": "Gemini API 400 INVALID_ARGUMENT message",
+  "raw": "The input token count (210000) exceeds the maximum number of tokens allowed (200000).",
+  "kind": "context",
+  "window": 200000,
+  "total": 0,
+  "input": 210000,
+  "output": 0
+}

@@ -1,0 +1,11 @@
+{
+  "provider": "llama.cpp / LocalAI",
+  "source": "the same LocalAI HTTP 500 overflow in the text form of cogito's typed streaming error (in progress: status in *openai.APIError / *openai.RequestError)",
+  "raw": "failed to make a streaming decision after 3 attempts: localai stream: error, status code: 500, status: 500 Internal Server Error, message: rpc error: code = Internal desc = request (9739 tokens) exceeds the available context size (8192 tokens), try increasing it",
+  "kind": "context",
+  "status": 500,
+  "window": 8192,
+  "total": 0,
+  "input": 9739,
+  "output": 0
+}

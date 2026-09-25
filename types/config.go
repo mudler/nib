@@ -59,6 +59,22 @@ type CompactionConfig struct {
 	// the head is saved and the summary includes an artifact://N reference.
 	// Set to true to disable — compaction runs as before, nothing saved.
 	DisableArtifactSpill bool `yaml:"disable_artifact_spill"`
+	// OverflowPatterns teach nib a backend's context-overflow wording without a
+	// rebuild. They are tried before the built-in patterns, first match wins.
+	// An invalid regex or kind is logged and skipped; it never fails startup.
+	OverflowPatterns []OverflowPattern `yaml:"overflow_patterns"`
+}
+
+// OverflowPattern is one user-supplied row of the overflow error catalog.
+// Regex figures come from the named groups window, total, input and output,
+// so the pattern states what each number means.
+type OverflowPattern struct {
+	Name string `yaml:"name"`
+	// Kind is "context" (the prompt does not fit: compact), "budget" (prompt
+	// plus requested output does not fit: lower max_tokens) or "output_cap"
+	// (the requested output alone is above the model's maximum).
+	Kind  string `yaml:"kind"`
+	Regex string `yaml:"regex"`
 }
 
 // ToolOutputPruningConfig controls replacing stale or oversized tool results

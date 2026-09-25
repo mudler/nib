@@ -135,7 +135,10 @@ var fatalMarkers = []string{
 // it. Only the small set above — client-side failures that never succeed on
 // retry — stops immediately.
 func classifyBackendError(err error) backendErrorClass {
-	if err == nil || isContextOverflow(err) {
+	// Any size rejection the catalog recognises is fatal. Specific rows
+	// classify at any status, so a LocalAI overflow reported as a 500 is not
+	// repeated; a generic phrase in a 5xx is not an overflow and is retried.
+	if err == nil || classifyOverflow(err).Kind != KindNone {
 		return errFatal
 	}
 	low := strings.ToLower(err.Error())

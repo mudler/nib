@@ -684,6 +684,7 @@ func NewSession(ctx context.Context, cfg types.Config, callbacks Callbacks, tran
 		s.compactionAutoDetected = true
 		s.compaction.MaxContextTokens = defaultContextTokens
 	}
+	setConfigOverflowPatterns(cfg.Compaction.OverflowPatterns)
 
 	return s, nil
 }
@@ -1899,7 +1900,13 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 			// Never after an interrupt: a cancelled turnCtx means the user
 			// pressed Ctrl+C, and re-sending is the opposite of what they asked
 			// for. See canRecoverFromOverflow.
-			if canRecoverFromOverflow(turnCtx, err) {
+			//
+			// The turn's own classification, not the free isContextOverflow:
+			// only the session knows how large the failed request was, which
+			// decides whether a 413 with no token wording is an overflow.
+			turnOverflow := s.classifyTurnOverflow(err)
+			logUnclassifiedRejection(err, turnOverflow)
+			if turnCtx.Err() == nil && turnOverflow.Kind == KindContext {
 				if w, ok := learnedWindowFrom(err); ok {
 					s.rememberWindow(w, mainModel)
 				}
@@ -1998,7 +2005,7 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 			// clearing the conversation, because compaction just did the
 			// equivalent and the retry has already been made — see
 			// contextOverflowRetriedMessage.
-			overflow := isContextOverflow(err)
+			overflow := turnOverflow.Kind == KindContext
 			err = humanizeTurnError(err, s.overflowRetries() > 0)
 			if s.callbacks.OnError != nil {
 				s.callbacks.OnError(err)

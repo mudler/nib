@@ -575,8 +575,27 @@ log_level: error
 # prompt is fitted into the window minus that reservation. If the backend
 # still rejects it as too large, nib summarizes fewer of the older turns and
 # keeps the rest verbatim, instead of cutting the text it summarizes.
+#
+# nib reads a backend's "request too large" error to decide what to do:
+# compact when the prompt itself does not fit (kind "context"), lower the
+# requested output when only prompt + output does not fit ("budget"), or
+# lower the output cap when the output alone is above the model's maximum
+# ("output_cap"). It knows the wording of llama.cpp/LocalAI, vLLM, OpenAI,
+# Anthropic and Gemini. overflow_patterns teaches it another backend without a
+# rebuild: the rows are tried before the built-in ones, first match wins. A
+# regex states its figures with the named groups window, total, input and
+# output. A row with an invalid regex or kind is logged and skipped. A
+# backend-specific wording (built-in or from this list) counts at any HTTP
+# status, because LocalAI reports an overflow as HTTP 500; a generic phrase
+# such as "context window" counts only with status 400, 413 or none. An error
+# with HTTP status 400 or 413 that no pattern recognises is logged at debug
+# level, so you can copy its text from the log.
 compaction:
   summary_max_tokens: 16384
+  overflow_patterns:
+    - name: my-backend
+      kind: context
+      regex: 'prompt has (?P<input>\d+) tokens, limit is (?P<window>\d+)'
 
 # Optional: external MCP servers
 mcp_servers:

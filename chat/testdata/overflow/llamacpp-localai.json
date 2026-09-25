@@ -1,0 +1,10 @@
+{
+  "provider": "llama.cpp / LocalAI",
+  "source": "llama.cpp tools/server/server-context.cpp, surfaced by LocalAI over gRPC and wrapped by cogito's tool-selection loop",
+  "raw": "failed to select tool: failed to pick tool: tool selection failed: failed to make a decision after 3 attempts: rpc error: code = Internal desc = request (9739 tokens) exceeds the available context size (8192 tokens), try increasing it",
+  "kind": "context",
+  "window": 8192,
+  "total": 0,
+  "input": 9739,
+  "output": 0
+}

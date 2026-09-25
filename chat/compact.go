@@ -2,9 +2,7 @@ package chat
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"strconv"
 	"strings"
 
 	"github.com/mudler/nib/types"
@@ -97,8 +95,8 @@ func shouldAutoCompact(cfg types.CompactionConfig, window, promptTokens int) boo
 // 4096-context model is exactly nib's audience, so the floor sits below any
 // real served model and above any plausible misparse of an output-token count
 // (the largest default max_tokens backends print in overflow errors is in the
-// hundreds — vLLM's "512 output tokens" is the known example, and it is only
-// skipped today because tokenCountRe's \s* cannot span the word "output").
+// hundreds — vLLM's "512 output tokens" is the known example; the overflow
+// catalog's named groups keep it out of the window, see overflow_patterns.go).
 //
 // The ceiling exists because strconv.Atoi clamps an absurdly long digit run to
 // MaxInt instead of erroring, so garbage lands far ABOVE any floor rather than
@@ -217,6 +215,16 @@ func (s *Session) ContextWindow() int {
 // the interrupt case can be exercised at all (see the note above).
 func canRecoverFromOverflow(turnCtx context.Context, err error) bool {
 	return turnCtx.Err() == nil && isContextOverflow(err)
+}
+
+// canShrinkSummary reports whether a rejected summary request is worth
+// retrying with a smaller prompt: a context overflow, or a budget overflow
+// (the prompt fits but prompt + reserved output does not), the user did not
+// cancel. The summary's output reservation is already capped, so shrinking
+// its prompt is what fits a budget overflow here; this is not compaction of
+// the conversation, which a budget overflow must never trigger.
+func canShrinkSummary(ctx context.Context, err error) bool {
+	return ctx.Err() == nil && isWindowOverflow(err)
 }
 
 // overflowRetries reports how many context-overflow recoveries the current turn
@@ -543,22 +551,20 @@ func summaryRetryTarget(err error, sent int) int {
 }
 
 // overflowFigures reads the request size and the window from an overflow
-// error, applying the same rule as learnedWindowFrom: the larger figure is the
-// request and the smaller is the limit, whatever order the backend used.
+// error for the subtractive summary retry: (Total, Window) from the catalog
+// row, with Input + Output (or Input alone) standing in for a missing total.
+// A context or a budget overflow qualifies; a generic wording states no
+// figures and reports ok == false, so the caller halves instead.
 func overflowFigures(err error) (needs, allows int, ok bool) {
-	for e := err; e != nil; e = errors.Unwrap(e) {
-		m := tokenCountRe.FindAllStringSubmatch(e.Error(), -1)
-		if !hasOverflowMarker(e.Error()) || len(m) < 2 {
-			continue
-		}
-		a, _ := strconv.Atoi(m[0][1])
-		b, _ := strconv.Atoi(m[1][1])
-		needs, allows = max(a, b), min(a, b)
-		if allows > 0 {
-			return needs, allows, true
-		}
+	info := classifyOverflow(err)
+	if info.Kind != KindContext && info.Kind != KindBudget {
+		return 0, 0, false
 	}
-	return 0, 0, false
+	needs, allows = info.overflowNeeds(), info.Window
+	if needs <= 0 || allows <= 0 {
+		return 0, 0, false
+	}
+	return needs, allows, true
 }
 
 // CompactHistory summarizes the older portion of the conversation via the LLM
@@ -710,7 +716,7 @@ func (s *Session) summarizeFitting(ctx context.Context, msgs []openai.ChatComple
 	if serr == nil {
 		return summary, head, tail, nil
 	}
-	if maxSummaryAttempts <= 1 || !canRecoverFromOverflow(ctx, serr) {
+	if maxSummaryAttempts <= 1 || !canShrinkSummary(ctx, serr) {
 		return "", nil, nil, serr
 	}
 	target := summaryRetryTarget(serr, sent)
@@ -820,7 +826,7 @@ func (s *Session) rollingCover(ctx context.Context, head []openai.ChatCompletion
 			continue
 		}
 		failures++
-		if failures >= maxSummaryAttempts || !canRecoverFromOverflow(ctx, serr) {
+		if failures >= maxSummaryAttempts || !canShrinkSummary(ctx, serr) {
 			return "", 0, serr
 		}
 		if target = summaryRetryTarget(serr, sent); target <= 0 {
