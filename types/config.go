@@ -49,6 +49,11 @@ type CompactionConfig struct {
 	// compaction with nothing to trigger on (see chat.ContextBudget). At the
 	// 4096 default the cap applies only below an 8192-token window.
 	ReserveTokens int `yaml:"reserve_tokens"`
+	// SummaryMaxTokens caps the output the compaction summary request
+	// reserves. The request asks for the smaller of this and the model's own
+	// output cap, and its prompt is fitted into the window minus that
+	// reservation. 0 → default 16384.
+	SummaryMaxTokens int `yaml:"summary_max_tokens"`
 	// DisableArtifactSpill turns OFF saving the full conversation head as an
 	// artifact during compaction. Zero value (false) = spill ON (default):
 	// the head is saved and the summary includes an artifact://N reference.

@@ -359,12 +359,12 @@ func TestRunningAgentEventAddsNothing(t *testing.T) {
 	}
 }
 
-// summarizingLLM answers Ask with a summary and reports what that call cost,
+// summarizingLLM answers Ask and CreateChatCompletion with a summary and reports what that call cost,
 // which is the figure compaction has been spending invisibly.
 type summarizingLLM struct{}
 
 func (summarizingLLM) CreateChatCompletion(ctx context.Context, req openai.ChatCompletionRequest) (cogito.LLMReply, cogito.LLMUsage, error) {
-	return cogito.LLMReply{}, cogito.LLMUsage{}, nil
+	return replyWith("a summary of earlier turns"), cogito.LLMUsage{PromptTokens: 60, CompletionTokens: 6, TotalTokens: 66}, nil
 }
 
 func (summarizingLLM) Ask(ctx context.Context, f cogito.Fragment) (cogito.Fragment, error) {
@@ -409,12 +409,12 @@ func TestCompactionUsageCountsTowardTheSession(t *testing.T) {
 
 // failingSummaryLLM models a compaction call the backend served and billed and
 // that then failed — a truncated response, a mid-stream disconnect. It reports
-// the usage on the returned fragment before returning the error, which is the
-// only shape in which a client can hand back spend it already incurred.
+// the usage alongside the error (on the fragment, for Ask), which is the only
+// shape in which a client can hand back spend it already incurred.
 type failingSummaryLLM struct{}
 
 func (failingSummaryLLM) CreateChatCompletion(ctx context.Context, req openai.ChatCompletionRequest) (cogito.LLMReply, cogito.LLMUsage, error) {
-	return cogito.LLMReply{}, cogito.LLMUsage{}, nil
+	return cogito.LLMReply{}, cogito.LLMUsage{PromptTokens: 40, CompletionTokens: 4, TotalTokens: 44}, errors.New("backend hung up after answering")
 }
 
 func (failingSummaryLLM) Ask(ctx context.Context, f cogito.Fragment) (cogito.Fragment, error) {

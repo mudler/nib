@@ -14,7 +14,9 @@ import (
 )
 
 // overflowLLM fails the first N completion calls with a backend overflow error,
-// then succeeds. Ask always succeeds, so compaction's summarising call works.
+// then succeeds. Compaction's summary request (sent through
+// CreateChatCompletion, or Ask) always succeeds and is not counted as a
+// completion call, so compaction's summarising call works.
 type overflowLLM struct {
 	mu       sync.Mutex
 	failures int // remaining calls that should overflow
@@ -25,6 +27,9 @@ type overflowLLM struct {
 func (o *overflowLLM) CreateChatCompletion(ctx context.Context, req openai.ChatCompletionRequest) (cogito.LLMReply, cogito.LLMUsage, error) {
 	if err := ctx.Err(); err != nil {
 		return cogito.LLMReply{}, cogito.LLMUsage{}, err
+	}
+	if n := len(req.Messages); n > 0 && strings.HasPrefix(req.Messages[n-1].Content, compactInstruction) {
+		return replyWith(o.summary()), cogito.LLMUsage{PromptTokens: 20, CompletionTokens: 2, TotalTokens: 22}, nil
 	}
 	o.mu.Lock()
 	o.calls++
@@ -57,17 +62,20 @@ func (o *overflowLLM) CreateChatCompletion(ctx context.Context, req openai.ChatC
 // hiding the infinite loop the cap exists to prevent. Varying the text puts the
 // cap, and only the cap, on the hook.
 func (o *overflowLLM) Ask(ctx context.Context, f cogito.Fragment) (cogito.Fragment, error) {
-	o.mu.Lock()
-	o.asks++
-	n := o.asks
-	o.mu.Unlock()
-
-	summary := "summary " + strconv.Itoa(n) + " of earlier turns" + strings.Repeat(" with more detail", n)
-	out := f.AddMessage("assistant", summary)
+	out := f.AddMessage("assistant", o.summary())
 	if out.Status != nil {
 		out.Status.LastUsage = cogito.LLMUsage{PromptTokens: 20, CompletionTokens: 2, TotalTokens: 22}
 	}
 	return out, nil
+}
+
+// summary counts a summary request and returns its (distinct) text.
+func (o *overflowLLM) summary() string {
+	o.mu.Lock()
+	o.asks++
+	n := o.asks
+	o.mu.Unlock()
+	return "summary " + strconv.Itoa(n) + " of earlier turns" + strings.Repeat(" with more detail", n)
 }
 
 func newOverflowSession(t *testing.T, llm cogito.LLM) *Session {
@@ -466,6 +474,13 @@ type summaryFailingLLM struct {
 
 func (f *summaryFailingLLM) Ask(ctx context.Context, frag cogito.Fragment) (cogito.Fragment, error) {
 	return frag, errors.New("request (368203 tokens) exceeds the available context size (262144 tokens)")
+}
+
+func (f *summaryFailingLLM) CreateChatCompletion(ctx context.Context, req openai.ChatCompletionRequest) (cogito.LLMReply, cogito.LLMUsage, error) {
+	if n := len(req.Messages); n > 0 && strings.HasPrefix(req.Messages[n-1].Content, compactInstruction) {
+		return cogito.LLMReply{}, cogito.LLMUsage{}, errors.New("request (368203 tokens) exceeds the available context size (262144 tokens)")
+	}
+	return f.overflowLLM.CreateChatCompletion(ctx, req)
 }
 
 // When compaction's own call fails, the user gets the ORIGINAL overflow — the

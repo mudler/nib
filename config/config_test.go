@@ -32,7 +32,7 @@ func TestWithDefaultsKeepsUserValues(t *testing.T) {
 	// comparison below would fail for a reason that is not an override bug.
 	in := types.Config{Compaction: types.CompactionConfig{
 		MaxContextTokens: 200000, Threshold: 0.5, KeepRecent: 2, Disabled: true,
-		ReserveTokens: 512,
+		ReserveTokens: 512, SummaryMaxTokens: 2048,
 	}}
 	got := withDefaults(in)
 	if got.Compaction != in.Compaction {

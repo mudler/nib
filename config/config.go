@@ -423,6 +423,10 @@ func withDefaults(cfg types.Config) types.Config {
 	if cfg.Compaction.ReserveTokens == 0 {
 		cfg.Compaction.ReserveTokens = 4096
 	}
+	// Must match chat's defaultSummaryMaxTokens, for the same reason.
+	if cfg.Compaction.SummaryMaxTokens == 0 {
+		cfg.Compaction.SummaryMaxTokens = 16384
+	}
 
 	// Tool-output pruning is defaulted as a block, not field by field: a zero
 	// HighWaterTokens is meaningful on its own (it disables size pruning while

@@ -568,6 +568,16 @@ agents:
 # LOG_FORMAT=json switches to JSON lines.
 log_level: error
 
+# Optional: conversation compaction. When the context fills up, nib
+# summarizes the older turns and keeps the recent ones verbatim.
+# summary_max_tokens caps the output the summary request reserves (default
+# 16384; the model's own output cap wins when it is smaller). The summary
+# prompt is fitted into the window minus that reservation. If the backend
+# still rejects it as too large, nib summarizes fewer of the older turns and
+# keeps the rest verbatim, instead of cutting the text it summarizes.
+compaction:
+  summary_max_tokens: 16384
+
 # Optional: external MCP servers
 mcp_servers:
   filesystem:

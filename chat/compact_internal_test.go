@@ -96,11 +96,14 @@ func TestEstimateAndHumanTokens(t *testing.T) {
 	}
 }
 
-// fakeSummaryLLM is a minimal cogito.LLM that returns a canned summary from Ask.
+// fakeSummaryLLM is a minimal cogito.LLM that returns a canned summary from
+// Ask and from CreateChatCompletion, which is what compaction sends. lastReq is
+// the last CreateChatCompletion request.
 type fakeSummaryLLM struct {
-	reply string
-	err   error
-	calls int
+	reply   string
+	err     error
+	calls   int
+	lastReq openai.ChatCompletionRequest
 }
 
 func (f *fakeSummaryLLM) Ask(ctx context.Context, fr cogito.Fragment) (cogito.Fragment, error) {
@@ -116,7 +119,19 @@ func (f *fakeSummaryLLM) Ask(ctx context.Context, fr cogito.Fragment) (cogito.Fr
 }
 
 func (f *fakeSummaryLLM) CreateChatCompletion(ctx context.Context, req openai.ChatCompletionRequest) (cogito.LLMReply, cogito.LLMUsage, error) {
-	return cogito.LLMReply{}, cogito.LLMUsage{}, nil
+	f.calls++
+	f.lastReq = req
+	if f.err != nil {
+		return cogito.LLMReply{}, cogito.LLMUsage{}, f.err
+	}
+	return replyWith(f.reply), cogito.LLMUsage{TotalTokens: 1}, nil
+}
+
+// replyWith is a completion whose single choice says content.
+func replyWith(content string) cogito.LLMReply {
+	return cogito.LLMReply{ChatCompletionResponse: openai.ChatCompletionResponse{
+		Choices: []openai.ChatCompletionChoice{{Message: openai.ChatCompletionMessage{Role: "assistant", Content: content}}},
+	}}
 }
 
 func newCompactTestSession(llm cogito.LLM, keepRecent int, frag []openai.ChatCompletionMessage, disp []openai.ChatCompletionMessage) *Session {
