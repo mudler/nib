@@ -163,7 +163,7 @@ func (c *turnCompactor) compact(msgs, out []openai.ChatCompletionMessage, base, 
 			replacement = append(replacement, m)
 		}
 	}
-	replacement = append(replacement, summaryMessage(summary))
+	replacement = append(replacement, summaryMessage(summary, ""))
 
 	covered := base + len(head) - repl
 	c.covered, c.last, c.replacement = covered, msgs[covered-1], replacement

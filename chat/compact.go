@@ -578,13 +578,27 @@ func (s *Session) compactHistory(ctx context.Context) (before, after int, err er
 	if len(pieces) == 0 {
 		return before, before, nil // nothing to compact
 	}
+	// Save the full untruncated head as an artifact so nothing is lost
+	// when the lossy summary truncates or drops messages. The model can
+	// page through it via the read tool (artifact://N) or search it with
+	// search_artifacts.
+	var artifactURI string
+	if !cfg.DisableArtifactSpill && s.artifacts != nil {
+		var b strings.Builder
+		for _, p := range pieces {
+			b.WriteString(p.text)
+		}
+		if b.Len() > 0 {
+			artifactURI = s.artifacts.Save("compaction", b.String())
+		}
+	}
 	summary, err := s.summarize(ctx, pieces)
 	if err != nil {
 		return before, before, err
 	}
 
 	// Build the new state up front; swap only after success (atomic).
-	newFragMsgs := append([]openai.ChatCompletionMessage{summaryMessage(summary)}, tail...)
+	newFragMsgs := append([]openai.ChatCompletionMessage{summaryMessage(summary, artifactURI)}, tail...)
 
 	s.historyMu.Lock()
 	newMessages := compactedDisplay(s.messages, tail)
@@ -675,11 +689,16 @@ func (s *Session) summarize(ctx context.Context, pieces []summaryPiece) (string,
 // continuing, so the compaction boundary does not silently drop context.
 // The memory tool reference nudges the model to persist durable facts
 // (paths, decisions, gotchas) that the lossy summary may not preserve.
-func summaryMessage(summary string) openai.ChatCompletionMessage {
+func summaryMessage(summary, artifactURI string) openai.ChatCompletionMessage {
+	content := "[Earlier conversation compacted. Review the summary below and continue from where you left off. " +
+		"If the summary contains important context that should persist across sessions, save it to memory now before it is lost.]\n\n" + summary
+	if artifactURI != "" {
+		content += "\n\nFull conversation before compaction is available at " + artifactURI +
+			" — use the read tool with this path to page through it, or use search_artifacts to search for specific content."
+	}
 	return openai.ChatCompletionMessage{
-		Role: "user",
-		Content: "[Earlier conversation compacted. Review the summary below and continue from where you left off. " +
-			"If the summary contains important context that should persist across sessions, save it to memory now before it is lost.]\n\n" + summary,
+		Role:    "user",
+		Content: content,
 	}
 }
 
