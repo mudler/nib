@@ -694,6 +694,18 @@ func (c *Config) GetPrompt() string {
 // agent reads them before acting on the repository.
 var contextFileNames = []string{"AGENTS.md", "CLAUDE.md", "NIB.md", "GEMINI.md"}
 
+// DetectContextFiles returns the names of known project instruction files that
+// exist as regular files in dir, preserving contextFileNames order.
+func DetectContextFiles(dir string) []string {
+	return detectContextFiles(dir)
+}
+
+// ContextFileNames returns the list of project instruction file names nib
+// looks for in the working directory.
+func ContextFileNames() []string {
+	return append([]string(nil), contextFileNames...)
+}
+
 // detectContextFiles returns the names of known project instruction files that
 // exist as regular files in dir, preserving contextFileNames order.
 func detectContextFiles(dir string) []string {
