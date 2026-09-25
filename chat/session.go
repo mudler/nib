@@ -1301,6 +1301,10 @@ func (s *Session) mcpToolFilter() func(*mcp.ClientSession, string) bool {
 			s.provenanceMu.Unlock()
 			return true
 		}
+		// search_artifacts is only useful when the artifact store has content.
+		if name == "search_artifacts" {
+			return s.toolEnabled(name) && s.artifacts != nil && s.artifacts.Count() > 0
+		}
 		return s.toolEnabled(name)
 	}
 }

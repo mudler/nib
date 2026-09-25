@@ -879,3 +879,118 @@ func TestFileSystemResolvesRelativeAgainstRoot(t *testing.T) {
 		t.Fatalf("empty root must not rewrite paths")
 	}
 }
+
+func TestSearchArtifacts(t *testing.T) {
+	// --- helper: start server with an artifact store ---
+	startServer := func(t *testing.T, store *ArtifactStore) (context.CancelFunc, *mcp.ClientSession) {
+		t.Helper()
+		serverTransport, clientTransport := mcp.NewInMemoryTransports()
+		ctx, cancel := context.WithCancel(context.Background())
+		go func() { _ = StartFileSystemMCPServer(ctx, serverTransport, "", nil, store) }()
+		time.Sleep(100 * time.Millisecond)
+		client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "v1.0.0"}, nil)
+		sess, err := client.Connect(ctx, clientTransport, nil)
+		if err != nil {
+			t.Fatalf("connect: %v", err)
+		}
+		return cancel, sess
+	}
+
+	extractText := func(result *mcp.CallToolResult) string {
+		for _, c := range result.Content {
+			if tc, ok := c.(*mcp.TextContent); ok {
+				return tc.Text
+			}
+		}
+		return ""
+	}
+
+	// --- subtest: with artifacts in the store ---
+	t.Run("with artifacts", func(t *testing.T) {
+		store := NewArtifactStore()
+		store.Save("compaction", "line one\nline two match here\nline three\nline four\nline five\nline six\nline seven")
+		store.Save("compaction", "another artifact\nwith a match\nand more lines")
+
+		cancel, sess := startServer(t, store)
+		defer cancel()
+
+		res, err := sess.CallTool(context.Background(), &mcp.CallToolParams{
+			Name:      "search_artifacts",
+			Arguments: map[string]any{"pattern": "match"},
+		})
+		if err != nil {
+			t.Fatalf("CallTool: %v", err)
+		}
+		text := extractText(res)
+		if !strings.Contains(text, "artifact://1") {
+			t.Errorf("expected artifact URI in results, got: %s", text)
+		}
+		if !strings.Contains(text, "match") {
+			t.Errorf("expected 'match' in results, got: %s", text)
+		}
+		if !strings.Contains(text, "line") {
+			t.Errorf("expected line numbers in results, got: %s", text)
+		}
+	})
+
+	// --- subtest: no-match pattern ---
+	t.Run("no matches", func(t *testing.T) {
+		store := NewArtifactStore()
+		store.Save("compaction", "nothing relevant here")
+
+		cancel, sess := startServer(t, store)
+		defer cancel()
+
+		res, err := sess.CallTool(context.Background(), &mcp.CallToolParams{
+			Name:      "search_artifacts",
+			Arguments: map[string]any{"pattern": "nonexistent"},
+		})
+		if err != nil {
+			t.Fatalf("CallTool: %v", err)
+		}
+		text := extractText(res)
+		if !strings.Contains(text, "No matches found") {
+			t.Errorf("expected 'No matches found', got: %s", text)
+		}
+	})
+
+	// --- subtest: invalid regex ---
+	t.Run("invalid regex", func(t *testing.T) {
+		store := NewArtifactStore()
+		store.Save("compaction", "some content")
+
+		cancel, sess := startServer(t, store)
+		defer cancel()
+
+		res, err := sess.CallTool(context.Background(), &mcp.CallToolParams{
+			Name:      "search_artifacts",
+			Arguments: map[string]any{"pattern": "[invalid(("},
+		})
+		if err != nil {
+			t.Fatalf("CallTool: %v", err)
+		}
+		text := extractText(res)
+		if !strings.Contains(text, "Invalid regex pattern") {
+			t.Errorf("expected 'Invalid regex pattern', got: %s", text)
+		}
+	})
+
+	// --- subtest: empty store ---
+	t.Run("empty store", func(t *testing.T) {
+		store := NewArtifactStore()
+		cancel, sess := startServer(t, store)
+		defer cancel()
+
+		res, err := sess.CallTool(context.Background(), &mcp.CallToolParams{
+			Name:      "search_artifacts",
+			Arguments: map[string]any{"pattern": "anything"},
+		})
+		if err != nil {
+			t.Fatalf("CallTool: %v", err)
+		}
+		text := extractText(res)
+		if !strings.Contains(text, "No artifacts available") {
+			t.Errorf("expected 'No artifacts available', got: %s", text)
+		}
+	})
+}

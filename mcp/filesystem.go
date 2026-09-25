@@ -778,10 +778,47 @@ func StartFileSystemMCPServer(ctx context.Context, transport mcp.Transport, root
 		Description: "Search files for regex pattern, returns up to 50 matches. Skips binary files and .git, .hg, .svn and node_modules directories",
 	}, fs.grep)
 
+	// Add tool for searching compaction artifacts
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "search_artifacts",
+		Description: "Search artifacts saved during compaction. Accepts a regex pattern (case-insensitive). Returns matching lines with 3 lines of context before and after, artifact IDs, and line numbers. Use read with an artifact://N path to page through full content.",
+	}, fs.searchArtifacts)
+
 	// Run the server
 	if err := server.Run(ctx, transport); err != nil {
 		return err
 	}
 
 	return nil
+}
+
+type searchArtifactsInput struct {
+	Pattern string `json:"pattern" jsonschema:"regular expression pattern (case-insensitive)"`
+}
+
+type searchArtifactsOutput struct {
+	Success bool   `json:"success" jsonschema:"whether operation was successful"`
+	Error   string `json:"error,omitempty" jsonschema:"error message if failed"`
+}
+
+func (f *fileSystem) searchArtifacts(ctx context.Context, req *mcp.CallToolRequest, input searchArtifactsInput) (
+	*mcp.CallToolResult,
+	searchArtifactsOutput,
+	error,
+) {
+	if f.artifacts == nil || f.artifacts.Count() == 0 {
+		return textResult("No artifacts available to search."), searchArtifactsOutput{Success: true}, nil
+	}
+	results, err := f.artifacts.Search(input.Pattern)
+	if err != nil {
+		return textResult(fmt.Sprintf("Invalid regex pattern: %v", err)), searchArtifactsOutput{Success: false, Error: "invalid regex pattern"}, nil
+	}
+	if len(results) == 0 {
+		return textResult("No matches found."), searchArtifactsOutput{Success: true}, nil
+	}
+	var b strings.Builder
+	for _, r := range results {
+		fmt.Fprintf(&b, "%s, line %d:\n%s\n", formatArtifactURI(r.ID), r.Line, r.Text)
+	}
+	return textResult(b.String()), searchArtifactsOutput{Success: true}, nil
 }

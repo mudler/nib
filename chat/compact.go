@@ -443,10 +443,14 @@ func stubbedView(msgs []openai.ChatCompletionMessage, already map[string]string)
 	return out
 }
 
-// summaryPieceKeep is how much of an over-long piece fitSummaryInput keeps: the
-// start of a message carries its role, the tool name and its arguments, which
-// is what a summary needs to record that the step happened.
-const summaryPieceKeep = 512
+// summaryHeadBudget and summaryTailBudget are how much of the head and tail of
+// an over-long piece fitSummaryInput keeps: the start of a message carries its
+// role, the tool name and its arguments (which records that the step happened),
+// while the tail carries trailing results a summary may still need.
+const (
+	summaryHeadBudget = 256
+	summaryTailBudget = 256
+)
 
 // fitSummaryInput joins pieces into at most maxTokens (byte/4) tokens. A
 // maxTokens of zero or less means no limit.
@@ -480,11 +484,16 @@ func fitSummaryInput(pieces []summaryPiece, maxTokens int) string {
 			if total <= limit {
 				return
 			}
-			if pieces[i].tool != tools || len(pieces[i].text) <= summaryPieceKeep*2 {
+			if pieces[i].tool != tools || len(pieces[i].text) <= summaryHeadBudget+summaryTailBudget {
 				continue
 			}
 			text := pieces[i].text
-			short := text[:summaryPieceKeep] + fmt.Sprintf("\n[... %d bytes omitted to fit the summary]\n", len(text)-summaryPieceKeep)
+			if len(text) <= summaryHeadBudget+summaryTailBudget {
+				continue
+			}
+			head := text[:summaryHeadBudget]
+			tail := text[len(text)-summaryTailBudget:]
+			short := head + fmt.Sprintf("\n[... %d bytes omitted to fit the summary]\n", len(text)-summaryHeadBudget-summaryTailBudget) + tail
 			total -= len(text) - len(short)
 			pieces[i].text = short
 		}
@@ -569,13 +578,27 @@ func (s *Session) compactHistory(ctx context.Context) (before, after int, err er
 	if len(pieces) == 0 {
 		return before, before, nil // nothing to compact
 	}
+	// Save the full untruncated head as an artifact so nothing is lost
+	// when the lossy summary truncates or drops messages. The model can
+	// page through it via the read tool (artifact://N) or search it with
+	// search_artifacts.
+	var artifactURI string
+	if !cfg.DisableArtifactSpill && s.artifacts != nil {
+		var b strings.Builder
+		for _, p := range pieces {
+			b.WriteString(p.text)
+		}
+		if b.Len() > 0 {
+			artifactURI = s.artifacts.Save("compaction", b.String())
+		}
+	}
 	summary, err := s.summarize(ctx, pieces)
 	if err != nil {
 		return before, before, err
 	}
 
 	// Build the new state up front; swap only after success (atomic).
-	newFragMsgs := append([]openai.ChatCompletionMessage{summaryMessage(summary)}, tail...)
+	newFragMsgs := append([]openai.ChatCompletionMessage{summaryMessage(summary, artifactURI)}, tail...)
 
 	s.historyMu.Lock()
 	newMessages := compactedDisplay(s.messages, tail)
@@ -666,11 +689,16 @@ func (s *Session) summarize(ctx context.Context, pieces []summaryPiece) (string,
 // continuing, so the compaction boundary does not silently drop context.
 // The memory tool reference nudges the model to persist durable facts
 // (paths, decisions, gotchas) that the lossy summary may not preserve.
-func summaryMessage(summary string) openai.ChatCompletionMessage {
+func summaryMessage(summary, artifactURI string) openai.ChatCompletionMessage {
+	content := "[Earlier conversation compacted. Review the summary below and continue from where you left off. " +
+		"If the summary contains important context that should persist across sessions, save it to memory now before it is lost.]\n\n" + summary
+	if artifactURI != "" {
+		content += "\n\nFull conversation before compaction is available at " + artifactURI +
+			" — use the read tool with this path to page through it, or use search_artifacts to search for specific content."
+	}
 	return openai.ChatCompletionMessage{
-		Role: "user",
-		Content: "[Earlier conversation compacted. Review the summary below and continue from where you left off. " +
-			"If the summary contains important context that should persist across sessions, save it to memory now before it is lost.]\n\n" + summary,
+		Role:    "user",
+		Content: content,
 	}
 }
 
