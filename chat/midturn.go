@@ -112,10 +112,10 @@ func (c *turnCompactor) manipulate(msgs []openai.ChatCompletionMessage) []openai
 // report measured both, so its excess over the last estimate is added back.
 func (c *turnCompactor) overhead() int {
 	reported := c.s.live.promptTokens()
-	if c.sent <= 0 || reported <= c.sent {
+	if c.sent <= 0 {
 		return 0
 	}
-	return reported - c.sent
+	return promptOverhead(reported, c.sent)
 }
 
 // compact summarizes the head of out and returns the request with the summary

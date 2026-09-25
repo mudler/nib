@@ -31,9 +31,52 @@ import (
 // active distinguishes "no turn is running" from "a turn is running and has
 // not been billed yet". Without it a zero would be indistinguishable from an
 // idle session and ContextTokens could not tell which source to trust.
+//
+// floor is different: it is the fixed per-request overhead (tool schemas and
+// system messages) the wrapper measured on the last request that carried
+// tools, raised by the backend's own count when that is larger. It is not
+// reset between turns, because it describes the session's configuration, not
+// the conversation. See SchemaBudget.
 type liveUsage struct {
 	prompt atomic.Int64
 	active atomic.Bool
+
+	floor    atomic.Int64
+	measured atomic.Bool
+}
+
+// recordFloor stores the measured fixed overhead of the latest request.
+func (l *liveUsage) recordFloor(n int) {
+	l.floor.Store(int64(n))
+	l.measured.Store(true)
+}
+
+// raiseFloor lifts the latest floor to n when n is larger: the backend's
+// count of the same request also includes tokenizer skew.
+func (l *liveUsage) raiseFloor(n int) {
+	for {
+		cur := l.floor.Load()
+		if int64(n) <= cur || l.floor.CompareAndSwap(cur, int64(n)) {
+			return
+		}
+	}
+}
+
+// schemaFloor returns the latest measured floor, and whether any request
+// was measured yet.
+func (l *liveUsage) schemaFloor() (int, bool) {
+	return int(l.floor.Load()), l.measured.Load()
+}
+
+// promptOverhead is how many more tokens the backend reported for a request
+// than the byte/4 estimate of the messages it was measured against: the
+// tool schemas, anything else the estimate left out, and tokenizer skew.
+// Zero when the report is not larger.
+func promptOverhead(reported, estimated int) int {
+	if reported <= estimated {
+		return 0
+	}
+	return reported - estimated
 }
 
 // begin arms the tracker for a new turn, discarding the previous turn's
@@ -88,17 +131,48 @@ type trackedLLM struct {
 	limits func() (cap, window int)
 }
 
-// clamp applies clampOutputTokens with the session's current limits.
-func (t *trackedLLM) clamp(request openai.ChatCompletionRequest) openai.ChatCompletionRequest {
+// prepare measures the request's fixed overhead and applies clampOutputTokens
+// with the session's current limits. The tool schemas are marshalled once for
+// both. It returns the byte/4 estimate of the request's non-system messages,
+// which calibrate compares with the backend's report, or -1 when the request
+// was not measured.
+//
+// Only a request that carries tools is measured: a tool-less request (a
+// summary, say) says nothing about the overhead of a turn's requests.
+func (t *trackedLLM) prepare(request openai.ChatCompletionRequest) (openai.ChatCompletionRequest, int) {
+	toolBytes := toolSchemaBytes(request.Tools)
+	rest := -1
+	if len(request.Tools) > 0 {
+		sysBytes := 0
+		var other []openai.ChatCompletionMessage
+		for _, m := range request.Messages {
+			if m.Role == openai.ChatMessageRoleSystem {
+				sysBytes += len(m.Content)
+			} else {
+				other = append(other, m)
+			}
+		}
+		t.live.recordFloor((toolBytes + sysBytes) / 4)
+		rest = estimateTokens(other)
+	}
 	if t.limits == nil {
-		return request
+		return request, rest
 	}
 	cap, window := t.limits()
-	return clampOutputTokens(request, cap, window)
+	return clampOutputTokensSized(request, cap, window, toolBytes/4), rest
+}
+
+// calibrate raises the measured floor to the backend's overhead for the
+// request prepare measured (rest >= 0) when the backend reported more.
+func (t *trackedLLM) calibrate(promptTokens, rest int) {
+	if rest < 0 || promptTokens <= 0 {
+		return
+	}
+	t.live.raiseFloor(promptOverhead(promptTokens, rest))
 }
 
 func (t *trackedLLM) CreateChatCompletion(ctx context.Context, request openai.ChatCompletionRequest) (cogito.LLMReply, cogito.LLMUsage, error) {
-	request = t.clamp(request)
+	request, rest := t.prepare(request)
 	var usage cogito.LLMUsage
 	reply, err := retryRequest(ctx, func() (cogito.LLMReply, error) {
 		r, u, e := t.LLM.CreateChatCompletion(ctx, request)
@@ -106,6 +180,7 @@ func (t *trackedLLM) CreateChatCompletion(ctx context.Context, request openai.Ch
 		return r, e
 	})
 	t.live.record(usage.PromptTokens)
+	t.calibrate(usage.PromptTokens, rest)
 	return reply, usage, err
 }
 
@@ -137,7 +212,7 @@ type trackedStreamingLLM struct {
 // The relay goroutine is bounded by the source channel: it ends when the
 // provider closes it, which cogito's own consumer loop already depends on.
 func (t *trackedStreamingLLM) CreateChatCompletionStream(ctx context.Context, request openai.ChatCompletionRequest) (<-chan cogito.StreamEvent, error) {
-	request = t.clamp(request)
+	request, rest := t.prepare(request)
 	src, err := retryRequest(ctx, func() (<-chan cogito.StreamEvent, error) {
 		return t.stream.CreateChatCompletionStream(ctx, request)
 	})
@@ -150,6 +225,7 @@ func (t *trackedStreamingLLM) CreateChatCompletionStream(ctx context.Context, re
 		for ev := range src {
 			if ev.Type == cogito.StreamEventDone {
 				t.live.record(ev.Usage.PromptTokens)
+				t.calibrate(ev.Usage.PromptTokens, rest)
 			}
 			out <- ev
 		}
@@ -193,15 +269,28 @@ const (
 // A request with an explicit value, or unknown limits (cap or window 0), is
 // returned unchanged.
 func clampOutputTokens(request openai.ChatCompletionRequest, cap, window int) openai.ChatCompletionRequest {
+	return clampOutputTokensSized(request, cap, window, toolSchemaBytes(request.Tools)/4)
+}
+
+// toolSchemaBytes is the size of the JSON of a request's tools.
+func toolSchemaBytes(tools []openai.Tool) int {
+	if len(tools) == 0 {
+		return 0
+	}
+	b, err := json.Marshal(tools)
+	if err != nil {
+		return 0
+	}
+	return len(b)
+}
+
+// clampOutputTokensSized is clampOutputTokens with the tool schemas already
+// measured (toolTokens), so the wrapper does not marshal them twice.
+func clampOutputTokensSized(request openai.ChatCompletionRequest, cap, window, toolTokens int) openai.ChatCompletionRequest {
 	if cap <= 0 || window <= 0 || request.MaxTokens != 0 || request.MaxCompletionTokens != 0 {
 		return request
 	}
-	prompt := estimateTokens(request.Messages)
-	if len(request.Tools) > 0 {
-		if b, err := json.Marshal(request.Tools); err == nil {
-			prompt += len(b) / 4
-		}
-	}
+	prompt := estimateTokens(request.Messages) + toolTokens
 	v := min(cap, window-prompt-outputSafetyMargin)
 	if v < minOutputTokens {
 		v = min(minOutputTokens, cap)

@@ -129,6 +129,14 @@ type Session struct {
 	schemaTools   []cogito.ToolDefinitionInterface
 	schemaToolsMu sync.Mutex
 
+	// schemaCosts caches mcpSchemaCosts until the set of MCP servers changes;
+	// schemaNoticeLevel is the highest SchemaBudget level (1 warn, 2 error)
+	// already reported to the user. Both guarded by schemaCostsMu.
+	schemaCosts       []ServerSchemaCost
+	schemaCostsValid  bool
+	schemaNoticeLevel int
+	schemaCostsMu     sync.Mutex
+
 	agentManager       *cogito.AgentManager
 	agentDefs          []cogito.AgentDefinition
 	agentModels        map[string]bool // models configured per agent type (for the LLM-model guard)
@@ -1957,6 +1965,9 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 		var newFragment cogito.Fragment
 		midTurn.reset()
 		newFragment, err = cogito.ExecuteTools(llm, runFragment, cogitoOpts...)
+		// The run's requests measured the tool-schema floor; tell the user
+		// once when it takes a large share of the window.
+		s.notifySchemaBudget()
 		if err != nil && !errors.Is(err, cogito.ErrNoToolSelected) {
 			// Interrupt (turnCtx cancelled) surfaces here as a context error;
 			// pause the goal so the user's stop sticks and it doesn't re-arm,
@@ -2403,12 +2414,14 @@ func (s *Session) ReconcileMCPServers(desired map[string]types.MCPServer) error 
 			_ = sess.Close()
 			delete(s.cfgClients, name)
 			delete(s.cfgServers, name)
+			s.invalidateSchemaCosts()
 		}
 	}
 	for name, srv := range desired {
 		if _, ok := s.cfgClients[name]; ok {
 			continue
 		}
+		s.invalidateSchemaCosts()
 		transport := wizmcp.TransportForServer(srv)
 		// Deliberately pass s.ctx (the session's long-lived context) directly,
 		// with no per-connect timeout. The go-sdk's mcp.Client.Connect stores the
@@ -2438,6 +2451,7 @@ func (s *Session) ReconcileMCPServers(desired map[string]types.MCPServer) error 
 // Called from Reload at turn start (deferred while background sub-agents run),
 // so closing the old skills client cannot race with a detached agent.
 func (s *Session) SetSkills(skills []types.Skill) error {
+	s.invalidateSchemaCosts()
 	if s.skillsClient != nil {
 		_ = s.skillsClient.Close()
 		s.skillsClient = nil
