@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 
@@ -14,15 +15,25 @@ import (
 )
 
 // autoCompactOpenAI is a minimal OpenAI-compatible endpoint that always replies
-// with a plain stop message and reports a fixed, high prompt-token usage so the
-// auto-compaction threshold is deterministically crossed after a single turn.
-func autoCompactOpenAI(promptTokens int) http.HandlerFunc {
+// with a plain stop message and reports the request's prompt tokens as ratio
+// times its byte/4 size (messages and tool schemas): a backend whose tokenizer
+// counts more than the estimate, as real ones do.
+func autoCompactOpenAI(ratio float64) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
-			Stream bool `json:"stream"`
+			Stream   bool `json:"stream"`
+			Messages []struct {
+				Content string `json:"content"`
+			} `json:"messages"`
+			Tools json.RawMessage `json:"tools"`
 		}
 		body, _ := readAll(r)
 		_ = json.Unmarshal(body, &req)
+		n := len(req.Tools)
+		for _, m := range req.Messages {
+			n += len(m.Content)
+		}
+		promptTokens := int(float64(n/4) * ratio)
 
 		usage := map[string]any{
 			"prompt_tokens":     promptTokens,
@@ -71,15 +82,13 @@ func autoCompactOpenAI(promptTokens int) http.HandlerFunc {
 }
 
 // TestSessionAutoCompacts drives a real chat.Session against a fake LLM that
-// reports a prompt-token usage above the configured threshold, and proves the
-// OnCompactDone callback fires after the turn.
+// counts 1.5x the byte/4 estimate, with a large history and a large reserve,
+// and proves the OnCompactDone callback fires. The tokenizer skew on the
+// history must not be taken for a tool-schema floor that blocks compaction.
 func TestSessionAutoCompacts(t *testing.T) {
 	xlog.SetLogger(xlog.NewLogger(xlog.LogLevel("error"), ""))
 
-	// 14000 is over the 12723 trigger (0.8 of a 20000 window less the 4096
-	// reserve) and under the 15904 budget. The backend's count calibrates the
-	// tool-schema floor, and a floor over the budget skips auto-compaction.
-	srv := httptest.NewServer(autoCompactOpenAI(14000))
+	srv := httptest.NewServer(autoCompactOpenAI(1.5))
 	defer srv.Close()
 
 	var mu sync.Mutex
@@ -94,7 +103,11 @@ func TestSessionAutoCompacts(t *testing.T) {
 		ApprovalMode: "auto",
 		AgentOptions: types.AgentOptions{Iterations: 10, MaxAttempts: 3, MaxRetries: 3},
 		Compaction: types.CompactionConfig{
-			MaxContextTokens: 20000,
+			// Budget 20000 (window less half of it), trigger 16000. The
+			// history below is 40000 byte/4 tokens, 60000 as counted: the
+			// skew alone on it is 20000, the whole budget.
+			MaxContextTokens: 40000,
+			ReserveTokens:    20000,
 			KeepRecent:       0,
 		},
 	}
@@ -115,6 +128,9 @@ func TestSessionAutoCompacts(t *testing.T) {
 	}
 	defer session.Close()
 
+	if _, err := session.SendMessage(strings.Repeat("earlier detail ", 40000*4/15)); err != nil {
+		t.Fatalf("SendMessage: %v", err)
+	}
 	if _, err := session.SendMessage("hi"); err != nil {
 		t.Fatalf("SendMessage: %v", err)
 	}

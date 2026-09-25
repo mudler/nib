@@ -3,6 +3,7 @@ package chat
 import (
 	"context"
 	"encoding/json"
+	"math"
 	"sync/atomic"
 
 	"github.com/mudler/cogito"
@@ -33,39 +34,55 @@ import (
 // idle session and ContextTokens could not tell which source to trust.
 //
 // floor is different: it is the fixed per-request overhead (tool schemas and
-// system messages) the wrapper measured on the last request that carried
-// tools, raised by the backend's own count when that is larger. It is not
-// reset between turns, because it describes the session's configuration, not
-// the conversation. See SchemaBudget.
+// system messages) the wrapper measured, byte/4, on the last request that
+// carried tools. ratio is how many tokens the backend counts per byte/4
+// estimated token, learned from the reported usage; the floor is reported
+// scaled by it (see schemaFloor). Neither is reset between turns, because they
+// describe the session's configuration and backend, not the conversation. See
+// SchemaBudget.
 type liveUsage struct {
 	prompt atomic.Int64
 	active atomic.Bool
 
 	floor    atomic.Int64
 	measured atomic.Bool
+	ratio    atomic.Uint64 // math.Float64bits; 0 means not calibrated yet
 }
 
-// recordFloor stores the measured fixed overhead of the latest request.
+// maxTokenizerRatio caps how many tokens per byte/4 estimated token the floor
+// calibration believes a backend counts.
+const maxTokenizerRatio = 4.0
+
+// recordFloor stores the measured fixed overhead (byte/4) of the latest
+// request.
 func (l *liveUsage) recordFloor(n int) {
 	l.floor.Store(int64(n))
 	l.measured.Store(true)
 }
 
-// raiseFloor lifts the latest floor to n when n is larger: the backend's
-// count of the same request also includes tokenizer skew.
-func (l *liveUsage) raiseFloor(n int) {
-	for {
-		cur := l.floor.Load()
-		if int64(n) <= cur || l.floor.CompareAndSwap(cur, int64(n)) {
-			return
-		}
+// setRatio stores the tokenizer ratio, clamped to [1, maxTokenizerRatio].
+func (l *liveUsage) setRatio(r float64) {
+	switch {
+	case r < 1:
+		r = 1
+	case r > maxTokenizerRatio:
+		r = maxTokenizerRatio
 	}
+	l.ratio.Store(math.Float64bits(r))
 }
 
-// schemaFloor returns the latest measured floor, and whether any request
-// was measured yet.
+// tokenizerRatio returns the calibrated ratio, or 1 before any calibration.
+func (l *liveUsage) tokenizerRatio() float64 {
+	if b := l.ratio.Load(); b != 0 {
+		return math.Float64frombits(b)
+	}
+	return 1
+}
+
+// schemaFloor returns the latest measured floor scaled by the tokenizer
+// ratio, and whether any request was measured yet.
 func (l *liveUsage) schemaFloor() (int, bool) {
-	return int(l.floor.Load()), l.measured.Load()
+	return int(float64(l.floor.Load()) * l.tokenizerRatio()), l.measured.Load()
 }
 
 // promptOverhead is how many more tokens the backend reported for a request
@@ -133,17 +150,21 @@ type trackedLLM struct {
 
 // prepare measures the request's fixed overhead and applies clampOutputTokens
 // with the session's current limits. The tool schemas are marshalled once for
-// both. It returns the byte/4 estimate of the request's non-system messages,
-// which calibrate compares with the backend's report, or -1 when the request
-// was not measured.
+// both. It returns the byte/4 estimate of the whole request (messages, tools
+// and system messages), which calibrate compares with the backend's report,
+// or -1 when the request must not calibrate.
 //
 // Only a request that carries tools is measured: a tool-less request (a
-// summary, say) says nothing about the overhead of a turn's requests.
+// summary, say) says nothing about the overhead of a turn's requests. A
+// request with an image part is measured but does not calibrate: the backend
+// counts the image, the byte/4 estimate does not, and the ratio would absorb
+// it.
 func (t *trackedLLM) prepare(request openai.ChatCompletionRequest) (openai.ChatCompletionRequest, int) {
 	toolBytes := toolSchemaBytes(request.Tools)
-	rest := -1
+	whole := -1
 	if len(request.Tools) > 0 {
 		sysBytes := 0
+		image := false
 		var other []openai.ChatCompletionMessage
 		for _, m := range request.Messages {
 			if m.Role == openai.ChatMessageRoleSystem {
@@ -151,28 +172,40 @@ func (t *trackedLLM) prepare(request openai.ChatCompletionRequest) (openai.ChatC
 			} else {
 				other = append(other, m)
 			}
+			for _, p := range m.MultiContent {
+				if p.Type == openai.ChatMessagePartTypeImageURL {
+					image = true
+				}
+			}
 		}
-		t.live.recordFloor((toolBytes + sysBytes) / 4)
-		rest = estimateTokens(other)
+		fixed := (toolBytes + sysBytes) / 4
+		t.live.recordFloor(fixed)
+		if !image {
+			whole = estimateTokens(other) + fixed
+		}
 	}
 	if t.limits == nil {
-		return request, rest
+		return request, whole
 	}
 	cap, window := t.limits()
-	return clampOutputTokensSized(request, cap, window, toolBytes/4), rest
+	return clampOutputTokensSized(request, cap, window, toolBytes/4), whole
 }
 
-// calibrate raises the measured floor to the backend's overhead for the
-// request prepare measured (rest >= 0) when the backend reported more.
-func (t *trackedLLM) calibrate(promptTokens, rest int) {
-	if rest < 0 || promptTokens <= 0 {
+// calibrate sets the tokenizer ratio from the backend's report for a request
+// prepare measured (whole >= 0): promptTokens / whole, clamped to
+// [1, maxTokenizerRatio]. The floor is the measured overhead times this ratio,
+// never the raw residual promptTokens - estimate: that residual also holds the
+// skew on the whole conversation, and would make the floor grow with the
+// history.
+func (t *trackedLLM) calibrate(promptTokens, whole int) {
+	if whole <= 0 || promptTokens <= 0 {
 		return
 	}
-	t.live.raiseFloor(promptOverhead(promptTokens, rest))
+	t.live.setRatio(float64(promptTokens) / float64(whole))
 }
 
 func (t *trackedLLM) CreateChatCompletion(ctx context.Context, request openai.ChatCompletionRequest) (cogito.LLMReply, cogito.LLMUsage, error) {
-	request, rest := t.prepare(request)
+	request, whole := t.prepare(request)
 	var usage cogito.LLMUsage
 	reply, err := retryRequest(ctx, func() (cogito.LLMReply, error) {
 		r, u, e := t.LLM.CreateChatCompletion(ctx, request)
@@ -180,7 +213,7 @@ func (t *trackedLLM) CreateChatCompletion(ctx context.Context, request openai.Ch
 		return r, e
 	})
 	t.live.record(usage.PromptTokens)
-	t.calibrate(usage.PromptTokens, rest)
+	t.calibrate(usage.PromptTokens, whole)
 	return reply, usage, err
 }
 
@@ -212,7 +245,7 @@ type trackedStreamingLLM struct {
 // The relay goroutine is bounded by the source channel: it ends when the
 // provider closes it, which cogito's own consumer loop already depends on.
 func (t *trackedStreamingLLM) CreateChatCompletionStream(ctx context.Context, request openai.ChatCompletionRequest) (<-chan cogito.StreamEvent, error) {
-	request, rest := t.prepare(request)
+	request, whole := t.prepare(request)
 	src, err := retryRequest(ctx, func() (<-chan cogito.StreamEvent, error) {
 		return t.stream.CreateChatCompletionStream(ctx, request)
 	})
@@ -225,7 +258,7 @@ func (t *trackedStreamingLLM) CreateChatCompletionStream(ctx context.Context, re
 		for ev := range src {
 			if ev.Type == cogito.StreamEventDone {
 				t.live.record(ev.Usage.PromptTokens)
-				t.calibrate(ev.Usage.PromptTokens, rest)
+				t.calibrate(ev.Usage.PromptTokens, whole)
 			}
 			out <- ev
 		}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -147,30 +148,145 @@ func TestSchemaBudgetMeasuredFromRequest(t *testing.T) {
 	}
 }
 
-func TestSchemaBudgetUsageCalibration(t *testing.T) {
-	s := newCompactTestSession(&fakeSummaryLLM{}, 2, nil, nil)
-	tools := mcpLikeTools(1, 40)
-	user := strings.Repeat("u", 400) // 100 tokens
+// skewLLM reports the whole request (messages and tool schemas) at byte/4
+// times ratio, standing in for a backend whose tokenizer counts more than the
+// byte/4 estimate.
+type skewLLM struct {
+	cogito.LLM
+	ratio float64
+}
+
+func (u *skewLLM) CreateChatCompletion(_ context.Context, req openai.ChatCompletionRequest) (cogito.LLMReply, cogito.LLMUsage, error) {
+	n := estimateTokens(req.Messages) + toolSchemaBytes(req.Tools)/4
+	return cogito.LLMReply{}, cogito.LLMUsage{PromptTokens: int(float64(n) * u.ratio)}, nil
+}
+
+// skewRequest is a request with about schemaTokens of tools and system
+// prompt and historyTokens of byte/4 conversation. It returns the byte/4 size
+// of the tools and system messages too.
+func skewRequest(schemaTokens, historyTokens int) (openai.ChatCompletionRequest, int) {
+	tools := mcpLikeTools(schemaTokens/1000, 3900)
+	sys := "you are nib"
 	req := openai.ChatCompletionRequest{
-		Messages: []openai.ChatCompletionMessage{{Role: "system", Content: "sys"}, {Role: "user", Content: user}},
-		Tools:    tools,
+		Messages: []openai.ChatCompletionMessage{
+			{Role: "system", Content: sys},
+			{Role: "user", Content: strings.Repeat("u", historyTokens*4)},
+		},
+		Tools: tools,
 	}
-	llm := trackUsage(&promptUsageLLM{prompt: 700}, &s.live, s.requestLimits)
+	return req, (toolSchemaBytes(tools) + len(sys)) / 4
+}
+
+func near(got, want int) bool {
+	d := got - want
+	return d >= -want/100-2 && d <= want/100+2
+}
+
+// The worked example: 5k of schemas, 60k of history, a backend counting 1.5x.
+// The floor is the schemas at 1.5x, not the whole residual, and it does not
+// grow with the history.
+func TestSchemaBudgetScalesByTokenizerRatio(t *testing.T) {
+	s := newCompactTestSession(&fakeSummaryLLM{}, 2, nil, nil)
+	llm := trackUsage(&skewLLM{ratio: 1.5}, &s.live, s.requestLimits)
+
+	req, raw := skewRequest(5000, 60000)
 	if _, _, err := llm.CreateChatCompletion(context.Background(), req); err != nil {
 		t.Fatal(err)
 	}
-	if got := s.SchemaBudget().Floor; got != 700-100 {
-		t.Fatalf("Floor = %d, want the backend overhead %d", got, 600)
+	want := raw * 3 / 2
+	if got := s.SchemaBudget().Floor; !near(got, want) {
+		t.Fatalf("Floor = %d, want about %d (schemas x 1.5), not the residual", got, want)
 	}
 
-	// A report below the measurement keeps the measurement.
-	llm = trackUsage(&promptUsageLLM{prompt: 101}, &s.live, s.requestLimits)
+	req, _ = skewRequest(5000, 120000)
 	if _, _, err := llm.CreateChatCompletion(context.Background(), req); err != nil {
 		t.Fatal(err)
 	}
-	b, _ := json.Marshal(tools)
-	if got, want := s.SchemaBudget().Floor, (len(b)+len("sys"))/4; got != want {
-		t.Fatalf("Floor = %d, want the measurement %d", got, want)
+	if got := s.SchemaBudget().Floor; !near(got, want) {
+		t.Fatalf("Floor = %d after the history doubled, want about %d", got, want)
+	}
+}
+
+// The ratio is clamped to [1, maxTokenizerRatio]: a report below the estimate
+// keeps the measurement, and a wild one cannot multiply the floor without end.
+func TestSchemaBudgetRatioClamped(t *testing.T) {
+	s := newCompactTestSession(&fakeSummaryLLM{}, 2, nil, nil)
+	req, raw := skewRequest(2000, 1000)
+
+	llm := trackUsage(&skewLLM{ratio: 0.5}, &s.live, s.requestLimits)
+	if _, _, err := llm.CreateChatCompletion(context.Background(), req); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.SchemaBudget().Floor; got != raw {
+		t.Fatalf("Floor = %d with a report below the estimate, want the measurement %d", got, raw)
+	}
+
+	llm = trackUsage(&skewLLM{ratio: 10}, &s.live, s.requestLimits)
+	if _, _, err := llm.CreateChatCompletion(context.Background(), req); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := s.SchemaBudget().Floor, int(float64(raw)*maxTokenizerRatio); got != want {
+		t.Fatalf("Floor = %d with a 10x report, want %d (clamped to %vx)", got, want, maxTokenizerRatio)
+	}
+}
+
+// Image parts are not in the byte/4 estimate, so a request that carries one
+// says nothing about the tokenizer: it does not change the ratio.
+func TestSchemaBudgetImageKeepsRatio(t *testing.T) {
+	s := newCompactTestSession(&fakeSummaryLLM{}, 2, nil, nil)
+	llm := trackUsage(&skewLLM{ratio: 1.5}, &s.live, s.requestLimits)
+	req, raw := skewRequest(2000, 1000)
+	if _, _, err := llm.CreateChatCompletion(context.Background(), req); err != nil {
+		t.Fatal(err)
+	}
+	want := s.SchemaBudget().Floor
+	if !near(want, raw*3/2) {
+		t.Fatalf("Floor = %d, want about %d", want, raw*3/2)
+	}
+
+	img := req
+	img.Messages = append(slices.Clone(req.Messages), openai.ChatCompletionMessage{Role: "user", MultiContent: []openai.ChatMessagePart{
+		{Type: openai.ChatMessagePartTypeText, Text: "look"},
+		{Type: openai.ChatMessagePartTypeImageURL, ImageURL: &openai.ChatMessageImageURL{URL: "data:image/png;base64,AAAA"}},
+	}})
+	llm = trackUsage(&skewLLM{ratio: 4}, &s.live, s.requestLimits)
+	if _, _, err := llm.CreateChatCompletion(context.Background(), img); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.SchemaBudget().Floor; got != want {
+		t.Fatalf("Floor = %d after a request with an image, want the previous %d", got, want)
+	}
+
+	// With no earlier calibration, an image request leaves the ratio at 1.
+	s2 := newCompactTestSession(&fakeSummaryLLM{}, 2, nil, nil)
+	llm = trackUsage(&skewLLM{ratio: 4}, &s2.live, s2.requestLimits)
+	if _, _, err := llm.CreateChatCompletion(context.Background(), img); err != nil {
+		t.Fatal(err)
+	}
+	if got := s2.SchemaBudget().Floor; got != raw {
+		t.Fatalf("Floor = %d, want the unscaled measurement %d", got, raw)
+	}
+}
+
+// The schema-budget notice reports the corrected size, not the tokenizer skew
+// on the whole conversation.
+func TestSchemaBudgetNoticeCorrectedSize(t *testing.T) {
+	s := newCompactTestSession(&fakeSummaryLLM{}, 2, nil, nil)
+	s.compaction.MaxContextTokens = 20000 // budget 15904, warn above 9542
+	var notices []string
+	s.callbacks.OnStatus = func(m string) { notices = append(notices, m) }
+
+	llm := trackUsage(&skewLLM{ratio: 1.5}, &s.live, s.requestLimits)
+	req, raw := skewRequest(8000, 60000)
+	if _, _, err := llm.CreateChatCompletion(context.Background(), req); err != nil {
+		t.Fatal(err)
+	}
+	s.notifySchemaBudget()
+	if len(notices) != 1 {
+		t.Fatalf("notices = %q, want one", notices)
+	}
+	if want := fmtTokensK(raw * 3 / 2); !strings.Contains(notices[0], "use "+want+" ") {
+		t.Fatalf("notice %q does not report the corrected %s", notices[0], want)
 	}
 }
 

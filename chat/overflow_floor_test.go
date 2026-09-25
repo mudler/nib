@@ -9,6 +9,7 @@ import (
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/mudler/cogito"
+	"github.com/mudler/nib/types"
 	openai "github.com/sashabaranov/go-openai"
 )
 
@@ -135,9 +136,12 @@ func (f *floorUsageLLM) Ask(ctx context.Context, fr cogito.Fragment) (cogito.Fra
 // End-of-turn auto-compaction is skipped when the floor alone is over the
 // budget, and runs otherwise.
 func TestOverflowFloorEndOfTurnCompaction(t *testing.T) {
-	run := func(t *testing.T, extra int, history string) (*floorUsageLLM, *Session) {
+	run := func(t *testing.T, extra int, sys, history string) (*floorUsageLLM, *Session) {
 		llm := &floorUsageLLM{extra: extra}
 		s := newOverflowSession(t, llm)
+		if sys != "" {
+			s.systemPrompt = sys
+		}
 		// Budget 40000 - 4096 = 35904; trigger 28723.
 		s.compaction.MaxContextTokens = 40000
 		s.fragment = cogito.NewFragment(
@@ -153,7 +157,9 @@ func TestOverflowFloorEndOfTurnCompaction(t *testing.T) {
 	}
 
 	t.Run("floor over budget", func(t *testing.T) {
-		llm, s := run(t, 37000, "short")
+		// A system prompt of 37000 tokens: the floor is the fixed overhead
+		// itself, not a skew the backend reports on top of the history.
+		llm, s := run(t, 0, strings.Repeat("s", 37000*4), "short")
 		if llm.asks != 0 {
 			t.Fatalf("auto-compaction summarized %d times with the floor (%d) over the budget", llm.asks, s.SchemaBudget().Floor)
 		}
@@ -162,7 +168,7 @@ func TestOverflowFloorEndOfTurnCompaction(t *testing.T) {
 		}
 	})
 	t.Run("floor under budget", func(t *testing.T) {
-		llm, _ := run(t, 5000, strings.Repeat("earlier detail ", 3500)) // ~13k tokens each
+		llm, _ := run(t, 5000, "", strings.Repeat("earlier detail ", 3500)) // ~13k tokens each
 		if llm.asks == 0 {
 			t.Fatal("auto-compaction did not run")
 		}
@@ -201,5 +207,46 @@ func TestOverflowFloorMidTurnCompaction(t *testing.T) {
 				t.Fatalf("request changed: %d messages, want %d", len(out), len(in))
 			}
 		})
+	}
+}
+
+// With a large reserve (budget window/2) and a backend counting 1.5x, a long
+// history must not read as a schema floor: the history is the problem, so
+// end-of-turn auto-compaction runs. The old calibration took the whole
+// residual (schemas plus the skew on the history) as the floor and skipped it.
+func TestOverflowFloorSkewDoesNotBlockAutoCompaction(t *testing.T) {
+	s := newCompactTestSession(&fakeSummaryLLM{}, 2, nil, nil)
+	s.compaction = types.CompactionConfig{MaxContextTokens: 96000, ReserveTokens: 48000, Threshold: 0.8, KeepRecent: 2}
+	llm := trackUsage(&skewLLM{ratio: 1.5}, &s.live, s.requestLimits)
+	req, raw := skewRequest(5000, 90000)
+	_, usage, err := llm.CreateChatCompletion(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !s.shouldCompactNow(usage.PromptTokens) {
+		t.Fatalf("%d prompt tokens did not cross the trigger", usage.PromptTokens)
+	}
+	if s.autoCompactBlocked(10) {
+		t.Fatalf("auto-compaction blocked by a floor of %d (schemas about %d x 1.5) with budget 48000",
+			s.SchemaBudget().Floor, raw)
+	}
+}
+
+// A tools-heavy request, schemas 80k of a 96k window and no skew, still
+// blocks: there the schemas are the problem, whatever is compacted.
+func TestOverflowFloorToolsHeavyBlocks(t *testing.T) {
+	s := newCompactTestSession(&fakeSummaryLLM{}, 2, nil, nil)
+	s.compaction = types.CompactionConfig{MaxContextTokens: 96000, ReserveTokens: 48000, Threshold: 0.8, KeepRecent: 2}
+	llm := trackUsage(&skewLLM{ratio: 1}, &s.live, s.requestLimits)
+	req, raw := skewRequest(80000, 1000)
+	if _, _, err := llm.CreateChatCompletion(context.Background(), req); err != nil {
+		t.Fatal(err)
+	}
+	sb, blocked := s.schemaFloorBlocks(ContextBudget(s.compactionConfig(), s.contextWindow()), 10)
+	if !blocked || !sb.Measured || sb.Floor != raw {
+		t.Fatalf("floor %d (measured %v, want %d) did not block", sb.Floor, sb.Measured, raw)
+	}
+	if !s.autoCompactBlocked(10) {
+		t.Fatal("auto-compaction not blocked by an 80k floor")
 	}
 }
