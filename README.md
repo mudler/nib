@@ -134,7 +134,7 @@ From a local checkout:
 ```bash
 nix run . -- --help
 nix build .                 # executable: ./result/bin/nib
-nix develop                # Go 1.26, gopls, gotools, Delve, Git, and Make
+nix develop                # Go 1.26, gopls, gotools, Delve, Git, and Make; Linux also includes nsjail
 nix develop -c make test
 nix flake check             # build nib and run the Go tests
 nix fmt                     # format the Nix files
@@ -535,10 +535,11 @@ prompt_injection_protection:
     api_key: local
     base_url: http://localhost:8080/v1
 
-# Optional: a small classification model, reached through the SystemOne API
-# (LocalAI with a GLiNER model, vllm.cpp, or kev). approval_mode: classify and
-# the TUI's reply suggestions use it. Unrelated to the LLM classifier above.
+# Optional: command approval and reply-suggestion classifier. Use api: llm
+# alone to inherit the main provider/model (including OpenAI OAuth), or
+# configure SystemOne as below. Separate from prompt-injection protection.
 classifier:
+  api: systemone          # llm uses the normal provider transport instead
   endpoint: home-localai   # a name under endpoints:; omit for the top-level base_url
   model: gliner2.5         # optional
   timeout: 2s              # per request (default 2s)
@@ -786,7 +787,27 @@ boundary exists only with `prompt_injection_protection.enabled: true`. If
 the classifier is slow or unreachable, you get the prompt
 (`classifier: unavailable`).
 
-The classifier is any server that speaks the SystemOne API
+For OpenAI, including a saved ChatGPT/OpenAI OAuth login, use the LLM backend:
+
+```yaml
+classifier:
+  api: llm
+  timeout: 30s
+approval_mode: classify
+auto_approve:
+  allow: [inspect, build_test]
+  threshold: 0.85
+```
+
+This inherits the top-level provider, model and credentials. Optionally set
+`classifier.endpoint` to a named endpoint and `classifier.model` to override
+its model. The classifier gets the command and working directory, with no
+conversation history or tools. Its confidence is a model estimate, not a
+guarantee of safety. Invalid answers, errors and timeouts prompt for approval.
+The default LLM timeout is 30 seconds. Reply suggestions also use this backend
+unless `suggestions.disabled: true`.
+
+The default backend (`api: systemone`, or omitted) uses a server that speaks the SystemOne API
 (`POST {base_url}/systemone`), for example LocalAI with a GLiNER model on the
 vllm-cpp backend. Configure it with the `classifier` block (see
 [Configuration](#configuration)), or at runtime with `/classifier`.
@@ -804,10 +825,13 @@ the mode to the config file.
 
 ### Changing the classifier at runtime
 
-`/classifier` requires a SystemOne endpoint with a `base_url`, such as LocalAI.
-ChatGPT/OpenAI OAuth does not provide this API. When using OAuth for chat,
-configure a separate named classifier endpoint and select it with
-`/classifier <endpoint> <model>`.
+For OpenAI or ChatGPT/OpenAI OAuth, run `/settings classifier.api llm`
+to use your configured provider and model, then `/approve classify` to enable
+automatic classification for this session. `/settings approval_mode classify`
+persists the mode. `/classifier` can select a different endpoint and model.
+
+The default `systemone` backend requires a SystemOne endpoint with a
+`base_url`, such as LocalAI; OpenAI does not serve that API.
 
 - `/classifier` opens a picker: pick one of your endpoints (config.yaml's own,
   or a named one), then one of the models it lists. In the CLI, bare

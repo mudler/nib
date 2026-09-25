@@ -90,7 +90,10 @@
                 git
                 gnumake
               ]
-              ++ lib.optionals stdenv.hostPlatform.isLinux [ procps ];
+              ++ lib.optionals stdenv.hostPlatform.isLinux [
+                procps
+                nsjail
+              ];
             CGO_ENABLED = "0";
             GOTOOLCHAIN = "local";
           };

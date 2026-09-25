@@ -91,6 +91,9 @@ func New(cfg types.Config) (Classifier, error) {
 	if !c.Configured() {
 		return nil, nil
 	}
+	if c.API == "llm" {
+		return newLLM(cfg)
+	}
 	api := c.API
 	if api == "" {
 		api = "systemone"

@@ -339,21 +339,23 @@ type UIConfig struct {
 }
 
 // ClassifierConfig names the small classification model. It is configured
-// when Endpoint or Model is set.
+// when Endpoint or Model is set, or API is "llm".
 type ClassifierConfig struct {
 	// Endpoint names an entry under endpoints:. Empty uses the top-level
-	// base_url and api_key. The entry's own model is never used.
+	// provider and credentials. With API llm, its model is inherited too.
 	Endpoint string `yaml:"endpoint,omitempty"`
 	// Model is sent as the request's model field. Optional.
 	Model string `yaml:"model,omitempty"`
-	// API selects the wire protocol. Empty or "systemone".
+	// API selects the wire protocol: "llm", or empty/"systemone".
 	API string `yaml:"api,omitempty"`
-	// Timeout bounds each request. 0 means 2s.
+	// Timeout bounds each request. 0 means 2s for SystemOne, 30s for llm.
 	Timeout time.Duration `yaml:"timeout,omitempty"`
 }
 
 // Configured reports whether a classifier is set up.
-func (c ClassifierConfig) Configured() bool { return c.Endpoint != "" || c.Model != "" }
+func (c ClassifierConfig) Configured() bool {
+	return c.Endpoint != "" || c.Model != "" || c.API == "llm"
+}
 
 // AutoApproveConfig is the policy approval_mode "classify" applies.
 type AutoApproveConfig struct {
