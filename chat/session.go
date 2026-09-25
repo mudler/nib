@@ -124,6 +124,11 @@ type Session struct {
 	// sub-agents). May be nil (e.g. headless CLI without a job registry).
 	shellJobs *wizmcp.ShellJobs
 
+	// schemaTools records the tool definitions toolOptions registers, for
+	// SchemaBudget. Guarded by schemaToolsMu. See schema_budget.go.
+	schemaTools   []cogito.ToolDefinitionInterface
+	schemaToolsMu sync.Mutex
+
 	agentManager       *cogito.AgentManager
 	agentDefs          []cogito.AgentDefinition
 	agentModels        map[string]bool // models configured per agent type (for the LLM-model guard)
@@ -1361,6 +1366,7 @@ func buildUserFragment(f cogito.Fragment, text string, parts []ContentPart) cogi
 // the sub-agents a turn spawns resolve against the same model the turn itself
 // is using, even if SetModel lands halfway through.
 func (s *Session) toolOptions(turnCtx context.Context, goal, mainModel string) []cogito.Option {
+	s.resetSchemaTools()
 	opts := []cogito.Option{
 		cogito.WithMCPs(s.allClients()...),
 		// Disable cogito's sink-state "reply" tool so ExecuteTools is the whole
@@ -1385,7 +1391,7 @@ func (s *Session) toolOptions(turnCtx context.Context, goal, mainModel string) [
 		opts = append(opts, cogito.EnableAgentSpawning)
 	}
 	if s.toolEnabled("ask_user") && !s.AutoApprove() {
-		opts = append(opts, cogito.WithTools(askUserToolDefinition(func(req AskRequest) string {
+		opts = append(opts, s.withTool(askUserToolDefinition(func(req AskRequest) string {
 			if s.callbacks.OnAskUser != nil {
 				return s.callbacks.OnAskUser(req)
 			}
@@ -1393,10 +1399,10 @@ func (s *Session) toolOptions(turnCtx context.Context, goal, mainModel string) [
 		})))
 	}
 	if s.toolEnabled("agent_logs") {
-		opts = append(opts, cogito.WithTools(agentLogsToolDefinition(s.AgentLog)))
+		opts = append(opts, s.withTool(agentLogsToolDefinition(s.AgentLog)))
 	}
 	if s.toolEnabled("schedule_wakeup") {
-		opts = append(opts, cogito.WithTools(scheduleWakeupToolDefinition(func(req WakeupRequest) string {
+		opts = append(opts, s.withTool(scheduleWakeupToolDefinition(func(req WakeupRequest) string {
 			if s.callbacks.OnScheduleWakeup != nil {
 				return s.callbacks.OnScheduleWakeup(req)
 			}
@@ -1406,7 +1412,7 @@ func (s *Session) toolOptions(turnCtx context.Context, goal, mainModel string) [
 		})))
 	}
 	if s.toolEnabled("cron") {
-		opts = append(opts, cogito.WithTools(cronToolDefinition(func(req CronRequest) string {
+		opts = append(opts, s.withTool(cronToolDefinition(func(req CronRequest) string {
 			if s.callbacks.OnCronCreate != nil {
 				return s.callbacks.OnCronCreate(req)
 			}
@@ -1414,7 +1420,7 @@ func (s *Session) toolOptions(turnCtx context.Context, goal, mainModel string) [
 		})))
 	}
 	if s.toolEnabled("cron_list") {
-		opts = append(opts, cogito.WithTools(cronListToolDefinition(func() string {
+		opts = append(opts, s.withTool(cronListToolDefinition(func() string {
 			if s.callbacks.OnCronList != nil {
 				return s.callbacks.OnCronList()
 			}
@@ -1422,7 +1428,7 @@ func (s *Session) toolOptions(turnCtx context.Context, goal, mainModel string) [
 		})))
 	}
 	if s.toolEnabled("cron_delete") {
-		opts = append(opts, cogito.WithTools(cronDeleteToolDefinition(func(id string) string {
+		opts = append(opts, s.withTool(cronDeleteToolDefinition(func(id string) string {
 			if s.callbacks.OnCronDelete != nil {
 				return s.callbacks.OnCronDelete(id)
 			}
@@ -1430,7 +1436,7 @@ func (s *Session) toolOptions(turnCtx context.Context, goal, mainModel string) [
 		})))
 	}
 	if s.toolEnabled("cron_pause") {
-		opts = append(opts, cogito.WithTools(cronPauseToolDefinition(func(id string) string {
+		opts = append(opts, s.withTool(cronPauseToolDefinition(func(id string) string {
 			if s.callbacks.OnCronPause != nil {
 				return s.callbacks.OnCronPause(id)
 			}
@@ -1438,7 +1444,7 @@ func (s *Session) toolOptions(turnCtx context.Context, goal, mainModel string) [
 		})))
 	}
 	if s.toolEnabled("cron_resume") {
-		opts = append(opts, cogito.WithTools(cronResumeToolDefinition(func(id string) string {
+		opts = append(opts, s.withTool(cronResumeToolDefinition(func(id string) string {
 			if s.callbacks.OnCronResume != nil {
 				return s.callbacks.OnCronResume(id)
 			}
@@ -1446,7 +1452,7 @@ func (s *Session) toolOptions(turnCtx context.Context, goal, mainModel string) [
 		})))
 	}
 	if s.toolEnabled("cron_trigger") {
-		opts = append(opts, cogito.WithTools(cronTriggerToolDefinition(func(id string) string {
+		opts = append(opts, s.withTool(cronTriggerToolDefinition(func(id string) string {
 			if s.callbacks.OnCronTrigger != nil {
 				return s.callbacks.OnCronTrigger(id)
 			}
@@ -1458,21 +1464,21 @@ func (s *Session) toolOptions(turnCtx context.Context, goal, mainModel string) [
 	// specialist client with the tool's dedicated model and scopes the path to
 	// the session working dir, mirroring how host file tools resolve paths.
 	if s.toolEnabled("read_image") {
-		opts = append(opts, cogito.WithTools(readImageToolDefinition(
+		opts = append(opts, s.withTool(readImageToolDefinition(
 			func(path, question string) (string, error) {
 				return specialist.New(s.baseURL, s.apiKey).Describe(
 					turnCtx, resolveWorkspacePath(s.workingDir, path), s.visionModel, question)
 			})))
 	}
 	if s.toolEnabled("transcribe_audio") {
-		opts = append(opts, cogito.WithTools(transcribeAudioToolDefinition(
+		opts = append(opts, s.withTool(transcribeAudioToolDefinition(
 			func(path string) (string, error) {
 				return specialist.New(s.baseURL, s.apiKey).Transcribe(
 					turnCtx, resolveWorkspacePath(s.workingDir, path), s.transcribeModel)
 			})))
 	}
 	if s.toolEnabled("read_video") {
-		opts = append(opts, cogito.WithTools(readVideoToolDefinition(
+		opts = append(opts, s.withTool(readVideoToolDefinition(
 			func(path, question string) (string, error) {
 				return specialist.New(s.baseURL, s.apiKey).DescribeVideo(
 					turnCtx, resolveWorkspacePath(s.workingDir, path), s.videoModel, question)
@@ -1485,7 +1491,7 @@ func (s *Session) toolOptions(turnCtx context.Context, goal, mainModel string) [
 	// the goal so it does not re-arm on the next message. The callback body takes
 	// runMu, which is correct: it fires during a run, not during option assembly.
 	if goal != "" {
-		opts = append(opts, cogito.WithTools(goalDoneToolDefinition(func(justification string) string {
+		opts = append(opts, s.withTool(goalDoneToolDefinition(func(justification string) string {
 			s.runMu.Lock()
 			s.goalDone = true
 			s.goal = ""
@@ -1498,27 +1504,27 @@ func (s *Session) toolOptions(turnCtx context.Context, goal, mainModel string) [
 	// Wire the persistent memory tool so the assistant can save and retrieve
 	// notes that survive compaction and model restarts.
 	if s.toolEnabled("memory") {
-		opts = append(opts, cogito.WithTools(memoryToolDefinition(s.memoryStore)))
+		opts = append(opts, s.withTool(memoryToolDefinition(s.memoryStore)))
 	}
 
 	// Wire the ephemeral todo list so the assistant can plan and track
 	// multi-step work within the current session (replace-all semantics,
 	// like maki).
 	if s.toolEnabled("todo_write") {
-		opts = append(opts, cogito.WithTools(todoWriteToolDefinition(s.todoList)))
+		opts = append(opts, s.withTool(todoWriteToolDefinition(s.todoList)))
 	}
 
 	// Wire the tree-sitter index tool so the assistant can skeletonize source
 	// files — a compact structural overview before deciding what to read.
 	if s.toolEnabled("index") {
-		opts = append(opts, cogito.WithTools(indexToolDefinition(
+		opts = append(opts, s.withTool(indexToolDefinition(
 			func(p string) string { return resolveWorkspacePath(s.workingDir, p) })))
 	}
 
 	// Wire the repo_map tool so the assistant can get a bird's-eye overview of
 	// the whole codebase in one token-budgeted call.
 	if s.toolEnabled("repo_map") {
-		opts = append(opts, cogito.WithTools(repoMapToolDefinition(
+		opts = append(opts, s.withTool(repoMapToolDefinition(
 			s.workingDir,
 			func(p string) string { return resolveWorkspacePath(s.workingDir, p) },
 		)))
@@ -1527,7 +1533,7 @@ func (s *Session) toolOptions(turnCtx context.Context, goal, mainModel string) [
 	// Wire the LSP tool so the assistant can do symbol-aware navigation
 	// (definition, references, symbols) when a language server is configured.
 	if s.lspManager != nil && s.toolEnabled("lsp") {
-		opts = append(opts, cogito.WithTools(lspToolDefinition(
+		opts = append(opts, s.withTool(lspToolDefinition(
 			s.lspManager,
 			func(p string) string { return resolveWorkspacePath(s.workingDir, p) },
 		)))
@@ -1538,7 +1544,7 @@ func (s *Session) toolOptions(turnCtx context.Context, goal, mainModel string) [
 	// session on the next turn after any mutating op.
 	for _, d := range selfConfigToolDefs(s.configurator, s.requestReload) {
 		if s.toolEnabled(d.name) {
-			opts = append(opts, cogito.WithTools(d.def))
+			opts = append(opts, s.withTool(d.def))
 		}
 	}
 
