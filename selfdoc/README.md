@@ -584,7 +584,11 @@ log_level: error
 # not make the history fit, nib stubs old tool outputs, then drops older turns
 # (saved as an artifact:// the model can read), and as a last resort compacts
 # without the model. If the retry still does not fit, the turn fails, but the
-# compaction is kept, so the next turn does not overflow again. It knows the
+# compaction is kept, so the next turn does not overflow again. When the tool
+# schemas and system prompt alone fill the window, compaction cannot help:
+# nib keeps the conversation as it was, does not compact (neither on
+# overflow nor automatically), and names the MCP servers that take the most
+# room, so you can disable them or filter their tools. It knows the
 # wording of llama.cpp/LocalAI, vLLM, OpenAI,
 # Anthropic and Gemini. overflow_patterns teaches it another backend without a
 # rebuild: the rows are tried before the built-in ones, first match wins. A

@@ -1359,6 +1359,49 @@ func (s *Session) fragmentTokens() int {
 	return estimateTokens(s.fragment.Messages)
 }
 
+// schemaFloorBlocks reports whether the fixed prompt overhead (tool schemas
+// and system prompt, see SchemaBudget) leaves no room for the smallest request
+// that could succeed: room tokens on top of the floor within limit. When it
+// does not, compacting the conversation cannot help, and destroys history
+// that was never the problem.
+//
+// A measured floor is trusted as is. An estimate (no request sent yet) may
+// undercount, so it blocks only when it alone is over limit. An unknown limit
+// never blocks.
+func (s *Session) schemaFloorBlocks(limit, room int) (SchemaBudget, bool) {
+	sb := s.SchemaBudget()
+	if limit <= 0 {
+		return sb, false
+	}
+	if !sb.Measured {
+		return sb, sb.Floor > limit
+	}
+	return sb, sb.Floor+room > limit
+}
+
+// autoCompactBlocked reports whether auto-compaction (end of turn or mid-turn)
+// must be skipped because the floor plus lastUser tokens is over the context
+// budget: the request would stay over the trigger whatever is summarized.
+func (s *Session) autoCompactBlocked(lastUser int) bool {
+	budget := ContextBudget(s.compactionConfig(), s.contextWindow())
+	sb, blocked := s.schemaFloorBlocks(budget, lastUser)
+	if blocked {
+		xlog.Warn("auto-compaction skipped: the tool schemas and system prompt alone exceed the context budget",
+			"schema_tokens", sb.Floor, "budget", budget)
+	}
+	return blocked
+}
+
+// lastUserTokens is the byte/4 size of the last user message in msgs.
+func lastUserTokens(msgs []openai.ChatCompletionMessage) int {
+	for i := len(msgs) - 1; i >= 0; i-- {
+		if msgs[i].Role == "user" {
+			return estimateTokens(msgs[i : i+1])
+		}
+	}
+	return 0
+}
+
 // noticesText is the message pendingNoticesMessage made for notices, or ""
 // when there were none.
 func noticesText(notices []string) string {
@@ -2059,6 +2102,30 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 				first := s.overflowRetried == 0
 				s.overflowMu.Unlock()
 
+				// When the tool schemas and system prompt alone leave no
+				// room for even the user's message and a minimal answer, no
+				// compaction can make the request fit. Do not compact away
+				// the conversation: keep it as it was before the turn, with
+				// the user's message still on screen, and say what takes
+				// the room.
+				if first {
+					window := s.contextWindow()
+					if sb, blocked := s.schemaFloorBlocks(window, estimateTokens([]openai.ChatCompletionMessage{turnUser})+minOutputTokens); blocked {
+						xlog.Warn("overflow recovery skipped: the tool schemas and system prompt alone fill the context window",
+							"schema_tokens", sb.Floor, "window", window)
+						err = &FriendlyError{err: fmt.Errorf("%w: %w", errSchemaFloor, err), msg: schemaFloorMessage(sb, window)}
+						if s.callbacks.OnError != nil {
+							s.callbacks.OnError(err)
+						}
+						s.historyMu.Lock()
+						s.fragment = preTurnFragment
+						s.messages = append(slices.Clone(preTurnMessages), openai.ChatCompletionMessage{Role: "user", Content: text})
+						s.historyMu.Unlock()
+						s.restorePendingNotices(notices)
+						return "", err
+					}
+				}
+
 				if first {
 					// The escalation chain: iterativeTrim (LLM compaction,
 					// then a smaller tail, a forced prune and a hard
@@ -2273,7 +2340,9 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 	if s.fragment.Status != nil {
 		promptTokens = s.fragment.Status.LastUsage.PromptTokens
 	}
-	if s.shouldCompactNow(promptTokens) {
+	// Not when the tool schemas alone are over the budget: the next request
+	// would cross the trigger again whatever the summary kept.
+	if s.shouldCompactNow(promptTokens) && !s.autoCompactBlocked(estimateTokens([]openai.ChatCompletionMessage{turnUser})) {
 		if s.callbacks.OnStatus != nil {
 			s.callbacks.OnStatus("Compacting conversation…")
 		}

@@ -174,3 +174,16 @@ func contextOverflowRetriedMessage(raw string) string {
 	return "the request is still larger than the model's context window" + overflowDetail(raw) +
 		" after compacting the conversation and retrying. Compacting again will not help: increase the backend's context size, or reduce the enabled tools/MCP servers."
 }
+
+// errSchemaFloor marks a turn that failed because the tool schemas and the
+// system prompt alone leave no room for a request: no compaction can help, so
+// nib kept the conversation instead of compacting it away.
+var errSchemaFloor = errors.New("tool schemas and system prompt do not fit the context window")
+
+// schemaFloorMessage is the user-facing text for errSchemaFloor. It reads
+// like the schema-budget notice (sizes, the largest servers, what to do), and
+// says the conversation was kept.
+func schemaFloorMessage(sb SchemaBudget, window int) string {
+	return schemaBudgetNotice(sb, window) +
+		", or increase the backend's context size. The conversation was kept: compacting it cannot make the request fit."
+}

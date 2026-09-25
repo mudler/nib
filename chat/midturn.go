@@ -94,7 +94,7 @@ func (c *turnCompactor) manipulate(msgs []openai.ChatCompletionMessage) []openai
 	out := c.s.progressivePrune(view)
 
 	overhead := c.overhead()
-	if !c.failed && c.s.shouldCompactNow(estimateTokens(out)+overhead) {
+	if !c.failed && c.s.shouldCompactNow(estimateTokens(out)+overhead) && !c.s.autoCompactBlocked(lastUserTokens(out)) {
 		out = c.compact(msgs, out, base, repl, overhead)
 	}
 	c.sent = estimateTokens(out)

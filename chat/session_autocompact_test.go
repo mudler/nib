@@ -76,7 +76,10 @@ func autoCompactOpenAI(promptTokens int) http.HandlerFunc {
 func TestSessionAutoCompacts(t *testing.T) {
 	xlog.SetLogger(xlog.NewLogger(xlog.LogLevel("error"), ""))
 
-	srv := httptest.NewServer(autoCompactOpenAI(1000))
+	// 14000 is over the 12723 trigger (0.8 of a 20000 window less the 4096
+	// reserve) and under the 15904 budget. The backend's count calibrates the
+	// tool-schema floor, and a floor over the budget skips auto-compaction.
+	srv := httptest.NewServer(autoCompactOpenAI(14000))
 	defer srv.Close()
 
 	var mu sync.Mutex
@@ -91,7 +94,7 @@ func TestSessionAutoCompacts(t *testing.T) {
 		ApprovalMode: "auto",
 		AgentOptions: types.AgentOptions{Iterations: 10, MaxAttempts: 3, MaxRetries: 3},
 		Compaction: types.CompactionConfig{
-			MaxContextTokens: 100, // limit = 80 with default 0.8 threshold; 1000 >> 80
+			MaxContextTokens: 20000,
 			KeepRecent:       0,
 		},
 	}
