@@ -183,9 +183,21 @@ func (s *Session) forcePrune(budget int) error {
 		MinResultTokens: s.pruning.MinResultTokens,
 	}
 	out, newly, _ := pruneToolOutputs(before, forced, s.prunedIDs)
+	// Measure what the requests send: a result the prune keeps may already
+	// be compressed to a recorded level (see progressivePrune). The new stubs
+	// take precedence over a level, as they do in the requests.
+	pruned := make(map[string]string, len(s.prunedIDs)+len(newly))
+	for k, v := range s.prunedIDs {
+		pruned[k] = v
+	}
+	for _, n := range newly {
+		pruned[n.id] = n.detail
+	}
+	beforeView := requestView(before, s.prunedIDs, s.compressed)
+	outView := requestView(out, pruned, s.compressed)
 	s.prunedMu.Unlock()
 
-	if err := validateCompaction(before, out, budget); err != nil {
+	if err := validateCompaction(beforeView, outView, budget); err != nil {
 		return err
 	}
 	s.prunedMu.Lock()

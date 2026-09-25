@@ -80,8 +80,9 @@ func sameMessage(a, b openai.ChatCompletionMessage) bool {
 }
 
 // manipulate is the cogito.WithMessagesManipulator body for a turn: it puts the
-// summary in place of the history it covers, prunes tool output, and compacts
-// when the result crosses the auto-compaction trigger.
+// summary in place of the history it covers, prunes and progressively
+// compresses tool output (progressivePrune), and compacts when the result
+// crosses the auto-compaction trigger.
 func (c *turnCompactor) manipulate(msgs []openai.ChatCompletionMessage) []openai.ChatCompletionMessage {
 	base, repl := 0, 0
 	view := msgs
@@ -90,7 +91,7 @@ func (c *turnCompactor) manipulate(msgs []openai.ChatCompletionMessage) []openai
 		view = make([]openai.ChatCompletionMessage, 0, repl+len(msgs)-base)
 		view = append(append(view, c.replacement...), msgs[base:]...)
 	}
-	out := c.s.pruneMessages(view)
+	out := c.s.progressivePrune(view)
 
 	overhead := c.overhead()
 	if !c.failed && c.s.shouldCompactNow(estimateTokens(out)+overhead) {

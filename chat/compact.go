@@ -594,9 +594,15 @@ func (s *Session) compactHistoryKeep(ctx context.Context, keep int) (before, aft
 	for k, v := range s.prunedIDs {
 		pruned[k] = v
 	}
+	compressed := s.copyCompressedLocked()
 	s.prunedMu.Unlock()
+	// The summary sees what the requests saw: stubs, then the progressive
+	// compression levels (see progressivePrune).
 	view := func(m []openai.ChatCompletionMessage) []openai.ChatCompletionMessage {
-		return stubbedView(m, pruned)
+		if len(compressed) == 0 {
+			return stubbedView(m, pruned)
+		}
+		return requestView(m, pruned, compressed)
 	}
 	summary, head, tail, err := s.summarizeFitting(ctx, msgs, keep, view)
 	if err != nil {

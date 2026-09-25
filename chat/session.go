@@ -258,6 +258,13 @@ type Session struct {
 	// a stub whose wording changed between calls would move the prompt prefix
 	// just as un-stubbing it would.
 	prunedIDs map[string]string
+	// compressed maps each tool_call_id progressivePrune compressed to its
+	// level and the text it was rendered as. Like prunedIDs it only grows in
+	// level, so an already-sent result keeps its bytes. compressBand is the
+	// pressure band of the previous call; levels are assigned only when the
+	// band rises above it.
+	compressed   map[string]compressedResult
+	compressBand int
 
 	// outputLimitsMu guards the tool-output limits policy (budget, per-line
 	// truncation, artifact spill). SetToolOutputLimits writes it from the UI

@@ -439,9 +439,9 @@ func pruneToolOutputs(msgs []openai.ChatCompletionMessage, cfg types.ToolOutputP
 	return out, newly, freed
 }
 
-// pruneMessages is the cogito.WithMessagesManipulator body: it rewrites the
-// messages about to be sent, and records what it stubbed so the next call makes
-// the same decisions.
+// pruneMessages rewrites the messages about to be sent, and records what it
+// stubbed so the next call makes the same decisions. The request path reaches
+// it through progressivePrune, which compresses what it leaves in full.
 //
 // It runs on the turn goroutine but the state is guarded anyway — the
 // manipulator is called from inside cogito's loop, and nothing here should
