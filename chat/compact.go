@@ -578,11 +578,17 @@ func (s *Session) CompactHistory() (before, after int, err error) {
 // passed-in ctx governs the summarization LLM call, allowing callers (e.g.
 // auto-compaction) to make it cancellable via a per-turn context.
 func (s *Session) compactHistory(ctx context.Context) (before, after int, err error) {
+	return s.compactHistoryKeep(ctx, s.compactionConfig().KeepRecent)
+}
+
+// compactHistoryKeep is compactHistory with the tail length passed in rather
+// than read from the config. Overflow recovery uses it to retry with a
+// smaller tail without writing the shared CompactionConfig.
+func (s *Session) compactHistoryKeep(ctx context.Context, keep int) (before, after int, err error) {
 	msgs := s.fragment.Messages
 
 	before = estimateTokens(msgs)
 
-	cfg := s.compactionConfig()
 	s.prunedMu.Lock()
 	pruned := make(map[string]string, len(s.prunedIDs))
 	for k, v := range s.prunedIDs {
@@ -592,7 +598,7 @@ func (s *Session) compactHistory(ctx context.Context) (before, after int, err er
 	view := func(m []openai.ChatCompletionMessage) []openai.ChatCompletionMessage {
 		return stubbedView(m, pruned)
 	}
-	summary, head, tail, err := s.summarizeFitting(ctx, msgs, cfg.KeepRecent, view)
+	summary, head, tail, err := s.summarizeFitting(ctx, msgs, keep, view)
 	if err != nil {
 		return before, before, err
 	}
