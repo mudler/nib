@@ -230,6 +230,13 @@ type Session struct {
 	// modellimits.go.
 	limitsFor string
 
+	// outputCap is the output-token cap the current model's client sends,
+	// as resolved for it (config, catalog, then discovery); guarded by
+	// modelMu. 0 means unknown, or a client that carries no cap. The turn's
+	// LLM wrapper clamps each request's reservation against it (see
+	// clampOutputTokens).
+	outputCap int
+
 	// prunedMu guards the tool-output pruning state below. The manipulator reads
 	// it from inside cogito's loop, and nothing here should assume which
 	// goroutine that is; Reload writes the policy from the turn goroutine.
@@ -474,6 +481,8 @@ func NewSession(ctx context.Context, cfg types.Config, callbacks Callbacks, tran
 	if err != nil {
 		return nil, fmt.Errorf("create main LLM: %w", err)
 	}
+	// Read before tracing wraps the client and hides its SetMaxTokens.
+	outCap := factoryOutputCap(llm, mainProvider, credStore)
 	endpoints, configErrs := endpoint.New(cfg, credStore)
 	classifier, err := provenance.ClassifierForConfig(cfg)
 	if err != nil {
@@ -542,6 +551,7 @@ func NewSession(ctx context.Context, cfg types.Config, callbacks Callbacks, tran
 		agentLogs:            newAgentLogStore(),
 		llmModel:             mainProvider.Model,
 		mainProvider:         mainProvider,
+		outputCap:            outCap,
 		configProvider:       mainProvider,
 		endpoints:            endpoints,
 		configErrs:           configErrs,
@@ -1649,7 +1659,7 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 	// retrying client instead (WithAgentLLM below; see agentretry.go):
 	// without it cogito would hand them this tracked one.
 	agentLLM := retryForAgent(llm, &s.agentBackoff)
-	llm = trackUsage(llm, &s.live)
+	llm = trackUsage(llm, &s.live, s.requestLimits)
 
 	// Build cogito options from config
 	cogitoOpts := []cogito.Option{
@@ -2628,6 +2638,8 @@ func (s *Session) applyProvider(provider types.ModelProviderConfig, id string) e
 	if err != nil {
 		return err
 	}
+	// Read before tracing wraps the client and hides its SetMaxTokens.
+	outCap := factoryOutputCap(llm, provider, s.credStore)
 	if s.tracer != nil {
 		llm = trace.NewRecordingLLM(llm, s.tracer, name, "")
 	}
@@ -2636,6 +2648,7 @@ func (s *Session) applyProvider(provider types.ModelProviderConfig, id string) e
 	s.llm = llm
 	s.llmModel = name
 	s.mainProvider = provider
+	s.outputCap = outCap
 	if id != "" {
 		s.endpointID = id
 	}

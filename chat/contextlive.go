@@ -2,9 +2,11 @@ package chat
 
 import (
 	"context"
+	"encoding/json"
 	"sync/atomic"
 
 	"github.com/mudler/cogito"
+	"github.com/mudler/xlog"
 	"github.com/sashabaranov/go-openai"
 )
 
@@ -76,12 +78,27 @@ func (l *liveUsage) promptTokens() int {
 
 // trackedLLM is the LLM the turn loop actually calls: the session's client,
 // with every request's reported usage recorded on the way back.
+//
+// It also sizes each request's output reservation (see clampOutputTokens).
+// limits reports the session's output cap and context window; nil leaves every
+// request as the caller built it.
 type trackedLLM struct {
 	cogito.LLM
-	live *liveUsage
+	live   *liveUsage
+	limits func() (cap, window int)
+}
+
+// clamp applies clampOutputTokens with the session's current limits.
+func (t *trackedLLM) clamp(request openai.ChatCompletionRequest) openai.ChatCompletionRequest {
+	if t.limits == nil {
+		return request
+	}
+	cap, window := t.limits()
+	return clampOutputTokens(request, cap, window)
 }
 
 func (t *trackedLLM) CreateChatCompletion(ctx context.Context, request openai.ChatCompletionRequest) (cogito.LLMReply, cogito.LLMUsage, error) {
+	request = t.clamp(request)
 	var usage cogito.LLMUsage
 	reply, err := retryRequest(ctx, func() (cogito.LLMReply, error) {
 		r, u, e := t.LLM.CreateChatCompletion(ctx, request)
@@ -120,6 +137,7 @@ type trackedStreamingLLM struct {
 // The relay goroutine is bounded by the source channel: it ends when the
 // provider closes it, which cogito's own consumer loop already depends on.
 func (t *trackedStreamingLLM) CreateChatCompletionStream(ctx context.Context, request openai.ChatCompletionRequest) (<-chan cogito.StreamEvent, error) {
+	request = t.clamp(request)
 	src, err := retryRequest(ctx, func() (<-chan cogito.StreamEvent, error) {
 		return t.stream.CreateChatCompletionStream(ctx, request)
 	})
@@ -139,11 +157,58 @@ func (t *trackedStreamingLLM) CreateChatCompletionStream(ctx context.Context, re
 	return out, nil
 }
 
-// trackUsage wraps llm so the turn's requests report their size to live,
+// trackUsage wraps llm so the turn's requests report their size to live and
+// reserve only the output room the window has left (limits may be nil),
 // preserving streaming support when the client has it.
-func trackUsage(llm cogito.LLM, live *liveUsage) cogito.LLM {
+func trackUsage(llm cogito.LLM, live *liveUsage, limits func() (cap, window int)) cogito.LLM {
+	t := trackedLLM{LLM: llm, live: live, limits: limits}
 	if s, ok := llm.(cogito.StreamingLLM); ok {
-		return &trackedStreamingLLM{trackedLLM: trackedLLM{LLM: llm, live: live}, stream: s}
+		return &trackedStreamingLLM{trackedLLM: t, stream: s}
 	}
-	return &trackedLLM{LLM: llm, live: live}
+	return &t
+}
+
+const (
+	// minOutputTokens is the smallest output reservation a clamped request
+	// carries. A prompt that already fills the window still gets this much,
+	// and the overflow path deals with the rejection.
+	minOutputTokens = 1024
+	// outputSafetyMargin absorbs the error of the bytes/4 prompt estimate.
+	outputSafetyMargin = 512
+)
+
+// clampOutputTokens sizes a request's output reservation to what the window
+// has left after its prompt.
+//
+// The client sends its output cap as max_tokens on every request. A backend
+// such as vLLM rejects a request when prompt + max_tokens exceeds the window,
+// whatever the model actually generates. With a cap that is a large fraction
+// of the window (regolo: 96000 of 210000), every prompt above window − cap
+// failed, compaction summaries included. cogito applies the client's cap only
+// when the request carries none, so setting it here decides the reservation.
+//
+// The result is min(cap, window − prompt − outputSafetyMargin), floored at
+// minOutputTokens (and never above cap). The prompt estimate is bytes/4 over
+// the messages and the JSON of the tool schemas, which are real prompt tokens.
+// A request with an explicit value, or unknown limits (cap or window 0), is
+// returned unchanged.
+func clampOutputTokens(request openai.ChatCompletionRequest, cap, window int) openai.ChatCompletionRequest {
+	if cap <= 0 || window <= 0 || request.MaxTokens != 0 || request.MaxCompletionTokens != 0 {
+		return request
+	}
+	prompt := estimateTokens(request.Messages)
+	if len(request.Tools) > 0 {
+		if b, err := json.Marshal(request.Tools); err == nil {
+			prompt += len(b) / 4
+		}
+	}
+	v := min(cap, window-prompt-outputSafetyMargin)
+	if v < minOutputTokens {
+		v = min(minOutputTokens, cap)
+	}
+	if v < cap {
+		xlog.Debug("output reservation clamped", "from", cap, "to", v, "prompt_estimate", prompt, "window", window)
+	}
+	request.MaxTokens = v
+	return request
 }

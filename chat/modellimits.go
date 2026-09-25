@@ -3,8 +3,11 @@ package chat
 import (
 	"context"
 
+	"github.com/mudler/cogito"
+	"github.com/mudler/nib/auth"
 	"github.com/mudler/nib/llmprovider"
 	"github.com/mudler/nib/llmprovider/catalog"
+	"github.com/mudler/nib/types"
 )
 
 // A model has two limits nib can only learn by asking the endpoint: the
@@ -53,6 +56,11 @@ func (s *Session) ensureModelLimits(ctx context.Context) {
 		cancel()
 		if !res.Omit && res.MaxTokens > 0 {
 			setter.SetMaxTokens(res.MaxTokens)
+			s.modelMu.Lock()
+			if s.llmModel == model {
+				s.outputCap = res.MaxTokens
+			}
+			s.modelMu.Unlock()
 		}
 	}
 
@@ -66,4 +74,30 @@ func (s *Session) ensureModelLimits(ctx context.Context) {
 // do not implement it.
 type maxTokensSetter interface {
 	SetMaxTokens(int)
+}
+
+// factoryOutputCap is the output cap the LLM factory gave llm when it built it
+// for provider: the same resolution (config, then catalog, no network), so the
+// session knows what each request reserves without asking the client. A
+// client that carries no cap (no SetMaxTokens) reports 0, which leaves its
+// requests unclamped.
+func factoryOutputCap(llm cogito.LLM, provider types.ModelProviderConfig, store *auth.Store) int {
+	if _, ok := llm.(maxTokensSetter); !ok {
+		return 0
+	}
+	baseURL, apiKey, _ := llmprovider.ModelsEndpoint(provider, store)
+	res := catalog.ResolveMaxTokens(nil, provider, baseURL, apiKey)
+	if res.Omit || res.MaxTokens <= 0 {
+		return 0
+	}
+	return res.MaxTokens
+}
+
+// requestLimits reports the output cap and context window the turn's requests
+// are clamped against (see clampOutputTokens), read under one lock so a model
+// switch cannot pair one model's cap with another's window.
+func (s *Session) requestLimits() (cap, window int) {
+	s.modelMu.RLock()
+	defer s.modelMu.RUnlock()
+	return s.outputCap, s.windowLocked()
 }
