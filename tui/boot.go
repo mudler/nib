@@ -7,6 +7,7 @@ import (
 
 	"github.com/charmbracelet/bubbletea"
 	"github.com/mudler/nib/theme"
+	"github.com/mudler/nib/types"
 )
 
 // bootEntry is one line in the boot log.
@@ -47,10 +48,12 @@ func bootScript() []bootScriptEntry {
 		{120, "provider", ""},
 		{200, "model", ""},
 		{260, "mcp.connect", ""},
-		{400, "tools.mount", ""},
-		{460, "skills.index", ""},
-		{520, "session", ""},
-		{580, "memory", "0 notes loaded"},
+		{320, "lsp.detect", ""},
+		{460, "tools.mount", ""},
+		{520, "skills.index", ""},
+		{580, "context.files", ""},
+		{640, "session", ""},
+		{700, "memory", "0 notes loaded"},
 	}
 }
 
@@ -112,10 +115,25 @@ func bootDetail(m *Model, e bootScriptEntry) string {
 			return "no transports"
 		}
 		return fmt.Sprintf("connecting %d transports", n)
+	case "lsp.detect":
+		if m.session == nil {
+			return "—"
+		}
+		lines := m.session.DetectedLSPServers()
+		if len(lines) == 0 {
+			return "none"
+		}
+		return strings.Join(lines, ", ")
 	case "tools.mount":
 		return "tools registered"
 	case "skills.index":
 		return fmt.Sprintf("%d skills indexed", len(m.cfg.Skills))
+	case "context.files":
+		files := types.DetectContextFiles(m.cfg.WorkingDir)
+		if len(files) == 0 {
+			return "none"
+		}
+		return strings.Join(files, ", ")
 	case "session":
 		sid := m.sessionID
 		if len(sid) > 8 {
@@ -194,6 +212,10 @@ func (b *bootState) refreshSession(m *Model) {
 			b.entries[i].dt = m.bootProvider()
 		case "model":
 			b.entries[i].dt = m.bootModel()
+		case "lsp.detect":
+			b.entries[i].dt = bootDetail(m, bootScriptEntry{ev: "lsp.detect"})
+		case "context.files":
+			b.entries[i].dt = bootDetail(m, bootScriptEntry{ev: "context.files"})
 		}
 	}
 }

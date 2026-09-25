@@ -64,6 +64,16 @@ func (s *Session) StartupNote() string { return s.startupNote }
 // ConfigErrors are the config.yaml endpoints that were rejected at load.
 func (s *Session) ConfigErrors() []error { return s.configErrs }
 
+// DetectedLSPServers returns human-readable lines describing the language
+// servers configured on the session (explicit config plus auto-detected). It
+// is nil when no servers are configured. Used by the boot screen.
+func (s *Session) DetectedLSPServers() []string {
+	if s.lspManager == nil {
+		return nil
+	}
+	return s.lspManager.ConfigLines()
+}
+
 // ActiveProviderName is the display name of the endpoint the session is
 // talking to right now: the registry name of a /login provider ("Regolo"),
 // a config.yaml named endpoint ("@work"), or ConfigProviderName while

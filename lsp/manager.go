@@ -129,3 +129,29 @@ func (m *Manager) Status() string {
 	}
 	return b.String()
 }
+
+// ConfigLines returns human-readable lines for the configured servers,
+// sorted by language, each "lang: command [args...]". It does not touch state.
+// Returns nil when no servers are configured.
+func (m *Manager) ConfigLines() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if len(m.configs) == 0 {
+		return nil
+	}
+	langs := make([]string, 0, len(m.configs))
+	for lang := range m.configs {
+		langs = append(langs, lang)
+	}
+	sort.Strings(langs)
+	lines := make([]string, 0, len(langs))
+	for _, lang := range langs {
+		cfg := m.configs[lang]
+		fullCmd := cfg.Command
+		if len(cfg.Args) > 0 {
+			fullCmd += " " + strings.Join(cfg.Args, " ")
+		}
+		lines = append(lines, lang+": "+fullCmd)
+	}
+	return lines
+}
