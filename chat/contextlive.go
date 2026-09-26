@@ -3,6 +3,7 @@ package chat
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"math"
 	"slices"
 	"sync/atomic"
@@ -238,13 +239,50 @@ func (t *trackedLLM) prepare(request openai.ChatCompletionRequest) (openai.ChatC
 		return request, whole
 	}
 	cap, window := t.limits()
-	out := clampOutputTokensSized(request, cap, window, toolBytes/4)
+	out := clampOutputTokensSized(request, cap, window, toolBytes/4, t.live.tokenizerRatio())
 	// An explicit value is cogito's own retry of the previous request with
 	// a raised cap: it keeps that request's record.
 	if !explicit {
 		t.live.clamped.Store(cap > 0 && window > 0 && out.MaxTokens < cap)
 	}
 	return out, whole
+}
+
+// contextFullError is a turn request nib did not send because, counted the
+// way the backend counts (the byte/4 estimate times the calibrated tokenizer
+// ratio), its prompt leaves the model less than minOutputTokens of the window.
+//
+// A backend rejects a prompt larger than the window, and the overflow
+// recovery takes over. A prompt that only nearly fills it is accepted, and
+// the reply is cut off wherever the window ends; LocalAI reports that as
+// "stop", so a tool call cut in half surfaces as invalid arguments, again and
+// again, while the conversation stays too large. classifyOverflow reads this
+// error as a context overflow, so the recovery runs instead.
+type contextFullError struct {
+	Prompt, Window int
+}
+
+func (e *contextFullError) Error() string {
+	return fmt.Sprintf("context window full: the prompt is about %d tokens of a %d-token window, leaving less than %d for the reply",
+		e.Prompt, e.Window, minOutputTokens)
+}
+
+// starved returns a contextFullError when a request prepare measured (whole
+// >= 0, a turn request) leaves the model less than minOutputTokens of the
+// window, counted with the calibrated tokenizer ratio.
+func (t *trackedLLM) starved(whole int) error {
+	if whole < 0 || t.limits == nil {
+		return nil
+	}
+	_, window := t.limits()
+	if window <= 0 {
+		return nil
+	}
+	prompt := int(float64(whole) * t.live.tokenizerRatio())
+	if window-prompt >= minOutputTokens {
+		return nil
+	}
+	return &contextFullError{Prompt: prompt, Window: window}
 }
 
 // calibrate sets the tokenizer ratio from the backend's report for a request
@@ -262,6 +300,9 @@ func (t *trackedLLM) calibrate(promptTokens, whole int) {
 
 func (t *trackedLLM) CreateChatCompletion(ctx context.Context, request openai.ChatCompletionRequest) (cogito.LLMReply, cogito.LLMUsage, error) {
 	request, whole := t.prepare(request)
+	if err := t.starved(whole); err != nil {
+		return cogito.LLMReply{}, cogito.LLMUsage{}, err
+	}
 	var usage cogito.LLMUsage
 	reply, err := retryRequest(ctx, func() (cogito.LLMReply, error) {
 		r, u, e := t.LLM.CreateChatCompletion(ctx, request)
@@ -302,6 +343,9 @@ type trackedStreamingLLM struct {
 // provider closes it, which cogito's own consumer loop already depends on.
 func (t *trackedStreamingLLM) CreateChatCompletionStream(ctx context.Context, request openai.ChatCompletionRequest) (<-chan cogito.StreamEvent, error) {
 	request, whole := t.prepare(request)
+	if err := t.starved(whole); err != nil {
+		return nil, err
+	}
 	src, err := retryRequest(ctx, func() (<-chan cogito.StreamEvent, error) {
 		return t.stream.CreateChatCompletionStream(ctx, request)
 	})
@@ -358,7 +402,7 @@ const (
 // A request with an explicit value, or unknown limits (cap or window 0), is
 // returned unchanged.
 func clampOutputTokens(request openai.ChatCompletionRequest, cap, window int) openai.ChatCompletionRequest {
-	return clampOutputTokensSized(request, cap, window, toolSchemaBytes(request.Tools)/4)
+	return clampOutputTokensSized(request, cap, window, toolSchemaBytes(request.Tools)/4, 1)
 }
 
 // toolSchemaBytes is the size of the JSON of a request's tools.
@@ -375,11 +419,11 @@ func toolSchemaBytes(tools []openai.Tool) int {
 
 // clampOutputTokensSized is clampOutputTokens with the tool schemas already
 // measured (toolTokens), so the wrapper does not marshal them twice.
-func clampOutputTokensSized(request openai.ChatCompletionRequest, cap, window, toolTokens int) openai.ChatCompletionRequest {
+func clampOutputTokensSized(request openai.ChatCompletionRequest, cap, window, toolTokens int, ratio float64) openai.ChatCompletionRequest {
 	if cap <= 0 || window <= 0 || request.MaxTokens != 0 || request.MaxCompletionTokens != 0 {
 		return request
 	}
-	prompt := estimateTokens(request.Messages) + toolTokens
+	prompt := int(float64(estimateTokens(request.Messages)+toolTokens) * max(ratio, 1))
 	v := min(cap, window-prompt-outputSafetyMargin)
 	if v < minOutputTokens {
 		v = min(minOutputTokens, cap)

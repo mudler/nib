@@ -215,6 +215,11 @@ func classifyOverflowWith(err error, lastRequestTokens, window int) overflowInfo
 	if errors.Is(err, cogito.ErrToolArgumentsTruncated) {
 		return overflowInfo{}
 	}
+	// A request nib held back because it would leave the reply no room.
+	var full *contextFullError
+	if errors.As(err, &full) {
+		return overflowInfo{Kind: KindContext, Pattern: "nib:context_full", Window: full.Window, Input: full.Prompt}
+	}
 	status := errorStatus(err)
 	weakOK := status == 0 || status == 400 || status == 413
 	m := matchOverflow(err, weakOK)
