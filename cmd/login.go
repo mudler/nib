@@ -34,9 +34,21 @@ func RunLoginCommand(programName, baseDir string, args []string) int {
 		return loginList(prog, store)
 	}
 
-	def, ok := provider.Get(args[0])
+	// --device flag forces the device-code flow for providers that support it
+	// (even if their default LoginKind is LoginOAuthCode). This is the
+	// SSH-friendly path: no localhost callback server needed.
+	useDevice := false
+	providerID := args[0]
+	rest := args[1:]
+	if len(rest) > 0 && (rest[0] == "--device" || rest[0] == "-d") {
+		useDevice = true
+		rest = rest[1:]
+	}
+	_ = rest // currently no positional args after provider ID
+
+	def, ok := provider.Get(providerID)
 	if !ok {
-		fmt.Fprintf(os.Stderr, "%s login: unknown provider %q\n", prog, args[0])
+		fmt.Fprintf(os.Stderr, "%s login: unknown provider %q\n", prog, providerID)
 		fmt.Fprintf(os.Stderr, "Available: %s\n", providerIDs(provider.Loginable()))
 		return 1
 	}
@@ -48,11 +60,21 @@ func RunLoginCommand(programName, baseDir string, args []string) int {
 
 	ctx := context.Background()
 
+	// --device flag: switch to device-code flow if the provider has a DeviceURL.
+	if useDevice {
+		if def.DeviceURL == "" {
+			fmt.Fprintf(os.Stderr, "%s login: %s does not support device-code flow (no device authorization endpoint)\n", prog, def.ID)
+			fmt.Fprintf(os.Stderr, "Use the standard OAuth flow instead. Over SSH, set up port forwarding:\n")
+			fmt.Fprintf(os.Stderr, "  ssh -L %d:localhost:%d <user>@<this-host>\n", def.CallbackPort, def.CallbackPort)
+			return 1
+		}
+		// Temporarily switch the login kind to device-code.
+		def.LoginKind = provider.LoginDeviceCode
+	}
+
 	switch def.LoginKind {
-	case provider.LoginOAuthCode:
-		return loginOAuth(ctx, prog, store, def)
-	case provider.LoginDeviceCode:
-		return loginDeviceCode(ctx, prog, store, def)
+	case provider.LoginOAuthCode, provider.LoginDeviceCode:
+		return loginFlow(ctx, prog, store, def)
 	case provider.LoginAPIKey:
 		return loginAPIKey(prog, store, def)
 	case provider.LoginCopilot:
@@ -98,44 +120,91 @@ func RunLogoutCommand(programName, baseDir string, args []string) int {
 	return 0
 }
 
-func loginOAuth(ctx context.Context, prog string, store *auth.Store, def provider.Definition) int {
-	fmt.Printf("Starting OAuth login for %s...\n", def.Name)
-	flow, err := auth.StartOAuthFlow(def)
+// loginFlow handles both OAuth-code and device-code login by delegating to
+// auth.StartLogin, which detects SSH sessions, auto-switches to device flow
+// when appropriate, and builds the port-forward hint / paste-code prompt.
+func loginFlow(ctx context.Context, prog string, store *auth.Store, def provider.Definition) int {
+	flow, err := auth.StartLogin(ctx, store, def)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "%s login: %v\n", prog, err)
 		return 1
 	}
-	url := flow.AuthorizeURL()
-	fmt.Printf("\nOpen this URL in your browser:\n  %s\n\n", url)
-	openBrowser(url)
-	fmt.Println("Waiting for authorization...")
 
+	fmt.Printf("Starting %s login for %s...\n", def.LoginKind, def.Name)
+	fmt.Println(flow.Prompt)
+
+	if flow.URL != "" && !flow.IsSSH {
+		openBrowser(flow.URL)
+	}
+
+	if flow.IsSSH {
+		return loginOAuthSSH(ctx, prog, def, flow)
+	}
+
+	fmt.Println("Waiting for authorization...")
 	cred, err := flow.Complete(ctx)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "%s login: %v\n", prog, err)
-		return 1
-	}
-	if err := store.Save(cred); err != nil {
-		fmt.Fprintf(os.Stderr, "%s login: save credential: %v\n", prog, err)
 		return 1
 	}
 	fmt.Printf("Logged in to %s as %s\n", def.Name, cred.DisplayLabel())
 	return 0
 }
 
-func loginDeviceCode(ctx context.Context, prog string, store *auth.Store, def provider.Definition) int {
-	fmt.Printf("Starting device login for %s...\n", def.Name)
-	cred, err := auth.LoginDeviceCode(ctx, store, def, func(instructions, url string) {
-		fmt.Printf("\n%s\n", instructions)
-		openBrowser(url)
-		fmt.Println("Waiting for authorization...")
-	})
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "%s login: %v\n", prog, err)
-		return 1
+// loginOAuthSSH handles the SSH paste-the-code fallback: races the
+// callback server (flow.Complete) against stdin, feeding pasted URLs
+// into flow.ManualCallback.
+func loginOAuthSSH(ctx context.Context, prog string, def provider.Definition, flow *auth.LoginFlow) int {
+	fmt.Println("Waiting for authorization (callback or pasted URL)...")
+
+	type result struct {
+		cred auth.Credential
+		err  error
 	}
-	fmt.Printf("Logged in to %s as %s\n", def.Name, cred.DisplayLabel())
-	return 0
+	completeCh := make(chan result, 1)
+	go func() {
+		cred, err := flow.Complete(ctx)
+		completeCh <- result{cred, err}
+	}()
+
+	stdinCh := make(chan string, 1)
+	go func() {
+		scanner := bufio.NewScanner(os.Stdin)
+		for scanner.Scan() {
+			stdinCh <- strings.TrimSpace(scanner.Text())
+		}
+	}()
+
+	for {
+		select {
+		case res := <-completeCh:
+			if res.err != nil {
+				fmt.Fprintf(os.Stderr, "%s login: %v\n", prog, res.err)
+				return 1
+			}
+			fmt.Printf("Logged in to %s as %s\n", def.Name, res.cred.DisplayLabel())
+			return 0
+		case raw := <-stdinCh:
+			if raw == "" {
+				continue
+			}
+			if !strings.HasPrefix(raw, "http://") && !strings.HasPrefix(raw, "https://") {
+				fmt.Println("That doesn't look like a URL. Paste the full callback URL from your browser's address bar.")
+				continue
+			}
+			if err := flow.ManualCallback(raw); err != nil {
+				fmt.Fprintf(os.Stderr, "%s login: invalid pasted URL: %v\n", prog, err)
+				continue
+			}
+			res := <-completeCh
+			if res.err != nil {
+				fmt.Fprintf(os.Stderr, "%s login: %v\n", prog, res.err)
+				return 1
+			}
+			fmt.Printf("Logged in to %s as %s\n", def.Name, res.cred.DisplayLabel())
+			return 0
+		}
+	}
 }
 
 func loginCopilotToken(prog string, store *auth.Store, def provider.Definition) int {
@@ -236,12 +305,18 @@ func logoutList(prog string, store *auth.Store) int {
 }
 
 func loginUsage(prog string) {
-	fmt.Printf("Usage: %s login <provider>\n", prog)
+	fmt.Printf("Usage: %s login <provider> [--device]\n", prog)
 	fmt.Printf("       %s login --list\n\n", prog)
 	fmt.Println("Providers with login:")
 	for _, d := range provider.Loginable() {
-		fmt.Printf("  %-12s  %s  (%s)\n", d.ID, d.Name, d.LoginKind)
+		extras := []string{string(d.LoginKind)}
+		if d.DeviceURL != "" {
+			extras = append(extras, "device-code supported")
+		}
+		fmt.Printf("  %-12s  %s  (%s)\n", d.ID, d.Name, strings.Join(extras, ", "))
 	}
+	fmt.Println("\n--device  Use the device-code flow (RFC 8628) when available.")
+	fmt.Println("         This avoids the localhost callback and works over SSH without port forwarding.")
 }
 
 func credentialPath(root string) string {
