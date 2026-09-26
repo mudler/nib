@@ -180,6 +180,12 @@ its own chip in the footer's activity strip (see [The footer](#the-footer)):
   <img alt="nib delegating to the explore sub-agent, with the jobs footer" src="docs/images/demo-agents.gif" width="800">
 </p>
 
+To talk to a running sub-agent, open its log: `Ctrl+G`, select its chip, and
+press `Enter` (or pick it in the `Ctrl+O` log list). Type under the log and
+press `Enter` to send. The agent reads your message at its next step, the
+message shows in its log and in the transcript, and `Esc` clears what you
+typed. A finished agent's log takes no input: ask nib to follow up with it.
+
 While the model works, the working indicator shows its generation speed and the
 tokens generated this turn, e.g. `thinking · 42 tok/s ▃▅▆▇ · 1.2k tokens`. When a
 sub-agent finishes, its line reports the same: `sub-agent explore finished · 3 tools ·
@@ -214,7 +220,7 @@ clock, CPU and memory by default).
 | Key | Action |
 |---|---|
 | `←` `→`, `Tab` | Select the previous or next chip |
-| `Enter` | Open the chip: the todo panel, the sub-agent's or shell job's log, or the loops or goal panel |
+| `Enter` | Open the chip: the todo panel, the sub-agent's or shell job's log (a running sub-agent's log takes a message for it), or the loops or goal panel |
 | `Esc`, `Ctrl+G` | Go back to the composer |
 
 Any other key goes back to the composer and is typed there.

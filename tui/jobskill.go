@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/mudler/nib/chat"
 	"github.com/mudler/nib/theme"
 	"github.com/mudler/nib/tui/render"
 )
@@ -84,6 +85,17 @@ func clipLine(s string, width int) string {
 	return s
 }
 
+// openJobLog opens one job's full log. A sub-agent's log gets a fresh input
+// line addressed to it.
+func (m *Model) openJobLog(j jobRef) {
+	m.logOpenID, m.logOpenKind = j.ID, j.Kind
+	m.agentInputNote = ""
+	if j.Kind == "agent" {
+		m.agentInput = newAgentInput(m.agentTypeOf(j.ID))
+	}
+	m.syncLogViewport()
+}
+
 // syncLogViewport loads the open job's full log into the log viewport.
 func (m *Model) syncLogViewport() {
 	if m.logOpenID == "" {
@@ -101,6 +113,11 @@ func (m *Model) syncLogViewport() {
 	m.logVP.GotoBottom()
 }
 
+// logViewerChrome is how many rows an open log's view adds around the log
+// itself: the "logs" title, a blank line, the job's header, and the status
+// line under the log (blank while there is nothing to say).
+const logViewerChrome = 4
+
 // renderLogsViewer renders the Ctrl+O viewer: a selectable list of sub-agents +
 // background jobs, or the scrollable full log of the one the user opened.
 func (m Model) renderLogsViewer() string {
@@ -108,10 +125,25 @@ func (m Model) renderLogsViewer() string {
 	b.WriteString(theme.Brand.Render("logs"))
 	b.WriteString("\n\n")
 	if m.logOpenID != "" {
-		// Open one job's full log.
-		b.WriteString(theme.Meta.Render(m.logOpenKind + " " + render.ShortID(m.logOpenID)))
+		// Open one job's full log. A sub-agent's header names it and its task,
+		// and says whether it still takes messages.
+		header := m.logOpenKind + " " + render.ShortID(m.logOpenID)
+		var footer string
+		if job, ok := m.jobByID(m.logOpenID); ok && m.logOpenKind == "agent" {
+			header = m.agentTypeOf(job.ID)
+			if title := job.title(); title != "" {
+				header += ": " + title
+			}
+			header += " " + theme.Sep + " " + string(job.Status)
+			if job.Status != chat.AgentStatusRunning {
+				footer = "finished " + theme.Sep + " ask nib to follow up with it"
+			}
+		}
+		b.WriteString(theme.Meta.Render(header))
 		b.WriteString("\n")
 		b.WriteString(m.logVP.View())
+		// Always a row, so the frame keeps its height when the agent ends.
+		b.WriteString("\n" + theme.Help.Render(footer))
 		return b.String()
 	}
 	jobs := m.unifiedJobs()

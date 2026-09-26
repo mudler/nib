@@ -293,8 +293,13 @@ func (a *agentMeters) step(id string, ev chat.StreamEvent) {
 	}
 	var step string
 	switch {
-	case ev.Kind == "tool_call" && ev.ToolName != "":
+	case ev.ToolName != "" && (ev.Kind == "tool_call" || ev.Kind == "sub_agent"):
 		step = ev.ToolName
+	case ev.Kind == "sub_agent" && ev.Content != "":
+		// A background sub-agent's events all arrive as "sub_agent" (cogito
+		// replaces their type), so its text cannot tell thinking from
+		// writing.
+		step = "working"
 	case ev.Kind == "reasoning":
 		step = "thinking"
 	case ev.Kind == "content":

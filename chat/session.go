@@ -933,6 +933,39 @@ func (s *Session) KillAgent(id string) bool {
 	return true
 }
 
+// ErrAgentFinished is returned by SendToAgent for a sub-agent that is no
+// longer running. The main agent can still resume it (send_agent_message).
+var ErrAgentFinished = errors.New("the sub-agent has finished")
+
+// SendToAgent sends the user's message to a running sub-agent, which reads it
+// at its next step, and records it in the agent's log. It never blocks: it
+// fails for an unknown or finished agent (ErrAgentFinished) and for one that
+// has not yet read the messages already sent to it.
+func (s *Session) SendToAgent(id, message string) error {
+	message = strings.TrimSpace(message)
+	if message == "" {
+		return errors.New("the message is empty")
+	}
+	if s.agentManager == nil {
+		return fmt.Errorf("no sub-agent %s", id)
+	}
+	// The sub-agent's "user" is the agent that spawned it, so the message
+	// says who it is from.
+	err := s.agentManager.Inject(id, "Message from the user, sent while you work:\n\n"+message)
+	switch {
+	case errors.Is(err, cogito.ErrAgentNotRunning):
+		return ErrAgentFinished
+	case errors.Is(err, cogito.ErrInjectQueueFull):
+		return errors.New("the sub-agent has not read your previous messages yet")
+	case err != nil:
+		return err
+	}
+	if s.agentLogs != nil {
+		s.agentLogs.append(id, "› you: "+message)
+	}
+	return nil
+}
+
 // StopAgents cancels every sub-agent, running or detached. Cancelling one that
 // already finished does nothing.
 //
