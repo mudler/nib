@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"math"
+	"slices"
 	"sync/atomic"
 
 	"github.com/mudler/cogito"
@@ -47,6 +48,38 @@ type liveUsage struct {
 	floor    atomic.Int64
 	measured atomic.Bool
 	ratio    atomic.Uint64 // math.Float64bits; 0 means not calibrated yet
+
+	// clamped records whether clampOutputTokens lowered the last request's
+	// max_tokens below the cap. A tool call truncated on such a request ran
+	// out of window, not of cap (see truncationCause).
+	clamped atomic.Bool
+	// note is a one-turn user-role message the next request carries on the
+	// wire only, then drops: it never reaches the fragment (see
+	// trackedLLM.prepare).
+	note atomic.Pointer[string]
+}
+
+// setNote arms the note the next request carries; "" disarms it.
+func (l *liveUsage) setNote(n string) {
+	if n == "" {
+		l.note.Store(nil)
+		return
+	}
+	l.note.Store(&n)
+}
+
+// takeNote returns the armed note and disarms it.
+func (l *liveUsage) takeNote() string {
+	if p := l.note.Swap(nil); p != nil {
+		return *p
+	}
+	return ""
+}
+
+// lastClamped reports whether the last request's output reservation was
+// lowered below the cap by clampOutputTokens.
+func (l *liveUsage) lastClamped() bool {
+	return l.clamped.Load()
 }
 
 // maxTokenizerRatio caps how many tokens per byte/4 estimated token the floor
@@ -101,6 +134,8 @@ func promptOverhead(reported, estimated int) int {
 func (l *liveUsage) begin() {
 	l.prompt.Store(0)
 	l.active.Store(true)
+	l.clamped.Store(false)
+	l.note.Store(nil)
 }
 
 // end disarms it, handing authority back to s.fragment — which by then holds
@@ -108,6 +143,7 @@ func (l *liveUsage) begin() {
 func (l *liveUsage) end() {
 	l.active.Store(false)
 	l.prompt.Store(0)
+	l.note.Store(nil)
 }
 
 // reset drops the in-flight figure without disarming: compaction replaced the
@@ -160,6 +196,12 @@ type trackedLLM struct {
 // counts the image, the byte/4 estimate does not, and the ratio would absorb
 // it.
 func (t *trackedLLM) prepare(request openai.ChatCompletionRequest) (openai.ChatCompletionRequest, int) {
+	// A one-turn note goes on this request only. The fragment is cogito's,
+	// built from its own messages, so nothing here is stored.
+	if note := t.live.takeNote(); note != "" {
+		request.Messages = append(slices.Clip(request.Messages),
+			openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: note})
+	}
 	toolBytes := toolSchemaBytes(request.Tools)
 	whole := -1
 	if len(request.Tools) > 0 {
@@ -184,11 +226,19 @@ func (t *trackedLLM) prepare(request openai.ChatCompletionRequest) (openai.ChatC
 			whole = estimateTokens(other) + fixed
 		}
 	}
+	explicit := request.MaxTokens != 0 || request.MaxCompletionTokens != 0
 	if t.limits == nil {
+		t.live.clamped.Store(false)
 		return request, whole
 	}
 	cap, window := t.limits()
-	return clampOutputTokensSized(request, cap, window, toolBytes/4), whole
+	out := clampOutputTokensSized(request, cap, window, toolBytes/4)
+	// An explicit value is cogito's own retry of the previous request with
+	// a raised cap: it keeps that request's record.
+	if !explicit {
+		t.live.clamped.Store(cap > 0 && window > 0 && out.MaxTokens < cap)
+	}
+	return out, whole
 }
 
 // calibrate sets the tokenizer ratio from the backend's report for a request

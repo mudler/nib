@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync/atomic"
 
+	"github.com/mudler/cogito"
 	"github.com/mudler/nib/types"
 	"github.com/mudler/xlog"
 	openai "github.com/sashabaranov/go-openai"
@@ -206,6 +207,12 @@ func classifyOverflow(err error) overflowInfo {
 // 500, and proxies rewrap statuses.
 func classifyOverflowWith(err error, lastRequestTokens, window int) overflowInfo {
 	if err == nil {
+		return overflowInfo{}
+	}
+	// A tool call cut by finish_reason=length is not a rejected request, even
+	// though cogito's text for it says "the context window ran out". The
+	// turn decides what it means (see truncationCause).
+	if errors.Is(err, cogito.ErrToolArgumentsTruncated) {
 		return overflowInfo{}
 	}
 	status := errorStatus(err)

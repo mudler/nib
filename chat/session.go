@@ -20,6 +20,7 @@ import (
 	"github.com/mudler/nib/hooks"
 	"github.com/mudler/nib/internal"
 	"github.com/mudler/nib/llmprovider"
+	"github.com/mudler/nib/llmprovider/catalog"
 	"github.com/mudler/nib/llmprovider/copilot"
 	"github.com/mudler/nib/lsp"
 	"github.com/mudler/nib/manage"
@@ -1470,6 +1471,101 @@ func dropFailedDisplay(msgs []openai.ChatCompletionMessage, text string) []opena
 	return msgs
 }
 
+const (
+	// windowExhaustedShare: a truncated tool call whose prompt plus completion
+	// reached this share of the window stopped at the window, not the cap
+	// (llama.cpp and LocalAI stop at n_ctx with finish_reason=length).
+	windowExhaustedShare = 0.95
+	// compactableShare: a prompt at least this share of the window is large
+	// enough that compaction can make room for the call.
+	compactableShare = 0.25
+)
+
+// truncationCause decides what a tool call cut by finish_reason=length means.
+// The window was exhausted when prompt + completion reached
+// windowExhaustedShare of it, or when clampOutputTokens lowered the request's
+// max_tokens below the cap (clamped). Otherwise the cap was reached with room
+// left: truncCap, which no retry fixes. When exhausted, the cause is the
+// reasoning if it took most of the reply, else the call; compact reports
+// whether the prompt is large enough for compaction to make room.
+func (s *Session) truncationCause(te *cogito.ToolArgumentsTruncatedError, clamped bool) (cause truncationCause, compact bool) {
+	window := s.contextWindow()
+	used := te.PromptTokens + te.CompletionTokens
+	exhausted := clamped || (window > 0 && used > 0 && float64(used) >= windowExhaustedShare*float64(window))
+	if !exhausted {
+		return truncCap, false
+	}
+	cause = truncToolCall
+	if te.ReasoningBytes > 2*te.ArgumentsBytes {
+		cause = truncReasoning
+	}
+	prompt := te.PromptTokens
+	if prompt <= 0 {
+		prompt = s.fragmentTokens()
+	}
+	return cause, window > 0 && float64(prompt) >= compactableShare*float64(window)
+}
+
+// reasoningEffortSetter is a client whose reasoning effort can be changed.
+type reasoningEffortSetter interface {
+	SetReasoningEffort(effort string)
+}
+
+// minUnknownEffort is the lowest effort lowerEffort picks when the catalog
+// does not list the efforts a model accepts: most reasoning models accept
+// "low", fewer accept "minimal" or "none".
+const minUnknownEffort = "low"
+
+// lowerEffort returns the effort one level below effort that the model
+// accepts (supported, from the catalog; empty when unknown), or "" when there
+// is none.
+func lowerEffort(effort string, supported []string) string {
+	idx := slices.Index(types.EffortOrder, strings.ToLower(effort))
+	if idx <= 0 {
+		return ""
+	}
+	if len(supported) == 0 {
+		floor := slices.Index(types.EffortOrder, minUnknownEffort)
+		if idx-1 < floor {
+			return ""
+		}
+		return types.EffortOrder[idx-1]
+	}
+	for i := idx - 1; i >= 0; i-- {
+		if slices.ContainsFunc(supported, func(s string) bool { return strings.EqualFold(strings.TrimSpace(s), types.EffortOrder[i]) }) {
+			return types.EffortOrder[i]
+		}
+	}
+	return ""
+}
+
+// lowerReasoningForTurn lowers llm's reasoning effort by one level the model
+// accepts and returns the func that restores it. It does nothing (and returns
+// a no-op) when the session sets no effort or the client cannot change it.
+func (s *Session) lowerReasoningForTurn(llm cogito.LLM) (restore func()) {
+	noop := func() {}
+	setter, ok := llm.(reasoningEffortSetter)
+	if !ok {
+		return noop
+	}
+	provider := s.resolvedSessionProvider()
+	effort := provider.ReasoningEffort
+	if effort == "" {
+		return noop
+	}
+	var supported []string
+	if m, ok := catalog.Lookup(provider.Provider, provider.Model, provider.BaseURL); ok {
+		supported = m.Compat.SupportedReasoningEfforts
+	}
+	lower := lowerEffort(effort, supported)
+	if lower == "" {
+		return noop
+	}
+	xlog.Warn("reasoning filled the context window; lowering the reasoning effort for this turn", "from", effort, "to", lower)
+	setter.SetReasoningEffort(lower)
+	return func() { setter.SetReasoningEffort(effort) }
+}
+
 // overflowTrim is the first step of overflow recovery. It is a variable so a
 // test can make it fail and reach the basicCompact fallback.
 var overflowTrim = func(s *Session, ctx context.Context) error { return s.iterativeTrim(ctx) }
@@ -1732,6 +1828,13 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 	// Output-cap and budget overflows are retried at most once per turn each;
 	// neither compacts, so neither counts as an overflow recovery.
 	capRetried, budgetRetried := false, false
+	// Turn retries in a row per error class with its own budget (see
+	// classRetryBudget), and whether a truncated tool call was retried.
+	classRetries := map[backendErrorClass]int{}
+	truncRetried := false
+	// Restores a reasoning effort lowered for this turn.
+	restoreEffort := func() {}
+	defer func() { restoreEffort() }()
 	defer s.endTurn()
 	// Report this turn's own size while it runs; hand authority back to
 	// s.fragment (which compaction may since have shrunk) once it ends.
@@ -1817,6 +1920,7 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 	// retrying client instead (WithAgentLLM below; see agentretry.go):
 	// without it cogito would hand them this tracked one.
 	agentLLM := retryForAgent(llm, &s.agentBackoff)
+	baseLLM := llm
 	llm = trackUsage(llm, &s.live, s.requestLimits)
 
 	// Build cogito options from config
@@ -2094,6 +2198,41 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 					turnOverflow.Kind = KindContext
 				}
 			}
+			// A tool call cut by finish_reason=length. When the window, not
+			// the cap, ran out, retry once with a note that asks for smaller
+			// calls: after compacting when the prompt is large enough for
+			// that to make room, else as it is (never with a lower output
+			// cap: a long write is legitimate). See truncationCause.
+			var trunc *cogito.ToolArgumentsTruncatedError
+			truncNote := ""
+			var truncErr error
+			if turnCtx.Err() == nil && turnOverflow.Kind == KindNone && errors.As(err, &trunc) {
+				cause, compact := s.truncationCause(trunc, s.live.lastClamped())
+				friendly := &FriendlyError{err: err, msg: toolArgsTruncatedMessage(trunc, cause)}
+				switch {
+				case cause == truncCap || truncRetried:
+					err = friendly
+				case compact:
+					truncRetried = true
+					turnOverflow.Kind = KindContext
+					truncNote = truncationNote(trunc, cause)
+					truncErr = friendly
+					xlog.Warn("tool call truncated by the context window; compacting and retrying", "tool", trunc.ToolName, "prompt_tokens", trunc.PromptTokens)
+				default:
+					truncRetried = true
+					if cause == truncReasoning {
+						restoreEffort()
+						restoreEffort = s.lowerReasoningForTurn(baseLLM)
+					}
+					xlog.Warn("reply filled the context window; retrying with a note", "tool", trunc.ToolName, "prompt_tokens", trunc.PromptTokens, "completion_tokens", trunc.CompletionTokens)
+					s.live.setNote(truncationNote(trunc, cause))
+					announce("Reply ran out of room in the context window — retrying in smaller steps…")
+					announce(retryResumeStatus)
+					resume, _ := resumableFragment(runFragment, newFragment)
+					s.commitRun(midTurn, resume)
+					continue
+				}
+			}
 			if turnCtx.Err() == nil && turnOverflow.Kind == KindContext {
 				if w, ok := learnedWindowFrom(err); ok {
 					s.rememberWindow(w, mainModel)
@@ -2174,9 +2313,14 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 						// answer leaves "compacting and retrying" on screen
 						// for the rest of the turn (see retryResumeStatus).
 						announce(retryResumeStatus)
+						s.live.setNote(truncNote)
 						continue
 					}
 				}
+			}
+			// The recovery a truncated call asked for did not retry.
+			if truncErr != nil {
+				err = truncErr
 			}
 
 			// Backend failure recovery: a rate limit or a transient error
@@ -2189,11 +2333,14 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 			// and never after an interrupt: Ctrl+C cancels turnCtx, which
 			// also ends the wait.
 			if canRetryTurn(turnCtx, err) {
+				class := classifyBackendError(err)
 				resume, progressed := resumableFragment(runFragment, newFragment)
 				if progressed {
 					stalled = 0
+					clear(classRetries)
 				}
-				if stalled < turnRetryBudget {
+				if stalled < turnRetryBudget && classRetries[class] < classRetryBudget(class) {
+					classRetries[class]++
 					wait := turnWait(err, stalled)
 					announce := func(status string) {
 						if s.callbacks.OnStatus != nil {
@@ -2210,6 +2357,17 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 						s.commitRun(midTurn, resume)
 						continue
 					}
+				}
+			}
+
+			// cogito's sentinels get a message that names the cause, not the
+			// raw chain. The stream count is only known here.
+			if turnCtx.Err() == nil {
+				switch classifyBackendError(err) {
+				case errStreamInterrupted:
+					err = &FriendlyError{err: err, msg: streamInterruptedMessage(classRetries[errStreamInterrupted] + 1)}
+				case errToolArgs:
+					err = &FriendlyError{err: err, msg: toolArgsInvalidMessage}
 				}
 			}
 

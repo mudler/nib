@@ -2,6 +2,7 @@ package chat
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math/rand/v2"
 	"regexp"
@@ -52,6 +53,24 @@ const (
 	errFatal backendErrorClass = iota
 	errRateLimited
 	errTransient
+	// errStreamInterrupted: the stream ended before the backend finished it
+	// (cogito.ErrStreamInterrupted). Retried with backoff, at most
+	// streamInterruptedBudget times in a row.
+	errStreamInterrupted
+	// errToolArgs: the model's tool-call arguments were not valid JSON after
+	// every cogito attempt (cogito.ErrToolArgumentsInvalid). cogito already
+	// showed the model its parse error, so the turn is retried at most
+	// toolArgsBudget time.
+	errToolArgs
+)
+
+const (
+	// streamInterruptedBudget caps the turn retries in a row after an
+	// interrupted stream. Each retry already made cogito's own attempts, so
+	// turnRetryBudget (10) would re-send the same long reply dozens of times.
+	streamInterruptedBudget = 3
+	// toolArgsBudget caps the turn retries after invalid tool arguments.
+	toolArgsBudget = 1
 )
 
 const (
@@ -140,6 +159,17 @@ func classifyBackendError(err error) backendErrorClass {
 	// repeated; a generic phrase in a 5xx is not an overflow and is retried.
 	if err == nil || classifyOverflow(err).Kind != KindNone {
 		return errFatal
+	}
+	// cogito names these causes with sentinels; match them before the
+	// strings. A truncated tool call is handled by the turn itself (see
+	// truncationCause): repeating the same request truncates it the same way.
+	switch {
+	case errors.Is(err, cogito.ErrToolArgumentsTruncated):
+		return errFatal
+	case errors.Is(err, cogito.ErrStreamInterrupted):
+		return errStreamInterrupted
+	case errors.Is(err, cogito.ErrToolArgumentsInvalid):
+		return errToolArgs
 	}
 	low := strings.ToLower(err.Error())
 	if m := statusRe.FindStringSubmatch(low); m != nil {
@@ -312,6 +342,18 @@ func retryRequest[T any](ctx context.Context, fn func() (T, error)) (T, error) {
 			return zero, serr
 		}
 	}
+}
+
+// classRetryBudget is how many turn retries in a row an error class gets:
+// turnRetryBudget, or the class's own budget when that is smaller.
+func classRetryBudget(c backendErrorClass) int {
+	switch c {
+	case errStreamInterrupted:
+		return min(streamInterruptedBudget, turnRetryBudget)
+	case errToolArgs:
+		return min(toolArgsBudget, turnRetryBudget)
+	}
+	return turnRetryBudget
 }
 
 // canRetryTurn reports whether the session should run the turn again after

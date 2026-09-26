@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+
+	"github.com/mudler/cogito"
 )
 
 // FriendlyError wraps a noisy backend error with a short, actionable message
@@ -32,7 +34,80 @@ func humanizeError(err error) error {
 	if isEmptyReply(err) {
 		return &FriendlyError{err: err, msg: emptyReplyMessage}
 	}
+	// cogito's sentinels. The turn builds these messages with the figures
+	// only it knows; this is the fallback for an error it did not rewrite.
+	if _, done := err.(*FriendlyError); !done {
+		var te *cogito.ToolArgumentsTruncatedError
+		switch {
+		case errors.Is(err, cogito.ErrStreamInterrupted):
+			return &FriendlyError{err: err, msg: streamInterruptedMessage(0)}
+		case errors.Is(err, cogito.ErrToolArgumentsInvalid):
+			return &FriendlyError{err: err, msg: toolArgsInvalidMessage}
+		case errors.As(err, &te):
+			return &FriendlyError{err: err, msg: toolArgsTruncatedMessage(te, truncCap)}
+		}
+	}
 	return err
+}
+
+// streamInterruptedMessage is the text for a turn whose stream kept ending
+// before the backend finished it. tries is how many times the turn was sent,
+// or 0 when unknown.
+func streamInterruptedMessage(tries int) string {
+	n := ""
+	if tries > 0 {
+		n = fmt.Sprintf(" (tried %d times)", tries)
+	}
+	return "the connection to the model ended before the reply finished" + n +
+		". The backend or a proxy in front of it may have timed out on a long reply."
+}
+
+const toolArgsInvalidMessage = "the model produced a tool call with invalid arguments several times. " +
+	"Try rephrasing, or ask it to split the change into smaller steps."
+
+// truncationCause is why a tool call was cut by finish_reason=length.
+type truncationCause int
+
+const (
+	// truncCap: the output cap was reached with room left in the window.
+	truncCap truncationCause = iota
+	// truncToolCall: the window ran out while the model wrote a long call.
+	truncToolCall
+	// truncReasoning: the window ran out while the model was reasoning.
+	truncReasoning
+)
+
+// toolArgsTruncatedMessage is the text for a tool call cut by the output
+// limit, by cause.
+func toolArgsTruncatedMessage(te *cogito.ToolArgumentsTruncatedError, cause truncationCause) string {
+	switch cause {
+	case truncToolCall:
+		return fmt.Sprintf("the model's call to %s did not fit in the context window (about %d tokens of arguments on a prompt of %d). "+
+			"Ask it to make the change in smaller steps.", te.ToolName, te.ArgumentsBytes/4, te.PromptTokens)
+	case truncReasoning:
+		return fmt.Sprintf("the model's reasoning filled the context window (about %d tokens on a prompt of %d). "+
+			"Ask it to split the task, or lower the reasoning effort.", te.ReasoningBytes/4, te.PromptTokens)
+	}
+	limit := "the output limit"
+	if te.MaxTokens > 0 {
+		limit = fmt.Sprintf("the output limit (max_tokens %d)", te.MaxTokens)
+	}
+	return "the model's tool call was longer than " + limit +
+		". Raise the model's max_tokens, or ask for smaller edits."
+}
+
+// truncationNote is the one-turn user-role note sent with the retry after a
+// tool call was cut because the window ran out. It is never stored in the
+// history.
+func truncationNote(te *cogito.ToolArgumentsTruncatedError, cause truncationCause) string {
+	if cause == truncReasoning {
+		return fmt.Sprintf("Your previous reply was cut off: its reasoning (about %d tokens) ran out of room in the context window before the call to %s was complete. "+
+			"Keep the plan shorter and work in smaller steps (for example write a file in parts, or use edit for targeted changes).",
+			te.ReasoningBytes/4, te.ToolName)
+	}
+	return fmt.Sprintf("Your previous call to %s was cut off after about %d tokens because the reply ran out of room in the context window. "+
+		"Split it into smaller calls (for example write the file in parts, or use edit for targeted changes).",
+		te.ToolName, te.ArgumentsBytes/4)
 }
 
 // emptyReplyMarkers are the texts cogito uses when every decision attempt came

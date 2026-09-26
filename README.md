@@ -588,7 +588,14 @@ log_level: error
 # schemas and system prompt alone fill the window, compaction cannot help:
 # nib keeps the conversation as it was, does not compact (neither on
 # overflow nor automatically), and names the MCP servers that take the most
-# room, so you can disable them or filter their tools. It knows the
+# room, so you can disable them or filter their tools. When a tool call is
+# cut off because the reply ran out of room in the window (for example a
+# whole file in one write), nib retries the turn once with a note that asks
+# the model to split the call, after compacting when the prompt is large.
+# When the reasoning filled the window, the retry also uses one lower
+# reasoning effort. nib never caps the output for this. A stream that ends
+# before the reply is finished is retried at most 3 times, and a tool call
+# with invalid JSON arguments once. It knows the
 # wording of llama.cpp/LocalAI, vLLM, OpenAI,
 # Anthropic and Gemini. overflow_patterns teaches it another backend without a
 # rebuild: the rows are tried before the built-in ones, first match wins. A
