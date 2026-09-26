@@ -795,9 +795,7 @@ func TestFooterHeightMatchesFooter(t *testing.T) {
 			if tc.state.NewOutput {
 				want++
 			}
-			if tc.state.Badges != "" {
-				want++
-			}
+			// The front telemetry shares the help line.
 			if tc.state.Expanded != "" {
 				want++
 			}

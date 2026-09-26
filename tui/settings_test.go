@@ -58,14 +58,14 @@ func withHUD(m Model) Model {
 func TestFooterBadgesHonorHideHUD(t *testing.T) {
 	m := withHUD(newQueueTestModel())
 	m.width = 200
-	shown := m.expandedBadges()
+	shown := m.footerBadges(10)
 	for _, want := range []string{"cpu", "mem", "12:34:56"} {
 		if !strings.Contains(shown, want) {
 			t.Fatalf("badges %q lack %q with the HUD shown", shown, want)
 		}
 	}
 	m.cfg.UI.HideHUD = true
-	hidden := m.expandedBadges()
+	hidden := m.footerBadges(10)
 	for _, gone := range []string{"cpu", "mem", "12:34:56"} {
 		if strings.Contains(hidden, gone) {
 			t.Fatalf("badges %q still show %q with ui.hide_hud on", hidden, gone)
@@ -83,7 +83,7 @@ func TestSettingsHideHUDHidesBadgesAndPersists(t *testing.T) {
 	if msg := lastMessage(t, m); msg.Role == "error" {
 		t.Fatalf("set failed: %s", msg.Content)
 	}
-	if b := m.expandedBadges(); strings.Contains(b, "cpu") || strings.Contains(b, "mem") {
+	if b := m.footerBadges(10); strings.Contains(b, "cpu") || strings.Contains(b, "mem") {
 		t.Fatalf("badges %q still show cpu/mem after /settings ui.hide_hud on", b)
 	}
 	data, err := os.ReadFile(path)
@@ -96,7 +96,7 @@ func TestSettingsHideHUDHidesBadgesAndPersists(t *testing.T) {
 
 	// default removes the key and brings the badges back.
 	m.dispatchResolved("/settings ui.hide_hud default")
-	if b := m.expandedBadges(); !strings.Contains(b, "cpu") {
+	if b := m.footerBadges(10); !strings.Contains(b, "cpu") {
 		t.Fatalf("badges %q after reset, want cpu back", b)
 	}
 	if data, _ := os.ReadFile(path); strings.Contains(string(data), "hide_hud") {

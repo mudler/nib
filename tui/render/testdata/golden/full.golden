@@ -160,8 +160,7 @@ nib  yolo                                      ~/src/project
 tab complete
 
 === footer help and badges ===
-12k ctx
-tab complete
+tab complete                                         12k ctx
 
 === footer new output marker ===
 ↓ new output
@@ -196,23 +195,21 @@ o todo 2/5 writing tests
 tab complete
 
 === footer focused strip ===
-12k ctx
-session 1k in / 2k out  12:00:00
+                            session 1k in / 2k out  12:00:00
 o todo -  ▸ shell 3 done x1  > explore 3.1k
-lt/rt move · enter open · esc back
+lt/rt move · enter open · esc back                   12k ctx
 
 === footer help right hint ===
-tab complete                                 ctrl+g activity
+tab complete
 
 === footer every row ===
 ↓ new output
-12k ctx
 * 2 jobs ru…  > 1 shell job  ~ loop every …  o goal: ship it
-tab complete
+tab complete                                         12k ctx
 × something failed
 
 === footer height every row ===
-5
+4
 
 === frame without dialogs ===
 nib                                            ~/src/project
