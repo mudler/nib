@@ -214,6 +214,11 @@ type Callbacks struct {
 	// OnCompactDone is called after the conversation is compacted, with the
 	// approximate token counts before and after. Optional.
 	OnCompactDone func(before, after int)
+	// OnCompactFailed is called instead of OnCompactDone when a compaction
+	// that was announced with OnStatus("Compacting conversation…") does not
+	// shrink the conversation: the summary failed, or there was nothing new
+	// to summarize. The conversation is kept as it was. Optional.
+	OnCompactFailed func(err error)
 	// OnPruneDone is called when tool-output pruning stubs results it had not
 	// stubbed before, with how many results were replaced on this pass and the
 	// approximate tokens that freed. It fires on the transition, not on every

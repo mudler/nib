@@ -2507,7 +2507,10 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 		cb, ca, cerr := s.compactHistory(turnCtx)
 		if cerr != nil {
 			xlog.Warn("auto-compaction failed", "error", cerr)
-		} else if cb != ca {
+			s.compactFailed(cerr)
+		} else if cb == ca {
+			s.compactFailed(errNothingToCompact)
+		} else {
 			// Compaction dropped the head of the conversation, which
 			// may have included the model's read of AGENTS.md and other
 			// project instruction files. The system prompt still

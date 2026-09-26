@@ -61,6 +61,9 @@ type midTurnBackend struct {
 	// prompt tokens reported for it, standing in for tool schemas and tokenizer
 	// skew. Zero reports a fixed small figure.
 	extra int
+	// emptySummary answers every summary request with no content, which the
+	// session takes for a failed summary.
+	emptySummary bool
 }
 
 func (b *midTurnBackend) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -87,6 +90,9 @@ func (b *midTurnBackend) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case summary:
 		b.summaries++
 		msg["content"] = fmt.Sprintf("SUMMARY-%d", b.summaries)
+		if b.emptySummary {
+			msg["content"] = ""
+		}
 	case b.turnReqs < b.steps:
 		b.turnReqs++
 		msg["content"] = nil
@@ -163,9 +169,16 @@ func runMidTurn(t *testing.T, answers []string) (*Session, *midTurnBackend, *mid
 // beyond the messages of every turn request.
 func runMidTurnReporting(t *testing.T, answers []string, extra int) (*Session, *midTurnBackend, *midTurnEvents) {
 	t.Helper()
+	return runMidTurnOn(t, &midTurnBackend{steps: len(answers), extra: extra}, answers)
+}
+
+// runMidTurnOn is runMidTurn against backend, whose steps must match answers.
+// Besides the status and compaction callbacks, events records what
+// ContextTokens reports when OnCompactDone fires.
+func runMidTurnOn(t *testing.T, backend *midTurnBackend, answers []string) (*Session, *midTurnBackend, *midTurnEvents) {
+	t.Helper()
 	xlog.SetLogger(xlog.NewLogger(xlog.LogLevel("error"), ""))
 
-	backend := &midTurnBackend{steps: len(answers), extra: extra}
 	srv := httptest.NewServer(backend)
 	t.Cleanup(srv.Close)
 
@@ -184,6 +197,7 @@ func runMidTurnReporting(t *testing.T, answers []string, extra int) (*Session, *
 			MaxContextTokens: midTurnWindow, ReserveTokens: midTurnReserve, Threshold: 0.8, KeepRecent: 2,
 		},
 	}
+	var s *Session
 	s, err := NewSession(context.Background(), cfg, Callbacks{
 		OnAskUser: func(AskRequest) string {
 			askMu.Lock()
@@ -192,8 +206,12 @@ func runMidTurnReporting(t *testing.T, answers []string, extra int) (*Session, *
 			asked++
 			return a
 		},
-		OnStatus:      func(st string) { events.add("status:" + st) },
-		OnCompactDone: func(before, after int) { events.add(fmt.Sprintf("compacted:%d>%d", before, after)) },
+		OnStatus: func(st string) { events.add("status:" + st) },
+		OnCompactDone: func(before, after int) {
+			events.add(fmt.Sprintf("compacted:%d>%d", before, after))
+			events.add(fmt.Sprintf("gauge:%d", s.ContextTokens()))
+		},
+		OnCompactFailed: func(err error) { events.add("compact-failed:" + err.Error()) },
 	})
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
@@ -485,4 +503,61 @@ func TestMidTurnCompactionCountsWhatTheBackendReports(t *testing.T) {
 	if got := strings.Join(order, ","); !strings.HasPrefix(got, "turn,turn,summary,turn") {
 		t.Fatalf("request order = %s, want a summary before the third turn request", got)
 	}
+}
+
+// A summary that fails mid-turn must still end the "Compacting conversation…"
+// status it started: the host clears the status on a compaction callback, and
+// without one the status stayed on screen for the rest of the turn while the
+// turn went on with the full history.
+func TestMidTurnCompactionFailureIsReported(t *testing.T) {
+	answers := []string{answer("FIRST_ANSWER", 7500), answer("SECOND_ANSWER", 7500), answer("THIRD_ANSWER", 100)}
+	_, _, events := runMidTurnOn(t, &midTurnBackend{steps: len(answers), emptySummary: true}, answers)
+
+	started, ended := -1, -1
+	for i, ev := range events.list() {
+		switch {
+		case ev == "status:Compacting conversation…" && started < 0:
+			started = i
+		case strings.HasPrefix(ev, "compact-failed:"):
+			ended = i
+		case strings.HasPrefix(ev, "compacted:"):
+			t.Fatalf("compaction reported done with an empty summary: %v", events.list())
+		}
+	}
+	if started < 0 {
+		t.Fatalf("compaction never started: %v", events.list())
+	}
+	if ended < started {
+		t.Fatalf("compaction started but no failure was reported after it: %v", events.list())
+	}
+}
+
+// Once the turn compacted, the gauge must show the compacted size. The live
+// figure described the history that was replaced, and the fragment is not
+// rewritten until the run ends, so neither can answer until the next request
+// reports its usage: that request can stream for minutes.
+func TestMidTurnCompactionUpdatesTheGauge(t *testing.T) {
+	_, _, events := runMidTurnReporting(t, []string{
+		answer("FIRST_ANSWER", 5000), answer("SECOND_ANSWER", 5000), answer("THIRD_ANSWER", 100),
+	}, 6000)
+
+	list := events.list()
+	for i, ev := range list {
+		var before, after int
+		if _, err := fmt.Sscanf(ev, "compacted:%d>%d", &before, &after); err != nil {
+			continue
+		}
+		var gauge int
+		if i+1 >= len(list) {
+			t.Fatalf("no gauge reading after %s", ev)
+		}
+		if _, err := fmt.Sscanf(list[i+1], "gauge:%d", &gauge); err != nil {
+			t.Fatalf("event after %s = %s, want a gauge reading", ev, list[i+1])
+		}
+		if gauge != after {
+			t.Fatalf("gauge = %d right after compacting %d -> %d, want %d", gauge, before, after, after)
+		}
+		return
+	}
+	t.Fatalf("the turn did not compact: %v", list)
 }

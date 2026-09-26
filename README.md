@@ -575,6 +575,11 @@ log_level: error
 # prompt is fitted into the window minus that reservation. If the backend
 # still rejects it as too large, nib summarizes fewer of the older turns and
 # keeps the rest verbatim, instead of cutting the text it summarizes.
+# When the turns stream (the TUI), the summary request streams too, so a
+# proxy with a first-byte timeout (Cloudflare's 524) does not cut it off, and
+# the status line shows the summary's progress. A compaction that fails or
+# finds nothing to summarize says so in the transcript, and the turn continues
+# with the full conversation.
 #
 # nib reads a backend's "request too large" error to decide what to do:
 # compact when the prompt itself does not fit (kind "context"), lower the

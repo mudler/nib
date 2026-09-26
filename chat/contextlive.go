@@ -154,6 +154,12 @@ func (l *liveUsage) reset() {
 	l.prompt.Store(0)
 }
 
+// replace stands n in for the in-flight figure after compaction rewrote the
+// request mid-turn, where there is no rebuilt fragment to fall back on.
+func (l *liveUsage) replace(n int) {
+	l.prompt.Store(int64(max(n, 0)))
+}
+
 // record stores a request's prompt tokens. Zero and negative counts are
 // ignored: a backend that reports no usage must not erase the last real
 // figure and drop the gauge back to the estimate mid-turn.

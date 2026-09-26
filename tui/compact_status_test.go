@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"errors"
+	"strings"
 	"testing"
 
 	"github.com/charmbracelet/bubbles/viewport"
@@ -75,5 +77,31 @@ func TestCompactionStatusClearedAfterCompactNoticeEndOfTurn(t *testing.T) {
 	vs := m.viewState()
 	if m.loading && vs.Status == "Compacting conversation…" {
 		t.Fatalf("viewState still shows stale compaction status %q after compactNoticeMsg", vs.Status)
+	}
+}
+
+// A compaction that fails must end its status too, and say so in the
+// transcript: the status used to stay on "Compacting conversation…" for the
+// rest of the turn while the conversation kept growing, with nothing telling
+// the user the compaction never happened.
+func TestCompactionStatusClearedAfterCompactFailed(t *testing.T) {
+	m := newTestModel(Model{
+		viewport: viewport.New(80, 20),
+		width:    80,
+		loading:  true,
+	})
+	m.startThinking()
+
+	next, _ := m.Update(statusMsg("Compacting conversation…"))
+	m = next.(Model)
+	next, _ = m.Update(compactFailedMsg{err: errors.New("compaction summary failed: status code: 524")})
+	m = next.(Model)
+
+	if m.status == "Compacting conversation…" {
+		t.Fatalf("compaction status is stuck after the compaction failed")
+	}
+	last := m.messages[len(m.messages)-1]
+	if !strings.Contains(last.Content, "Compaction skipped") || !strings.Contains(last.Content, "524") {
+		t.Fatalf("last transcript message = %q, want the failure and its reason", last.Content)
 	}
 }

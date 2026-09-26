@@ -2,14 +2,28 @@ package chat
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/mudler/nib/types"
 
 	"github.com/mudler/cogito"
 	openai "github.com/sashabaranov/go-openai"
 )
+
+// errNothingToCompact is what OnCompactFailed reports for an automatic
+// compaction that found no history it could summarize.
+var errNothingToCompact = errors.New("nothing new to summarize")
+
+// compactFailed reports an announced compaction that did not shrink the
+// conversation, so the host can end the "Compacting conversation…" status.
+func (s *Session) compactFailed(err error) {
+	if s.callbacks.OnCompactFailed != nil {
+		s.callbacks.OnCompactFailed(err)
+	}
+}
 
 // compactInstruction is the prompt prefix used to summarize the older portion
 // of a conversation during compaction. The structured template forces the model
@@ -899,8 +913,7 @@ func (s *Session) summarize(ctx context.Context, pieces []summaryPiece, limit in
 func (s *Session) summarizeWith(ctx context.Context, prefix string, pieces []summaryPiece, limit int) (summary string, sentTokens int, err error) {
 	prompt := prefix + fitSummaryInput(pieces, limit)
 	sentTokens = tokensOf(prompt)
-	llm, _ := s.currentLLM()
-	reply, usage, aerr := llm.CreateChatCompletion(ctx, openai.ChatCompletionRequest{
+	content, usage, aerr := s.summaryRequest(ctx, openai.ChatCompletionRequest{
 		Messages:  []openai.ChatCompletionMessage{{Role: cogito.UserMessageRole.String(), Content: prompt}},
 		MaxTokens: s.summaryOutputTokens(),
 	})
@@ -917,14 +930,76 @@ func (s *Session) summarizeWith(ctx context.Context, prefix string, pieces []sum
 	if aerr != nil {
 		return "", sentTokens, fmt.Errorf("compaction summary failed: %w", aerr)
 	}
-	var content string
-	if ch := reply.ChatCompletionResponse.Choices; len(ch) > 0 {
-		content = ch[0].Message.Content
-	}
 	if strings.TrimSpace(content) == "" {
 		return "", sentTokens, fmt.Errorf("compaction produced an empty summary")
 	}
 	return content, sentTokens, nil
+}
+
+// summaryRequest sends a summary request and returns the reply's content.
+//
+// It streams when the session's turns do (Callbacks.OnStream) and the client
+// can. A summary reads the whole conversation before it writes anything, and
+// a proxy with a first-byte timeout (Cloudflare's 524 after 100 seconds) cuts
+// off a blocking request that takes that long, while the turns, streamed, get
+// through. The streamed deltas are not relayed: the summary is not part of the
+// transcript.
+func (s *Session) summaryRequest(ctx context.Context, req openai.ChatCompletionRequest) (string, cogito.LLMUsage, error) {
+	llm, _ := s.currentLLM()
+	stream, ok := llm.(cogito.StreamingLLM)
+	if !ok || s.callbacks.OnStream == nil {
+		reply, usage, err := llm.CreateChatCompletion(ctx, req)
+		var content string
+		if ch := reply.ChatCompletionResponse.Choices; len(ch) > 0 {
+			content = ch[0].Message.Content
+		}
+		return content, usage, err
+	}
+	events, err := stream.CreateChatCompletionStream(ctx, req)
+	if err != nil {
+		return "", cogito.LLMUsage{}, err
+	}
+	var content strings.Builder
+	var usage cogito.LLMUsage
+	// A summary of a long conversation can take minutes. The status says
+	// what it is doing, at most once a second, so a slow summary does not
+	// look like a stuck one.
+	reasoned := 0
+	var shown time.Time
+	progress := func() {
+		if s.callbacks.OnStatus == nil || time.Since(shown) < time.Second {
+			return
+		}
+		shown = time.Now()
+		if content.Len() == 0 {
+			s.callbacks.OnStatus(fmt.Sprintf("Compacting conversation… thinking (~%s tokens)", formatTokenCount(max(reasoned/4, 1))))
+			return
+		}
+		s.callbacks.OnStatus(fmt.Sprintf("Compacting conversation… writing summary (~%s tokens)", formatTokenCount(max(content.Len()/4, 1))))
+	}
+	for ev := range events {
+		switch ev.Type {
+		case cogito.StreamEventReasoning:
+			reasoned += len(ev.Content)
+			progress()
+		case cogito.StreamEventContent:
+			content.WriteString(ev.Content)
+			progress()
+		case cogito.StreamEventDone:
+			usage = ev.Usage
+		case cogito.StreamEventError:
+			if err == nil {
+				err = ev.Error
+			}
+			if err == nil {
+				err = errors.New("summary stream failed")
+			}
+		}
+	}
+	if err == nil {
+		err = ctx.Err()
+	}
+	return content.String(), usage, err
 }
 
 // summaryMessage wraps a compaction summary as the message that stands in for
