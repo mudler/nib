@@ -284,8 +284,13 @@ func TestToolArgsRunawayReasoning(t *testing.T) {
 	if cap, _ := s.requestLimits(); cap != 100000 {
 		t.Fatalf("output cap after the turn = %d, want 100000", cap)
 	}
-	if d := reqs[0].MaxTokens - reqs[1].MaxTokens; d > len(note)/4+8 {
-		t.Fatalf("the retry lowered max_tokens: %d then %d", reqs[0].MaxTokens, reqs[1].MaxTokens)
+	// The first report calibrates the tokenizer ratio, so the retry sizes its
+	// reservation from the prompt as the backend counted it (20000), less the
+	// note's own size at that ratio.
+	ratio := s.live.tokenizerRatio()
+	if want := 100000 - 20000 - outputSafetyMargin - int(float64(len(note)/4+8)*ratio); reqs[1].MaxTokens < want {
+		t.Fatalf("the retry lowered max_tokens below what the window leaves: %d then %d, want at least %d (ratio %.2f)",
+			reqs[0].MaxTokens, reqs[1].MaxTokens, want, ratio)
 	}
 	if !strings.Contains(note, "reasoning") || !strings.Contains(note, "smaller steps") {
 		t.Fatalf("retry note = %q, want the reasoning note", note)

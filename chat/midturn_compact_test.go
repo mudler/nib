@@ -64,6 +64,16 @@ type midTurnBackend struct {
 	// emptySummary answers every summary request with no content, which the
 	// session takes for a failed summary.
 	emptySummary bool
+	// ratio, when set, reports a turn request's prompt tokens as its whole
+	// byte/4 size (messages and tool schemas) times ratio: a tokenizer that
+	// counts more than the estimate. window, when set, rejects a larger
+	// prompt the way LocalAI does, and accepts anything up to it.
+	ratio  float64
+	window int
+	// failSummary answers every summary request with a proxy timeout (524).
+	failSummary bool
+	// prompts records the prompt tokens reported for each turn request.
+	prompts []int
 }
 
 func (b *midTurnBackend) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -80,6 +90,25 @@ func (b *midTurnBackend) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	promptTokens := 10
 	if b.extra > 0 && !summary {
 		promptTokens = estimateTokens(req.Messages) + b.extra
+	}
+	if b.ratio > 0 && !summary {
+		tools, _ := json.Marshal(req.Tools)
+		promptTokens = int(float64(estimateTokens(req.Messages)+len(tools)/4) * b.ratio)
+	}
+	if summary && b.failSummary {
+		w.WriteHeader(524)
+		_, _ = w.Write([]byte(`{"error":{"message":"A timeout occurred"}}`))
+		return
+	}
+	if b.window > 0 && !summary && promptTokens > b.window {
+		w.WriteHeader(400)
+		_, _ = fmt.Fprintf(w, `{"error":{"code":400,"message":"request (%d tokens) exceeds the available context size (%d tokens), try increasing it"}}`, promptTokens, b.window)
+		return
+	}
+	if !summary {
+		b.mu.Lock()
+		b.prompts = append(b.prompts, promptTokens)
+		b.mu.Unlock()
 	}
 
 	b.mu.Lock()
@@ -520,7 +549,9 @@ func TestMidTurnCompactionFailureIsReported(t *testing.T) {
 			started = i
 		case strings.HasPrefix(ev, "compact-failed:"):
 			ended = i
-		case strings.HasPrefix(ev, "compacted:"):
+		case strings.HasPrefix(ev, "compacted:") && ended < 0:
+			// Later compactions are the overflow recovery's, which trims
+			// without the model once the request no longer fits.
 			t.Fatalf("compaction reported done with an empty summary: %v", events.list())
 		}
 	}
@@ -560,4 +591,35 @@ func TestMidTurnCompactionUpdatesTheGauge(t *testing.T) {
 		return
 	}
 	t.Fatalf("the turn did not compact: %v", list)
+}
+
+// The session this reproduces: summaries always fail (the proxy times them
+// out), the backend counts 1.5x the estimate, and it accepts any prompt up to
+// its window. The conversation grows in steps smaller than minOutputTokens, so
+// some request lands with less than that left for the reply. Sent, the reply
+// is cut off mid-tool-call, which reads as invalid arguments. Held back as a
+// context overflow, the recovery trims the history without the model and the
+// turn goes on.
+func TestStarvedRequestIsNeverSent(t *testing.T) {
+	// One large result takes the prompt near the window; the rest grow it in
+	// steps of about 600 counted tokens, so one request has to land within
+	// minOutputTokens of the window.
+	answers := []string{answer("ANSWER_0", 6500)}
+	for i := 1; i < 7; i++ {
+		answers = append(answers, answer(fmt.Sprintf("ANSWER_%d", i), 400))
+	}
+	backend := &midTurnBackend{steps: len(answers), ratio: 1.5, window: midTurnWindow, failSummary: true}
+	_, _, _ = runMidTurnOn(t, backend, answers)
+
+	backend.mu.Lock()
+	defer backend.mu.Unlock()
+	for i, p := range backend.prompts {
+		if left := midTurnWindow - p; left < minOutputTokens {
+			t.Fatalf("turn request %d was sent with %d prompt tokens, leaving %d of the %d window for the reply (prompts %v)",
+				i, p, left, midTurnWindow, backend.prompts)
+		}
+	}
+	if len(backend.prompts) <= len(answers) {
+		t.Fatalf("the turn did not finish: %d requests for %d steps", len(backend.prompts), len(answers))
+	}
 }

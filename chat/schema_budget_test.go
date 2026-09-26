@@ -129,7 +129,7 @@ func TestSchemaBudgetMeasuredFromRequest(t *testing.T) {
 		Messages: []openai.ChatCompletionMessage{{Role: "system", Content: sys}, {Role: "user", Content: "hi"}},
 		Tools:    tools,
 	}
-	llm := trackUsage(&promptUsageLLM{}, &s.live, s.requestLimits)
+	llm := trackUsage(&promptUsageLLM{}, &s.live, nil)
 	if _, _, err := llm.CreateChatCompletion(context.Background(), req); err != nil {
 		t.Fatal(err)
 	}
@@ -187,7 +187,7 @@ func near(got, want int) bool {
 // grow with the history.
 func TestSchemaBudgetScalesByTokenizerRatio(t *testing.T) {
 	s := newCompactTestSession(&fakeSummaryLLM{}, 2, nil, nil)
-	llm := trackUsage(&skewLLM{ratio: 1.5}, &s.live, s.requestLimits)
+	llm := trackUsage(&skewLLM{ratio: 1.5}, &s.live, nil)
 
 	req, raw := skewRequest(5000, 60000)
 	if _, _, err := llm.CreateChatCompletion(context.Background(), req); err != nil {
@@ -211,9 +211,11 @@ func TestSchemaBudgetScalesByTokenizerRatio(t *testing.T) {
 // keeps the measurement, and a wild one cannot multiply the floor without end.
 func TestSchemaBudgetRatioClamped(t *testing.T) {
 	s := newCompactTestSession(&fakeSummaryLLM{}, 2, nil, nil)
+	// No limits: the floor is measured either way, and this request is far
+	// larger than the test session's window.
 	req, raw := skewRequest(2000, 1000)
 
-	llm := trackUsage(&skewLLM{ratio: 0.5}, &s.live, s.requestLimits)
+	llm := trackUsage(&skewLLM{ratio: 0.5}, &s.live, nil)
 	if _, _, err := llm.CreateChatCompletion(context.Background(), req); err != nil {
 		t.Fatal(err)
 	}
@@ -221,7 +223,7 @@ func TestSchemaBudgetRatioClamped(t *testing.T) {
 		t.Fatalf("Floor = %d with a report below the estimate, want the measurement %d", got, raw)
 	}
 
-	llm = trackUsage(&skewLLM{ratio: 10}, &s.live, s.requestLimits)
+	llm = trackUsage(&skewLLM{ratio: 10}, &s.live, nil)
 	if _, _, err := llm.CreateChatCompletion(context.Background(), req); err != nil {
 		t.Fatal(err)
 	}
@@ -234,7 +236,7 @@ func TestSchemaBudgetRatioClamped(t *testing.T) {
 // says nothing about the tokenizer: it does not change the ratio.
 func TestSchemaBudgetImageKeepsRatio(t *testing.T) {
 	s := newCompactTestSession(&fakeSummaryLLM{}, 2, nil, nil)
-	llm := trackUsage(&skewLLM{ratio: 1.5}, &s.live, s.requestLimits)
+	llm := trackUsage(&skewLLM{ratio: 1.5}, &s.live, nil)
 	req, raw := skewRequest(2000, 1000)
 	if _, _, err := llm.CreateChatCompletion(context.Background(), req); err != nil {
 		t.Fatal(err)
@@ -249,7 +251,7 @@ func TestSchemaBudgetImageKeepsRatio(t *testing.T) {
 		{Type: openai.ChatMessagePartTypeText, Text: "look"},
 		{Type: openai.ChatMessagePartTypeImageURL, ImageURL: &openai.ChatMessageImageURL{URL: "data:image/png;base64,AAAA"}},
 	}})
-	llm = trackUsage(&skewLLM{ratio: 4}, &s.live, s.requestLimits)
+	llm = trackUsage(&skewLLM{ratio: 4}, &s.live, nil)
 	if _, _, err := llm.CreateChatCompletion(context.Background(), img); err != nil {
 		t.Fatal(err)
 	}
@@ -276,7 +278,7 @@ func TestSchemaBudgetNoticeCorrectedSize(t *testing.T) {
 	var notices []string
 	s.callbacks.OnStatus = func(m string) { notices = append(notices, m) }
 
-	llm := trackUsage(&skewLLM{ratio: 1.5}, &s.live, s.requestLimits)
+	llm := trackUsage(&skewLLM{ratio: 1.5}, &s.live, nil)
 	req, raw := skewRequest(8000, 60000)
 	if _, _, err := llm.CreateChatCompletion(context.Background(), req); err != nil {
 		t.Fatal(err)

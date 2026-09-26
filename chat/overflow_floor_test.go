@@ -157,9 +157,10 @@ func TestOverflowFloorEndOfTurnCompaction(t *testing.T) {
 	}
 
 	t.Run("floor over budget", func(t *testing.T) {
-		// A system prompt of 37000 tokens: the floor is the fixed overhead
+		// A system prompt of 33000 tokens (with the tool schemas, over the
+		// 35904 budget but inside the window): the floor is the fixed overhead
 		// itself, not a skew the backend reports on top of the history.
-		llm, s := run(t, 0, strings.Repeat("s", 37000*4), "short")
+		llm, s := run(t, 0, strings.Repeat("s", 33000*4), "short")
 		if llm.asks != 0 {
 			t.Fatalf("auto-compaction summarized %d times with the floor (%d) over the budget", llm.asks, s.SchemaBudget().Floor)
 		}
@@ -217,7 +218,8 @@ func TestOverflowFloorMidTurnCompaction(t *testing.T) {
 func TestOverflowFloorSkewDoesNotBlockAutoCompaction(t *testing.T) {
 	s := newCompactTestSession(&fakeSummaryLLM{}, 2, nil, nil)
 	s.compaction = types.CompactionConfig{MaxContextTokens: 96000, ReserveTokens: 48000, Threshold: 0.8, KeepRecent: 2}
-	llm := trackUsage(&skewLLM{ratio: 1.5}, &s.live, s.requestLimits)
+	// No limits: this near-full request only calibrates the ratio.
+	llm := trackUsage(&skewLLM{ratio: 1.5}, &s.live, nil)
 	req, raw := skewRequest(5000, 90000)
 	_, usage, err := llm.CreateChatCompletion(context.Background(), req)
 	if err != nil {

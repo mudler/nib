@@ -103,11 +103,14 @@ func TestSessionAutoCompacts(t *testing.T) {
 		ApprovalMode: "auto",
 		AgentOptions: types.AgentOptions{Iterations: 10, MaxAttempts: 3, MaxRetries: 3},
 		Compaction: types.CompactionConfig{
-			// Budget 20000 (window less half of it), trigger 16000. The
-			// history below is 40000 byte/4 tokens, 60000 as counted: the
-			// skew alone on it is 20000, the whole budget.
-			MaxContextTokens: 40000,
-			ReserveTokens:    20000,
+			// Budget 23000 (window less half of it). The history below is
+			// 40000 byte/4 tokens, 60000 as counted: the skew alone on it
+			// is 20000, which the old residual calibration took for a floor
+			// over the budget. The window has room for the first request
+			// as estimated, so it is sent: nib holds back one that does
+			// not leave the reply room.
+			MaxContextTokens: 46000,
+			ReserveTokens:    23000,
 			KeepRecent:       0,
 		},
 	}
