@@ -727,6 +727,7 @@ func footerStates() []struct {
 		{"one job row", render.ViewState{Help: help, Footers: rows[:1]}},
 		{"job and loop rows", render.ViewState{Help: help, Footers: []render.FooterRow{rows[0], rows[2]}}},
 		{"every row", render.ViewState{Help: help, Badges: "12k ctx", NewOutput: true, Err: "something failed", Footers: rows}},
+		{"expanded telemetry", render.ViewState{Help: help, HelpRight: "ctrl+g activity", Badges: "12k ctx", Expanded: "12:00:00", Footers: rows}},
 		{"a row with no glyph", render.ViewState{Help: help, Footers: []render.FooterRow{{Text: "unset kind row"}}}},
 	}
 }
@@ -735,7 +736,8 @@ func footerStates() []struct {
 // surfaces must render the same number of them, in the same order, with the
 // same text — however differently they style them.
 func TestFooterStructuralEquivalence(t *testing.T) {
-	const w = 60
+	// Wide enough that no chip label is shortened to fit.
+	const w = 100
 	for _, tc := range footerStates() {
 		t.Run(tc.name, func(t *testing.T) {
 			var tokens []string
@@ -744,6 +746,12 @@ func TestFooterStructuralEquivalence(t *testing.T) {
 			}
 			if tc.state.Badges != "" {
 				tokens = append(tokens, tc.state.Badges)
+			}
+			if tc.state.Expanded != "" {
+				tokens = append(tokens, tc.state.Expanded)
+			}
+			if tc.state.HelpRight != "" {
+				tokens = append(tokens, tc.state.HelpRight)
 			}
 			if tc.state.Err != "" {
 				tokens = append(tokens, tc.state.Err)
@@ -783,14 +791,22 @@ func TestFooterHeightMatchesFooter(t *testing.T) {
 	// below holds at both widths.
 	for _, w := range []int{20, 60} {
 		for _, tc := range footerStates() {
-			want := 1 // the help/badges line, always present
+			want := 1 // the help line, always present
 			if tc.state.NewOutput {
 				want++
+			}
+			if tc.state.Badges != "" {
+				want++
+			}
+			if tc.state.Expanded != "" {
+				want++
+			}
+			if len(tc.state.Footers) > 0 {
+				want++ // every chip shares the activity strip's one line
 			}
 			if tc.state.Err != "" {
 				want++
 			}
-			want += len(tc.state.Footers)
 
 			for name, p := range presenters() {
 				if got := p.FooterHeight(tc.state, w); got != want {
@@ -855,8 +871,8 @@ func TestFooterHeightGrowsWithRows(t *testing.T) {
 		if lo != 1 {
 			t.Errorf("%s FooterHeight(bare) = %d, want 1", name, lo)
 		}
-		if hi != 5 {
-			t.Errorf("%s FooterHeight(busy) = %d, want 5 (marker + help + error + two rows)", name, hi)
+		if hi != 4 {
+			t.Errorf("%s FooterHeight(busy) = %d, want 4 (marker + activity strip + help + error)", name, hi)
 		}
 	}
 }

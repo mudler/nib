@@ -196,21 +196,32 @@ const (
 	FooterTodo
 )
 
-// FooterRow is one line of the footer's job-status area (active sub-agent
-// jobs, shell jobs, cron loops, the active goal). It carries data, not
-// pixels: Glyph is the marker rune (e.g. theme.Loop), Text is the already-
-// composed but UNSTYLED line, and Kind says which of the four rows this is so
-// a Presenter can apply the right style (FooterJobs/FooterShell get the
-// original theme.Meta + width-fill treatment; FooterLoops/FooterGoal get
-// theme.Subtle, unfilled — see inline.Footer). The tui-side callers that
-// build these (tui/agents.go, tui/shelljobs.go, tui/loops.go, tui/goal.go)
-// must not depend on any Presenter or style types, only produce plain data,
-// since a Presenter must never import their argument types (agentJob,
-// *loop.Registry, wizmcp.ShellJobInfo).
+// ChipState is how much attention a FooterRow's area needs right now.
+type ChipState int
+
+const (
+	// ChipIdle: nothing running, nothing unseen. Drawn dim.
+	ChipIdle ChipState = iota
+	// ChipActive: something in the area is running or in progress.
+	ChipActive
+)
+
+// FooterRow is one chip of the footer's activity strip: an area of background
+// work (sub-agents, shell jobs, cron loops, the goal, the todo list). It
+// carries data, not pixels: Glyph is the marker rune (e.g. theme.Loop), Text
+// the already-composed but UNSTYLED label, Alert an unstyled failure marker
+// ("✗1") the presenter draws in the error color, State how much attention it
+// needs, and Selected whether the strip has focus on it. The tui-side callers
+// that build these must not depend on any Presenter or style types, only
+// produce plain data, since a Presenter must never import their argument types
+// (agentJob, *loop.Registry, wizmcp.ShellJobInfo).
 type FooterRow struct {
-	Glyph string
-	Text  string
-	Kind  FooterRowKind
+	Glyph    string
+	Text     string
+	Kind     FooterRowKind
+	Alert    string
+	State    ChipState
+	Selected bool
 }
 
 // ViewState is the read-only projection of Model state a Presenter renders
@@ -279,7 +290,7 @@ type ViewState struct {
 	// Speed is the live generation rate, already rendered, shown after the
 	// status on the working indicator line; "" when the model is not
 	// generating right now.
-	Speed     string
+	Speed string
 	// Tip is a dim usage hint shown as a single line beneath the loader,
 	// above reasoning. Empty when the feature is disabled or no tip was
 	// picked.
@@ -287,7 +298,13 @@ type ViewState struct {
 	Reasoning Reasoning
 	Dialogs   []Dialog
 	Help      string
-	Badges    string
+	// HelpRight is a dim hint drawn at the right end of the help line.
+	HelpRight string
+	// Badges is the front telemetry line (ui.footer_front), already rendered.
+	Badges string
+	// Expanded is the expanded telemetry line (ui.footer_expanded), already
+	// rendered; "" unless the activity strip has focus.
+	Expanded string
 
 	// HUD live telemetry for the footer.
 	Clock string
@@ -298,5 +315,6 @@ type ViewState struct {
 
 	NewOutput bool
 	Err       string
-	Footers   []FooterRow
+	// Footers are the activity strip's chips, drawn on one line.
+	Footers []FooterRow
 }

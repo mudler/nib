@@ -60,6 +60,8 @@ var (
 	Todo           = "◐"  // todo-list footer marker
 	ShellJob       = "▷"  // shell-jobs footer marker
 	ScrollKeys     = "↑↓" // up/down navigation hint
+	SideKeys       = "←→" // left/right navigation hint
+	Idle           = "–"  // an activity chip with nothing in it
 	ReasoningGlyph = "✻"  // marks a block of model thinking/reasoning
 	NewOutputGlyph = "↓"  // footer marker: new content arrived while scrolled up
 	HairlineGlyph  = "─"  // the one-cell rule repeated under the header
@@ -128,6 +130,8 @@ func applyGlyphProfile() {
 		PromptGlyph, ApprovalGutter, SubAgent = ">", "|", ">"
 		MsgGutter = "|"
 		Arrow, ShellJob, ScrollKeys = "->", ">", "up/dn"
+		SideKeys = "lt/rt"
+		Idle = "-"
 		Loop = "~"
 		Goal = "*"
 		Todo = "o"
@@ -149,6 +153,8 @@ func applyGlyphProfile() {
 	PromptGlyph, ApprovalGutter, SubAgent = "›", "▏", "↳"
 	MsgGutter = "▏"
 	Arrow, ShellJob, ScrollKeys = "→", "▷", "↑↓"
+	SideKeys = "←→"
+	Idle = "–"
 	Loop = "↻"
 	Goal = "◎"
 	Todo = "◐"

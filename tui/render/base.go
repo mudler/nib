@@ -415,58 +415,145 @@ func (b Base) HeaderHeight(v ViewState) int {
 	return BlockRows(b.Header(v))
 }
 
-// footerRowStyle renders one FooterRow's text (glyph already prefixed), per
-// its Kind. FooterJobs/FooterShell reproduce the original theme.Meta +
-// width-fill treatment (Width doesn't just pad — lipgloss wraps content
-// exceeding w, so a narrow terminal hard-wraps instead of spilling, exactly
-// as before); everything else — FooterLoops/FooterGoal, and the zero-value
-// FooterKindUnset (a forgotten Kind on some future fifth row) — gets the
-// plain default: theme.Subtle, unfilled.
-func footerRowStyle(kind FooterRowKind, text string, w int) string {
-	switch kind {
-	case FooterJobs, FooterShell:
-		return theme.Meta.Width(w).Render(text)
-	default:
-		return theme.Subtle.Render(text)
+// chipSep separates the activity strip's chips.
+const chipSep = "  "
+
+// chipText is a chip's unstyled text, glyph first. The selected chip shows
+// the cursor in its glyph's place, so moving the focus never shifts the strip.
+func chipText(row FooterRow) string {
+	glyph := row.Glyph
+	if row.Selected {
+		glyph = theme.Cursor
 	}
+	if glyph == "" {
+		return row.Text
+	}
+	return glyph + " " + row.Text
 }
 
-// Footer renders the new-output marker (when scrolled up with unread content
-// below the fold), the help/badges line, the error line, and the job-status
-// footer rows — everything that lives between the composer and the bottom of
-// the screen.
+// minChipText is how far fitChips shortens a label before it drops a chip:
+// "explore: s…" still says which agent it is.
+const minChipText = 10
+
+// fitChips fits the strip in w cells. It shortens the widest labels down to
+// minChipText, so a long title gives way before a count does; then drops idle
+// chips (nothing running, no alert, not selected), which say the least; and
+// only then shortens labels further. Alerts are never cut.
+func fitChips(rows []FooterRow, w int) []FooterRow {
+	out := append([]FooterRow(nil), rows...)
+	width := func() int {
+		n := lipgloss.Width(chipSep) * (len(out) - 1)
+		for _, r := range out {
+			n += lipgloss.Width(chipText(r))
+			if r.Alert != "" {
+				n += 1 + lipgloss.Width(r.Alert)
+			}
+		}
+		return n
+	}
+	shrink := func(floor int) {
+		for over := width() - w; over > 0; over = width() - w {
+			widest := -1
+			for i, r := range out {
+				if lipgloss.Width(r.Text) > floor && (widest < 0 || lipgloss.Width(r.Text) > lipgloss.Width(out[widest].Text)) {
+					widest = i
+				}
+			}
+			if widest < 0 {
+				return
+			}
+			cur := lipgloss.Width(out[widest].Text)
+			out[widest].Text = TruncateRunes(out[widest].Text, max(cur-over, floor))
+		}
+	}
+	shrink(minChipText)
+	for i := len(out) - 1; i >= 0 && width() > w; i-- {
+		if r := out[i]; r.State == ChipIdle && r.Alert == "" && !r.Selected {
+			out = append(out[:i], out[i+1:]...)
+		}
+	}
+	shrink(1)
+	return out
+}
+
+// chipStyle renders one chip: dim when idle, plain when active, and marked
+// with the accent color and a leading cursor when the strip's focus is on it.
+func chipStyle(row FooterRow) string {
+	text := chipText(row)
+	var s string
+	switch {
+	case row.Selected:
+		s = theme.Brand.Render(text)
+	case row.State == ChipActive:
+		s = theme.Meta.Render(text)
+	default:
+		s = theme.Help.Render(text)
+	}
+	if row.Alert != "" {
+		s += " " + theme.Error.Render(row.Alert)
+	}
+	return s
+}
+
+// Footer renders everything between the composer and the bottom of the
+// screen: the new-output marker (when scrolled up with unread content below
+// the fold), the front telemetry line, the expanded telemetry line while the
+// activity strip has focus, the activity strip, the help line with its right
+// hint, and the error line.
 func (Base) Footer(v ViewState, w int) string {
-	var b strings.Builder
+	var lines []string
 	if v.NewOutput {
-		b.WriteString(theme.NewOutputMarker())
-		b.WriteString("\n")
+		lines = append(lines, theme.NewOutputMarker())
 	}
 	if v.Badges != "" {
-		gap := w - lipgloss.Width(v.Help) - lipgloss.Width(v.Badges)
-		if gap < 1 {
-			gap = 1
-		}
-		b.WriteString(v.Help + strings.Repeat(" ", gap) + v.Badges)
-	} else {
-		b.WriteString(v.Help)
+		lines = append(lines, v.Badges)
 	}
+	if v.Expanded != "" {
+		lines = append(lines, v.Expanded)
+	}
+	// The right hint goes at the end of the help line, or, when the help line
+	// has no room for it, at the end of the activity strip, which makes room
+	// for it: it is how the strip is reached, so it must not be lost on a
+	// narrow terminal.
+	hintW := lipgloss.Width(v.HelpRight)
+	hintOnHelp := v.HelpRight != "" && lipgloss.Width(v.Help)+2+hintW <= w
+	hintOnStrip := v.HelpRight != "" && !hintOnHelp && len(v.Footers) > 0
+	if len(v.Footers) > 0 {
+		budget := w
+		if hintOnStrip {
+			budget -= hintW + 2
+		}
+		var chips []string
+		for _, r := range fitChips(v.Footers, budget) {
+			chips = append(chips, chipStyle(r))
+		}
+		strip := strings.Join(chips, chipSep)
+		if hintOnStrip {
+			strip = rightAlign(strip, v.HelpRight, w)
+		}
+		lines = append(lines, strip)
+	}
+	help := v.Help
+	if hintOnHelp {
+		help = rightAlign(help, v.HelpRight, w)
+	}
+	lines = append(lines, help)
 	if v.Err != "" {
-		b.WriteString("\n" + theme.Error.Render(theme.Cross+" "+v.Err))
+		lines = append(lines, theme.Error.Render(theme.Cross+" "+v.Err))
 	}
-	for _, row := range v.Footers {
-		text := row.Text
-		if row.Glyph != "" {
-			text = row.Glyph + " " + text
-		}
-		b.WriteString("\n" + footerRowStyle(row.Kind, text, w))
-	}
-	return b.String()
+	return strings.Join(lines, "\n")
+}
+
+// rightAlign puts right at the end of a w-cell line that starts with left.
+func rightAlign(left, right string, w int) string {
+	gap := max(w-lipgloss.Width(left)-lipgloss.Width(right), 2)
+	return left + strings.Repeat(" ", gap) + right
 }
 
 // FooterHeight reports how many terminal rows Footer occupies for this
-// ViewState at this width — 1 for the bare help line, up to 7 once the
-// new-output marker, an error line and the four job-status rows are all
-// present. The shared core budgets the viewport against it, so an answer that
+// ViewState at this width — 1 for the bare help line, up to 6 once the
+// new-output marker, both telemetry lines, the activity strip and an error
+// line are all present. The shared core budgets the viewport against it, so an answer that
 // disagrees with Footer by even one row makes the composed frame overflow the
 // screen. Measuring the real output is the only way the two cannot drift.
 func (b Base) FooterHeight(v ViewState, w int) int {

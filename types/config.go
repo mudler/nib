@@ -253,16 +253,16 @@ type Config struct {
 	// even when the model's chat template has no enable_thinking toggle (e.g.
 	// LFM2.5), so it's the reliable way to disable a reasoning model's thinking
 	// ("none"). Empty leaves the field unset.
-	ReasoningEffort string               `yaml:"reasoning_effort,omitempty"`
+	ReasoningEffort string `yaml:"reasoning_effort,omitempty"`
 	// ThinkingMode selects how reasoning effort is expressed on the wire:
 	// "effort" (default) sends reasoning_effort; "budget" sends a thinking
 	// budget token count (see ThinkingBudgets). Empty means "effort".
-	ThinkingMode      string             `yaml:"thinking_mode,omitempty"`
-	ThinkingBudgets   map[string]int     `yaml:"thinking_budgets,omitempty"`
-	ReasoningOverrides map[string]string `yaml:"reasoning_overrides,omitempty"`
-	MCPServers      map[string]MCPServer `yaml:"mcp_servers"`
-	AgentOptions    AgentOptions         `yaml:"agent_options"`
-	Compaction      CompactionConfig     `yaml:"compaction"`
+	ThinkingMode       string               `yaml:"thinking_mode,omitempty"`
+	ThinkingBudgets    map[string]int       `yaml:"thinking_budgets,omitempty"`
+	ReasoningOverrides map[string]string    `yaml:"reasoning_overrides,omitempty"`
+	MCPServers         map[string]MCPServer `yaml:"mcp_servers"`
+	AgentOptions       AgentOptions         `yaml:"agent_options"`
+	Compaction         CompactionConfig     `yaml:"compaction"`
 	// ToolOutputPruning shrinks what old tool results cost in the request
 	// without touching the stored conversation.
 	ToolOutputPruning ToolOutputPruningConfig `yaml:"tool_output_pruning"`
@@ -270,7 +270,7 @@ type Config struct {
 	// inline. Output beyond the budget is truncated (head+tail) and, above
 	// a threshold, saved as a session artifact the model can page through.
 	ToolOutputLimits ToolOutputLimitsConfig `yaml:"tool_output_limits"`
-	Agents            []AgentTypeConfig       `yaml:"agents"`
+	Agents           []AgentTypeConfig      `yaml:"agents"`
 
 	PromptFragments []string `yaml:"prompt_fragments"`
 	Skills          []Skill  `yaml:"skills"`
@@ -414,6 +414,13 @@ type UIConfig struct {
 	// spinner while the agent is thinking. Zero value (false) = funny lines
 	// and tips shown.
 	NoFunny bool `yaml:"no_funny,omitempty"`
+	// FooterFront lists the telemetry always shown in the footer, in
+	// priority order, separated by commas: context, speed, usage, age,
+	// clock, cpu, mem. "" = "context,speed"; "none" = nothing.
+	FooterFront string `yaml:"footer_front,omitempty"`
+	// FooterExpanded lists the telemetry shown while the activity strip has
+	// focus (ctrl+g), in the same format. "" = "usage,age,clock,cpu,mem".
+	FooterExpanded string `yaml:"footer_expanded,omitempty"`
 }
 
 // ClassifierConfig names the small classification model. It is configured

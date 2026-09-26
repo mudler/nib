@@ -48,8 +48,12 @@ func TestViewStateIsComplete(t *testing.T) {
 	if vs.Err != errFrameTest.Error() {
 		t.Errorf("viewState Err = %q, want %q", vs.Err, errFrameTest.Error())
 	}
-	if len(vs.Footers) != 1 || vs.Footers[0].Kind != render.FooterJobs {
-		t.Errorf("viewState Footers = %+v, want one FooterJobs row", vs.Footers)
+	var agent bool
+	for _, f := range vs.Footers {
+		agent = agent || (f.Kind == render.FooterJobs && strings.HasPrefix(f.Text, "explore"))
+	}
+	if !agent {
+		t.Errorf("viewState Footers = %+v, want a chip for the running explore agent", vs.Footers)
 	}
 	if vs.Brand == "" || vs.Status == "" {
 		t.Errorf("viewState left Brand/Status empty: %q / %q", vs.Brand, vs.Status)
@@ -74,8 +78,8 @@ func TestViewDoesNotMutateViewState(t *testing.T) {
 	// The footer rows must reach the rendered frame from the same projection
 	// Header rendered from — i.e. without View filling them in afterwards.
 	out := m.View()
-	if !strings.Contains(out, "jobs: 1 running") {
-		t.Errorf("rendered frame lost the job row: %q", out)
+	if !strings.Contains(out, "explore") {
+		t.Errorf("rendered frame lost the agent chip: %q", out)
 	}
 }
 
@@ -115,9 +119,10 @@ func TestViewportBudgetsAgainstFooterHeight(t *testing.T) {
 	m := frameModel()
 	bare := m.viewport.Height
 
-	// A sub-agent job and an error line: two footer rows the fixed budget never
-	// accounted for.
-	m.jobs = []agentJob{{ID: "a1", Type: "explore", Status: chat.AgentStatusRunning}}
+	// The expanded telemetry line and an error line: two footer rows the
+	// fixed budget never accounted for.
+	m.hudClock = "12:00:00"
+	m.activityFocus = true
 	m.err = errFrameTest
 	m.updateDimensions()
 
@@ -265,27 +270,27 @@ func TestFooterBudgetRecomputesMidTurn(t *testing.T) {
 
 	bareFrame := lipgloss.Height(m.View())
 
-	// Mid-turn: a sub-agent job appears. No resize, just a re-render.
-	m.jobs = []agentJob{{ID: "a1", Type: "explore", Status: chat.AgentStatusRunning}}
+	// Mid-turn: an error line appears. No resize, just a re-render.
+	m.err = errFrameTest
 	m.updateViewport()
 	// The user-visible symptom: before the fix the frame grew by the job row
 	// instead of the viewport giving the row up, so on the alt screen
 	// bubbletea scrolled the frame and the header walked off the top.
 	if got := lipgloss.Height(m.View()); got != bareFrame {
-		t.Errorf("frame height changed from %d to %d when a job row appeared", bareFrame, got)
+		t.Errorf("frame height changed from %d to %d when an error row appeared", bareFrame, got)
 	}
 	if got := m.viewport.Height; got != bare-1 {
-		t.Errorf("viewport height after a job row appeared = %d, want %d", got, bare-1)
+		t.Errorf("viewport height after an error row appeared = %d, want %d", got, bare-1)
 	}
 	if got := lipgloss.Height(m.View()); got > m.height {
 		t.Errorf("frame is %d rows tall, terminal is %d", got, m.height)
 	}
 
 	// And back: the row goes away, the row comes back to the viewport.
-	m.jobs = nil
+	m.err = nil
 	m.updateViewport()
 	if got := m.viewport.Height; got != bare {
-		t.Errorf("viewport height after the job row went away = %d, want %d", got, bare)
+		t.Errorf("viewport height after the error row went away = %d, want %d", got, bare)
 	}
 }
 

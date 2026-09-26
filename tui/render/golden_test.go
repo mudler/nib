@@ -240,6 +240,20 @@ func goldenCases() []goldenCase {
 		{"footer unset kind row", func(p render.Presenter) string {
 			return p.Footer(render.ViewState{Help: "tab complete", Footers: []render.FooterRow{{Text: "unset kind row"}}}, w)
 		}},
+		{"footer todo chip", func(p render.Presenter) string {
+			return p.Footer(render.ViewState{Help: "tab complete", Footers: []render.FooterRow{{Glyph: "o", Text: "todo 2/5 writing tests", Kind: render.FooterTodo, State: render.ChipActive}}}, w)
+		}},
+		{"footer focused strip", func(p render.Presenter) string {
+			return p.Footer(render.ViewState{Help: "lt/rt move · enter open · esc back", Badges: "12k ctx", Expanded: "session 1k in / 2k out  12:00:00",
+				Footers: []render.FooterRow{
+					{Glyph: "o", Text: "todo -", Kind: render.FooterTodo},
+					{Glyph: ">", Text: "shell 3 done", Kind: render.FooterShell, Alert: "x1", Selected: true},
+					{Glyph: ">", Text: "explore 3.1k", Kind: render.FooterJobs, State: render.ChipActive},
+				}}, w)
+		}},
+		{"footer help right hint", func(p render.Presenter) string {
+			return p.Footer(render.ViewState{Help: "tab complete", HelpRight: "ctrl+g activity"}, w)
+		}},
 		{"footer every row", func(p render.Presenter) string { return p.Footer(busyFooter, w) }},
 		{"footer height every row", func(p render.Presenter) string { return fmt.Sprintf("%d", p.FooterHeight(busyFooter, w)) }},
 

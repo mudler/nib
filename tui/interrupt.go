@@ -21,7 +21,7 @@ type exitDisarmMsg struct{ seq int }
 // dialogOpen reports whether a dialog or panel owns the keyboard. Ctrl+C then
 // acts as Esc, which each of them handles as "close" or "cancel".
 func (m Model) dialogOpen() bool {
-	return m.showTodo || m.showLogs ||
+	return m.panelOpen() || m.showLogs ||
 		m.loginWait.active || m.loginForm.active ||
 		m.providerPicker.active || m.modelPicker.active ||
 		m.awaitingApproval || m.awaitingAsk || m.awaitingResume

@@ -74,6 +74,7 @@ func TestNarrowFooterDropsUsageAndKeepsContext(t *testing.T) {
 		sessionUsage:  chat.SessionUsage{PromptTokens: 312000, CompletionTokens: 18400},
 	})
 	m.cfg.Compaction.MaxContextTokens = 128000
+	m.cfg.UI.FooterFront = "context,usage"
 
 	got := m.footerBadges(20)
 	if strings.Contains(got, "312k") {
@@ -84,7 +85,7 @@ func TestNarrowFooterDropsUsageAndKeepsContext(t *testing.T) {
 	}
 }
 
-// With room for both, both render.
+// With room for both, both render, once usage is moved to the front line.
 func TestWideFooterShowsBothBadges(t *testing.T) {
 	m := newTestModel(Model{
 		width:         120,
@@ -92,6 +93,7 @@ func TestWideFooterShowsBothBadges(t *testing.T) {
 		sessionUsage:  chat.SessionUsage{PromptTokens: 312000, CompletionTokens: 18400},
 	})
 	m.cfg.Compaction.MaxContextTokens = 128000
+	m.cfg.UI.FooterFront = "context,usage"
 
 	got := m.footerBadges(20)
 	if !strings.Contains(got, "ctx") || !strings.Contains(got, "312k") {
@@ -506,7 +508,7 @@ func TestContextBadgeShrinksWithTheFooter(t *testing.T) {
 // The HUD badges name what they measure.
 func TestHudBadgesAreLabelled(t *testing.T) {
 	m := newTestModel(Model{width: 200, hudCPU: 12, hudCPUOK: true, hudMemUsed: 9 << 30, hudMemTotal: 31 << 30})
-	got := m.footerBadges(10)
+	got := m.expandedBadges()
 	if !strings.Contains(got, "cpu 12%") || !strings.Contains(got, "mem 9/31G") {
 		t.Fatalf("footer = %q, want cpu and mem badges", got)
 	}

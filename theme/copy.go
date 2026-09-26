@@ -11,8 +11,13 @@ const (
 	// the style, in theme.go).
 	LabelYouText = "you"
 
-	HelpDefault      = "enter send · ctrl+y use command · G/end newest · ctrl+c twice exit"
-	HelpApproval     = "pick an option above · esc deny"
+	HelpDefault  = "enter send · ctrl+y use command · G/end newest · ctrl+c twice exit"
+	HelpApproval = "pick an option above · esc deny"
+	// HelpActivity follows SideKeys on the help line while the footer's
+	// activity strip has focus (ctrl+g); HintActivity is the right-hand hint
+	// that says how to get there.
+	HelpActivity     = " move · enter open · esc back"
+	HintActivity     = "ctrl+g activity"
 	HelpApprovalEdit = "enter submit · esc cancel"
 	ApproveEditHint  = "describe the change · enter submit · esc cancel"
 

@@ -5,12 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -498,6 +496,16 @@ type Model struct {
 
 	// Ctrl+T todo panel state.
 	showTodo bool // panel open
+	// infoPanel is the open detail panel from the activity strip: chipLoops
+	// or chipGoal, "" when none is open. It replaces the body like showTodo.
+	infoPanel string
+	// activityFocus puts the keyboard on the footer's activity strip
+	// (ctrl+g), with activitySel the selected chip.
+	activityFocus bool
+	activitySel   int
+	// seenFailed counts the failures, per chip kind, that were on screen
+	// when the user last opened the kind's view. Only newer ones alert.
+	seenFailed map[string]int
 
 	// Unified `/` completion state
 	completion compState
@@ -947,6 +955,7 @@ func (m Model) initSession() tea.Cmd {
 				// Each sub-agent is also metered on its own, for its
 				// landing line. Only text deltas carry Content.
 				m.agentSpeed.record(ev.AgentID, len(ev.Content), time.Now())
+				m.agentSpeed.step(ev.AgentID, ev)
 				switch ev.Kind {
 				case "reasoning":
 					m.reasoningChan <- reasoningEvent{kind: reasoningEventDelta, text: ev.Content, gen: gen}
@@ -1122,6 +1131,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.disarmExit()
 			msg = tea.KeyMsg{Type: tea.KeyEsc}
+		}
+		// Loops / goal detail panel: esc closes, other keys are swallowed.
+		if m.infoPanel != "" {
+			if msg.Type == tea.KeyEsc {
+				m.infoPanel = ""
+				m.reflowLayout()
+			}
+			return m, nil
+		}
+		// ctrl+g activity strip focus: arrows move, enter opens, esc leaves.
+		// A key it does not use leaves the strip and goes on to the composer.
+		if m.activityFocus {
+			if cmd, handled := m.handleActivityKey(msg); handled {
+				m.updateViewport()
+				return m, cmd
+			}
 		}
 		// Ctrl+T todo panel: intercepts keys while open.
 		if m.showTodo {
@@ -1405,6 +1430,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			m.showLogs = !m.showLogs
+			if m.showLogs {
+				m.markFailuresSeen()
+			}
 			m.logSel = 0
 			m.logOpenID = ""
 			m.logOpenKind = ""
@@ -1437,6 +1465,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m.resolveApproval(chat.ToolCallResponse{Approved: true})
 			}
 			m.updateViewportFollow()
+			return m, nil
+
+		case tea.KeyCtrlG:
+			// Focus the footer's activity strip.
+			if !m.sessionReady {
+				return m, nil
+			}
+			m.focusActivity()
+			m.reflowLayout()
 			return m, nil
 
 		case tea.KeyCtrlT:
@@ -3233,8 +3270,8 @@ func (m Model) renderComposer(w int) string {
 		composer.WriteString(theme.Help.Render(theme.Starting))
 	case m.showLogs:
 		// no input: the log viewer owns the body and the keystrokes
-	case m.showTodo:
-		// no input: the todo panel owns the body and the keystrokes
+	case m.panelOpen():
+		// no input: the panel owns the body and the keystrokes
 	case m.awaitingApproval && !m.approvalEditing:
 		// no input: choice row lives in the viewport approval block
 	case m.awaitingResume:
@@ -3617,7 +3654,7 @@ func (m Model) showingViewport() bool {
 	if m.showLogs {
 		return false
 	}
-	if m.showTodo {
+	if m.panelOpen() {
 		return false
 	}
 	return len(m.messages) > 0 || m.loading || m.awaitingApproval || m.awaitingAsk || m.awaitingResume || m.modelPicker.active ||
@@ -3648,37 +3685,6 @@ func (m Model) reasoningBoxHit(y int) bool {
 	chrome := m.presenter.HeaderHeight(m.viewState())
 	row := y - chrome + m.viewport.YOffset
 	return row >= m.reasoningSpanStart && row < m.reasoningSpanEnd
-}
-
-// footerRows builds the job-status footer rows — active sub-agent jobs, shell
-// jobs, cron loops, the active goal — in the order they are rendered. Empty
-// while the log viewer owns the body, which hides the footer entirely.
-func (m Model) footerRows() []render.FooterRow {
-	if m.showLogs {
-		return nil
-	}
-	if m.showTodo {
-		return nil
-	}
-	var rows []render.FooterRow
-	if row, ok := jobsFooterRow(m.jobs); ok {
-		rows = append(rows, row)
-	}
-	if row, ok := shellJobsFooterRow(m.shellJobs.List()); ok {
-		rows = append(rows, row)
-	}
-	if row, ok := loopsFooterRow(m.loops, m.selfPaced); ok {
-		rows = append(rows, row)
-	}
-	if m.session != nil {
-		if row, ok := goalFooterRow(m.session.Goal(), m.session.GoalPaused()); ok {
-			rows = append(rows, row)
-		}
-		if row, ok := todoFooterRow(m.session.TodoList()); ok {
-			rows = append(rows, row)
-		}
-	}
-	return rows
 }
 
 // viewState builds the complete ViewState for the current frame: every field
@@ -3731,7 +3737,19 @@ func (m Model) viewState() render.ViewState {
 		Dialogs: m.currentDialogs(),
 		Help:    help,
 		Tip:     tip,
-		Badges:  m.footerBadges(lipgloss.Width(help)),
+		Badges:  m.footerBadges(0),
+		Expanded: func() string {
+			if m.activityFocus {
+				return m.expandedBadges()
+			}
+			return ""
+		}(),
+		HelpRight: func() string {
+			if m.activityFocus || m.showLogs || m.panelOpen() {
+				return ""
+			}
+			return theme.Help.Render(theme.HintActivity)
+		}(),
 		Clock:   m.hudClock,
 		CPU:     m.hudCPU,
 		RAM:     int(m.hudMemUsed / (1 << 20)),
@@ -3927,15 +3945,6 @@ func (m *Model) updateViewport() {
 		m.toolSpans = append(m.toolSpans, toolSpan{start: start, end: strings.Count(sb.String(), "\n"), index: i, running: true})
 	}
 
-	// Live sub-agent stats: one indented line per running agent that has
-	// streamed, showing its token count and generation rate. Collapsed
-	// by default (ctrl+o opens the full log viewer); the line keeps the
-	// user oriented without filling the transcript.
-	if line := m.agentLiveStatsLine(); line != "" {
-		sb.WriteString(line)
-		sb.WriteString("\n")
-	}
-
 	reasoningStart := strings.Count(sb.String(), "\n")
 	reasoningOut := presenter.Reasoning(vs, contentWidth)
 	sb.WriteString(reasoningOut)
@@ -3993,6 +4002,8 @@ func (m Model) View() string {
 	switch {
 	case m.showTodo:
 		body = m.renderTodoPanel()
+	case m.infoPanel != "":
+		body = m.renderInfoPanel()
 	case m.showLogs:
 		body = m.renderLogsViewer()
 	case m.boot != nil && !m.boot.collapsed:
@@ -4051,6 +4062,10 @@ func (m Model) helpLine() string {
 		return m.hint
 	case m.showTodo:
 		return theme.ScrollKeys + " scroll · esc/ctrl+t close"
+	case m.infoPanel != "":
+		return "esc close"
+	case m.activityFocus:
+		return theme.SideKeys + theme.HelpActivity
 	case m.showLogs && m.logOpenID != "":
 		return theme.ScrollKeys + " scroll · esc back · ctrl+o close"
 	case m.showLogs:
@@ -4468,91 +4483,6 @@ func (m Model) usageBadge() string {
 		label = theme.UsageEstimatedPrefix + label
 	}
 	return theme.Meta.Render(label)
-}
-
-// footerBadges renders the right-aligned bottom-bar badges for a help line of
-// helpWidth columns. Badges are priority-based: the lowest-priority badge drops
-// first when space is tight.
-//
-// Priority (lowest drops first): mem(20), cpu(40), clock(60), usage(80),
-// speed(90), context(100). The context badge earns the highest priority because it
-// predicts auto-compaction and is therefore actionable.
-func (m Model) footerBadges(helpWidth int) string {
-	type badge struct {
-		text     string
-		priority int
-	}
-	var badges []badge
-
-	// The context badge takes the widest form that fits beside the help line,
-	// falling back to its narrowest when none does; the rest share what is left.
-	usage := m.usageBadge()
-	ctxWidth := 0
-	if forms := m.contextBadges(); len(forms) > 0 {
-		ctx := forms[len(forms)-1]
-		for _, f := range forms {
-			if helpWidth+1+lipgloss.Width(f) <= m.width {
-				ctx = f
-				break
-			}
-		}
-		badges = append(badges, badge{ctx, 100})
-		ctxWidth = lipgloss.Width(ctx)
-	}
-	// The speed badge ranks just under the context badge. It takes its full
-	// form when that fits beside the help line and the context badge, and
-	// its narrow form (the session average alone) otherwise.
-	if speed, narrow := m.speedBadges(); speed != "" {
-		if helpWidth+1+ctxWidth+2+lipgloss.Width(speed) > m.width {
-			speed = narrow
-		}
-		badges = append(badges, badge{speed, 90})
-	}
-	if usage != "" {
-		badges = append(badges, badge{usage, 80})
-	}
-	// Aggregate sub-agent token spend while one or more are running. It
-	// complements the session usage badge (root agent) so the user can see
-	// what sub-agents are costing live.
-	if total, active := m.agentSpeed.aggregateTokens(time.Now()); total > 0 && active > 0 {
-		agentBadge := theme.Help.Render("agents ") + theme.Meta.Render(chat.HumanTokens(int(math.Round(total))))
-		badges = append(badges, badge{agentBadge, 85})
-	}
-	// ui.hide_hud drops the machine badges (clock, cpu, mem) and keeps the
-	// session ones above, which predict compaction and spend.
-	hud := !m.cfg.UI.HideHUD
-	if hud && m.hudClock != "" {
-		badges = append(badges, badge{theme.Meta.Render(m.hudClock), 60})
-	}
-	if hud && m.hudCPUOK {
-		badges = append(badges, badge{theme.Help.Render("cpu ") + theme.Meta.Render(strconv.Itoa(m.hudCPU)+"%"), 40})
-	}
-	if hud && m.hudMemTotal > 0 {
-		badges = append(badges, badge{theme.Help.Render("mem ") + theme.Meta.Render(humanGiB(m.hudMemUsed)+"/"+humanGiB(m.hudMemTotal)+"G"), 20})
-	}
-
-	if len(badges) == 0 {
-		return ""
-	}
-
-	// Greedily include from highest to lowest priority. The first (highest-
-	// priority) badge is always included even if it overflows — it carries the
-	// most actionable information (context predicts compaction).
-	sep := "  "
-	var included []string
-	used := helpWidth + 1
-	for i, b := range badges {
-		w := lipgloss.Width(b.text)
-		if len(included) > 0 {
-			w += len(sep)
-		}
-		if i == 0 || used+w <= m.width {
-			included = append(included, b.text)
-			used += w
-		}
-	}
-
-	return strings.Join(included, sep)
 }
 
 // quit tears down the session and exits.

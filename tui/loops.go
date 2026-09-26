@@ -8,8 +8,6 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/mudler/nib/loop"
 	"github.com/mudler/nib/slash"
-	"github.com/mudler/nib/theme"
-	"github.com/mudler/nib/tui/render"
 )
 
 // durationToCron maps a /loop interval to a cron expression. Sub-minute
@@ -35,33 +33,6 @@ func durationToCron(d time.Duration) string {
 		}
 		return fmt.Sprintf("*/%d * * * *", m)
 	}
-}
-
-// loopsFooterRow returns the plain {Glyph, Text, Kind} data for the loops
-// footer, and whether there is one to show. The presenter styles it
-// (render.FooterLoops gets the original theme.Subtle, unfilled treatment —
-// see inline.Footer).
-func loopsFooterRow(r *loop.Registry, selfPaced int) (render.FooterRow, bool) {
-	if r == nil {
-		if selfPaced == 0 {
-			return render.FooterRow{}, false
-		}
-		text := fmt.Sprintf("%d loop(s): %d self-paced  (/loop list · /loop stop)", selfPaced, selfPaced)
-		return render.FooterRow{Glyph: theme.Loop, Text: text, Kind: render.FooterLoops}, true
-	}
-	jobs := r.List()
-	if len(jobs) == 0 && selfPaced == 0 {
-		return render.FooterRow{}, false
-	}
-	var parts []string
-	for _, j := range jobs {
-		parts = append(parts, fmt.Sprintf("%s %s%s%s", j.ID, j.Expr, theme.Arrow, render.TruncateRunes(j.Prompt, 24)))
-	}
-	if selfPaced > 0 {
-		parts = append(parts, fmt.Sprintf("%d self-paced", selfPaced))
-	}
-	text := fmt.Sprintf("%d loop(s): %s  (/loop list · /loop stop)", len(jobs)+selfPaced, strings.Join(parts, " · "))
-	return render.FooterRow{Glyph: theme.Loop, Text: text, Kind: render.FooterLoops}, true
 }
 
 // dispatchLoop runs a due loop payload, routing by run-state: inject into a
