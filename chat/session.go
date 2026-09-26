@@ -180,7 +180,10 @@ type Session struct {
 	// never resolves to ""); only a Session built directly within this
 	// package's own tests can leave it unset.
 	savedPath string
-	credStore *auth.Store // credential store for /login-managed providers
+	// ignoreSavedEndpoint is types.Config.IgnoreSavedEndpoint: start on the
+	// config and never read or rewrite savedPath at startup.
+	ignoreSavedEndpoint bool
+	credStore           *auth.Store // credential store for /login-managed providers
 
 	// learnedWindow is the context window a backend stated in an overflow
 	// error, and learnedWindowModel is the model it was learned for. They are
@@ -581,6 +584,7 @@ func NewSession(ctx context.Context, cfg types.Config, callbacks Callbacks, tran
 		endpoints:            endpoints,
 		configErrs:           configErrs,
 		savedPath:            filepath.Join(plugin.BaseDirIn(cfg.BaseDir), ProviderStateFile),
+		ignoreSavedEndpoint:  cfg.IgnoreSavedEndpoint,
 		endpointID:           endpoint.DefaultID,
 		credStore:            credStore,
 		apiKey:               mainProvider.APIKey,
@@ -3033,7 +3037,7 @@ func (s *Session) ResetModel() (string, error) {
 	if err := s.applyProvider(p, id); err != nil {
 		return "", err
 	}
-	if err := endpoint.WriteSaved(s.savedPath, endpoint.Saved{ID: id}); err != nil {
+	if err := s.writeSaved(id, ""); err != nil {
 		xlog.Warn("could not clear the saved model", "endpoint", id, "error", err)
 	}
 	return p.Model, nil

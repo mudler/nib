@@ -60,6 +60,8 @@ func newTestSessionWithConfig(t *testing.T, cfg types.Config) *Session {
 		endpointID:     ConfigProviderID,
 		savedPath:      savedPath,
 		credStore:      credStore,
+
+		ignoreSavedEndpoint: cfg.IgnoreSavedEndpoint,
 	}
 }
 

@@ -702,6 +702,24 @@ model or a named endpoint is active, `/settings model` (and
 `provider`/`base_url`) reports the value it would write as not in use, and
 names the command that undoes it.
 
+The last change wins. Every saved pick records a fingerprint of the config
+at that moment: the default block's `provider`, `base_url`, `model` and
+`api_key_env` (the variable's name, never a key), plus the same fields of
+the named endpoint you picked (its `model` counts only if you saved a model
+with the pick). If you edit any of these in `config.yaml` after the pick,
+the next session starts on `config.yaml` instead, drops the saved pick, and
+says so once in the boot log, for example `config.yaml changed since your
+last endpoint pick (regolo · glm5.2); starting on config.yaml`. Edits to
+other named endpoints keep the pick. A `provider.json` written by an older
+nib has no fingerprint: the pick sticks, and nib adds the fingerprint so
+later edits are detected.
+
+To ignore the saved pick completely, set `ignore_saved_endpoint: true` in
+`config.yaml`, pass `--no-saved-endpoint`, or set `NIB_NO_SAVED_ENDPOINT=1`.
+nib then starts on the configured endpoint and does not change
+`provider.json`. Use this for scripts, tests and embedders that pass their
+own endpoint; in Go, set `types.Config.IgnoreSavedEndpoint`.
+
 To skip every approval prompt for a run ("yolo" mode), pass `--yolo` or set
 `NIB_YOLO=1` — both force `approval_mode: auto` regardless of what the config
 file says:

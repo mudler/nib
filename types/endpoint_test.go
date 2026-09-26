@@ -87,3 +87,13 @@ func TestValidateDropsBadEntriesAndKeepsGoodOnes(t *testing.T) {
 		}
 	}
 }
+
+func TestIgnoreSavedEndpointDecodesFromYAML(t *testing.T) {
+	var cfg Config
+	if err := yaml.Unmarshal([]byte("model: m\nignore_saved_endpoint: true\n"), &cfg); err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.IgnoreSavedEndpoint {
+		t.Fatalf("IgnoreSavedEndpoint = false, want ignore_saved_endpoint: true decoded")
+	}
+}
