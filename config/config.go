@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"time"
 
 	"dario.cat/mergo"
@@ -218,6 +219,7 @@ func LoadWith(o LoadOptions) types.Config {
 	applyOverrides(&cfg, o.Overrides)
 
 	cfg = withDefaults(cfg)
+	cfg.Compaction.OverflowPatterns = validOverflowPatterns(cfg.Compaction.OverflowPatterns)
 
 	// Carry the override (not the resolved root) so consumers keep resolving it
 	// through plugin.BaseDirIn / config.WritablePathIn: with no override those
@@ -423,6 +425,10 @@ func withDefaults(cfg types.Config) types.Config {
 	if cfg.Compaction.ReserveTokens == 0 {
 		cfg.Compaction.ReserveTokens = 4096
 	}
+	// Must match chat's defaultSummaryMaxTokens, for the same reason.
+	if cfg.Compaction.SummaryMaxTokens == 0 {
+		cfg.Compaction.SummaryMaxTokens = 16384
+	}
 
 	// Tool-output pruning is defaulted as a block, not field by field: a zero
 	// HighWaterTokens is meaningful on its own (it disables size pruning while
@@ -448,4 +454,26 @@ func withDefaults(cfg types.Config) types.Config {
 		}
 	}
 	return cfg
+}
+
+// validOverflowPatterns drops the compaction.overflow_patterns rows that cannot
+// work: a regex that does not compile, or a kind nib does not know. Each one is
+// reported on stderr and skipped. A bad pattern must never fail startup: the
+// built-in patterns still cover the backend, only the user's addition is lost.
+func validOverflowPatterns(in []types.OverflowPattern) []types.OverflowPattern {
+	var out []types.OverflowPattern
+	for _, p := range in {
+		switch p.Kind {
+		case "context", "budget", "output_cap":
+		default:
+			fmt.Fprintf(os.Stderr, "nib: compaction.overflow_patterns: %q: unknown kind %q (want context, budget or output_cap), skipped\n", p.Name, p.Kind)
+			continue
+		}
+		if _, err := regexp.Compile(p.Regex); err != nil {
+			fmt.Fprintf(os.Stderr, "nib: compaction.overflow_patterns: %q: %v, skipped\n", p.Name, err)
+			continue
+		}
+		out = append(out, p)
+	}
+	return out
 }

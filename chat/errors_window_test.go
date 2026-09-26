@@ -33,11 +33,9 @@ func TestLearnedWindowFromRealBackendPhrasings(t *testing.T) {
 			want: 8192,
 		},
 		{
-			// vLLM current, vllm/renderers/params.py. Note the near-miss: the
-			// "512 output tokens" and "9739 input tokens" figures do NOT match
-			// tokenCountRe, because the intervening word breaks `\s*tokens`.
-			// The two that do match are the limit and the total, so the
-			// smaller is still the window.
+			// vLLM current, vllm/renderers/params.py. The catalog row names
+			// each figure (window, output, input, total), so the window is
+			// read by name, not guessed from number order.
 			name: "vLLM, current",
 			msg:  "This model's maximum context length is 8192 tokens. However, you requested 512 output tokens and your prompt contains 9739 input tokens, for a total of 10251 tokens. Please reduce the length of the input prompt or the number of requested output tokens.",
 			want: 8192,

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -20,16 +21,18 @@ type promptCapturingLLM struct {
 }
 
 func (f *promptCapturingLLM) Ask(ctx context.Context, fr cogito.Fragment) (cogito.Fragment, error) {
-	prompt := fr.Messages[len(fr.Messages)-1].Content
-	f.prompts = append(f.prompts, prompt)
-	if f.limit > 0 && tokensOf(prompt) > f.limit {
-		return cogito.Fragment{}, fmt.Errorf("rpc error: code = Internal desc = request (%d tokens) exceeds the available context size (%d tokens), try increasing it", tokensOf(prompt), f.limit)
-	}
-	return fr.AddMessage(cogito.AssistantMessageRole, "SUMMARY"), nil
+	return cogito.Fragment{}, errors.New("the summary must be sent with CreateChatCompletion, not Ask")
 }
 
 func (f *promptCapturingLLM) CreateChatCompletion(ctx context.Context, req openai.ChatCompletionRequest) (cogito.LLMReply, cogito.LLMUsage, error) {
-	return cogito.LLMReply{}, cogito.LLMUsage{}, nil
+	prompt := req.Messages[len(req.Messages)-1].Content
+	f.prompts = append(f.prompts, prompt)
+	if f.limit > 0 && tokensOf(prompt) > f.limit {
+		return cogito.LLMReply{}, cogito.LLMUsage{}, fmt.Errorf("rpc error: code = Internal desc = request (%d tokens) exceeds the available context size (%d tokens), try increasing it", tokensOf(prompt), f.limit)
+	}
+	return cogito.LLMReply{ChatCompletionResponse: openai.ChatCompletionResponse{
+		Choices: []openai.ChatCompletionChoice{{Message: openai.ChatCompletionMessage{Role: "assistant", Content: "SUMMARY"}}},
+	}}, cogito.LLMUsage{}, nil
 }
 
 // toolTurn is one assistant tool call plus its result.
@@ -90,20 +93,24 @@ func TestCompactHistoryFitsTheSummaryPromptInTheBudget(t *testing.T) {
 	if _, _, err := s.CompactHistory(); err != nil {
 		t.Fatalf("CompactHistory: %v", err)
 	}
-	if got := tokensOf(llm.prompts[0]); got > budget {
-		t.Fatalf("summary prompt is ~%d tokens, budget is %d", got, budget)
+	// The head is known not to fit, so it goes out in chunks from the start.
+	for i, p := range llm.prompts {
+		if got := tokensOf(p); got > budget {
+			t.Fatalf("summary prompt %d is ~%d tokens, budget is %d", i, got, budget)
+		}
 	}
 	if !strings.Contains(llm.prompts[0], "goal: fix the parser") {
 		t.Fatal("fitting the prompt dropped the user's goal")
 	}
-	if !strings.Contains(llm.prompts[0], "f5.go") {
+	if !strings.Contains(strings.Join(llm.prompts, ""), "f5.go") {
 		t.Fatal("fitting the prompt dropped the record of which tools ran")
 	}
 }
 
 func TestCompactHistoryRetriesSmallerWhenTheSummaryOverflows(t *testing.T) {
 	// The backend tokenizes denser than byte/4, so a prompt the estimate says
-	// fits can still overflow. The backend's own figures say by how much.
+	// fits can still overflow. The backend's own figures say by how much, and
+	// the head is then summarized in chunks that fit.
 	frag := []openai.ChatCompletionMessage{{Role: "user", Content: "goal"}}
 	for i := range 6 {
 		frag = append(frag, toolTurn(fmt.Sprintf("c%d", i), fmt.Sprintf("f%d.go", i), strings.Repeat("x", 8000))...)
@@ -112,6 +119,7 @@ func TestCompactHistoryRetriesSmallerWhenTheSummaryOverflows(t *testing.T) {
 		openai.ChatCompletionMessage{Role: "user", Content: "u2"},
 		openai.ChatCompletionMessage{Role: "assistant", Content: "a2"},
 	)
+	orig := cloneMessages(frag)
 	llm := &promptCapturingLLM{limit: 1500}
 	s := newCompactTestSession(llm, 2, frag, frag)
 	s.compaction.MaxContextTokens = 8000
@@ -119,21 +127,26 @@ func TestCompactHistoryRetriesSmallerWhenTheSummaryOverflows(t *testing.T) {
 	if _, _, err := s.CompactHistory(); err != nil {
 		t.Fatalf("CompactHistory: %v", err)
 	}
-	if len(llm.prompts) != 2 {
-		t.Fatalf("summary calls = %d, want 2 (one overflow, one smaller retry)", len(llm.prompts))
+	if n := len(llm.prompts); n < 2 || n > 1+maxRollingChunks {
+		t.Fatalf("summary calls = %d, want an overflow and then smaller chunks", n)
 	}
-	if !strings.Contains(s.fragment.Messages[0].Content, "SUMMARY") {
-		t.Fatal("the retried summary was not installed")
+	if got := tokensOf(llm.prompts[len(llm.prompts)-1]); got > 1500 {
+		t.Fatalf("the accepted prompt is ~%d tokens, over the backend's 1500", got)
 	}
+	// The messages no chunk covered are kept verbatim instead.
+	checkVerbatimTail(t, orig, s.fragment.Messages)
 }
 
-func TestCompactHistoryRetriesTheSummaryOnlyOnce(t *testing.T) {
+func TestCompactHistoryGivesUpWhenNoSummaryFits(t *testing.T) {
+	// Not even the instruction fits, and the rejection carries no usable
+	// figures: the loop halves until it runs out of attempts.
 	frag := []openai.ChatCompletionMessage{
 		{Role: "user", Content: strings.Repeat("u", 4000)},
 		{Role: "assistant", Content: "a1"},
 		{Role: "user", Content: "u2"},
 		{Role: "assistant", Content: "a2"},
 	}
+	orig := cloneMessages(frag)
 	llm := &promptCapturingLLM{limit: 10}
 	s := newCompactTestSession(llm, 1, frag, frag)
 	s.compaction.MaxContextTokens = 1 << 20
@@ -142,7 +155,10 @@ func TestCompactHistoryRetriesTheSummaryOnlyOnce(t *testing.T) {
 	if !isContextOverflow(errors.Unwrap(err)) {
 		t.Fatalf("want the summarizer's overflow, got %v", err)
 	}
-	if len(llm.prompts) != 2 {
-		t.Fatalf("summary calls = %d, want exactly 2", len(llm.prompts))
+	if len(llm.prompts) != maxSummaryAttempts {
+		t.Fatalf("summary calls = %d, want exactly %d", len(llm.prompts), maxSummaryAttempts)
+	}
+	if !reflect.DeepEqual(s.fragment.Messages, orig) {
+		t.Fatal("a failed compaction changed the fragment")
 	}
 }

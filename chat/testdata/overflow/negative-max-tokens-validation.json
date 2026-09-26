@@ -1,0 +1,10 @@
+{
+  "provider": "OpenAI",
+  "source": "max_tokens parameter validation, not about size (output-cap guard)",
+  "raw": "Invalid 'max_tokens': integer above maximum value. Expected a value <= 16384, but got 100000 instead.",
+  "kind": "none",
+  "window": 0,
+  "total": 0,
+  "input": 0,
+  "output": 0
+}

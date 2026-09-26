@@ -65,6 +65,7 @@ func (s *Session) SetCompaction(c types.CompactionConfig) {
 		s.compactionAutoDetected = false
 	}
 	s.compaction = c
+	setConfigOverflowPatterns(c.OverflowPatterns)
 }
 
 // compactionConfig returns a copy of the compaction policy, read under the

@@ -1,0 +1,10 @@
+{
+  "provider": "OpenAI-compatible",
+  "source": "bare error code, no figures",
+  "raw": "error, status code: 400, status: 400 Bad Request, message: context_length_exceeded",
+  "kind": "context",
+  "window": 0,
+  "total": 0,
+  "input": 0,
+  "output": 0
+}

@@ -223,11 +223,18 @@ func answer(marker string, tokens int) string {
 
 // The real failure: a turn that starts well under the trigger grows past the
 // window through its own tool results, because auto-compaction only ran after
-// the turn. Two 9000-token results take the third request to about 18000
-// tokens, over the 15200 trigger; the turn must compact before sending it.
+// the turn. Two 7500-token results and the ~1300-token system prompt take the
+// third request to about 16300 tokens, over the 15200 trigger; the turn must
+// compact before sending it.
+//
+// The results are sized so the request lands between 80% and 90% of the
+// 19000 budget. There progressivePrune leaves a one-line result as it is, so
+// the request still crosses the trigger. Above 90% it elides the older result
+// and the request drops under the trigger without a summary, which is the
+// compression working, not the compaction under test.
 func TestMidTurnCompactionKeepsEveryRequestUnderTheTrigger(t *testing.T) {
 	_, backend, events := runMidTurn(t, []string{
-		answer("FIRST_ANSWER", 9000), answer("SECOND_ANSWER", 9000), answer("THIRD_ANSWER", 1000),
+		answer("FIRST_ANSWER", 7500), answer("SECOND_ANSWER", 7500), answer("THIRD_ANSWER", 1000),
 	})
 
 	turns := backend.turns()
@@ -273,7 +280,7 @@ func TestMidTurnCompactionKeepsEveryRequestUnderTheTrigger(t *testing.T) {
 // the compaction carry the same one.
 func TestMidTurnCompactionReusesTheSummary(t *testing.T) {
 	_, backend, _ := runMidTurn(t, []string{
-		answer("FIRST_ANSWER", 9000), answer("SECOND_ANSWER", 9000), answer("THIRD_ANSWER", 1000),
+		answer("FIRST_ANSWER", 7500), answer("SECOND_ANSWER", 7500), answer("THIRD_ANSWER", 1000),
 	})
 
 	if n := backend.summaryCount(); n != 1 {
@@ -301,7 +308,7 @@ func TestMidTurnCompactionReusesTheSummary(t *testing.T) {
 // and every tool result follows the assistant message that called it.
 func TestMidTurnCompactionKeepsSystemPromptAndToolPairs(t *testing.T) {
 	_, backend, _ := runMidTurn(t, []string{
-		answer("FIRST_ANSWER", 9000), answer("SECOND_ANSWER", 9000), answer("THIRD_ANSWER", 1000),
+		answer("FIRST_ANSWER", 7500), answer("SECOND_ANSWER", 7500), answer("THIRD_ANSWER", 1000),
 	})
 
 	turns := backend.turns()
@@ -341,7 +348,7 @@ func TestMidTurnCompactionKeepsSystemPromptAndToolPairs(t *testing.T) {
 // copy records the compaction the way compactHistory does.
 func TestMidTurnCompactionLeavesTheFragmentCompacted(t *testing.T) {
 	s, _, _ := runMidTurn(t, []string{
-		answer("FIRST_ANSWER", 9000), answer("SECOND_ANSWER", 9000), answer("THIRD_ANSWER", 1000),
+		answer("FIRST_ANSWER", 7500), answer("SECOND_ANSWER", 7500), answer("THIRD_ANSWER", 1000),
 	})
 
 	s.historyMu.Lock()
@@ -411,8 +418,8 @@ func TestNoMidTurnCompactionUnderTheTrigger(t *testing.T) {
 // off by the length of the first replacement, it would drop or repeat a step.
 func TestMidTurnCompactionTwiceInOneTurn(t *testing.T) {
 	s, backend, _ := runMidTurn(t, []string{
-		answer("FIRST_ANSWER", 9000), answer("SECOND_ANSWER", 9000),
-		answer("THIRD_ANSWER", 9000), answer("FOURTH_ANSWER", 1000),
+		answer("FIRST_ANSWER", 7500), answer("SECOND_ANSWER", 7500),
+		answer("THIRD_ANSWER", 7500), answer("FOURTH_ANSWER", 1000),
 	})
 
 	if n := backend.summaryCount(); n != 2 {

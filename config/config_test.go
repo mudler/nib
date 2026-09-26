@@ -32,10 +32,10 @@ func TestWithDefaultsKeepsUserValues(t *testing.T) {
 	// comparison below would fail for a reason that is not an override bug.
 	in := types.Config{Compaction: types.CompactionConfig{
 		MaxContextTokens: 200000, Threshold: 0.5, KeepRecent: 2, Disabled: true,
-		ReserveTokens: 512,
+		ReserveTokens: 512, SummaryMaxTokens: 2048,
 	}}
 	got := withDefaults(in)
-	if got.Compaction != in.Compaction {
+	if !reflect.DeepEqual(got.Compaction, in.Compaction) {
 		t.Fatalf("withDefaults overrode user values: %+v", got.Compaction)
 	}
 }
@@ -658,5 +658,18 @@ func TestWritablePathInPrefersInjectedRoot(t *testing.T) {
 	want := filepath.Join(dir, "config.yaml")
 	if got != want {
 		t.Fatalf("WritablePathIn = %q, want %q", got, want)
+	}
+}
+
+// An invalid compaction.overflow_patterns row is skipped at load time; it
+// never fails startup, and the valid rows survive.
+func TestValidOverflowPatternsSkipsInvalidRows(t *testing.T) {
+	got := validOverflowPatterns([]types.OverflowPattern{
+		{Name: "broken", Kind: "context", Regex: `(unclosed`},
+		{Name: "bad-kind", Kind: "sideways", Regex: `x`},
+		{Name: "ok", Kind: "budget", Regex: `(?P<input>\d+) \+ (?P<output>\d+) > (?P<window>\d+)`},
+	})
+	if len(got) != 1 || got[0].Name != "ok" {
+		t.Fatalf("valid rows = %+v, want only \"ok\"", got)
 	}
 }

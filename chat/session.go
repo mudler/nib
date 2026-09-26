@@ -20,6 +20,7 @@ import (
 	"github.com/mudler/nib/hooks"
 	"github.com/mudler/nib/internal"
 	"github.com/mudler/nib/llmprovider"
+	"github.com/mudler/nib/llmprovider/catalog"
 	"github.com/mudler/nib/llmprovider/copilot"
 	"github.com/mudler/nib/lsp"
 	"github.com/mudler/nib/manage"
@@ -123,6 +124,19 @@ type Session struct {
 	// backgrounded shell command is still running (cogito only knows about
 	// sub-agents). May be nil (e.g. headless CLI without a job registry).
 	shellJobs *wizmcp.ShellJobs
+
+	// schemaTools records the tool definitions toolOptions registers, for
+	// SchemaBudget. Guarded by schemaToolsMu. See schema_budget.go.
+	schemaTools   []cogito.ToolDefinitionInterface
+	schemaToolsMu sync.Mutex
+
+	// schemaCosts caches mcpSchemaCosts until the set of MCP servers changes;
+	// schemaNoticeLevel is the highest SchemaBudget level (1 warn, 2 error)
+	// already reported to the user. Both guarded by schemaCostsMu.
+	schemaCosts       []ServerSchemaCost
+	schemaCostsValid  bool
+	schemaNoticeLevel int
+	schemaCostsMu     sync.Mutex
 
 	agentManager       *cogito.AgentManager
 	agentDefs          []cogito.AgentDefinition
@@ -230,6 +244,17 @@ type Session struct {
 	// modellimits.go.
 	limitsFor string
 
+	// outputCap is the output-token cap the current model's client sends,
+	// as resolved for it (config, catalog, then discovery); guarded by
+	// modelMu. 0 means unknown, or a client that carries no cap. The turn's
+	// LLM wrapper clamps each request's reservation against it (see
+	// clampOutputTokens).
+	outputCap int
+	// turnOutputCap, when above 0, lowers outputCap for the current turn
+	// only; guarded by modelMu. A budget overflow sets it from the figures
+	// the backend stated (see budgetRetryOutput), and each turn clears it.
+	turnOutputCap int
+
 	// prunedMu guards the tool-output pruning state below. The manipulator reads
 	// it from inside cogito's loop, and nothing here should assume which
 	// goroutine that is; Reload writes the policy from the turn goroutine.
@@ -246,6 +271,13 @@ type Session struct {
 	// a stub whose wording changed between calls would move the prompt prefix
 	// just as un-stubbing it would.
 	prunedIDs map[string]string
+	// compressed maps each tool_call_id progressivePrune compressed to its
+	// level and the text it was rendered as. Like prunedIDs it only grows in
+	// level, so an already-sent result keeps its bytes. compressBand is the
+	// pressure band of the previous call; levels are assigned only when the
+	// band rises above it.
+	compressed   map[string]compressedResult
+	compressBand int
 
 	// outputLimitsMu guards the tool-output limits policy (budget, per-line
 	// truncation, artifact spill). SetToolOutputLimits writes it from the UI
@@ -474,6 +506,8 @@ func NewSession(ctx context.Context, cfg types.Config, callbacks Callbacks, tran
 	if err != nil {
 		return nil, fmt.Errorf("create main LLM: %w", err)
 	}
+	// Read before tracing wraps the client and hides its SetMaxTokens.
+	outCap := factoryOutputCap(llm, mainProvider, credStore)
 	endpoints, configErrs := endpoint.New(cfg, credStore)
 	classifier, err := provenance.ClassifierForConfig(cfg)
 	if err != nil {
@@ -542,6 +576,7 @@ func NewSession(ctx context.Context, cfg types.Config, callbacks Callbacks, tran
 		agentLogs:            newAgentLogStore(),
 		llmModel:             mainProvider.Model,
 		mainProvider:         mainProvider,
+		outputCap:            outCap,
 		configProvider:       mainProvider,
 		endpoints:            endpoints,
 		configErrs:           configErrs,
@@ -662,6 +697,7 @@ func NewSession(ctx context.Context, cfg types.Config, callbacks Callbacks, tran
 		s.compactionAutoDetected = true
 		s.compaction.MaxContextTokens = defaultContextTokens
 	}
+	setConfigOverflowPatterns(cfg.Compaction.OverflowPatterns)
 
 	return s, nil
 }
@@ -1316,6 +1352,224 @@ func (s *Session) mcpToolFilter() func(*mcp.ClientSession, string) bool {
 	}
 }
 
+// fragmentTokens is the byte/4 estimate of the conversation, read under the
+// history lock.
+func (s *Session) fragmentTokens() int {
+	s.historyMu.Lock()
+	defer s.historyMu.Unlock()
+	return estimateTokens(s.fragment.Messages)
+}
+
+// schemaFloorBlocks reports whether the fixed prompt overhead (tool schemas
+// and system prompt, see SchemaBudget) leaves no room for the smallest request
+// that could succeed: room tokens on top of the floor within limit. When it
+// does not, compacting the conversation cannot help, and destroys history
+// that was never the problem.
+//
+// A measured floor is trusted as is. An estimate (no request sent yet) may
+// undercount, so it blocks only when it alone is over limit. An unknown limit
+// never blocks.
+func (s *Session) schemaFloorBlocks(limit, room int) (SchemaBudget, bool) {
+	sb := s.SchemaBudget()
+	if limit <= 0 {
+		return sb, false
+	}
+	if !sb.Measured {
+		return sb, sb.Floor > limit
+	}
+	return sb, sb.Floor+room > limit
+}
+
+// autoCompactBlocked reports whether auto-compaction (end of turn or mid-turn)
+// must be skipped because the floor plus lastUser tokens is over the context
+// budget: the request would stay over the trigger whatever is summarized.
+func (s *Session) autoCompactBlocked(lastUser int) bool {
+	budget := ContextBudget(s.compactionConfig(), s.contextWindow())
+	sb, blocked := s.schemaFloorBlocks(budget, lastUser)
+	if blocked {
+		xlog.Warn("auto-compaction skipped: the tool schemas and system prompt alone exceed the context budget",
+			"schema_tokens", sb.Floor, "budget", budget)
+	}
+	return blocked
+}
+
+// lastUserTokens is the byte/4 size of the last user message in msgs.
+func lastUserTokens(msgs []openai.ChatCompletionMessage) int {
+	for i := len(msgs) - 1; i >= 0; i-- {
+		if msgs[i].Role == "user" {
+			return estimateTokens(msgs[i : i+1])
+		}
+	}
+	return 0
+}
+
+// noticesText is the message pendingNoticesMessage made for notices, or ""
+// when there were none.
+func noticesText(notices []string) string {
+	if len(notices) == 0 {
+		return ""
+	}
+	return pendingNoticesMessage(notices)
+}
+
+// dropFailedTurn removes a failed turn's own messages from msgs, a history
+// that overflow recovery compacted during the turn, and keeps the compaction.
+//
+// The turn's messages start at its user message (and the notices message
+// just before it, which the caller hands back to the pending list). When the
+// user message is still in msgs, everything from it on goes. When it is not,
+// the compaction's summary covers it, and every message after the summary
+// (the first non-system message) is the turn's own: the kept tail is a suffix
+// of the history, and the user message came before all of it. System messages
+// are kept wherever they are, since ensureSystemPrompt may have appended the
+// prompt after the tail.
+//
+// It reports false when the result would break the tool pairing; the caller
+// then falls back to the pre-turn history.
+func dropFailedTurn(msgs []openai.ChatCompletionMessage, user openai.ChatCompletionMessage, notices string) ([]openai.ChatCompletionMessage, bool) {
+	cut := -1
+	for i := len(msgs) - 1; i >= 0; i-- {
+		m := msgs[i]
+		if m.Role == user.Role && m.Content == user.Content && len(m.MultiContent) == len(user.MultiContent) {
+			cut = i
+			break
+		}
+	}
+	if cut >= 0 {
+		if notices != "" && cut > 0 && msgs[cut-1].Role == "user" && msgs[cut-1].Content == notices {
+			cut--
+		}
+	} else {
+		cut = len(msgs)
+		for i, m := range msgs {
+			if m.Role != "system" {
+				cut = i + 1
+				break
+			}
+		}
+	}
+	kept := append([]openai.ChatCompletionMessage(nil), msgs[:cut]...)
+	for _, m := range msgs[cut:] {
+		if m.Role == "system" {
+			kept = append(kept, m)
+		}
+	}
+	if len(kept) == 0 || validateToolPairing(kept) != nil {
+		return nil, false
+	}
+	return kept, true
+}
+
+// dropFailedDisplay removes a failed turn's user message, and anything after
+// it, from the display copy, as the pre-turn rollback does.
+func dropFailedDisplay(msgs []openai.ChatCompletionMessage, text string) []openai.ChatCompletionMessage {
+	for i := len(msgs) - 1; i >= 0; i-- {
+		if msgs[i].Role == "user" && msgs[i].Content == text {
+			return msgs[:i]
+		}
+	}
+	return msgs
+}
+
+const (
+	// windowExhaustedShare: a truncated tool call whose prompt plus completion
+	// reached this share of the window stopped at the window, not the cap
+	// (llama.cpp and LocalAI stop at n_ctx with finish_reason=length).
+	windowExhaustedShare = 0.95
+	// compactableShare: a prompt at least this share of the window is large
+	// enough that compaction can make room for the call.
+	compactableShare = 0.25
+)
+
+// truncationCause decides what a tool call cut by finish_reason=length means.
+// The window was exhausted when prompt + completion reached
+// windowExhaustedShare of it, or when clampOutputTokens lowered the request's
+// max_tokens below the cap (clamped). Otherwise the cap was reached with room
+// left: truncCap, which no retry fixes. When exhausted, the cause is the
+// reasoning if it took most of the reply, else the call; compact reports
+// whether the prompt is large enough for compaction to make room.
+func (s *Session) truncationCause(te *cogito.ToolArgumentsTruncatedError, clamped bool) (cause truncationCause, compact bool) {
+	window := s.contextWindow()
+	used := te.PromptTokens + te.CompletionTokens
+	exhausted := clamped || (window > 0 && used > 0 && float64(used) >= windowExhaustedShare*float64(window))
+	if !exhausted {
+		return truncCap, false
+	}
+	cause = truncToolCall
+	if te.ReasoningBytes > 2*te.ArgumentsBytes {
+		cause = truncReasoning
+	}
+	prompt := te.PromptTokens
+	if prompt <= 0 {
+		prompt = s.fragmentTokens()
+	}
+	return cause, window > 0 && float64(prompt) >= compactableShare*float64(window)
+}
+
+// reasoningEffortSetter is a client whose reasoning effort can be changed.
+type reasoningEffortSetter interface {
+	SetReasoningEffort(effort string)
+}
+
+// minUnknownEffort is the lowest effort lowerEffort picks when the catalog
+// does not list the efforts a model accepts: most reasoning models accept
+// "low", fewer accept "minimal" or "none".
+const minUnknownEffort = "low"
+
+// lowerEffort returns the effort one level below effort that the model
+// accepts (supported, from the catalog; empty when unknown), or "" when there
+// is none.
+func lowerEffort(effort string, supported []string) string {
+	idx := slices.Index(types.EffortOrder, strings.ToLower(effort))
+	if idx <= 0 {
+		return ""
+	}
+	if len(supported) == 0 {
+		floor := slices.Index(types.EffortOrder, minUnknownEffort)
+		if idx-1 < floor {
+			return ""
+		}
+		return types.EffortOrder[idx-1]
+	}
+	for i := idx - 1; i >= 0; i-- {
+		if slices.ContainsFunc(supported, func(s string) bool { return strings.EqualFold(strings.TrimSpace(s), types.EffortOrder[i]) }) {
+			return types.EffortOrder[i]
+		}
+	}
+	return ""
+}
+
+// lowerReasoningForTurn lowers llm's reasoning effort by one level the model
+// accepts and returns the func that restores it. It does nothing (and returns
+// a no-op) when the session sets no effort or the client cannot change it.
+func (s *Session) lowerReasoningForTurn(llm cogito.LLM) (restore func()) {
+	noop := func() {}
+	setter, ok := llm.(reasoningEffortSetter)
+	if !ok {
+		return noop
+	}
+	provider := s.resolvedSessionProvider()
+	effort := provider.ReasoningEffort
+	if effort == "" {
+		return noop
+	}
+	var supported []string
+	if m, ok := catalog.Lookup(provider.Provider, provider.Model, provider.BaseURL); ok {
+		supported = m.Compat.SupportedReasoningEfforts
+	}
+	lower := lowerEffort(effort, supported)
+	if lower == "" {
+		return noop
+	}
+	xlog.Warn("reasoning filled the context window; lowering the reasoning effort for this turn", "from", effort, "to", lower)
+	setter.SetReasoningEffort(lower)
+	return func() { setter.SetReasoningEffort(effort) }
+}
+
+// overflowTrim is the first step of overflow recovery. It is a variable so a
+// test can make it fail and reach the basicCompact fallback.
+var overflowTrim = func(s *Session, ctx context.Context) error { return s.iterativeTrim(ctx) }
+
 // buildUserFragment appends the user turn to the fragment, attaching multimodal
 // parts. cogito's AddMessage routes image parts into image_url MultiContent and
 // audio/video into the fragment's transient PendingNativeParts (send-once).
@@ -1351,6 +1605,7 @@ func buildUserFragment(f cogito.Fragment, text string, parts []ContentPart) cogi
 // the sub-agents a turn spawns resolve against the same model the turn itself
 // is using, even if SetModel lands halfway through.
 func (s *Session) toolOptions(turnCtx context.Context, goal, mainModel string) []cogito.Option {
+	s.resetSchemaTools()
 	opts := []cogito.Option{
 		cogito.WithMCPs(s.allClients()...),
 		// Disable cogito's sink-state "reply" tool so ExecuteTools is the whole
@@ -1375,7 +1630,7 @@ func (s *Session) toolOptions(turnCtx context.Context, goal, mainModel string) [
 		opts = append(opts, cogito.EnableAgentSpawning)
 	}
 	if s.toolEnabled("ask_user") && !s.AutoApprove() {
-		opts = append(opts, cogito.WithTools(askUserToolDefinition(func(req AskRequest) string {
+		opts = append(opts, s.withTool(askUserToolDefinition(func(req AskRequest) string {
 			if s.callbacks.OnAskUser != nil {
 				return s.callbacks.OnAskUser(req)
 			}
@@ -1383,10 +1638,10 @@ func (s *Session) toolOptions(turnCtx context.Context, goal, mainModel string) [
 		})))
 	}
 	if s.toolEnabled("agent_logs") {
-		opts = append(opts, cogito.WithTools(agentLogsToolDefinition(s.AgentLog)))
+		opts = append(opts, s.withTool(agentLogsToolDefinition(s.AgentLog)))
 	}
 	if s.toolEnabled("schedule_wakeup") {
-		opts = append(opts, cogito.WithTools(scheduleWakeupToolDefinition(func(req WakeupRequest) string {
+		opts = append(opts, s.withTool(scheduleWakeupToolDefinition(func(req WakeupRequest) string {
 			if s.callbacks.OnScheduleWakeup != nil {
 				return s.callbacks.OnScheduleWakeup(req)
 			}
@@ -1396,7 +1651,7 @@ func (s *Session) toolOptions(turnCtx context.Context, goal, mainModel string) [
 		})))
 	}
 	if s.toolEnabled("cron") {
-		opts = append(opts, cogito.WithTools(cronToolDefinition(func(req CronRequest) string {
+		opts = append(opts, s.withTool(cronToolDefinition(func(req CronRequest) string {
 			if s.callbacks.OnCronCreate != nil {
 				return s.callbacks.OnCronCreate(req)
 			}
@@ -1404,7 +1659,7 @@ func (s *Session) toolOptions(turnCtx context.Context, goal, mainModel string) [
 		})))
 	}
 	if s.toolEnabled("cron_list") {
-		opts = append(opts, cogito.WithTools(cronListToolDefinition(func() string {
+		opts = append(opts, s.withTool(cronListToolDefinition(func() string {
 			if s.callbacks.OnCronList != nil {
 				return s.callbacks.OnCronList()
 			}
@@ -1412,7 +1667,7 @@ func (s *Session) toolOptions(turnCtx context.Context, goal, mainModel string) [
 		})))
 	}
 	if s.toolEnabled("cron_delete") {
-		opts = append(opts, cogito.WithTools(cronDeleteToolDefinition(func(id string) string {
+		opts = append(opts, s.withTool(cronDeleteToolDefinition(func(id string) string {
 			if s.callbacks.OnCronDelete != nil {
 				return s.callbacks.OnCronDelete(id)
 			}
@@ -1420,7 +1675,7 @@ func (s *Session) toolOptions(turnCtx context.Context, goal, mainModel string) [
 		})))
 	}
 	if s.toolEnabled("cron_pause") {
-		opts = append(opts, cogito.WithTools(cronPauseToolDefinition(func(id string) string {
+		opts = append(opts, s.withTool(cronPauseToolDefinition(func(id string) string {
 			if s.callbacks.OnCronPause != nil {
 				return s.callbacks.OnCronPause(id)
 			}
@@ -1428,7 +1683,7 @@ func (s *Session) toolOptions(turnCtx context.Context, goal, mainModel string) [
 		})))
 	}
 	if s.toolEnabled("cron_resume") {
-		opts = append(opts, cogito.WithTools(cronResumeToolDefinition(func(id string) string {
+		opts = append(opts, s.withTool(cronResumeToolDefinition(func(id string) string {
 			if s.callbacks.OnCronResume != nil {
 				return s.callbacks.OnCronResume(id)
 			}
@@ -1436,7 +1691,7 @@ func (s *Session) toolOptions(turnCtx context.Context, goal, mainModel string) [
 		})))
 	}
 	if s.toolEnabled("cron_trigger") {
-		opts = append(opts, cogito.WithTools(cronTriggerToolDefinition(func(id string) string {
+		opts = append(opts, s.withTool(cronTriggerToolDefinition(func(id string) string {
 			if s.callbacks.OnCronTrigger != nil {
 				return s.callbacks.OnCronTrigger(id)
 			}
@@ -1448,21 +1703,21 @@ func (s *Session) toolOptions(turnCtx context.Context, goal, mainModel string) [
 	// specialist client with the tool's dedicated model and scopes the path to
 	// the session working dir, mirroring how host file tools resolve paths.
 	if s.toolEnabled("read_image") {
-		opts = append(opts, cogito.WithTools(readImageToolDefinition(
+		opts = append(opts, s.withTool(readImageToolDefinition(
 			func(path, question string) (string, error) {
 				return specialist.New(s.baseURL, s.apiKey).Describe(
 					turnCtx, resolveWorkspacePath(s.workingDir, path), s.visionModel, question)
 			})))
 	}
 	if s.toolEnabled("transcribe_audio") {
-		opts = append(opts, cogito.WithTools(transcribeAudioToolDefinition(
+		opts = append(opts, s.withTool(transcribeAudioToolDefinition(
 			func(path string) (string, error) {
 				return specialist.New(s.baseURL, s.apiKey).Transcribe(
 					turnCtx, resolveWorkspacePath(s.workingDir, path), s.transcribeModel)
 			})))
 	}
 	if s.toolEnabled("read_video") {
-		opts = append(opts, cogito.WithTools(readVideoToolDefinition(
+		opts = append(opts, s.withTool(readVideoToolDefinition(
 			func(path, question string) (string, error) {
 				return specialist.New(s.baseURL, s.apiKey).DescribeVideo(
 					turnCtx, resolveWorkspacePath(s.workingDir, path), s.videoModel, question)
@@ -1475,7 +1730,7 @@ func (s *Session) toolOptions(turnCtx context.Context, goal, mainModel string) [
 	// the goal so it does not re-arm on the next message. The callback body takes
 	// runMu, which is correct: it fires during a run, not during option assembly.
 	if goal != "" {
-		opts = append(opts, cogito.WithTools(goalDoneToolDefinition(func(justification string) string {
+		opts = append(opts, s.withTool(goalDoneToolDefinition(func(justification string) string {
 			s.runMu.Lock()
 			s.goalDone = true
 			s.goal = ""
@@ -1488,27 +1743,27 @@ func (s *Session) toolOptions(turnCtx context.Context, goal, mainModel string) [
 	// Wire the persistent memory tool so the assistant can save and retrieve
 	// notes that survive compaction and model restarts.
 	if s.toolEnabled("memory") {
-		opts = append(opts, cogito.WithTools(memoryToolDefinition(s.memoryStore)))
+		opts = append(opts, s.withTool(memoryToolDefinition(s.memoryStore)))
 	}
 
 	// Wire the ephemeral todo list so the assistant can plan and track
 	// multi-step work within the current session (replace-all semantics,
 	// like maki).
 	if s.toolEnabled("todo_write") {
-		opts = append(opts, cogito.WithTools(todoWriteToolDefinition(s.todoList)))
+		opts = append(opts, s.withTool(todoWriteToolDefinition(s.todoList)))
 	}
 
 	// Wire the tree-sitter index tool so the assistant can skeletonize source
 	// files — a compact structural overview before deciding what to read.
 	if s.toolEnabled("index") {
-		opts = append(opts, cogito.WithTools(indexToolDefinition(
+		opts = append(opts, s.withTool(indexToolDefinition(
 			func(p string) string { return resolveWorkspacePath(s.workingDir, p) })))
 	}
 
 	// Wire the repo_map tool so the assistant can get a bird's-eye overview of
 	// the whole codebase in one token-budgeted call.
 	if s.toolEnabled("repo_map") {
-		opts = append(opts, cogito.WithTools(repoMapToolDefinition(
+		opts = append(opts, s.withTool(repoMapToolDefinition(
 			s.workingDir,
 			func(p string) string { return resolveWorkspacePath(s.workingDir, p) },
 		)))
@@ -1517,7 +1772,7 @@ func (s *Session) toolOptions(turnCtx context.Context, goal, mainModel string) [
 	// Wire the LSP tool so the assistant can do symbol-aware navigation
 	// (definition, references, symbols) when a language server is configured.
 	if s.lspManager != nil && s.toolEnabled("lsp") {
-		opts = append(opts, cogito.WithTools(lspToolDefinition(
+		opts = append(opts, s.withTool(lspToolDefinition(
 			s.lspManager,
 			func(p string) string { return resolveWorkspacePath(s.workingDir, p) },
 		)))
@@ -1528,7 +1783,7 @@ func (s *Session) toolOptions(turnCtx context.Context, goal, mainModel string) [
 	// session on the next turn after any mutating op.
 	for _, d := range selfConfigToolDefs(s.configurator, s.requestReload) {
 		if s.toolEnabled(d.name) {
-			opts = append(opts, cogito.WithTools(d.def))
+			opts = append(opts, s.withTool(d.def))
 		}
 	}
 
@@ -1562,11 +1817,24 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 	s.overflowMu.Lock()
 	s.overflowRetried = 0
 	s.overflowMu.Unlock()
+	// A budget overflow lowers the output reservation for one turn only.
+	s.setTurnOutputCap(0)
+	defer s.setTurnOutputCap(0)
 	s.turnRetryMu.Lock()
 	s.turnRetryTotal = 0
 	s.turnRetryMu.Unlock()
 	// Failed attempts in a row that made no progress; see turnRetryBudget.
 	stalled := 0
+	// Output-cap and budget overflows are retried at most once per turn each;
+	// neither compacts, so neither counts as an overflow recovery.
+	capRetried, budgetRetried := false, false
+	// Turn retries in a row per error class with its own budget (see
+	// classRetryBudget), and whether a truncated tool call was retried.
+	classRetries := map[backendErrorClass]int{}
+	truncRetried := false
+	// Restores a reasoning effort lowered for this turn.
+	restoreEffort := func() {}
+	defer func() { restoreEffort() }()
 	defer s.endTurn()
 	// Report this turn's own size while it runs; hand authority back to
 	// s.fragment (which compaction may since have shrunk) once it ends.
@@ -1620,6 +1888,9 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 		s.fragment = s.fragment.AddMessage("user", pendingNoticesMessage(notices))
 	}
 	s.fragment = buildUserFragment(s.fragment, text, parts)
+	// The turn's own message, so a failed turn can be cut out of a history
+	// that overflow recovery has since compacted (see dropFailedTurn).
+	turnUser := s.fragment.Messages[len(s.fragment.Messages)-1]
 	s.messages = append(s.messages, openai.ChatCompletionMessage{
 		Role:    "user",
 		Content: text,
@@ -1649,7 +1920,8 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 	// retrying client instead (WithAgentLLM below; see agentretry.go):
 	// without it cogito would hand them this tracked one.
 	agentLLM := retryForAgent(llm, &s.agentBackoff)
-	llm = trackUsage(llm, &s.live)
+	baseLLM := llm
+	llm = trackUsage(llm, &s.live, s.requestLimits)
 
 	// Build cogito options from config
 	cogitoOpts := []cogito.Option{
@@ -1840,6 +2112,9 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 		var newFragment cogito.Fragment
 		midTurn.reset()
 		newFragment, err = cogito.ExecuteTools(llm, runFragment, cogitoOpts...)
+		// The run's requests measured the tool-schema floor; tell the user
+		// once when it takes a large share of the window.
+		s.notifySchemaBudget()
 		if err != nil && !errors.Is(err, cogito.ErrNoToolSelected) {
 			// Interrupt (turnCtx cancelled) surfaces here as a context error;
 			// pause the goal so the user's stop sticks and it doesn't re-arm,
@@ -1876,7 +2151,89 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 			// Never after an interrupt: a cancelled turnCtx means the user
 			// pressed Ctrl+C, and re-sending is the opposite of what they asked
 			// for. See canRecoverFromOverflow.
-			if canRecoverFromOverflow(turnCtx, err) {
+			//
+			// The turn's own classification, not the free isContextOverflow:
+			// only the session knows how large the failed request was, which
+			// decides whether a 413 with no token wording is an overflow.
+			turnOverflow := s.classifyTurnOverflow(err)
+			logUnclassifiedRejection(err, turnOverflow)
+			announce := func(status string) {
+				if s.callbacks.OnStatus != nil {
+					s.callbacks.OnStatus(status)
+				}
+			}
+			if turnCtx.Err() == nil {
+				switch turnOverflow.Kind {
+				case KindOutputCap:
+					// The requested output alone is above the model's
+					// maximum. Compaction cannot fix that; a lower cap can.
+					// Once per turn, and only when the cap really drops, so
+					// the retry is not the same request again.
+					if !capRetried && s.lowerOutputCap(turnOverflow.Window, mainModel) {
+						capRetried = true
+						xlog.Warn("output cap above the model's maximum; lowered it and retrying", "cap", turnOverflow.Window)
+						announce("Output limit too large — lowering it and retrying…")
+						announce(retryResumeStatus)
+						continue
+					}
+				case KindBudget:
+					// The prompt fits, but prompt + reserved output does not.
+					// Never compact for this: lower the reservation for the
+					// rest of the turn, from the backend's exact figures.
+					if w, ok := learnedWindowFrom(err); ok {
+						s.rememberWindow(w, mainModel)
+					}
+					if out, ok := budgetRetryOutput(turnOverflow); ok && !budgetRetried {
+						budgetRetried = true
+						s.setTurnOutputCap(out)
+						xlog.Warn("prompt plus output reservation above the window; retrying with a smaller reservation", "max_tokens", out)
+						announce("Context window nearly full — reserving less output and retrying…")
+						announce(retryResumeStatus)
+						continue
+					}
+					// The prompt leaves less than minOutputTokens of room, or
+					// a smaller reservation did not fit either. Only a
+					// smaller prompt helps now, so this is a context
+					// overflow.
+					turnOverflow.Kind = KindContext
+				}
+			}
+			// A tool call cut by finish_reason=length. When the window, not
+			// the cap, ran out, retry once with a note that asks for smaller
+			// calls: after compacting when the prompt is large enough for
+			// that to make room, else as it is (never with a lower output
+			// cap: a long write is legitimate). See truncationCause.
+			var trunc *cogito.ToolArgumentsTruncatedError
+			truncNote := ""
+			var truncErr error
+			if turnCtx.Err() == nil && turnOverflow.Kind == KindNone && errors.As(err, &trunc) {
+				cause, compact := s.truncationCause(trunc, s.live.lastClamped())
+				friendly := &FriendlyError{err: err, msg: toolArgsTruncatedMessage(trunc, cause)}
+				switch {
+				case cause == truncCap || truncRetried:
+					err = friendly
+				case compact:
+					truncRetried = true
+					turnOverflow.Kind = KindContext
+					truncNote = truncationNote(trunc, cause)
+					truncErr = friendly
+					xlog.Warn("tool call truncated by the context window; compacting and retrying", "tool", trunc.ToolName, "prompt_tokens", trunc.PromptTokens)
+				default:
+					truncRetried = true
+					if cause == truncReasoning {
+						restoreEffort()
+						restoreEffort = s.lowerReasoningForTurn(baseLLM)
+					}
+					xlog.Warn("reply filled the context window; retrying with a note", "tool", trunc.ToolName, "prompt_tokens", trunc.PromptTokens, "completion_tokens", trunc.CompletionTokens)
+					s.live.setNote(truncationNote(trunc, cause))
+					announce("Reply ran out of room in the context window — retrying in smaller steps…")
+					announce(retryResumeStatus)
+					resume, _ := resumableFragment(runFragment, newFragment)
+					s.commitRun(midTurn, resume)
+					continue
+				}
+			}
+			if turnCtx.Err() == nil && turnOverflow.Kind == KindContext {
 				if w, ok := learnedWindowFrom(err); ok {
 					s.rememberWindow(w, mainModel)
 				}
@@ -1884,42 +2241,70 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 				first := s.overflowRetried == 0
 				s.overflowMu.Unlock()
 
+				// When the tool schemas and system prompt alone leave no
+				// room for even the user's message and a minimal answer, no
+				// compaction can make the request fit. Do not compact away
+				// the conversation: keep it as it was before the turn, with
+				// the user's message still on screen, and say what takes
+				// the room.
 				if first {
-					cb, ca, cerr := s.compactHistory(turnCtx)
-					switch {
-					case cerr != nil:
-						// Report the ORIGINAL overflow, not the summariser's
+					window := s.contextWindow()
+					if sb, blocked := s.schemaFloorBlocks(window, estimateTokens([]openai.ChatCompletionMessage{turnUser})+minOutputTokens); blocked {
+						xlog.Warn("overflow recovery skipped: the tool schemas and system prompt alone fill the context window",
+							"schema_tokens", sb.Floor, "window", window)
+						err = &FriendlyError{err: fmt.Errorf("%w: %w", errSchemaFloor, err), msg: schemaFloorMessage(sb, window)}
+						if s.callbacks.OnError != nil {
+							s.callbacks.OnError(err)
+						}
+						s.historyMu.Lock()
+						s.fragment = preTurnFragment
+						s.messages = append(slices.Clone(preTurnMessages), openai.ChatCompletionMessage{Role: "user", Content: text})
+						s.historyMu.Unlock()
+						s.restorePendingNotices(notices)
+						return "", err
+					}
+				}
+
+				if first {
+					// The escalation chain: iterativeTrim (LLM compaction,
+					// then a smaller tail, a forced prune and a hard
+					// truncation), then basicCompact when none of that
+					// fits. The whole chain is ONE recovery attempt.
+					cb := s.fragmentTokens()
+					status := ""
+					if terr := overflowTrim(s, turnCtx); terr == nil {
+						status = "Context window exceeded — compacting and retrying…"
+					} else if turnCtx.Err() == nil {
+						// Report the ORIGINAL overflow, not the trim's
 						// failure: the first is the one the user can act on.
-						xlog.Warn("overflow recovery: compaction failed", "error", cerr)
-					case cb == ca:
-						// Nothing to summarise, so a retry would send a
-						// byte-identical request.
-					default:
+						xlog.Warn("overflow recovery: trimming failed, trying basic compaction", "error", terr)
+						if berr := s.basicCompact(turnCtx); berr == nil {
+							status = "Context window exceeded — using basic fallback compaction and retrying…"
+						} else {
+							xlog.Warn("overflow recovery: basic compaction failed", "error", berr)
+						}
+					}
+					if status != "" {
+						ca := s.fragmentTokens()
 						s.overflowMu.Lock()
 						s.overflowRetried++
 						s.overflowMu.Unlock()
-						// compactHistory rebuilt the fragment as [summary] +
-						// tail, and renderMessages skips system content, so the
-						// system prompt was dropped without even being
-						// represented in the summary. SendMessage's own guard
-						// sits ABOVE this loop, so the `continue` below would
-						// re-send the turn with no identity, no working
+						// Compaction rebuilt the fragment as [summary] + tail,
+						// and renderMessages skips system content, so the
+						// system prompt may have been dropped without even
+						// being represented in the summary. SendMessage's own
+						// guard sits ABOVE this loop, so the `continue` below
+						// would re-send the turn with no identity, no working
 						// directory, no skills index and none of the tool
 						// guidance. Re-apply the same guard here: it is a
 						// no-op whenever the prompt survived in the kept tail.
 						s.ensureSystemPrompt()
-						// Announced here, AFTER compaction, and only on the
+						// Announced here, AFTER the chain, and only on the
 						// branch that reaches the `continue` below. The status
-						// promises a retry, and the two branches above are the
-						// cases where no retry happens: the user would be told
-						// nib was retrying and then handed the bare overflow
-						// error, with no corrective status to withdraw the
-						// promise. Compaction is a whole LLM call, so this does
-						// cost the user a few silent seconds before the line
-						// appears — the alternative is a line that lies.
-						if s.callbacks.OnStatus != nil {
-							s.callbacks.OnStatus("Context window exceeded — compacting and retrying…")
-						}
+						// promises a retry; a chain that changed nothing makes
+						// none, and the user would be told nib was retrying
+						// and then handed the bare overflow error.
+						announce(status)
 						if s.callbacks.OnCompactDone != nil {
 							s.callbacks.OnCompactDone(cb, ca)
 						}
@@ -1927,12 +2312,15 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 						// the status back, or a retry that streams a plain
 						// answer leaves "compacting and retrying" on screen
 						// for the rest of the turn (see retryResumeStatus).
-						if s.callbacks.OnStatus != nil {
-							s.callbacks.OnStatus(retryResumeStatus)
-						}
+						announce(retryResumeStatus)
+						s.live.setNote(truncNote)
 						continue
 					}
 				}
+			}
+			// The recovery a truncated call asked for did not retry.
+			if truncErr != nil {
+				err = truncErr
 			}
 
 			// Backend failure recovery: a rate limit or a transient error
@@ -1945,11 +2333,14 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 			// and never after an interrupt: Ctrl+C cancels turnCtx, which
 			// also ends the wait.
 			if canRetryTurn(turnCtx, err) {
+				class := classifyBackendError(err)
 				resume, progressed := resumableFragment(runFragment, newFragment)
 				if progressed {
 					stalled = 0
+					clear(classRetries)
 				}
-				if stalled < turnRetryBudget {
+				if stalled < turnRetryBudget && classRetries[class] < classRetryBudget(class) {
+					classRetries[class]++
 					wait := turnWait(err, stalled)
 					announce := func(status string) {
 						if s.callbacks.OnStatus != nil {
@@ -1969,13 +2360,24 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 				}
 			}
 
+			// cogito's sentinels get a message that names the cause, not the
+			// raw chain. The stream count is only known here.
+			if turnCtx.Err() == nil {
+				switch classifyBackendError(err) {
+				case errStreamInterrupted:
+					err = &FriendlyError{err: err, msg: streamInterruptedMessage(classRetries[errStreamInterrupted] + 1)}
+				case errToolArgs:
+					err = &FriendlyError{err: err, msg: toolArgsInvalidMessage}
+				}
+			}
+
 			// Reached only when no retry is happening: either this turn never
 			// qualified for one, or it already spent its single recovery and
 			// overflowed again. In that second case the message must not advise
 			// clearing the conversation, because compaction just did the
 			// equivalent and the retry has already been made — see
 			// contextOverflowRetriedMessage.
-			overflow := isContextOverflow(err)
+			overflow := turnOverflow.Kind == KindContext
 			err = humanizeTurnError(err, s.overflowRetries() > 0)
 			if s.callbacks.OnError != nil {
 				s.callbacks.OnError(err)
@@ -1985,9 +2387,23 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 			// every later turn overflow too. Token usage is kept — the
 			// backend billed those tokens regardless.
 			if overflow {
+				recovered := s.overflowRetries() > 0
 				s.historyMu.Lock()
-				s.fragment = preTurnFragment
-				s.messages = preTurnMessages
+				// When recovery compacted, rolling back to preTurnFragment
+				// would undo that compaction: the next turn would start from
+				// the same history that overflowed, and overflow again. Keep
+				// the compaction and cut out only this turn's own messages.
+				kept, ok := []openai.ChatCompletionMessage(nil), false
+				if recovered {
+					kept, ok = dropFailedTurn(s.fragment.Messages, turnUser, noticesText(notices))
+				}
+				if ok {
+					s.fragment.Messages = kept
+					s.messages = dropFailedDisplay(s.messages, text)
+				} else {
+					s.fragment = preTurnFragment
+					s.messages = preTurnMessages
+				}
 				s.historyMu.Unlock()
 				// The rollback dropped the notices too; keep them for the next turn.
 				s.restorePendingNotices(notices)
@@ -2082,7 +2498,9 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 	if s.fragment.Status != nil {
 		promptTokens = s.fragment.Status.LastUsage.PromptTokens
 	}
-	if s.shouldCompactNow(promptTokens) {
+	// Not when the tool schemas alone are over the budget: the next request
+	// would cross the trigger again whatever the summary kept.
+	if s.shouldCompactNow(promptTokens) && !s.autoCompactBlocked(estimateTokens([]openai.ChatCompletionMessage{turnUser})) {
 		if s.callbacks.OnStatus != nil {
 			s.callbacks.OnStatus("Compacting conversation…")
 		}
@@ -2223,12 +2641,14 @@ func (s *Session) ReconcileMCPServers(desired map[string]types.MCPServer) error 
 			_ = sess.Close()
 			delete(s.cfgClients, name)
 			delete(s.cfgServers, name)
+			s.invalidateSchemaCosts()
 		}
 	}
 	for name, srv := range desired {
 		if _, ok := s.cfgClients[name]; ok {
 			continue
 		}
+		s.invalidateSchemaCosts()
 		transport := wizmcp.TransportForServer(srv)
 		// Deliberately pass s.ctx (the session's long-lived context) directly,
 		// with no per-connect timeout. The go-sdk's mcp.Client.Connect stores the
@@ -2258,6 +2678,7 @@ func (s *Session) ReconcileMCPServers(desired map[string]types.MCPServer) error 
 // Called from Reload at turn start (deferred while background sub-agents run),
 // so closing the old skills client cannot race with a detached agent.
 func (s *Session) SetSkills(skills []types.Skill) error {
+	s.invalidateSchemaCosts()
 	if s.skillsClient != nil {
 		_ = s.skillsClient.Close()
 		s.skillsClient = nil
@@ -2628,6 +3049,8 @@ func (s *Session) applyProvider(provider types.ModelProviderConfig, id string) e
 	if err != nil {
 		return err
 	}
+	// Read before tracing wraps the client and hides its SetMaxTokens.
+	outCap := factoryOutputCap(llm, provider, s.credStore)
 	if s.tracer != nil {
 		llm = trace.NewRecordingLLM(llm, s.tracer, name, "")
 	}
@@ -2636,6 +3059,7 @@ func (s *Session) applyProvider(provider types.ModelProviderConfig, id string) e
 	s.llm = llm
 	s.llmModel = name
 	s.mainProvider = provider
+	s.outputCap = outCap
 	if id != "" {
 		s.endpointID = id
 	}

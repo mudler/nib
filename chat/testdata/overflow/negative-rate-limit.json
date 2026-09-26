@@ -1,0 +1,11 @@
+{
+  "provider": "OpenAI-compatible",
+  "source": "rate limit (429) with a generic context wording in the body: weak evidence at a status other than 400/413 is not an overflow",
+  "raw": "localai stream: status 429: Rate limit exceeded for this context window, retry in 20s",
+  "kind": "none",
+  "status": 429,
+  "window": 0,
+  "total": 0,
+  "input": 0,
+  "output": 0
+}

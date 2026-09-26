@@ -14,7 +14,9 @@ import (
 )
 
 // overflowLLM fails the first N completion calls with a backend overflow error,
-// then succeeds. Ask always succeeds, so compaction's summarising call works.
+// then succeeds. Compaction's summary request (sent through
+// CreateChatCompletion, or Ask) always succeeds and is not counted as a
+// completion call, so compaction's summarising call works.
 type overflowLLM struct {
 	mu       sync.Mutex
 	failures int // remaining calls that should overflow
@@ -25,6 +27,9 @@ type overflowLLM struct {
 func (o *overflowLLM) CreateChatCompletion(ctx context.Context, req openai.ChatCompletionRequest) (cogito.LLMReply, cogito.LLMUsage, error) {
 	if err := ctx.Err(); err != nil {
 		return cogito.LLMReply{}, cogito.LLMUsage{}, err
+	}
+	if n := len(req.Messages); n > 0 && strings.HasPrefix(req.Messages[n-1].Content, compactInstruction) {
+		return replyWith(o.summary()), cogito.LLMUsage{PromptTokens: 20, CompletionTokens: 2, TotalTokens: 22}, nil
 	}
 	o.mu.Lock()
 	o.calls++
@@ -57,17 +62,20 @@ func (o *overflowLLM) CreateChatCompletion(ctx context.Context, req openai.ChatC
 // hiding the infinite loop the cap exists to prevent. Varying the text puts the
 // cap, and only the cap, on the hook.
 func (o *overflowLLM) Ask(ctx context.Context, f cogito.Fragment) (cogito.Fragment, error) {
-	o.mu.Lock()
-	o.asks++
-	n := o.asks
-	o.mu.Unlock()
-
-	summary := "summary " + strconv.Itoa(n) + " of earlier turns" + strings.Repeat(" with more detail", n)
-	out := f.AddMessage("assistant", summary)
+	out := f.AddMessage("assistant", o.summary())
 	if out.Status != nil {
 		out.Status.LastUsage = cogito.LLMUsage{PromptTokens: 20, CompletionTokens: 2, TotalTokens: 22}
 	}
 	return out, nil
+}
+
+// summary counts a summary request and returns its (distinct) text.
+func (o *overflowLLM) summary() string {
+	o.mu.Lock()
+	o.asks++
+	n := o.asks
+	o.mu.Unlock()
+	return "summary " + strconv.Itoa(n) + " of earlier turns" + strings.Repeat(" with more detail", n)
 }
 
 func newOverflowSession(t *testing.T, llm cogito.LLM) *Session {
@@ -92,14 +100,32 @@ func newOverflowSession(t *testing.T, llm cogito.LLM) *Session {
 	}
 	// Enough history that compaction has something to summarise; without a
 	// head to compact the retry is correctly skipped and the test would prove
-	// nothing.
+	// nothing. The replies are long because overflow recovery validates its
+	// result: a summary larger than the history it replaces is rejected, and
+	// a real overflow never comes from a few bytes of history.
+	s.fragment = cogito.NewFragment(
+		openai.ChatCompletionMessage{Role: "user", Content: "u1"},
+		openai.ChatCompletionMessage{Role: "assistant", Content: "a1 " + overflowFiller},
+		openai.ChatCompletionMessage{Role: "user", Content: "u2"},
+		openai.ChatCompletionMessage{Role: "assistant", Content: "a2 " + overflowFiller},
+	)
+	return s
+}
+
+// overflowFiller makes a seeded reply large enough that compacting it shrinks
+// the history.
+var overflowFiller = strings.Repeat("earlier detail ", 150)
+
+// tinyHistory seeds a history no step of overflow recovery can shrink: a
+// summary, a truncation marker or a basic-compaction marker is larger than
+// it. With the summariser failing too, the whole recovery chain fails.
+func tinyHistory(s *Session) {
 	s.fragment = cogito.NewFragment(
 		openai.ChatCompletionMessage{Role: "user", Content: "u1"},
 		openai.ChatCompletionMessage{Role: "assistant", Content: "a1"},
 		openai.ChatCompletionMessage{Role: "user", Content: "u2"},
 		openai.ChatCompletionMessage{Role: "assistant", Content: "a2"},
 	)
-	return s
 }
 
 // The headline: an overflow no longer ends the turn.
@@ -190,6 +216,7 @@ func TestOverflowErrorReflectsWhetherCompactionWasTried(t *testing.T) {
 		// retrying. Nothing has been done about the size, so the original
 		// advice is still the right advice.
 		s := newOverflowSession(t, &summaryFailingLLM{overflowLLM: overflowLLM{failures: 99}})
+		tinyHistory(s)
 
 		_, err := s.SendMessage("what changed?")
 		if err == nil {
@@ -424,6 +451,7 @@ func TestOverflowDoesNotAnnounceARetryItWillNotMake(t *testing.T) {
 	t.Run("compaction fails", func(t *testing.T) {
 		rec := &retryStatusRecorder{}
 		s := newOverflowSession(t, &summaryFailingLLM{overflowLLM: overflowLLM{failures: 99}})
+		tinyHistory(s)
 		s.callbacks = rec.callbacks()
 
 		if _, err := s.SendMessage("what changed?"); err == nil {
@@ -468,11 +496,19 @@ func (f *summaryFailingLLM) Ask(ctx context.Context, frag cogito.Fragment) (cogi
 	return frag, errors.New("request (368203 tokens) exceeds the available context size (262144 tokens)")
 }
 
+func (f *summaryFailingLLM) CreateChatCompletion(ctx context.Context, req openai.ChatCompletionRequest) (cogito.LLMReply, cogito.LLMUsage, error) {
+	if n := len(req.Messages); n > 0 && strings.HasPrefix(req.Messages[n-1].Content, compactInstruction) {
+		return cogito.LLMReply{}, cogito.LLMUsage{}, errors.New("request (368203 tokens) exceeds the available context size (262144 tokens)")
+	}
+	return f.overflowLLM.CreateChatCompletion(ctx, req)
+}
+
 // When compaction's own call fails, the user gets the ORIGINAL overflow — the
 // one they can act on — and no retry is attempted.
 func TestOverflowReportsOriginalErrorWhenCompactionFails(t *testing.T) {
 	llm := &summaryFailingLLM{overflowLLM: overflowLLM{failures: 99}}
 	s := newOverflowSession(t, llm)
+	tinyHistory(s)
 
 	_, err := s.SendMessage("what changed?")
 	if err == nil {

@@ -1,0 +1,10 @@
+{
+  "provider": "regolo (LiteLLM + vLLM)",
+  "source": "live capture from regolo (LiteLLM in front of vLLM, model glm5.2), HTTP 400; raw is the body decoded by cogito's non-streaming client into *openai.APIError (its Error() is the message; HTTPStatusCode is not set), wrapped by cogito's decision loop",
+  "raw": "failed to select tool: failed to pick tool: tool selection failed: failed to make a decision after 3 attempts: regolo.BadRequestError: Hosted_vllmException - {\"object\":\"error\",\"message\":\"Requested token count exceeds the model's maximum context length of 210000 tokens. You requested a total of 210123 tokens: 133 tokens from the input messages and 209990 tokens for the completion. Please reduce the number of tokens in the input messages or the completion to fit within the limit.\",\"type\":\"BadRequestError\",\"param\":null,\"code\":400}No fallback model group found for original model_group=glm5.2.. Received Model Group=glm5.2\nAvailable Model Group Fallbacks=None\nregolo.BadRequestError: Hosted_vllmException - {\"object\":\"error\",\"message\":\"Requested token count exceeds the model's maximum context length of 210000 tokens. You requested a total of 210123 tokens: 133 tokens from the input messages and 209990 tokens for the completion. Please reduce the number of tokens in the input messages or the completion to fit within the limit.\",\"type\":\"BadRequestError\",\"param\":null,\"code\":400}No fallback model group found for original model_group=glm5.2. Retried: 2 times",
+  "kind": "budget",
+  "window": 210000,
+  "total": 210123,
+  "input": 133,
+  "output": 209990
+}

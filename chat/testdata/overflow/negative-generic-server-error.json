@@ -1,0 +1,11 @@
+{
+  "provider": "unknown",
+  "source": "HTTP 500 whose text only has a generic context phrase (no provider row): the status gate on weak evidence makes it KindNone",
+  "raw": "localai stream: status 500: internal error while computing the context window",
+  "kind": "none",
+  "status": 500,
+  "window": 0,
+  "total": 0,
+  "input": 0,
+  "output": 0
+}

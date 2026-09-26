@@ -1,0 +1,10 @@
+{
+  "provider": "Anthropic",
+  "source": "Anthropic Messages API 400 invalid_request_error text (maki-providers/src/error.rs fixture)",
+  "raw": "input length and `max_tokens` exceed context limit: 199773 + 8192 > 200000, decrease input length or `max_tokens` and try again",
+  "kind": "budget",
+  "window": 200000,
+  "total": 0,
+  "input": 199773,
+  "output": 8192
+}

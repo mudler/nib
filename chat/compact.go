@@ -2,9 +2,7 @@ package chat
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"strconv"
 	"strings"
 
 	"github.com/mudler/nib/types"
@@ -97,8 +95,8 @@ func shouldAutoCompact(cfg types.CompactionConfig, window, promptTokens int) boo
 // 4096-context model is exactly nib's audience, so the floor sits below any
 // real served model and above any plausible misparse of an output-token count
 // (the largest default max_tokens backends print in overflow errors is in the
-// hundreds — vLLM's "512 output tokens" is the known example, and it is only
-// skipped today because tokenCountRe's \s* cannot span the word "output").
+// hundreds — vLLM's "512 output tokens" is the known example; the overflow
+// catalog's named groups keep it out of the window, see overflow_patterns.go).
 //
 // The ceiling exists because strconv.Atoi clamps an absurdly long digit run to
 // MaxInt instead of erroring, so garbage lands far ABOVE any floor rather than
@@ -115,6 +113,15 @@ const (
 // from here — chat is downstream of it — so the number is repeated, as the 0.8
 // Threshold default already is).
 const defaultReserveTokens = 4096
+
+// defaultSummaryMaxTokens is the fallback for an unset CompactionConfig.
+// SummaryMaxTokens, repeated from config.Load for the same reason.
+const defaultSummaryMaxTokens = 16384
+
+// maxSummaryAttempts bounds how many summary requests summarizeFitting sends
+// for one compaction. Each overflow moves the boundary so the head shrinks by
+// the backend's stated overshoot, so a fit normally takes one or two retries.
+const maxSummaryAttempts = 6
 
 // rememberWindow records a context window a backend stated for a specific
 // model. Values outside the plausibility band are discarded rather than
@@ -208,6 +215,16 @@ func (s *Session) ContextWindow() int {
 // the interrupt case can be exercised at all (see the note above).
 func canRecoverFromOverflow(turnCtx context.Context, err error) bool {
 	return turnCtx.Err() == nil && isContextOverflow(err)
+}
+
+// canShrinkSummary reports whether a rejected summary request is worth
+// retrying with a smaller prompt: a context overflow, or a budget overflow
+// (the prompt fits but prompt + reserved output does not), the user did not
+// cancel. The summary's output reservation is already capped, so shrinking
+// its prompt is what fits a budget overflow here; this is not compaction of
+// the conversation, which a budget overflow must never trigger.
+func canShrinkSummary(ctx context.Context, err error) bool {
+	return ctx.Err() == nil && isWindowOverflow(err)
 }
 
 // overflowRetries reports how many context-overflow recoveries the current turn
@@ -517,35 +534,37 @@ func fitSummaryInput(pieces []summaryPiece, maxTokens int) string {
 // summaryRetryTarget returns the prompt size to retry a summary at after the
 // backend rejected a prompt of sent (byte/4) tokens.
 //
-// byte/4 is only an estimate, and a backend can count the same text as more
-// tokens than that. The rejection states both figures in the backend's own
-// count, so their ratio corrects the estimate. The 10% margin covers the
-// estimate varying across the text. With no figures to go on, it halves.
+// The rejection states the request size and the window in the backend's own
+// count. Their difference is by how many tokens the request overshot, and that
+// is a fixed number, not a ratio: the output the request reserves does not
+// shrink with the prompt. Scaling the prompt by window/request left the
+// reservation whole, so a large reservation overflowed again on every retry.
+// The 10% margin covers the byte/4 estimate varying across the text. With no
+// figures to go on, it halves. A result of zero or less means the reservation
+// alone does not fit, and no prompt will.
 func summaryRetryTarget(err error, sent int) int {
 	needs, allows, ok := overflowFigures(err)
 	if !ok {
 		return sent / 2
 	}
-	return int(float64(sent) * float64(allows) / float64(needs) * 0.9)
+	return int(float64(sent-(needs-allows)) * 0.9)
 }
 
 // overflowFigures reads the request size and the window from an overflow
-// error, applying the same rule as learnedWindowFrom: the larger figure is the
-// request and the smaller is the limit, whatever order the backend used.
+// error for the subtractive summary retry: (Total, Window) from the catalog
+// row, with Input + Output (or Input alone) standing in for a missing total.
+// A context or a budget overflow qualifies; a generic wording states no
+// figures and reports ok == false, so the caller halves instead.
 func overflowFigures(err error) (needs, allows int, ok bool) {
-	for e := err; e != nil; e = errors.Unwrap(e) {
-		m := tokenCountRe.FindAllStringSubmatch(e.Error(), -1)
-		if !hasOverflowMarker(e.Error()) || len(m) < 2 {
-			continue
-		}
-		a, _ := strconv.Atoi(m[0][1])
-		b, _ := strconv.Atoi(m[1][1])
-		needs, allows = max(a, b), min(a, b)
-		if allows > 0 {
-			return needs, allows, true
-		}
+	info := classifyOverflow(err)
+	if info.Kind != KindContext && info.Kind != KindBudget {
+		return 0, 0, false
 	}
-	return 0, 0, false
+	needs, allows = info.overflowNeeds(), info.Window
+	if needs <= 0 || allows <= 0 {
+		return 0, 0, false
+	}
+	return needs, allows, true
 }
 
 // CompactHistory summarizes the older portion of the conversation via the LLM
@@ -565,37 +584,40 @@ func (s *Session) CompactHistory() (before, after int, err error) {
 // passed-in ctx governs the summarization LLM call, allowing callers (e.g.
 // auto-compaction) to make it cancellable via a per-turn context.
 func (s *Session) compactHistory(ctx context.Context) (before, after int, err error) {
+	return s.compactHistoryKeep(ctx, s.compactionConfig().KeepRecent)
+}
+
+// compactHistoryKeep is compactHistory with the tail length passed in rather
+// than read from the config. Overflow recovery uses it to retry with a
+// smaller tail without writing the shared CompactionConfig.
+func (s *Session) compactHistoryKeep(ctx context.Context, keep int) (before, after int, err error) {
 	msgs := s.fragment.Messages
 
 	before = estimateTokens(msgs)
 
-	cfg := s.compactionConfig()
-	head, tail := splitForCompaction(msgs, cfg.KeepRecent)
 	s.prunedMu.Lock()
-	head = stubbedView(head, s.prunedIDs)
+	pruned := make(map[string]string, len(s.prunedIDs))
+	for k, v := range s.prunedIDs {
+		pruned[k] = v
+	}
+	compressed := s.copyCompressedLocked()
 	s.prunedMu.Unlock()
-	pieces := renderMessages(head)
-	if len(pieces) == 0 {
-		return before, before, nil // nothing to compact
-	}
-	// Save the full untruncated head as an artifact so nothing is lost
-	// when the lossy summary truncates or drops messages. The model can
-	// page through it via the read tool (artifact://N) or search it with
-	// search_artifacts.
-	var artifactURI string
-	if !cfg.DisableArtifactSpill && s.artifacts != nil {
-		var b strings.Builder
-		for _, p := range pieces {
-			b.WriteString(p.text)
+	// The summary sees what the requests saw: stubs, then the progressive
+	// compression levels (see progressivePrune).
+	view := func(m []openai.ChatCompletionMessage) []openai.ChatCompletionMessage {
+		if len(compressed) == 0 {
+			return stubbedView(m, pruned)
 		}
-		if b.Len() > 0 {
-			artifactURI = s.artifacts.Save("compaction", b.String())
-		}
+		return requestView(m, pruned, compressed)
 	}
-	summary, err := s.summarize(ctx, pieces)
+	summary, head, tail, err := s.summarizeFitting(ctx, msgs, keep, view)
 	if err != nil {
 		return before, before, err
 	}
+	if len(head) == 0 {
+		return before, before, nil // nothing to compact
+	}
+	artifactURI := s.spillCompactionHead(renderMessages(view(head)))
 
 	// Build the new state up front; swap only after success (atomic).
 	newFragMsgs := append([]openai.ChatCompletionMessage{summaryMessage(summary, artifactURI)}, tail...)
@@ -627,58 +649,282 @@ func (s *Session) compactHistory(ctx context.Context) (before, after int, err er
 	return before, after, nil
 }
 
-// summarize asks the model for the compaction summary of pieces, fitting the
-// prompt into the window. It counts the spend of every call it makes.
-func (s *Session) summarize(ctx context.Context, pieces []summaryPiece) (string, error) {
+// summaryPrefix is the instruction the rendered conversation follows in the
+// summary prompt.
+const summaryPrefix = compactInstruction + "\n\n--- CONVERSATION ---\n"
+
+// summaryOutputTokens is the output the summary request reserves: the smaller
+// of the model's output cap and cfg.SummaryMaxTokens, and never more than half
+// of a known window, so the prompt keeps room beside it.
+//
+// It is set on the request explicitly. Left to the client, the request
+// reserves the model's whole output cap, and a backend that checks prompt +
+// reservation against the window rejects every summary prompt larger than the
+// window minus that cap, however short the summary would have been.
+func (s *Session) summaryOutputTokens() int {
 	cfg := s.compactionConfig()
-	// The summary prompt has to fit the same window as any other request, and
-	// the head it summarizes is by nature most of a window that just filled up.
-	const prefix = compactInstruction + "\n\n--- CONVERSATION ---\n"
-	limit := 0
-	if window := s.contextWindow(); window > 0 {
-		limit = max(ContextBudget(cfg, window)-tokensOf(prefix), 1)
+	out := cfg.SummaryMaxTokens
+	if out <= 0 {
+		out = defaultSummaryMaxTokens
 	}
-	prompt := prefix + fitSummaryInput(pieces, limit)
-	llm, _ := s.currentLLM()
-	res, aerr := llm.Ask(ctx, cogito.NewFragment().AddMessage(cogito.UserMessageRole, prompt))
-	// Exactly once: the backend's rejection states by how much the estimate was
-	// off, so a single corrected retry fits, and a second failure means the
-	// backend cannot take even the minimal prompt.
-	if aerr != nil && canRecoverFromOverflow(ctx, aerr) {
-		if res.Status != nil {
-			s.addUsage(res.Status.LastUsage)
+	cap, window := s.requestLimits()
+	if cap > 0 {
+		out = min(out, cap)
+	}
+	if window > 0 {
+		out = max(min(out, window/2), 1)
+	}
+	return out
+}
+
+// summaryPromptLimit is the budget, in byte/4 tokens, for the rendered
+// conversation in the first summary request: the window less the summary's
+// output reservation (and never more than ContextBudget), less the
+// instruction. 0 means no window is known, so no limit.
+func (s *Session) summaryPromptLimit(output int) int {
+	window := s.contextWindow()
+	if window <= 0 {
+		return 0
+	}
+	budget := min(ContextBudget(s.compactionConfig(), window), window-output)
+	return max(budget-tokensOf(summaryPrefix), 1)
+}
+
+// summarizeFitting summarizes the head of msgs that splitForCompaction(msgs,
+// keep) leaves, and returns the summary with the head it covers and the tail
+// to keep verbatim. view maps messages to what the summary prompt should see
+// (the pruned view of them). An empty head, with a nil error, means there was
+// nothing to compact.
+//
+// When the window is known and the rendered head is larger than the summary
+// prompt budget (summaryPromptLimit), the head is summarized in chunks fitted
+// to that budget from the start (see rollingCover): fitting it into one
+// request would cut and drop messages on purpose. Otherwise the whole head
+// goes out in one request first, and when the backend rejects it as too
+// large, the head is summarized in chunks instead, each fitted to the retry
+// target summaryRetryTarget derives from the rejection. When the chunks cover the whole head, the result is the summary
+// and the original tail. When they stop at maxRollingChunks, the head ends
+// where they stopped and the rest joins the tail, verbatim: nothing is lost,
+// and the next compaction can summarize it. The loop stops on a non-overflow
+// error, a cancelled context, a target of zero or less, or after
+// maxSummaryAttempts overflows in a row, and returns the last error. It
+// changes no session state other than the usage it counts.
+func (s *Session) summarizeFitting(ctx context.Context, msgs []openai.ChatCompletionMessage, keep int, view func([]openai.ChatCompletionMessage) []openai.ChatCompletionMessage) (summary string, head, tail []openai.ChatCompletionMessage, err error) {
+	head, tail = splitForCompaction(msgs, keep)
+	if len(head) == 0 || len(renderMessages(view(head))) == 0 {
+		return "", nil, nil, nil
+	}
+	limit := s.summaryPromptLimit(s.summaryOutputTokens())
+	pieces := renderMessages(view(head))
+	if limit > 0 && piecesTokens(pieces) > limit {
+		// The head is known not to fit: fitSummaryInput would cut it down
+		// on purpose, so it goes out in chunks from the start instead. The
+		// target is the whole prompt, instruction included.
+		return s.rollingHead(ctx, msgs, head, view, limit+tokensOf(summaryPrefix), 0)
+	}
+	summary, sent, serr := s.summarize(ctx, pieces, limit)
+	if serr == nil {
+		return summary, head, tail, nil
+	}
+	if maxSummaryAttempts <= 1 || !canShrinkSummary(ctx, serr) {
+		return "", nil, nil, serr
+	}
+	target := summaryRetryTarget(serr, sent)
+	if target <= 0 {
+		return "", nil, nil, serr
+	}
+	return s.rollingHead(ctx, msgs, head, view, target, 1)
+}
+
+// rollingHead summarizes head in chunks fitted to target (see rollingCover)
+// and splits msgs where the chunks stopped. failures is passed through to
+// rollingCover.
+func (s *Session) rollingHead(ctx context.Context, msgs, head []openai.ChatCompletionMessage, view func([]openai.ChatCompletionMessage) []openai.ChatCompletionMessage, target, failures int) (summary string, h, tail []openai.ChatCompletionMessage, err error) {
+	summary, covered, err := s.rollingCover(ctx, head, view, target, failures)
+	if err != nil {
+		return "", nil, nil, err
+	}
+	// head is msgs[:len(head)], so what the chunks did not cover and the
+	// original tail are one contiguous run of msgs.
+	return summary, msgs[:covered], msgs[covered:], nil
+}
+
+// piecesTokens is the byte/4 size of pieces joined.
+func piecesTokens(pieces []summaryPiece) int {
+	n := 0
+	for _, p := range pieces {
+		n += len(p.text)
+	}
+	return n / 4
+}
+
+// maxRollingChunks bounds how many chunks rollingCover summarizes for one
+// compaction. What is left after that stays verbatim.
+const maxRollingChunks = 8
+
+// rollingInstruction is the instruction for every chunk after the first: the
+// running summary comes first in the prompt, the chunk's messages after it.
+const rollingInstruction = compactInstruction + "\n\n" +
+	"A summary of the earlier part of this conversation is given first. " +
+	"Merge it with the new messages into one summary in the same format; " +
+	"keep every file path, identifier and decision from both."
+
+// rollingPrefix is the prompt a later chunk's rendered messages follow.
+func rollingPrefix(running string) string {
+	return rollingInstruction + "\n\n--- EARLIER SUMMARY ---\n" + running + "\n\n--- NEW MESSAGES ---\n"
+}
+
+// rollingSummary summarizes head in consecutive chunks, each fitted to a
+// prompt of target byte/4 tokens, and returns the one summary that stands
+// for all of head. It fails when maxRollingChunks chunks do not cover head;
+// summarizeFitting, which keeps the uncovered rest verbatim instead, uses
+// rollingCover directly.
+func (s *Session) rollingSummary(ctx context.Context, head []openai.ChatCompletionMessage, view func([]openai.ChatCompletionMessage) []openai.ChatCompletionMessage, target int) (summary string, err error) {
+	summary, covered, err := s.rollingCover(ctx, head, view, target, 0)
+	if err != nil {
+		return "", err
+	}
+	if covered < len(head) {
+		return "", fmt.Errorf("compaction summary covered %d of %d messages in %d chunks", covered, len(head), maxRollingChunks)
+	}
+	return summary, nil
+}
+
+// rollingCover summarizes head from oldest to newest in chunks, and returns
+// the running summary and how many of head's messages it stands for.
+//
+// Each chunk is the longest run that fits target: the first after the
+// compaction instruction, each later one after rollingInstruction and the
+// running summary, whose reply then replaces the running summary. A chunk
+// ends only where splitForCompaction could, so it never separates a tool
+// call from its results. A run too large for target on its own still forms
+// a chunk, and fitSummaryInput cuts it down. When the backend rejects a chunk
+// anyway, target drops by the stated overshoot (summaryRetryTarget) and the
+// chunk is rebuilt from the same start, so the rest moves on to the next
+// chunk. failures is how many overflows in a row the caller already had;
+// maxSummaryAttempts of them in a row stop it. It stops after
+// maxRollingChunks chunks, and on any error it returns nothing covered.
+func (s *Session) rollingCover(ctx context.Context, head []openai.ChatCompletionMessage, view func([]openai.ChatCompletionMessage) []openai.ChatCompletionMessage, target, failures int) (summary string, covered int, err error) {
+	viewed := view(head)
+	if len(viewed) != len(head) {
+		return "", 0, fmt.Errorf("compaction view changed the message count")
+	}
+	sizes := make([]int, len(viewed))
+	for i := range viewed {
+		for _, p := range renderMessages(viewed[i : i+1]) {
+			sizes[i] += len(p.text)
 		}
-		limit = max(summaryRetryTarget(aerr, tokensOf(prompt))-tokensOf(prefix), 1)
-		prompt = prefix + fitSummaryInput(pieces, limit)
-		res, aerr = llm.Ask(ctx, cogito.NewFragment().AddMessage(cogito.UserMessageRole, prompt))
 	}
+	boundary := func(i int) bool {
+		return i == len(head) || (head[i].Role != "tool" && len(head[i-1].ToolCalls) == 0)
+	}
+
+	running := ""
+	start, chunks := 0, 0
+	for start < len(head) && chunks < maxRollingChunks {
+		prefix := summaryPrefix
+		if chunks > 0 {
+			prefix = rollingPrefix(running)
+		}
+		budget := target - tokensOf(prefix)
+		end, acc := 0, 0
+		for e := start + 1; e <= len(head); e++ {
+			acc += sizes[e-1]
+			if !boundary(e) {
+				continue
+			}
+			if end == 0 || acc/4 <= budget {
+				end = e
+			}
+			if acc/4 > budget {
+				break
+			}
+		}
+		pieces := renderMessages(viewed[start:end])
+		if len(pieces) == 0 {
+			start = end // nothing in it for a summary to cover
+			continue
+		}
+		reply, sent, serr := s.summarizeWith(ctx, prefix, pieces, max(budget, 1))
+		if serr == nil {
+			running, start, failures = reply, end, 0
+			chunks++
+			continue
+		}
+		failures++
+		if failures >= maxSummaryAttempts || !canShrinkSummary(ctx, serr) {
+			return "", 0, serr
+		}
+		if target = summaryRetryTarget(serr, sent); target <= 0 {
+			return "", 0, serr
+		}
+	}
+	if chunks == 0 {
+		return "", 0, fmt.Errorf("compaction produced an empty summary")
+	}
+	return running, start, nil
+}
+
+// spillCompactionHead saves the rendered head a summary stands for as an
+// artifact, so nothing is lost to the lossy summary, and returns its URI ("" when
+// spilling is off or there is no store). The model can page through it with
+// the read tool (artifact://N) or search it with search_artifacts.
+func (s *Session) spillCompactionHead(pieces []summaryPiece) string {
+	if s.compactionConfig().DisableArtifactSpill || s.artifacts == nil {
+		return ""
+	}
+	var b strings.Builder
+	for _, p := range pieces {
+		b.WriteString(p.text)
+	}
+	if b.Len() == 0 {
+		return ""
+	}
+	return s.artifacts.Save("compaction", b.String())
+}
+
+// summarize sends one summary request for pieces, fitted into limit byte/4
+// tokens (0 means no limit) after the instruction, and returns the summary and
+// the byte/4 size of the prompt it sent. It counts the spend of the call.
+//
+// The request goes out through CreateChatCompletion with MaxTokens set to
+// summaryOutputTokens. Ask would leave the reservation to the client, which
+// reserves the model's whole output cap.
+func (s *Session) summarize(ctx context.Context, pieces []summaryPiece, limit int) (summary string, sentTokens int, err error) {
+	return s.summarizeWith(ctx, summaryPrefix, pieces, limit)
+}
+
+// summarizeWith is summarize with the instruction prefix the rendered pieces
+// follow in the prompt.
+func (s *Session) summarizeWith(ctx context.Context, prefix string, pieces []summaryPiece, limit int) (summary string, sentTokens int, err error) {
+	prompt := prefix + fitSummaryInput(pieces, limit)
+	sentTokens = tokensOf(prompt)
+	llm, _ := s.currentLLM()
+	reply, usage, aerr := llm.CreateChatCompletion(ctx, openai.ChatCompletionRequest{
+		Messages:  []openai.ChatCompletionMessage{{Role: cogito.UserMessageRole.String(), Content: prompt}},
+		MaxTokens: s.summaryOutputTokens(),
+	})
 	// Compaction is not free, and it fires exactly when a session has already
 	// grown expensive — so leaving it out would understate the runs that cost
 	// the most.
 	//
-	// LastUsage, not CumulativeUsage: Ask is a single call on a throwaway
-	// fragment that no ExecuteTools run ever stamped, so CumulativeUsage is
-	// zero here and reading it would count nothing at all.
-	//
 	// Counted before BOTH exits below on purpose. What the backend served it
 	// billed, whether the summary then came back empty or the call came back an
 	// error, and a rejected summary must not also erase the spend — the same
-	// rule the interrupted-turn path in SendMessage follows. Placing this after
-	// either early return would make compaction the one path where paid-for
-	// tokens vanish, precisely on the sessions that spend the most. Clients
-	// that discard the fragment on error simply leave Status nil and add
-	// nothing, so the guard is what keeps this honest rather than optimistic.
-	if res.Status != nil {
-		s.addUsage(res.Status.LastUsage)
-	}
+	// rule the interrupted-turn path in SendMessage follows. A client that
+	// reports nothing on error simply adds zero.
+	s.addUsage(usage)
 	if aerr != nil {
-		return "", fmt.Errorf("compaction summary failed: %w", aerr)
+		return "", sentTokens, fmt.Errorf("compaction summary failed: %w", aerr)
 	}
-	last := res.LastMessage()
-	if last == nil || strings.TrimSpace(last.Content) == "" {
-		return "", fmt.Errorf("compaction produced an empty summary")
+	var content string
+	if ch := reply.ChatCompletionResponse.Choices; len(ch) > 0 {
+		content = ch[0].Message.Content
 	}
-	return last.Content, nil
+	if strings.TrimSpace(content) == "" {
+		return "", sentTokens, fmt.Errorf("compaction produced an empty summary")
+	}
+	return content, sentTokens, nil
 }
 
 // summaryMessage wraps a compaction summary as the message that stands in for

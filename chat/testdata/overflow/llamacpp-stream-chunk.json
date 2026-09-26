@@ -1,0 +1,10 @@
+{
+  "provider": "llama.cpp / LocalAI",
+  "source": "llama.cpp error delivered as an SSE error chunk mid-stream: no HTTP status in the chain",
+  "raw": "failed to make a streaming decision after 3 attempts: localai stream: request (368203 tokens) exceeds the available context size (262144 tokens), try increasing it",
+  "kind": "context",
+  "window": 262144,
+  "total": 0,
+  "input": 368203,
+  "output": 0
+}

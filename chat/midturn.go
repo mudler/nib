@@ -2,7 +2,6 @@ package chat
 
 import (
 	"context"
-	"strings"
 
 	"github.com/mudler/cogito"
 	"github.com/mudler/xlog"
@@ -81,8 +80,9 @@ func sameMessage(a, b openai.ChatCompletionMessage) bool {
 }
 
 // manipulate is the cogito.WithMessagesManipulator body for a turn: it puts the
-// summary in place of the history it covers, prunes tool output, and compacts
-// when the result crosses the auto-compaction trigger.
+// summary in place of the history it covers, prunes and progressively
+// compresses tool output (progressivePrune), and compacts when the result
+// crosses the auto-compaction trigger.
 func (c *turnCompactor) manipulate(msgs []openai.ChatCompletionMessage) []openai.ChatCompletionMessage {
 	base, repl := 0, 0
 	view := msgs
@@ -91,10 +91,10 @@ func (c *turnCompactor) manipulate(msgs []openai.ChatCompletionMessage) []openai
 		view = make([]openai.ChatCompletionMessage, 0, repl+len(msgs)-base)
 		view = append(append(view, c.replacement...), msgs[base:]...)
 	}
-	out := c.s.pruneMessages(view)
+	out := c.s.progressivePrune(view)
 
 	overhead := c.overhead()
-	if !c.failed && c.s.shouldCompactNow(estimateTokens(out)+overhead) {
+	if !c.failed && c.s.shouldCompactNow(estimateTokens(out)+overhead) && !c.s.autoCompactBlocked(lastUserTokens(out)) {
 		out = c.compact(msgs, out, base, repl, overhead)
 	}
 	c.sent = estimateTokens(out)
@@ -112,10 +112,10 @@ func (c *turnCompactor) manipulate(msgs []openai.ChatCompletionMessage) []openai
 // report measured both, so its excess over the last estimate is added back.
 func (c *turnCompactor) overhead() int {
 	reported := c.s.live.promptTokens()
-	if c.sent <= 0 || reported <= c.sent {
+	if c.sent <= 0 {
 		return 0
 	}
-	return reported - c.sent
+	return promptOverhead(reported, c.sent)
 }
 
 // compact summarizes the head of out and returns the request with the summary
@@ -126,49 +126,43 @@ func (c *turnCompactor) compact(msgs, out []openai.ChatCompletionMessage, base, 
 	// The kept tail has to fit too, or the summary buys nothing and the next
 	// step compacts again. Shrink it toward the last tool step when it does
 	// not; splitForCompaction still never separates a call from its results.
-	var head, tail []openai.ChatCompletionMessage
-	for keep := max(c.s.compactionConfig().KeepRecent, 1); keep >= 1; keep-- {
-		h, t := splitForCompaction(out, keep)
+	keep := 0
+	for k := max(c.s.compactionConfig().KeepRecent, 1); k >= 1; k-- {
+		h, t := splitForCompaction(out, k)
 		if h == nil {
 			continue
 		}
-		head, tail = h, t
+		keep = k
 		if !c.s.shouldCompactNow(estimateTokens(t) + overhead) {
 			break
 		}
 	}
 	// A head that is only the previous summary has nothing new in it.
-	if len(head) <= repl {
+	if keep == 0 {
 		return out
 	}
-	pieces := renderMessages(head)
-	if len(pieces) == 0 {
+	if h, _ := splitForCompaction(out, keep); len(h) <= repl {
 		return out
-	}
-
-	// Save the full untruncated head as a compaction artifact, the same
-	// as the end-of-turn path, so nothing is lost to the lossy summary.
-	var artifactURI string
-	cfg := c.s.compactionConfig()
-	if !cfg.DisableArtifactSpill && c.s.artifacts != nil {
-		var b strings.Builder
-		for _, p := range pieces {
-			b.WriteString(p.text)
-		}
-		if b.Len() > 0 {
-			artifactURI = c.s.artifacts.Save("compaction", b.String())
-		}
 	}
 
 	if c.s.callbacks.OnStatus != nil {
 		c.s.callbacks.OnStatus("Compacting conversation…")
 	}
-	summary, err := c.s.summarize(c.ctx, pieces)
+	// out is already the pruned request, so the summary sees it as it is.
+	summary, head, tail, err := c.s.summarizeFitting(c.ctx, out, keep, func(m []openai.ChatCompletionMessage) []openai.ChatCompletionMessage { return m })
 	if err != nil {
 		xlog.Warn("mid-turn compaction failed", "error", err)
 		c.failed = true
 		return out
 	}
+	// The overflow retries may have moved the boundary back until the head
+	// is only the previous summary, which has nothing new in it.
+	if len(head) <= repl {
+		return out
+	}
+	// Save the head actually summarized as a compaction artifact, the same
+	// as the end-of-turn path, so nothing is lost to the lossy summary.
+	artifactURI := c.s.spillCompactionHead(renderMessages(head))
 
 	// renderMessages leaves system messages out of the summary, so they are
 	// kept as they are: dropping them would lose the system prompt.

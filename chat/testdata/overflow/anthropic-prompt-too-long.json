@@ -1,0 +1,10 @@
+{
+  "provider": "Anthropic",
+  "source": "Anthropic Messages API 400 invalid_request_error text",
+  "raw": "prompt is too long: 210000 tokens > 200000 maximum",
+  "kind": "context",
+  "window": 200000,
+  "total": 0,
+  "input": 210000,
+  "output": 0
+}

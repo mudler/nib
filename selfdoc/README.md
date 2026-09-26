@@ -568,6 +568,51 @@ agents:
 # LOG_FORMAT=json switches to JSON lines.
 log_level: error
 
+# Optional: conversation compaction. When the context fills up, nib
+# summarizes the older turns and keeps the recent ones verbatim.
+# summary_max_tokens caps the output the summary request reserves (default
+# 16384; the model's own output cap wins when it is smaller). The summary
+# prompt is fitted into the window minus that reservation. If the backend
+# still rejects it as too large, nib summarizes fewer of the older turns and
+# keeps the rest verbatim, instead of cutting the text it summarizes.
+#
+# nib reads a backend's "request too large" error to decide what to do:
+# compact when the prompt itself does not fit (kind "context"), lower the
+# requested output when only prompt + output does not fit ("budget"), or
+# lower the output cap when the output alone is above the model's maximum
+# ("output_cap"), and then retry the turn once. When the summary alone does
+# not make the history fit, nib stubs old tool outputs, then drops older turns
+# (saved as an artifact:// the model can read), and as a last resort compacts
+# without the model. If the retry still does not fit, the turn fails, but the
+# compaction is kept, so the next turn does not overflow again. When the tool
+# schemas and system prompt alone fill the window, compaction cannot help:
+# nib keeps the conversation as it was, does not compact (neither on
+# overflow nor automatically), and names the MCP servers that take the most
+# room, so you can disable them or filter their tools. When a tool call is
+# cut off because the reply ran out of room in the window (for example a
+# whole file in one write), nib retries the turn once with a note that asks
+# the model to split the call, after compacting when the prompt is large.
+# When the reasoning filled the window, the retry also uses one lower
+# reasoning effort. nib never caps the output for this. A stream that ends
+# before the reply is finished is retried at most 3 times, and a tool call
+# with invalid JSON arguments once. It knows the
+# wording of llama.cpp/LocalAI, vLLM, OpenAI,
+# Anthropic and Gemini. overflow_patterns teaches it another backend without a
+# rebuild: the rows are tried before the built-in ones, first match wins. A
+# regex states its figures with the named groups window, total, input and
+# output. A row with an invalid regex or kind is logged and skipped. A
+# backend-specific wording (built-in or from this list) counts at any HTTP
+# status, because LocalAI reports an overflow as HTTP 500; a generic phrase
+# such as "context window" counts only with status 400, 413 or none. An error
+# with HTTP status 400 or 413 that no pattern recognises is logged at debug
+# level, so you can copy its text from the log.
+compaction:
+  summary_max_tokens: 16384
+  overflow_patterns:
+    - name: my-backend
+      kind: context
+      regex: 'prompt has (?P<input>\d+) tokens, limit is (?P<window>\d+)'
+
 # Optional: external MCP servers
 mcp_servers:
   filesystem:

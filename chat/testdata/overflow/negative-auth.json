@@ -1,0 +1,10 @@
+{
+  "provider": "OpenAI-compatible",
+  "source": "authentication failure",
+  "raw": "error, status code: 401, status: 401 Unauthorized, message: Incorrect API key provided",
+  "kind": "none",
+  "window": 0,
+  "total": 0,
+  "input": 0,
+  "output": 0
+}

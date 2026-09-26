@@ -3,41 +3,10 @@ package chat
 import (
 	"errors"
 	"fmt"
-	"regexp"
-	"strconv"
 	"strings"
+
+	"github.com/mudler/cogito"
 )
-
-// contextOverflowMarkers are substrings different backends emit when a request
-// exceeds the model's context window. Only a fragment of each message is
-// matched here, because the wording around it varies. The full messages, which
-// learnedWindowFrom parses for the model's stated limit, are:
-//
-//   - llama.cpp / LocalAI (tools/server/server-context.cpp):
-//     "request (9739 tokens) exceeds the available context size (8192 tokens), try increasing it"
-//   - OpenAI:
-//     "This model's maximum context length is 8192 tokens. However, your messages resulted in 9739 tokens. Please reduce the length of the messages."
-//   - vLLM, current (vllm/renderers/params.py):
-//     "This model's maximum context length is 8192 tokens. However, you requested 512 output tokens and your prompt contains 9739 input tokens, for a total of 10251 tokens. Please reduce the length of the input prompt or the number of requested output tokens."
-//   - vLLM, older OpenAI-compatible server:
-//     "This model's maximum context length is 8192 tokens. However, you requested 10251 tokens (9739 in the messages, 512 in the completion). Please reduce the length of the messages or completion."
-//
-// This comment used to abbreviate vLLM's message to "maximum context length is
-// 8192 tokens". That fragment is enough to trip a marker but carries only ONE
-// figure, so it teaches learnedWindowFrom nothing — an abbreviation that reads
-// as a complete message invites tests asserting coverage nib does not have.
-// Record the whole thing.
-var contextOverflowMarkers = []string{
-	"exceeds the available context size",
-	"maximum context length",
-	"context length",
-	"context window",
-	"context size",
-}
-
-// tokenCountRe pulls token counts (e.g. "8192 tokens") out of a backend error
-// so we can report how far over the limit the request was.
-var tokenCountRe = regexp.MustCompile(`(\d{3,})\s*tokens`)
 
 // FriendlyError wraps a noisy backend error with a short, actionable message
 // while preserving the original via Unwrap (so errors.Is/As still work).
@@ -56,7 +25,7 @@ func humanizeError(err error) error {
 	if err == nil {
 		return nil
 	}
-	if isContextOverflow(err) {
+	if isWindowOverflow(err) {
 		return &FriendlyError{err: err, msg: contextOverflowMessage(err.Error())}
 	}
 	if isRateLimitError(err) {
@@ -65,7 +34,80 @@ func humanizeError(err error) error {
 	if isEmptyReply(err) {
 		return &FriendlyError{err: err, msg: emptyReplyMessage}
 	}
+	// cogito's sentinels. The turn builds these messages with the figures
+	// only it knows; this is the fallback for an error it did not rewrite.
+	if _, done := err.(*FriendlyError); !done {
+		var te *cogito.ToolArgumentsTruncatedError
+		switch {
+		case errors.Is(err, cogito.ErrStreamInterrupted):
+			return &FriendlyError{err: err, msg: streamInterruptedMessage(0)}
+		case errors.Is(err, cogito.ErrToolArgumentsInvalid):
+			return &FriendlyError{err: err, msg: toolArgsInvalidMessage}
+		case errors.As(err, &te):
+			return &FriendlyError{err: err, msg: toolArgsTruncatedMessage(te, truncCap)}
+		}
+	}
 	return err
+}
+
+// streamInterruptedMessage is the text for a turn whose stream kept ending
+// before the backend finished it. tries is how many times the turn was sent,
+// or 0 when unknown.
+func streamInterruptedMessage(tries int) string {
+	n := ""
+	if tries > 0 {
+		n = fmt.Sprintf(" (tried %d times)", tries)
+	}
+	return "the connection to the model ended before the reply finished" + n +
+		". The backend or a proxy in front of it may have timed out on a long reply."
+}
+
+const toolArgsInvalidMessage = "the model produced a tool call with invalid arguments several times. " +
+	"Try rephrasing, or ask it to split the change into smaller steps."
+
+// truncationCause is why a tool call was cut by finish_reason=length.
+type truncationCause int
+
+const (
+	// truncCap: the output cap was reached with room left in the window.
+	truncCap truncationCause = iota
+	// truncToolCall: the window ran out while the model wrote a long call.
+	truncToolCall
+	// truncReasoning: the window ran out while the model was reasoning.
+	truncReasoning
+)
+
+// toolArgsTruncatedMessage is the text for a tool call cut by the output
+// limit, by cause.
+func toolArgsTruncatedMessage(te *cogito.ToolArgumentsTruncatedError, cause truncationCause) string {
+	switch cause {
+	case truncToolCall:
+		return fmt.Sprintf("the model's call to %s did not fit in the context window (about %d tokens of arguments on a prompt of %d). "+
+			"Ask it to make the change in smaller steps.", te.ToolName, te.ArgumentsBytes/4, te.PromptTokens)
+	case truncReasoning:
+		return fmt.Sprintf("the model's reasoning filled the context window (about %d tokens on a prompt of %d). "+
+			"Ask it to split the task, or lower the reasoning effort.", te.ReasoningBytes/4, te.PromptTokens)
+	}
+	limit := "the output limit"
+	if te.MaxTokens > 0 {
+		limit = fmt.Sprintf("the output limit (max_tokens %d)", te.MaxTokens)
+	}
+	return "the model's tool call was longer than " + limit +
+		". Raise the model's max_tokens, or ask for smaller edits."
+}
+
+// truncationNote is the one-turn user-role note sent with the retry after a
+// tool call was cut because the window ran out. It is never stored in the
+// history.
+func truncationNote(te *cogito.ToolArgumentsTruncatedError, cause truncationCause) string {
+	if cause == truncReasoning {
+		return fmt.Sprintf("Your previous reply was cut off: its reasoning (about %d tokens) ran out of room in the context window before the call to %s was complete. "+
+			"Keep the plan shorter and work in smaller steps (for example write a file in parts, or use edit for targeted changes).",
+			te.ReasoningBytes/4, te.ToolName)
+	}
+	return fmt.Sprintf("Your previous call to %s was cut off after about %d tokens because the reply ran out of room in the context window. "+
+		"Split it into smaller calls (for example write the file in parts, or use edit for targeted changes).",
+		te.ToolName, te.ArgumentsBytes/4)
 }
 
 // emptyReplyMarkers are the texts cogito uses when every decision attempt came
@@ -106,31 +148,28 @@ const emptyReplyMessage = "the model returned an empty reply (no text and no too
 // A bool parameter would leave one function whose every caller passes a
 // constant, and both branches would still have to be tested separately.
 func humanizeTurnError(err error, compacted bool) error {
-	if compacted && isContextOverflow(err) {
+	if compacted && isWindowOverflow(err) {
 		return &FriendlyError{err: err, msg: contextOverflowRetriedMessage(err.Error())}
 	}
 	return humanizeError(err)
 }
 
 // isContextOverflow reports whether err is a backend complaining that the
-// request did not fit the model's context window. Factored out of
-// humanizeError so the recovery path and the message path cannot drift apart
-// by consulting different marker lists.
+// prompt itself did not fit the model's context window: the one rejection
+// compaction can fix. A budget overflow (prompt + requested output) and an
+// output-cap error are not context overflows and must not trigger compaction.
+// Every overflow question in the package reads classifyOverflow, so the
+// recovery path and the message path cannot drift apart.
 func isContextOverflow(err error) bool {
-	return err != nil && hasOverflowMarker(err.Error())
+	return classifyOverflow(err).Kind == KindContext
 }
 
-// hasOverflowMarker holds the single walk over contextOverflowMarkers. Both
-// isContextOverflow and learnedWindowFrom go through it, so there is exactly
-// one marker list and one matching rule in the package.
-func hasOverflowMarker(msg string) bool {
-	low := strings.ToLower(msg)
-	for _, marker := range contextOverflowMarkers {
-		if strings.Contains(low, marker) {
-			return true
-		}
-	}
-	return false
+// isWindowOverflow reports a context or a budget overflow: the request, as
+// sent, did not fit the window. It decides the user-facing message, which is
+// true for both; recovery must still tell them apart.
+func isWindowOverflow(err error) bool {
+	k := classifyOverflow(err).Kind
+	return k == KindContext || k == KindBudget
 }
 
 // learnedWindowFrom extracts the model's real context window from an overflow
@@ -139,67 +178,52 @@ func hasOverflowMarker(msg string) bool {
 // so inconsistently, so this error is nib's only trustworthy source; inferring
 // a window from a model name would be a guess presented as a fact.
 //
-// Two figures are required. tokenCountRe can match a single number, and with
-// one number there is no way to tell whether it is the limit or the request
-// size — treating a request size as the window would raise the compaction
-// trigger above the real limit and suppress compaction exactly when it is most
-// needed. Fewer than two figures teaches nothing.
+// A window is learned only from a catalog row that names it (the "window"
+// group): a generic wording, or a row that states only a request size, teaches
+// nothing, because mistaking a request size for the window would raise the
+// compaction trigger above the real limit. Context and budget overflows both
+// state the real window; an output-cap error states the maximum OUTPUT, which
+// is not the window.
 //
-// The window is the SMALLER figure regardless of the order the backend printed
-// them, matching contextOverflowMessage.
-//
-// The whole unwrap chain is tried, not just err.Error(). humanizeError wraps
-// the backend error in a FriendlyError whose own text drops the second figure
-// — contextOverflowMessage prints "model allows 262144)" with no "tokens" for
-// tokenCountRe to anchor on — so reading only the outermost message would
-// learn nothing from a humanized error. Recovery runs before humanizeError
-// today, but that ordering is one edit away from silently never learning a
-// window again, and no test would catch it. Parsing every level makes the
-// order irrelevant.
+// classifyOverflow walks the whole unwrap chain, so a humanized error (whose
+// own text drops the figures) still teaches the window of the error it wraps.
 func learnedWindowFrom(err error) (int, bool) {
-	for e := err; e != nil; e = errors.Unwrap(e) {
-		if n, ok := windowFromMessage(e.Error()); ok {
-			return n, true
-		}
+	info := classifyOverflow(err)
+	if (info.Kind == KindContext || info.Kind == KindBudget) && info.Window > 0 {
+		return info.Window, true
 	}
 	return 0, false
 }
 
-// windowFromMessage applies the two-figure rule to one error message.
-func windowFromMessage(msg string) (int, bool) {
-	if !hasOverflowMarker(msg) {
-		return 0, false
+// overflowNeeds is the request size an overflow states: the total, else input
+// plus output, else the input alone (llama.cpp and OpenAI state only the
+// prompt, and reserve no output in the count).
+func (o overflowInfo) overflowNeeds() int {
+	switch {
+	case o.Total > 0:
+		return o.Total
+	case o.Input > 0 && o.Output > 0:
+		return o.Input + o.Output
+	default:
+		return o.Input
 	}
-	m := tokenCountRe.FindAllStringSubmatch(msg, -1)
-	if len(m) < 2 {
-		return 0, false
-	}
-	a, _ := strconv.Atoi(m[0][1])
-	b, _ := strconv.Atoi(m[1][1])
-	if b < a {
-		a = b
-	}
-	if a <= 0 {
-		return 0, false
-	}
-	return a, true
 }
 
 // overflowDetail renders the parenthesised token figures for an overflow
-// message, or "" when the backend did not report two of them. The larger count
-// is the request size and the smaller is the model's limit, regardless of the
-// order the backend printed them — the same rule learnedWindowFrom applies.
+// message, or "" when the backend stated none. Which figure is the request
+// size and which the limit comes from the catalog row, not number order.
 func overflowDetail(raw string) string {
-	m := tokenCountRe.FindAllStringSubmatch(raw, -1)
-	if len(m) < 2 {
-		return ""
+	info := classifyOverflow(errors.New(raw))
+	needs := info.overflowNeeds()
+	switch {
+	case needs > 0 && info.Window > 0:
+		return fmt.Sprintf(" (needs ~%d tokens, model allows %d)", needs, info.Window)
+	case info.Window > 0:
+		return fmt.Sprintf(" (model allows %d)", info.Window)
+	case needs > 0:
+		return fmt.Sprintf(" (needs ~%d tokens)", needs)
 	}
-	needs, _ := strconv.Atoi(m[0][1])
-	allows, _ := strconv.Atoi(m[1][1])
-	if allows > needs {
-		needs, allows = allows, needs
-	}
-	return fmt.Sprintf(" (needs ~%d tokens, model allows %d)", needs, allows)
+	return ""
 }
 
 // contextOverflowMessage builds the user-facing text for the FIRST context-
@@ -224,4 +248,17 @@ func contextOverflowMessage(raw string) string {
 func contextOverflowRetriedMessage(raw string) string {
 	return "the request is still larger than the model's context window" + overflowDetail(raw) +
 		" after compacting the conversation and retrying. Compacting again will not help: increase the backend's context size, or reduce the enabled tools/MCP servers."
+}
+
+// errSchemaFloor marks a turn that failed because the tool schemas and the
+// system prompt alone leave no room for a request: no compaction can help, so
+// nib kept the conversation instead of compacting it away.
+var errSchemaFloor = errors.New("tool schemas and system prompt do not fit the context window")
+
+// schemaFloorMessage is the user-facing text for errSchemaFloor. It reads
+// like the schema-budget notice (sizes, the largest servers, what to do), and
+// says the conversation was kept.
+func schemaFloorMessage(sb SchemaBudget, window int) string {
+	return schemaBudgetNotice(sb, window) +
+		", or increase the backend's context size. The conversation was kept: compacting it cannot make the request fit."
 }

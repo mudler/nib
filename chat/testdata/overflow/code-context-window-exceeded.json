@@ -1,0 +1,10 @@
+{
+  "provider": "LiteLLM",
+  "source": "LiteLLM exception class name, no figures",
+  "raw": "litellm.ContextWindowExceededError: litellm.BadRequestError: the prompt does not fit",
+  "kind": "context",
+  "window": 0,
+  "total": 0,
+  "input": 0,
+  "output": 0
+}
