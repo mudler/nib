@@ -106,6 +106,39 @@ base_url: https://api.openai.com/v1   # or your local endpoint, e.g. http://loca
 
 **3. Press `Ctrl+Space`** in your terminal (or just run `nib`). That's it.
 
+### Logging in to providers (`nib login`)
+
+`nib login <provider>` authenticates with a provider's own OAuth flow and
+saves a credential next to `config.yaml`. `nib login --list` shows what's
+available and its status.
+
+```bash
+nib login anthropic          # Claude (OAuth)
+nib login openai-codex       # ChatGPT Plus/Pro (OAuth)
+nib login google-gemini-cli  # Google AI Studio (OAuth)
+nib login xai-oauth          # xAI (device flow)
+```
+
+**Over SSH**, the OAuth callback (a localhost HTTP server) can't receive
+the browser redirect — the browser is on your laptop, the server is on the
+remote machine. nib detects this and prints the exact `ssh -L` port-forward
+command to run from your local machine. It also offers a paste fallback: if
+port forwarding isn't possible, complete the login in your browser, and
+when the redirect fails, copy the full URL from the address bar and paste
+it into nib.
+
+For providers that support RFC 8628 device flow (OpenAI, Google, xAI, and
+others), `--device` skips the localhost callback entirely — no port
+forwarding needed:
+
+```bash
+nib login openai-codex --device       # works over SSH with no forwarding
+nib login google-gemini-cli --device
+```
+
+Anthropic does not support device flow; for it, use port forwarding or the
+paste fallback.
+
 ## Usage
 
 Run `nib` to open the TUI, or press `Ctrl+Space` from your shell. In the TUI, `/help` lists

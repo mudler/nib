@@ -1239,6 +1239,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if msg.Type == tea.KeyEsc {
 				m.cancelLoginWait()
 				m.updateViewport()
+				return m, nil
+			}
+			// SSH paste-the-code fallback: when the login flow is over SSH,
+			// Enter submits the textarea content as a pasted callback URL.
+			if msg.Type == tea.KeyEnter && m.loginWait.flow != nil && m.loginWait.flow.IsSSH {
+				val := strings.TrimSpace(m.textarea.Value())
+				if val != "" && (strings.HasPrefix(val, "http://") || strings.HasPrefix(val, "https://")) {
+					if err := m.loginWait.flow.ManualCallback(val); err != nil {
+						m.appendMessage(ChatMessage{Role: "agent", Content: fmt.Sprintf("Invalid callback URL: %v", err)})
+					}
+					m.textarea.Reset()
+				}
 			}
 			return m, nil
 		}

@@ -304,6 +304,10 @@ var registry = map[string]Definition{
 		AuthorizeURL:      "https://auth.openai.com/oauth/authorize",
 		TokenURL:          "https://auth.openai.com/oauth/token",
 		TokenBodyFormat:   "form",
+		// DeviceURL enables `nib login openai-codex --device` (RFC 8628).
+		// OpenAI's auth server supports the device-code grant, which avoids
+		// the localhost callback entirely — ideal for SSH sessions.
+		DeviceURL: "https://auth.openai.com/oauth/device/code",
 		Scopes: []string{
 			"openid", "profile", "email", "offline_access",
 			"api.connectors.read", "api.connectors.invoke",
@@ -330,6 +334,10 @@ var registry = map[string]Definition{
 		AuthorizeURL:      "https://accounts.google.com/o/oauth2/v2/auth",
 		TokenURL:          "https://oauth2.googleapis.com/token",
 		TokenBodyFormat:   "form",
+		// DeviceURL enables `nib login google-gemini-cli --device` (RFC 8628).
+		// Google's OAuth provider supports the device-code grant, which avoids
+		// the localhost callback entirely — ideal for SSH sessions.
+		DeviceURL:         "https://oauth2.googleapis.com/device/code",
 		Scopes: []string{
 			"https://www.googleapis.com/auth/cloud-platform",
 			"https://www.googleapis.com/auth/userinfo.email",
@@ -358,6 +366,8 @@ var registry = map[string]Definition{
 		AuthorizeURL:      "https://accounts.google.com/o/oauth2/v2/auth",
 		TokenURL:          "https://oauth2.googleapis.com/token",
 		TokenBodyFormat:   "form",
+		// DeviceURL enables `nib login google-antigravity --device` (RFC 8628).
+		DeviceURL:         "https://oauth2.googleapis.com/device/code",
 		Scopes: []string{
 			"https://www.googleapis.com/auth/cloud-platform",
 			"https://www.googleapis.com/auth/userinfo.email",

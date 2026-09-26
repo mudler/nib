@@ -98,10 +98,7 @@ func (cs *CallbackServer) handle(w http.ResponseWriter, r *http.Request) {
 }
 
 func (cs *CallbackServer) deliver(w http.ResponseWriter, res CallbackResult) {
-	select {
-	case cs.resultCh <- res:
-	default:
-	}
+	cs.submit(res)
 	// Show a result page in the browser. The user sees this after the
 	// provider redirects; the app has already captured the code.
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -112,6 +109,46 @@ func (cs *CallbackServer) deliver(w http.ResponseWriter, res CallbackResult) {
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprint(w, `<html><body><h2>Login successful</h2><p>You can close this tab and return to nib.</p></body></html>`)
 	}
+}
+
+// submit pushes a result into the result channel. Non-blocking: if a result
+// is already pending, the new one is dropped (first callback wins).
+func (cs *CallbackServer) submit(res CallbackResult) {
+	select {
+	case cs.resultCh <- res:
+	default:
+	}
+}
+
+// ManualCallback parses a pasted callback URL (the full URL the browser tried
+// to redirect to) and delivers the result as if the HTTP callback had fired.
+// This is the fallback for SSH sessions where the browser's redirect to
+// localhost:port cannot reach the machine running nib.
+//
+// The URL must contain at least a "code" query parameter, and the "state"
+// parameter must match the expected state. Returns an error if the URL
+// cannot be parsed or the parameters are invalid.
+func (cs *CallbackServer) ManualCallback(rawURL string) error {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return fmt.Errorf("oauth: parse pasted URL: %w", err)
+	}
+	q := u.Query()
+	if errVal := q.Get("error"); errVal != "" {
+		desc := q.Get("error_description")
+		cs.submit(CallbackResult{Err: fmt.Errorf("oauth: provider error: %s: %s", errVal, desc)})
+		return nil
+	}
+	code := q.Get("code")
+	state := q.Get("state")
+	if code == "" {
+		return errors.New("oauth: pasted URL missing code parameter")
+	}
+	if state != cs.expected {
+		return fmt.Errorf("oauth: state mismatch (expected %q, got %q)", cs.expected, state)
+	}
+	cs.submit(CallbackResult{Code: code, State: state})
+	return nil
 }
 
 // Wait blocks until the callback is received or ctx is cancelled. The server

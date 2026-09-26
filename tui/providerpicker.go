@@ -236,11 +236,13 @@ func (f loginForm) dialog() render.Dialog {
 
 // loginWait is the dialog shown while an OAuth or device-code flow waits on
 // the browser. cancel aborts the flow (closing the callback server).
+// flow holds the LoginFlow for manual-callback (paste-code) support over SSH.
 type loginWait struct {
 	active bool
 	entry  chat.ProviderEntry
 	prompt string // device-code instructions, repeated in the dialog
 	cancel context.CancelFunc
+	flow   *auth.LoginFlow
 }
 
 // loginResultMsg is sent when an in-TUI login flow completes.
@@ -306,10 +308,14 @@ func (m *Model) startLogin(e chat.ProviderEntry) tea.Cmd {
 		// Keep the URL in the transcript: the browser may not open (SSH,
 		// headless), and the user must be able to copy it.
 		m.appendMessage(ChatMessage{Role: "agent", Content: flow.Prompt})
-		openBrowser(flow.URL)
+		if !flow.IsSSH {
+			openBrowser(flow.URL)
+		}
 	}
-	m.loginWait = loginWait{active: true, entry: e, cancel: cancel}
-	if e.LoginKind == provider.LoginDeviceCode {
+	m.loginWait = loginWait{active: true, entry: e, cancel: cancel, flow: flow}
+	if flow.IsSSH {
+		m.loginWait.prompt = flow.SSHPortForward
+	} else if e.LoginKind == provider.LoginDeviceCode {
 		m.loginWait.prompt = flow.Prompt
 	}
 	return func() tea.Msg {
