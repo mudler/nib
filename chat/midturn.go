@@ -153,11 +153,13 @@ func (c *turnCompactor) compact(msgs, out []openai.ChatCompletionMessage, base, 
 	if err != nil {
 		xlog.Warn("mid-turn compaction failed", "error", err)
 		c.failed = true
+		c.s.compactFailed(err)
 		return out
 	}
 	// The overflow retries may have moved the boundary back until the head
 	// is only the previous summary, which has nothing new in it.
 	if len(head) <= repl {
+		c.s.compactFailed(errNothingToCompact)
 		return out
 	}
 	// Save the head actually summarized as a compaction artifact, the same
@@ -178,11 +180,16 @@ func (c *turnCompactor) compact(msgs, out []openai.ChatCompletionMessage, base, 
 	c.covered, c.last, c.replacement = covered, msgs[covered-1], replacement
 
 	compacted := append(append([]openai.ChatCompletionMessage(nil), replacement...), tail...)
-	// The live figure measured the history that was just replaced; see
-	// compactHistory.
-	c.s.live.reset()
+	// The live figure measured the history that was just replaced. Unlike
+	// compactHistory, nothing here rewrites s.fragment before the run ends,
+	// so zeroing it would hand the gauge back to the fragment's figure, which
+	// is older still. The compacted request's estimate stands in instead,
+	// with the overhead the estimate misses, until the next request reports
+	// a real one. The notice quotes the same figures, so the two agree.
+	before, after := estimateTokens(out)+overhead, estimateTokens(compacted)+overhead
+	c.s.live.replace(after)
 	if c.s.callbacks.OnCompactDone != nil {
-		c.s.callbacks.OnCompactDone(estimateTokens(out), estimateTokens(compacted))
+		c.s.callbacks.OnCompactDone(before, after)
 	}
 	return compacted
 }

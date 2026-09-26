@@ -440,7 +440,7 @@ type Model struct {
 	wakeupChan      chan chat.WakeupRequest
 	cronFireChan    chan string    // prompts of cron jobs run now via cron_trigger
 	parkChan        chan parkEvent // park/resume signals from the live run
-	compactChan     chan [2]int    // {before, after} token counts from auto-compaction
+	compactChan     chan tea.Msg   // compactNoticeMsg or compactFailedMsg from auto-compaction
 	pruneChan       chan [2]int    // {results, freedTokens} from tool-output pruning
 
 	// /resume picker state (Phase 3 Task 15). Set synchronously by
@@ -645,6 +645,11 @@ type compactResultMsg struct {
 // compactNoticeMsg is an auto-compaction notice pushed from the session goroutine.
 type compactNoticeMsg [2]int
 
+// compactFailedMsg reports an automatic compaction that did not shrink the
+// conversation. It travels on compactChan with compactNoticeMsg, so the two
+// arrive in the order the session reported them.
+type compactFailedMsg struct{ err error }
+
 // pruneNoticeMsg is a tool-output pruning notice pushed from the session goroutine.
 type pruneNoticeMsg [2]int
 
@@ -820,7 +825,7 @@ func NewModel(ctx context.Context, cfg types.Config, height int, shellJobs *wizm
 		wakeupChan:         make(chan chat.WakeupRequest, 8),
 		cronFireChan:       make(chan string, 8),
 		parkChan:           make(chan parkEvent, 16),
-		compactChan:        make(chan [2]int, 4),
+		compactChan:        make(chan tea.Msg, 4),
 		pruneChan:          make(chan [2]int, 4),
 		mdRenderers:        make(map[int]*glamour.TermRenderer),
 		mdCache:            make(map[mdKey]string),
@@ -1048,7 +1053,13 @@ func (m Model) initSession() tea.Cmd {
 			},
 			OnCompactDone: func(before, after int) {
 				select {
-				case m.compactChan <- [2]int{before, after}:
+				case m.compactChan <- compactNoticeMsg{before, after}:
+				default:
+				}
+			},
+			OnCompactFailed: func(err error) {
+				select {
+				case m.compactChan <- compactFailedMsg{err}:
 				default:
 				}
 			},
@@ -1963,6 +1974,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.updateViewport()
 		return m, m.listenCompact()
 
+	case compactFailedMsg:
+		// The status said "Compacting conversation…"; say how it ended, in the
+		// transcript like a successful compaction, and clear it the same way.
+		m.appendMessage(ChatMessage{Role: "agent", Content: compactFailedNotice(msg.err)})
+		if m.loading {
+			m.startThinking()
+		} else {
+			m.status = ""
+		}
+		m.updateViewport()
+		return m, m.listenCompact()
+
 	case pruneNoticeMsg:
 		m.appendMessage(ChatMessage{Role: "agent", Content: prunedNotice(msg[0], msg[1])})
 		m.updateViewport()
@@ -2810,7 +2833,7 @@ func (m Model) listenCompact() tea.Cmd {
 	return func() tea.Msg {
 		select {
 		case v := <-m.compactChan:
-			return compactNoticeMsg(v)
+			return v
 		case <-m.ctx.Done():
 			return nil
 		}
@@ -4147,6 +4170,12 @@ func prunedNotice(results, freed int) string {
 func compactNotice(before, after int) string {
 	return fmt.Sprintf("Compacted conversation — ~%s → ~%s tokens (estimated)",
 		chat.HumanTokensOrZero(before), chat.HumanTokensOrZero(after))
+}
+
+// compactFailedNotice is the transcript line for an automatic compaction that
+// did not shrink the conversation.
+func compactFailedNotice(err error) string {
+	return "Compaction skipped: " + err.Error() + " — continuing with the full conversation"
 }
 
 // aboutText renders the /about output for the TUI. It duplicates

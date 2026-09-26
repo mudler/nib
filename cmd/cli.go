@@ -463,6 +463,9 @@ func RunCLI(ctx context.Context, cfg types.Config, streams Streams, shellJobs *w
 		OnCompactDone: func(before, after int) {
 			writeNotice(out, spin, theme.Subtle.Render(compactNotice(before, after)))
 		},
+		OnCompactFailed: func(err error) {
+			writeNotice(out, spin, theme.Subtle.Render("Compaction skipped: "+err.Error()+" — continuing with the full conversation"))
+		},
 		OnPruneDone: func(results, freed int) {
 			writeNotice(out, spin, theme.Subtle.Render(pruneNotice(results, freed)))
 		},
