@@ -39,6 +39,7 @@ const (
 	cmdEndpoint    = "endpoint"
 	cmdEndpointAdd = "add"
 	cmdAbout       = "about"
+	cmdHelp        = "help"
 
 	// /attach sub-verbs
 	cmdAttachClear = "clear"
@@ -96,6 +97,7 @@ const (
 	KindAbout                    // print version, config paths, and tool inventory
 	KindApprove                  // set the approval mode (Mode), or show it when Mode is empty
 	KindClassifier               // set the classifier (Endpoint, Model), turn it off, or pick one
+	KindHelp                     // list the keys and the commands
 )
 
 // AttachOp enumerates the /attach sub-operations.
@@ -289,6 +291,8 @@ func Resolve(input string, cmds []types.CommandConfig, skills []types.Skill, age
 		return Action{Kind: KindEndpoint, Endpoint: strings.TrimSpace(rest)}
 	case cmdAbout:
 		return Action{Kind: KindAbout}
+	case cmdHelp:
+		return Action{Kind: KindHelp}
 	default:
 		c, ok := findCommand(cmds, verb)
 		if !ok {

@@ -302,6 +302,10 @@ const (
 	CompEndpointDesc   = "switch endpoint"
 	CompAboutName      = "about"
 	CompAboutDesc      = "show version, config paths, and tool inventory"
+	CompHelpName       = "help"
+	CompHelpDesc       = "keys and commands"
+	// HelpMore closes /help: where the rest is documented.
+	HelpMore = "configuration and the rest: ask nib about itself, or see the README"
 
 	// ToolResultNoOutput is fmtBashResult's (chat/resultfmt.go) fallback for a
 	// failed bash/bash_job_output call whose stdout and stderr were both

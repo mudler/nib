@@ -780,6 +780,9 @@ func RunCLI(ctx context.Context, cfg types.Config, streams Streams, shellJobs *w
 					fmt.Fprintln(errOut, theme.Error.Render(theme.Cross+" "+err.Error()))
 				}
 				fmt.Fprintln(out)
+			case slash.KindHelp:
+				help(out)
+				continue
 			case slash.KindAbout:
 				fmt.Fprint(out, AboutText(cfg))
 				continue

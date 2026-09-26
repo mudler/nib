@@ -2645,6 +2645,9 @@ func (m *Model) dispatchResolved(input string) tea.Cmd {
 	case slash.KindAbout:
 		m.appendMessage(ChatMessage{Role: "agent", Content: aboutText(m.cfg)})
 		return nil
+	case slash.KindHelp:
+		m.appendMessage(ChatMessage{Role: "agent", Content: helpText(buildCompItems(m.cfg.Commands, m.cfg.Skills, m.cfg.Agents))})
+		return nil
 	default: // slash.KindSend
 		files, overrides := attachstage.BuildSend(m.pending, action)
 		m.loading = true
