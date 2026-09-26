@@ -486,6 +486,10 @@ type Model struct {
 	// Sub-agent jobs state
 	jobs           []agentJob
 	agentEventChan chan chat.AgentEvent
+	// agentTitleChan carries the titles the model writes for sub-agents, and
+	// earlyTitles holds one that arrived before its agent's event.
+	agentTitleChan chan agentTitleMsg
+	earlyTitles    map[string]string
 
 	// Ctrl+O log viewer state.
 	showLogs    bool           // viewer open
@@ -820,6 +824,7 @@ func NewModel(ctx context.Context, cfg types.Config, height int, shellJobs *wizm
 		cfg:                cfg,
 		height:             height,
 		agentEventChan:     make(chan chat.AgentEvent, 16),
+		agentTitleChan:     make(chan agentTitleMsg, 16),
 		statusChan:         make(chan string, 10),
 		reasoningChan:      make(chan reasoningEvent, 256),
 		turnGen:            new(atomic.Int32),
@@ -1057,6 +1062,13 @@ func (m Model) initSession() tea.Cmd {
 			OnAgentEvent: func(ev chat.AgentEvent) {
 				select {
 				case m.agentEventChan <- ev:
+				default:
+				}
+			},
+			OnAgentTitle: func(id, title string) {
+				// A title is a nicety: dropped when the UI is behind.
+				select {
+				case m.agentTitleChan <- agentTitleMsg{id: id, title: title}:
 				default:
 				}
 			},
@@ -1726,7 +1738,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.appendMessage(ChatMessage{Role: "agent", Content: fmt.Sprintf("Reloaded %d durable loop(s).", n)})
 		}
 		// Start listening for callbacks
-		cmds = append(cmds, m.listenStatus(), m.listenReasoningEvents(), m.listenToolRequest(), m.listenToolResult(), m.listenToolStart(), m.listenAutoApproved(), m.listenAskRequest(), m.listenAgentEvents(), m.shellTick(), m.loopTick(), m.listenWakeup(), m.listenCronFire(), m.listenPark(), m.listenCompact(), m.listenPrune())
+		cmds = append(cmds, m.listenStatus(), m.listenReasoningEvents(), m.listenToolRequest(), m.listenToolResult(), m.listenToolStart(), m.listenAutoApproved(), m.listenAskRequest(), m.listenAgentEvents(), m.shellTick(), m.loopTick(), m.listenWakeup(), m.listenCronFire(), m.listenPark(), m.listenCompact(), m.listenPrune(), m.listenAgentTitles())
 
 	case bootTickMsg:
 		if m.boot != nil {
@@ -2252,6 +2264,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.updateViewport()
 		m.ringBell()
 		cmds = append(cmds, m.listenAskRequest())
+
+	case agentTitleMsg:
+		m.applyAgentTitle(msg.id, msg.title)
+		m.updateViewport()
+		return m, m.listenAgentTitles()
 
 	case agentEventMsg:
 		// Update value-receiver copy via pointer helper, then write back.
@@ -2950,6 +2967,21 @@ func (m Model) listenReasoningEvents() tea.Cmd {
 				}
 			}
 			return reasoningEventsMsg(events)
+		case <-m.ctx.Done():
+			return nil
+		}
+	}
+}
+
+// agentTitleMsg is a title the model wrote for a sub-agent.
+type agentTitleMsg struct{ id, title string }
+
+// listenAgentTitles waits for a sub-agent title from the session.
+func (m Model) listenAgentTitles() tea.Cmd {
+	return func() tea.Msg {
+		select {
+		case v := <-m.agentTitleChan:
+			return v
 		case <-m.ctx.Done():
 			return nil
 		}

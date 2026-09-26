@@ -83,6 +83,9 @@ type agentJob struct {
 	Type   string
 	Task   string
 	Status chat.AgentStatus
+	// Title is the short title the model wrote for the task, "" until it
+	// arrives (see chat.Callbacks.OnAgentTitle).
+	Title string
 }
 
 // approvalContent is what a tool-approval prompt shows above its menu.
@@ -163,7 +166,24 @@ func (m *Model) applyAgentEvent(ev chat.AgentEvent) {
 			return
 		}
 	}
-	m.jobs = append(m.jobs, agentJob{ID: ev.ID, Type: ev.Type, Task: ev.Task, Status: ev.Status})
+	m.jobs = append(m.jobs, agentJob{ID: ev.ID, Type: ev.Type, Task: ev.Task, Status: ev.Status, Title: m.earlyTitles[ev.ID]})
+	delete(m.earlyTitles, ev.ID)
+}
+
+// applyAgentTitle records the title the model wrote for sub-agent id. It can
+// arrive before the agent's own event reaches the UI: the two travel on
+// separate channels. Then it is kept until the agent shows up.
+func (m *Model) applyAgentTitle(id, title string) {
+	for i := range m.jobs {
+		if m.jobs[i].ID == id {
+			m.jobs[i].Title = title
+			return
+		}
+	}
+	if m.earlyTitles == nil {
+		m.earlyTitles = map[string]string{}
+	}
+	m.earlyTitles[id] = title
 }
 
 // jobByID returns the tracked sub-agent job with the given id.

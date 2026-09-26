@@ -57,6 +57,7 @@ type Setting struct {
 // absent still lists, with its type standing in for the description.
 var settingDocs = map[string]string{
 	"ui.hide_hud":                             "hide the footer clock, cpu and memory badges",
+	"agent_options.no_titles":                 "do not ask the model for a short title for each sub-agent",
 	"ui.no_bell":                              "do not ring the terminal bell when nib needs you",
 	"ui.no_funny":                             "turn off funny thinking lines and tips while the agent works",
 	"ui.footer_front":                         "footer telemetry always shown: context, speed, usage, age, clock, cpu, mem (comma-separated; none for nothing)",

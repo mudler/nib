@@ -82,6 +82,8 @@ type Session struct {
 
 	agentMu    sync.Mutex
 	agentStart map[string]time.Time // sub-agent ID -> spawn time, for elapsed
+	// agentTitled records the sub-agents a title was requested for.
+	agentTitled map[string]bool
 
 	// inject is the per-session message-injection channel handed to cogito. While
 	// a run parks (background work pending, or simply waiting for the user), the
@@ -973,6 +975,7 @@ func (s *Session) emitAgentEvent(a *cogito.AgentState) {
 		if s.agentLogs != nil {
 			s.agentLogs.started(a.ID, time.Now())
 		}
+		s.titleAgent(a.ID, a.Task)
 	case AgentStatusCompleted, AgentStatusFailed:
 		if s.agentLogs != nil {
 			s.agentLogs.forget(a.ID)

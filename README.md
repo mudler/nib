@@ -200,8 +200,9 @@ enter send · ctrl+y use command · G/end newest · ctrl+c twice exit           
 - **Telemetry.** The context gauge (the tick marks the compaction point) and
   the generation speed. `ui.footer_front` chooses these items.
 - **Activity strip.** One chip per area of work: the todo list, shell jobs,
-  each running sub-agent (its type, a title from its task, what it is doing
-  now, and its output so far), sub-agent history, loops and the goal. A dim
+  each running sub-agent (its type, a short title the model wrote for its
+  task, what it is doing now, and its output so far), sub-agent history,
+  loops and the goal. A dim
   chip has nothing running. A red `×N` counts failures you have not looked at
   yet. Opening their view clears it.
 - **Keys** for what you can do now.
@@ -577,6 +578,12 @@ agent_options:
   max_attempts: 3
   max_retries: 3
   force_reasoning: false
+  # nib asks the model for a short title (at most six words) for each
+  # sub-agent, shown on its footer chip. It is one small request per
+  # sub-agent, counted in the session's usage. Until it arrives, or when it
+  # fails, the chip shows the task's first sentence. Set to true to not ask,
+  # for example on a backend that serves one request at a time.
+  no_titles: false
 
 # Optional: tool-approval policy (default: prompt)
 #   prompt    — ask before each tool call, but auto-approve read-only calls

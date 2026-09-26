@@ -20,6 +20,10 @@ type AgentOptions struct {
 	MaxAttempts    int  `yaml:"max_attempts"`
 	MaxRetries     int  `yaml:"max_retries"`
 	ForceReasoning bool `yaml:"force_reasoning"`
+	// NoTitles stops nib asking the model for a short title for each
+	// sub-agent it starts; the UI then names a sub-agent by its task's first
+	// sentence. Zero value (false) = titles requested.
+	NoTitles bool `yaml:"no_titles,omitempty"`
 }
 
 // CompactionConfig controls conversation compaction: summarizing older turns

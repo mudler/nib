@@ -214,6 +214,11 @@ type Callbacks struct {
 	// OnCompactDone is called after the conversation is compacted, with the
 	// approximate token counts before and after. Optional.
 	OnCompactDone func(before, after int)
+	// OnAgentTitle is called, from a background goroutine, with a short
+	// title the model wrote for sub-agent id's task. It may never come: the
+	// UI keeps the task's first sentence until it does. Optional; without
+	// it no title is requested.
+	OnAgentTitle func(id, title string)
 	// OnCompactFailed is called instead of OnCompactDone when a compaction
 	// that was announced with OnStatus("Compacting conversation…") does not
 	// shrink the conversation: the summary failed, or there was nothing new
