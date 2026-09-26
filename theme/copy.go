@@ -13,6 +13,9 @@ const (
 
 	HelpDefault  = "enter send · ctrl+y use command · G/end newest · ctrl+c twice exit"
 	HelpApproval = "pick an option above · esc deny"
+	// HelpForegroundWork is the help line while the turn waits on a
+	// foreground sub-agent or shell command.
+	HelpForegroundWork = "ctrl+b background · enter queue · ctrl+c interrupt · ctrl+o logs"
 	// HelpActivity follows SideKeys on the help line while the footer's
 	// activity strip has focus (ctrl+g); HintActivity is the right-hand hint
 	// that says how to get there.

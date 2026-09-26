@@ -18,7 +18,11 @@ type AgentEvent struct {
 	Type   string // agent type name (e.g. "explore"); empty for generic
 	Task   string
 	Status AgentStatus
-	Result string
+	// Background is true for a sub-agent that runs detached from the turn:
+	// spawned in the background. One the user detached stays false here;
+	// the UI records that itself.
+	Background bool
+	Result     string
 	Err    error
 	// Populated on completion/failure events (zero otherwise):
 	ToolCount   int           // tools the sub-agent executed

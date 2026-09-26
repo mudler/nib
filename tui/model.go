@@ -500,6 +500,9 @@ type Model struct {
 	// sendToAgent sends a message to a sub-agent; nil uses the session's.
 	// Tests set it.
 	sendToAgent func(id, message string) error
+	// detachAgent backgrounds a sub-agent; nil uses the session's agent
+	// manager. Tests set it.
+	detachAgent func(id string) error
 	logVP       viewport.Model // scrollable full-log view
 
 	// Ctrl+T todo panel state.
@@ -1404,17 +1407,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case tea.KeyCtrlB:
 			// Background the running foreground work: a sub-agent first,
-			// otherwise a running foreground shell command.
-			if m.sessionReady && m.session != nil {
-				if id := m.firstRunningJobID(); id != "" {
-					// Detach the sub-agent so it keeps running in the background; its
-					// completion is auto-injected into the live run by cogito.
-					_ = m.session.AgentManager().Detach(id)
-					return m, nil
-				}
-			}
-			if id, ok := m.shellJobs.DetachForeground(); ok {
-				m.status = "Backgrounded shell job " + id
+			// otherwise a running foreground shell command. A detached
+			// sub-agent keeps running; cogito injects its completion into
+			// the live run.
+			if what := m.backgroundForeground(); what != "" {
+				m.status = "Backgrounded " + what
 				m.updateViewport()
 			}
 			return m, nil
@@ -4132,6 +4129,9 @@ func (m Model) helpLine() string {
 		return theme.EndpointFormHint
 	case m.loginWait.active:
 		return theme.LoginWaitHint
+	case m.loading && m.hasForegroundWork():
+		// The turn waits on work ctrl+b can move out of its way.
+		return theme.HelpForegroundWork
 	case m.parked:
 		return "enter add a follow-up · ctrl+c interrupt · ctrl+o logs"
 	case strings.TrimSpace(m.textarea.Value()) == "" && len(m.queue) > 0:
