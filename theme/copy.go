@@ -425,9 +425,8 @@ const (
 	StatusInterrupting = "Interrupting…"
 	HintDraftCleared   = "draft cleared · ↑ to restore"
 	HintExitArmed      = "press ctrl+c again to exit"
-	HintQueueHeld      = "queue on hold · enter send it · ↑↓ pick · ^e edit · ^x delete"
 
 	NoticeGoalPaused       = "goal paused · /goal resume to continue, /goal clear to drop it"
-	NoticeQueueHeld        = "%d queued, on hold · press enter on an empty composer to send"
+	NoticeQueueSending     = "sending %d queued message(s) next"
 	NoticeStillRunningHelp = " · ctrl+o logs · /loop stop"
 )

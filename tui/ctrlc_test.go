@@ -12,7 +12,6 @@ import (
 
 	"github.com/mudler/nib/chat"
 	wizmcp "github.com/mudler/nib/mcp"
-	"github.com/mudler/nib/types"
 )
 
 var (
@@ -244,9 +243,10 @@ func TestEscClosesTheCompletionPopup(t *testing.T) {
 	}
 }
 
-// An interrupt holds the queue. The next queued message used to start at
-// once, so the agent went on after the user pressed stop.
-func TestInterruptHoldsTheQueue(t *testing.T) {
+// An interrupt stops the turn and sends what was queued behind it: the user
+// who queued a message and pressed stop wants the queued message next. It
+// used to be held until Enter on an empty composer.
+func TestInterruptSendsTheQueue(t *testing.T) {
 	m := newCtrlCModel()
 	m.loading = true
 	m.queue = []string{"next task"}
@@ -254,42 +254,20 @@ func TestInterruptHoldsTheQueue(t *testing.T) {
 
 	next, cmd := m.Update(responseMsg{err: context.Canceled})
 	m = next.(Model)
-	if cmd != nil {
-		t.Fatal("a turn started after the interrupt")
+	if cmd == nil || len(m.queue) != 0 {
+		t.Fatalf("queue=%v cmd=%v, want the queued message sent as the next turn", m.queue, cmd != nil)
 	}
-	if len(m.queue) != 1 || !m.queueHeld {
-		t.Fatalf("queue=%v held=%v, want the entry kept and held", m.queue, m.queueHeld)
+	if !m.loading {
+		t.Fatal("the queued turn did not start")
 	}
-	last := m.messages[len(m.messages)-1].Content
-	if !strings.Contains(last, "1 queued") {
-		t.Fatalf("the interrupt notice does not mention the held queue: %q", last)
+	var notice string
+	for _, msg := range m.messages {
+		if strings.HasPrefix(msg.Content, "interrupted.") {
+			notice = msg.Content
+		}
 	}
-
-	// Another run ending does not release the hold.
-	next, cmd = m.Update(responseMsg{content: "a loop ran"})
-	m = next.(Model)
-	if cmd != nil || len(m.queue) != 1 {
-		t.Fatal("the held queue was sent when another run ended")
-	}
-}
-
-// Enter on an empty composer releases a held queue.
-func TestEnterReleasesAHeldQueue(t *testing.T) {
-	s, err := chat.NewSession(context.Background(), types.Config{}, chat.Callbacks{})
-	if err != nil {
-		t.Fatalf("NewSession: %v", err)
-	}
-	defer s.Close()
-	m := newCtrlCModel()
-	m.session = s
-	m.queue = []string{"/goal"} // a slash command runs without starting a turn
-	m.queueHeld = true
-	m = pressKeys(t, m, tea.KeyMsg{Type: tea.KeyEnter})
-	if m.queueHeld || len(m.queue) != 0 {
-		t.Fatalf("held=%v queue=%v, want the queue released and sent", m.queueHeld, m.queue)
-	}
-	if last := m.messages[len(m.messages)-1].Content; !strings.Contains(last, "No goal set") {
-		t.Fatalf("the queued /goal did not run: %q", last)
+	if !strings.Contains(notice, "sending 1 queued") {
+		t.Fatalf("the interrupt notice does not say the queue is sent: %q", notice)
 	}
 }
 

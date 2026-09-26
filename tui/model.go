@@ -257,10 +257,6 @@ type Model struct {
 	// hint is a one-shot line shown in place of the help line (the exit
 	// warning, "draft cleared"). The next key other than Ctrl+C clears it.
 	hint string
-	// queueHeld stops the queue from being sent automatically. An interrupt
-	// sets it, so pressing stop does not start the next queued message; Enter
-	// on an empty composer releases it.
-	queueHeld bool
 	// parked is true while the live run is parked (the assistant replied but the
 	// run is still alive waiting on the injection channel — background work
 	// pending, or simply ready for a follow-up). While parked the composer is
@@ -1597,19 +1593,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			input := strings.TrimSpace(m.textarea.Value())
 			if input == "" {
-				// Enter on an empty composer releases a queue an interrupt
-				// held. While a run is live the queue drains at its next
-				// boundary; otherwise it is sent now.
-				if m.queueHeld && len(m.queue)+len(m.redispatch) > 0 {
-					m.queueHeld = false
-					if m.session != nil && m.session.RunLive() {
-						m.updateViewport()
-						return m, nil
-					}
-					cmd := m.flushQueueAsTurn()
-					m.updateViewport()
-					return m, cmd
-				}
 				return m, nil
 			}
 
@@ -1885,10 +1868,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if msg.err != nil && errors.Is(msg.err, context.Canceled) {
 			m.appendMessage(ChatMessage{Role: "agent", Content: m.interruptNotice()})
-		}
-		// A hold with nothing left to hold is over.
-		if len(m.queue)+len(m.redispatch) == 0 {
-			m.queueHeld = false
 		}
 		// Autosave at this turn boundary so /resume never loses more than the
 		// turn in flight when the process exits uncleanly. Save failures are
@@ -4155,8 +4134,6 @@ func (m Model) helpLine() string {
 		return theme.LoginWaitHint
 	case m.parked:
 		return "enter add a follow-up · ctrl+c interrupt · ctrl+o logs"
-	case strings.TrimSpace(m.textarea.Value()) == "" && len(m.queue) > 0 && m.queueHeld:
-		return theme.HintQueueHeld
 	case strings.TrimSpace(m.textarea.Value()) == "" && len(m.queue) > 0:
 		return "↑↓ pick · ^e edit · ^x delete"
 	default:

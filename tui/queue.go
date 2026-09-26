@@ -46,7 +46,7 @@ func (m *Model) queueDeleteSel() string {
 // queue is empty or no run is live; the entry stays queued and retries at the
 // next boundary if the injection channel is momentarily full.
 func (m *Model) releaseQueueFront() bool {
-	if m.queueHeld || len(m.queue) == 0 || m.session == nil || !m.session.RunLive() {
+	if len(m.queue) == 0 || m.session == nil || !m.session.RunLive() {
 		return false
 	}
 	front := m.queue[0]
@@ -93,12 +93,7 @@ func (m *Model) releaseQueueFront() bool {
 // Undelivered follow-ups (released into the ended run but never consumed by
 // it) go first: they were typed — and echoed — before anything still queued,
 // so they re-dispatch without a second transcript echo.
-//
-// It sends nothing while the queue is held (see queueHeld).
 func (m *Model) flushQueueAsTurn() tea.Cmd {
-	if m.queueHeld {
-		return nil
-	}
 	var texts []string
 
 	// dispatchAccumulated sends all collected plain-message texts as a single
