@@ -281,6 +281,43 @@ func (m Model) agentLiveSpeed(id string) string {
 type agentMeters struct {
 	mu     sync.Mutex
 	meters map[string]*speedMeter
+	// steps is what each sub-agent is doing now, from its latest stream
+	// event: the tool it called, or thinking / writing.
+	steps map[string]string
+}
+
+// step records what sub-agent id is doing, from one of its stream events.
+func (a *agentMeters) step(id string, ev chat.StreamEvent) {
+	if a == nil || id == "" {
+		return
+	}
+	var step string
+	switch {
+	case ev.Kind == "tool_call" && ev.ToolName != "":
+		step = ev.ToolName
+	case ev.Kind == "reasoning":
+		step = "thinking"
+	case ev.Kind == "content":
+		step = "writing"
+	default:
+		return
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.steps == nil {
+		a.steps = map[string]string{}
+	}
+	a.steps[id] = step
+}
+
+// doing returns what sub-agent id is doing now, or "" before it streamed.
+func (a *agentMeters) doing(id string) string {
+	if a == nil {
+		return ""
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.steps[id]
 }
 
 // record counts one streamed chunk of n bytes from sub-agent id.

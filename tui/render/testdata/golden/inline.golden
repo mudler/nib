@@ -160,7 +160,8 @@ nib · first para
 tab complete
 
 === footer help and badges ===
-tab complete                                         12k ctx
+12k ctx
+tab complete
 
 === footer new output marker ===
 ↓ new output
@@ -171,36 +172,47 @@ tab complete
 × something failed
 
 === footer jobs row ===
+* 2 jobs running
 tab complete
-* 2 jobs running                                            
 
 === footer shell row ===
+> 1 shell job
 tab complete
-> 1 shell job                                               
 
 === footer loops row ===
-tab complete
 ~ loop every 5m
+tab complete
 
 === footer goal row ===
-tab complete
 o goal: ship it
+tab complete
 
 === footer unset kind row ===
-tab complete
 unset kind row
+tab complete
+
+=== footer todo chip ===
+o todo 2/5 writing tests
+tab complete
+
+=== footer focused strip ===
+12k ctx
+session 1k in / 2k out  12:00:00
+o todo -  ▸ shell 3 done x1  > explore 3.1k
+lt/rt move · enter open · esc back
+
+=== footer help right hint ===
+tab complete                                 ctrl+g activity
 
 === footer every row ===
 ↓ new output
-tab complete                                         12k ctx
+12k ctx
+* 2 jobs ru…  > 1 shell job  ~ loop every …  o goal: ship it
+tab complete
 × something failed
-* 2 jobs running                                            
-> 1 shell job                                               
-~ loop every 5m
-o goal: ship it
 
 === footer height every row ===
-7
+5
 
 === frame without dialogs ===
 nib                                            ~/src/project

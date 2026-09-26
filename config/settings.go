@@ -59,6 +59,8 @@ var settingDocs = map[string]string{
 	"ui.hide_hud":                             "hide the footer clock, cpu and memory badges",
 	"ui.no_bell":                              "do not ring the terminal bell when nib needs you",
 	"ui.no_funny":                             "turn off funny thinking lines and tips while the agent works",
+	"ui.footer_front":                         "footer telemetry always shown: context, speed, usage, age, clock, cpu, mem (comma-separated; none for nothing)",
+	"ui.footer_expanded":                      "footer telemetry shown with ctrl+g: same items as ui.footer_front",
 	"approval_mode":                           "tool-call gating: prompt, strict, allowlist, classify or auto",
 	"classifier.endpoint":                     "named endpoint that serves the classifier",
 	"classifier.model":                        "classifier model (e.g. a GLiNER SystemOne model)",

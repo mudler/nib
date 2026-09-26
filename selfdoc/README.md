@@ -64,7 +64,7 @@ Think of it as the **`fzf` for LLMs**: portable, keyboard-driven, composable, an
 - **Two modes** — a polished TUI, or a plain `--cli` mode for pipes and scripts.
 - **Tool execution with approval** — the AI proposes commands; you approve, deny, edit, or trust for the session.
 - **Classifier approval & reply suggestions** — a small local classifier (e.g. GLiNER on LocalAI) can approve safe calls for you, and suggests your next reply as grey text that `Tab` accepts.
-- **Sub-agents & background jobs** — delegate to typed sub-agents; background them (`Ctrl+B`) and watch the jobs footer (`Ctrl+J`).
+- **Sub-agents & background jobs** — delegate to typed sub-agents; background them (`Ctrl+B`) and follow each one from the footer's activity strip (`Ctrl+G`).
 - **Plugins** — `nib plugin install <git-url|local-path|zip|catalog-name>`; six contribution types; Claude-Code-plugin compatible.
 - **Skills** — `nib skill install <git-url|local-path|zip|url|catalog-name>`; progressive-disclosure skill packs loaded on demand.
 - **Catalog** — `nib skill browse` / `nib plugin browse` discover extensions from agentskills.io-compatible index sources; a starter catalog ships built in.
@@ -173,7 +173,8 @@ nib --init fish | source      # ~/.config/fish/config.fish
 ### Sub-agents & background jobs
 
 Ask nib to delegate, and it spawns a typed sub-agent (`explore`, `plan`, or any you
-configure). Background a running job with `Ctrl+B` and watch the jobs footer with `Ctrl+J`:
+configure). Background a running job with `Ctrl+B`. Each running sub-agent has
+its own chip in the footer's activity strip (see [The footer](#the-footer)):
 
 <p align="center">
   <img alt="nib delegating to the explore sub-agent, with the jobs footer" src="docs/images/demo-agents.gif" width="800">
@@ -185,6 +186,52 @@ sub-agent finishes, its line reports the same: `sub-agent explore finished · 3 
 12.4k tokens (812 out) · 38 tok/s · 1m 03s`. The total comes from the backend's
 usage report. When the backend reports no usage, nib counts the streamed output
 and marks it with `~`.
+
+### The footer
+
+The footer has four lines:
+
+```
+ctx ▰▰▰▰▰▰▰▰│▰▱ 88.3k/100k · compacts at 76.7k  tok/s 12 · avg 13
+◐ todo 2/8 Wire the LoRA  ▷ shell 1 running  ↳ explore: scan the LoRA loader · bash · 3.1k  ↳ agents ×1
+enter send · ctrl+y use command · G/end newest · ctrl+c twice exit                  ctrl+g activity
+```
+
+- **Telemetry.** The context gauge (the tick marks the compaction point) and
+  the generation speed. `ui.footer_front` chooses these items.
+- **Activity strip.** One chip per area of work: the todo list, shell jobs,
+  each running sub-agent (its type, a title from its task, what it is doing
+  now, and its output so far), sub-agent history, loops and the goal. A dim
+  chip has nothing running. A red `×N` counts failures you have not looked at
+  yet. Opening their view clears it.
+- **Keys** for what you can do now.
+
+Press `Ctrl+G` to move the keyboard to the activity strip. It also shows a
+second telemetry line (`ui.footer_expanded`: session tokens, session age,
+clock, CPU and memory by default).
+
+| Key | Action |
+|---|---|
+| `←` `→`, `Tab` | Select the previous or next chip |
+| `Enter` | Open the chip: the todo panel, the sub-agent's or shell job's log, or the loops or goal panel |
+| `Esc`, `Ctrl+G` | Go back to the composer |
+
+Any other key goes back to the composer and is typed there.
+
+The telemetry items are `context`, `speed`, `usage`, `age`, `clock`, `cpu` and
+`mem`. Set either line to a comma-separated list, in priority order: when the
+terminal is narrow, the items at the end are left out first. Set it to `none`
+to show no items:
+
+```yaml
+ui:
+  footer_front: context,speed,usage   # default: context,speed
+  footer_expanded: age,clock,cpu,mem  # default: usage,age,clock,cpu,mem
+  hide_hud: false                     # true hides clock, cpu and mem everywhere
+```
+
+Both apply live with `/settings`, for example
+`/settings ui.footer_front context,usage`.
 
 ### Watching tool calls
 
@@ -236,9 +283,9 @@ current session. The model sends the **complete** todo list on every call
 time). Each item has a status: `pending`, `in_progress`, `completed`, or
 `cancelled`.
 
-The current list is shown in the footer as a compact summary line, e.g.
-`◐ 2/5 ✓ read files ◐ writing tests · deploy`. The list is ephemeral — it
-lives for the session and is not persisted to disk.
+The footer's todo chip shows the counts and the item in progress, e.g.
+`◐ todo 2/5 writing tests`. The list is ephemeral — it lives for the session
+and is not persisted to disk.
 
 Press `Ctrl+T` to toggle a full-panel view of the todo list with all items,
 their statuses, and a completion count.

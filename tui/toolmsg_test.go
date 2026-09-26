@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	"github.com/mudler/nib/chat"
-	wizmcp "github.com/mudler/nib/mcp"
 	"github.com/mudler/nib/tui/render"
 )
 
@@ -61,24 +60,6 @@ func TestToolMessageFailedEditKeepsErrorAndNoDiff(t *testing.T) {
 	}, 0)
 	if msg.Status != render.ToolStatusFailed || msg.Diff != nil || msg.Content != "old string not found" {
 		t.Fatalf("got %+v, want a failed block showing the error", msg)
-	}
-}
-
-func TestShellJobsFooterHiddenWhenIdle(t *testing.T) {
-	if _, ok := shellJobsFooterRow([]wizmcp.ShellJobInfo{{Status: "completed"}}); ok {
-		t.Fatal("a footer row was shown with nothing running")
-	}
-	if _, ok := shellJobsFooterRow([]wizmcp.ShellJobInfo{{Status: "failed"}}); !ok {
-		t.Fatal("a failed job should keep the row")
-	}
-	if _, ok := shellJobsFooterRow([]wizmcp.ShellJobInfo{{Status: "running"}}); !ok {
-		t.Fatal("a running job should show the row")
-	}
-}
-
-func TestJobsFooterHiddenWhenIdle(t *testing.T) {
-	if _, ok := jobsFooterRow([]agentJob{{Status: chat.AgentStatusCompleted}}); ok {
-		t.Fatal("a footer row was shown with nothing running")
 	}
 }
 

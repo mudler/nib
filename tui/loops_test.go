@@ -11,7 +11,6 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	"github.com/mudler/nib/chat"
 	"github.com/mudler/nib/loop"
-	"github.com/mudler/nib/tui/render"
 )
 
 // newLoopTestModel builds an idle, session-ready model with a fresh registry,
@@ -133,25 +132,6 @@ func TestDurationToCronParses(t *testing.T) {
 		if _, err := loop.Parse(durationToCron(d)); err != nil {
 			t.Fatalf("durationToCron(%s)=%q failed to parse: %v", d, durationToCron(d), err)
 		}
-	}
-}
-
-// TestLoopsFooterRow exercises loopsFooterRow, the live path View() actually
-// calls (renderLoopsFooter, the fully-styled string-returning function this
-// test used to pin, was deleted once it had zero production call sites left
-// — see the Task 6 fix-round-2 report).
-func TestLoopsFooterRow(t *testing.T) {
-	r := loop.NewRegistry()
-	if _, ok := loopsFooterRow(r, 0); ok {
-		t.Fatal("empty registry should report nothing to show")
-	}
-	r.Add("*/5 * * * *", "/foo", true, false, loop.MonitorConfig{})
-	row, ok := loopsFooterRow(r, 0)
-	if !ok {
-		t.Fatal("expected a row with one job")
-	}
-	if row.Kind != render.FooterLoops {
-		t.Fatalf("expected FooterLoops kind, got %v", row.Kind)
 	}
 }
 
