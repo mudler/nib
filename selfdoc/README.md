@@ -127,14 +127,17 @@ port forwarding isn't possible, complete the login in your browser, and
 when the redirect fails, copy the full URL from the address bar and paste
 it into nib.
 
-For providers that support RFC 8628 device flow (OpenAI, Google, xAI, and
-others), `--device` skips the localhost callback entirely — no port
+For providers that support RFC 8628 device flow (Google, xAI, Kimi, Meta,
+and others), `--device` skips the localhost callback entirely — no port
 forwarding needed:
 
 ```bash
-nib login openai-codex --device       # works over SSH with no forwarding
 nib login google-gemini-cli --device
 ```
+
+OpenAI's device-code flow uses non-standard endpoints and is not
+compatible with `--device` at this time. Over SSH, openai-codex uses the
+port-forward hint and paste fallback instead.
 
 Anthropic does not support device flow; for it, use port forwarding or the
 paste fallback.
