@@ -214,6 +214,10 @@ type Config struct {
 	// Endpoints are the named endpoints config.yaml offers besides the
 	// top-level default. See types/endpoint.go.
 	Endpoints Endpoints `yaml:"endpoints,omitempty"`
+	// IgnoreSavedEndpoint starts every session on this config, never on the
+	// endpoint pick saved in provider.json, and leaves that file untouched.
+	// Also set by --no-saved-endpoint and NIB_NO_SAVED_ENDPOINT.
+	IgnoreSavedEndpoint bool `yaml:"ignore_saved_endpoint,omitempty"`
 	// PromptInjectionProtection controls provenance tracking, LLM classification,
 	// redaction, and approval hardening for untrusted external data. It is
 	// disabled by default to preserve existing behavior.

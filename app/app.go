@@ -348,6 +348,7 @@ func runCtx(ctx context.Context, o Options) int {
 	setupFlag := fs.Bool("setup", false, "Run the interactive model setup wizard")
 	traceDirFlag := fs.String("trace-dir", "", "Write a session LLM trace (NDJSON) and token totals (usage.json) to this directory; also via NIB_TRACE_DIR")
 	yoloFlag := fs.Bool("yolo", false, "Auto-approve every tool call without prompting; also via NIB_YOLO")
+	noSavedEndpointFlag := fs.Bool("no-saved-endpoint", false, "Start on the configured endpoint, ignoring the last endpoint pick saved in provider.json; also via NIB_NO_SAVED_ENDPOINT")
 	resumeFlag := fs.Bool("resume", false, "Resume a recorded session: an id given as a bare argument after this flag loads it directly, otherwise the newest session (this directory unless --all) is used")
 	allFlag := fs.Bool("all", false, "With --resume, widen the match to sessions recorded in any working directory, not just this one")
 	sessionIDFlag := fs.String("session-id", "", "Record this session under the given id instead of minting one; with --resume, the session to load")
@@ -375,12 +376,7 @@ func runCtx(ctx context.Context, o Options) int {
 		return 0
 	}
 
-	cfg := config.LoadWith(config.LoadOptions{
-		BaseDir:     o.BaseDir,
-		Defaults:    o.Defaults,
-		Overrides:   o.Overrides,
-		SkipBareEnv: o.SkipBareEnv,
-	})
+	cfg := loadConfig(o)
 
 	// The name travels with the config because the system prompt is rendered
 	// from it, and that prompt tells the model what the user can type. Assigned
@@ -413,6 +409,12 @@ func runCtx(ctx context.Context, o Options) int {
 	// "auto" approval, overriding whatever the config file set.
 	if *yoloFlag || envTrue(os.Getenv("NIB_YOLO")) {
 		cfg.ApprovalMode = types.ApprovalAuto
+	}
+
+	// The flag or env var only ever raise ignore_saved_endpoint: a config
+	// file that already sets it keeps it.
+	if *noSavedEndpointFlag || envTrue(os.Getenv("NIB_NO_SAVED_ENDPOINT")) {
+		cfg.IgnoreSavedEndpoint = true
 	}
 
 	// --resume mirrors /resume's own semantics but resolved up front, before
@@ -597,6 +599,21 @@ func parseHeight(s string) int {
 		return 20 // default
 	}
 	return height
+}
+
+// loadConfig loads the session config for o, and registers o as its source
+// so a saved endpoint pick is fingerprinted against config.yaml as it is when
+// the pick is saved, not as it was when the session started (see
+// config.ReloadStartupEndpoint).
+func loadConfig(o Options) types.Config {
+	opts := config.LoadOptions{
+		BaseDir:     o.BaseDir,
+		Defaults:    o.Defaults,
+		Overrides:   o.Overrides,
+		SkipBareEnv: o.SkipBareEnv,
+	}
+	config.RegisterStartupSource(opts)
+	return config.LoadWith(opts)
 }
 
 // envTrue reports whether an environment variable value is truthy. Empty,

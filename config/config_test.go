@@ -673,3 +673,22 @@ func TestValidOverflowPatternsSkipsInvalidRows(t *testing.T) {
 		t.Fatalf("valid rows = %+v, want only \"ok\"", got)
 	}
 }
+
+func TestReloadStartupEndpointNeedsARegisteredSource(t *testing.T) {
+	clearBareEnv(t)
+	dir := t.TempDir()
+	if _, ok := ReloadStartupEndpoint(dir); ok {
+		t.Fatal("ReloadStartupEndpoint ok for a root nothing registered")
+	}
+	RegisterStartupSource(LoadOptions{BaseDir: dir, Defaults: types.Config{Model: "seeded"}})
+	got, ok := ReloadStartupEndpoint(dir)
+	if !ok || got.Model != "seeded" {
+		t.Fatalf("ReloadStartupEndpoint = %q ok=%v, want the seeded model", got.Model, ok)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte("model: from-file\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := ReloadStartupEndpoint(dir); got.Model != "from-file" {
+		t.Fatalf("after an edit: Model = %q, want the file read again", got.Model)
+	}
+}

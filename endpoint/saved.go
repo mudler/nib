@@ -17,6 +17,11 @@ type Saved struct {
 	ID    string `json:"id"`
 	Model string `json:"model"`
 
+	// ConfigFingerprint is Fingerprint of the config when the pick was
+	// written, so a later start can tell whether config.yaml changed since
+	// (see Set.Reconcile). Empty in a file written by an older nib.
+	ConfigFingerprint string `json:"config_fingerprint,omitempty"`
+
 	// Provider is the pre-endpoints field name, read for backward
 	// compatibility and never written. An install saved before named
 	// endpoints carries a registry ID here.
@@ -68,6 +73,18 @@ func WriteSaved(path string, sv Saved) error {
 	}
 	if err := os.Rename(tmp, path); err != nil {
 		os.Remove(tmp)
+		return err
+	}
+	return nil
+}
+
+// ClearSaved removes the saved pick. A missing file (or an empty path) is
+// not an error: there is nothing left to forget.
+func ClearSaved(path string) error {
+	if path == "" {
+		return nil
+	}
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		return err
 	}
 	return nil

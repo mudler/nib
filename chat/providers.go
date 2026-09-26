@@ -8,6 +8,7 @@ import (
 	"github.com/mudler/xlog"
 
 	"github.com/mudler/nib/auth"
+	"github.com/mudler/nib/config"
 	"github.com/mudler/nib/endpoint"
 	"github.com/mudler/nib/provider"
 	"github.com/mudler/nib/types"
@@ -229,7 +230,7 @@ func (s *Session) SwitchProvider(id, model string) error {
 	// Startup already falls back to the entry's own model when Saved.Model is
 	// empty (endpoint.TestStartupSavedWithoutModelUsesTheEntryModel), so a
 	// bare switch stays correct.
-	return endpoint.WriteSaved(s.savedPath, endpoint.Saved{ID: id, Model: model})
+	return s.writeSaved(id, model)
 }
 
 // SaveModelAsDefault saves the model in use as the one the current endpoint
@@ -241,7 +242,25 @@ func (s *Session) SaveModelAsDefault() error {
 	if model == "" {
 		return fmt.Errorf("no model in use to save as the default")
 	}
-	return endpoint.WriteSaved(s.savedPath, endpoint.Saved{ID: s.EndpointID(), Model: model})
+	return s.writeSaved(s.EndpointID(), model)
+}
+
+// writeSaved records an endpoint pick in provider.json with the fingerprint
+// of the config as it is now, so the next start can tell a later config.yaml
+// edit from an unchanged one (endpoint.Set.Reconcile). "Now" matters: the
+// session's endpoint set is built once, at start, and config.yaml can change
+// after that (/settings, another editor). A session loaded from a file
+// therefore loads it again here, with the options it was loaded with
+// (config.ReloadStartupEndpoint); a programmatic config registers none, has
+// no file to change, and uses the set's own config.
+func (s *Session) writeSaved(id, model string) error {
+	sv := endpoint.Saved{ID: id, Model: model}
+	if cfg, ok := config.ReloadStartupEndpoint(s.configRoot); ok {
+		sv.ConfigFingerprint = endpoint.Fingerprint(cfg, sv)
+	} else {
+		sv.ConfigFingerprint = s.endpoints.Fingerprint(sv)
+	}
+	return endpoint.WriteSaved(s.savedPath, sv)
 }
 
 // SetDefaultModel is /model default [name]. An empty name saves the model in
@@ -272,10 +291,31 @@ const ProviderStateFile = "provider.json"
 
 // restoreStartupEndpoint puts a new session on the endpoint the last one
 // picked. A pick that no longer resolves leaves the session on the default
-// and records why, for the boot log.
+// and records why, for the boot log. The last change wins: a pick saved
+// before config.yaml changed is dropped in favor of the config, with a note
+// (endpoint.Set.Reconcile). IgnoreSavedEndpoint skips all of this and leaves
+// provider.json alone.
 func (s *Session) restoreStartupEndpoint() {
-	e, p, note := s.endpoints.Startup(endpoint.LoadSaved(s.savedPath))
+	if s.ignoreSavedEndpoint {
+		return
+	}
+	sv, rewrite, dropped := s.endpoints.Reconcile(endpoint.LoadSaved(s.savedPath))
+	if rewrite {
+		var err error
+		if sv == (endpoint.Saved{}) {
+			err = endpoint.ClearSaved(s.savedPath)
+		} else {
+			err = endpoint.WriteSaved(s.savedPath, sv)
+		}
+		if err != nil {
+			xlog.Warn("could not update the saved endpoint pick", "path", s.savedPath, "error", err)
+		}
+	}
+	e, p, note := s.endpoints.Startup(sv)
 	s.startupNote = note
+	if dropped != "" {
+		s.startupNote = dropped
+	}
 	if e.ID == endpoint.DefaultID && note == "" && p.Model == s.Model() {
 		return // already built from the default, with the same model
 	}
