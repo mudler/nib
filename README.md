@@ -640,8 +640,9 @@ log_level: error
 # treats a request as an overflow before sending it when, counted the way the
 # backend counts (the estimate times the tokenizer ratio learned from its usage
 # reports), the prompt would leave the reply less than 1024 tokens of the
-# window: some backends accept such a prompt and cut the reply off mid-tool-call. When the tool
-# schemas and system prompt alone fill the window, compaction cannot help:
+# window: some backends accept such a prompt and cut the reply off
+# mid-tool-call. When the tool schemas and system prompt alone fill the
+# window, compaction cannot help:
 # nib keeps the conversation as it was, does not compact (neither on
 # overflow nor automatically), and names the MCP servers that take the most
 # room, so you can disable them or filter their tools. When a tool call is
