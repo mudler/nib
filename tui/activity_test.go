@@ -164,7 +164,7 @@ func TestLoopsChipOpensPanel(t *testing.T) {
 
 func TestTelemetryItems(t *testing.T) {
 	cases := map[string][]string{
-		"":                  {"context", "speed"},
+		"":                  {"context", "speed", "clock", "cpu", "mem"},
 		"none":              nil,
 		"clock, cpu,bogus":  {"clock", "cpu"},
 		"usage age context": {"usage", "age", "context"},
@@ -177,22 +177,23 @@ func TestTelemetryItems(t *testing.T) {
 	}
 }
 
-// The expanded line shows only while the strip has focus, and ui.footer_front
-// moves an item up front.
+// The machine telemetry is up front by default; the expanded line (session
+// age here) shows only while the strip has focus; ui.footer_expanded moves an
+// item there.
 func TestExpandedTelemetryFollowsFocusAndConfig(t *testing.T) {
 	m := withHUD(newQueueTestModel())
 	m.width = 200
-	if vs := m.viewState(); vs.Expanded != "" || strings.Contains(vs.Badges, "cpu") {
+	m.sessionCreated = time.Now().Add(-time.Hour)
+	if vs := m.viewState(); vs.Expanded != "" || !strings.Contains(vs.Badges, "cpu") || !strings.Contains(vs.Badges, "12:34:56") {
 		t.Fatalf("unfocused: badges %q, expanded %q", vs.Badges, vs.Expanded)
 	}
 	m.activityFocus = true
-	if vs := m.viewState(); !strings.Contains(vs.Expanded, "cpu") {
-		t.Fatalf("focused expanded = %q, want cpu", vs.Expanded)
+	if vs := m.viewState(); !strings.Contains(vs.Expanded, "age 1h") {
+		t.Fatalf("focused expanded = %q, want the session age", vs.Expanded)
 	}
-	m.activityFocus = false
-	m.cfg.UI.FooterFront = "context,clock"
-	if vs := m.viewState(); !strings.Contains(vs.Badges, "12:34:56") {
-		t.Fatalf("front = %q, want the clock moved up", vs.Badges)
+	m.cfg.UI.FooterFront, m.cfg.UI.FooterExpanded = "context", "clock,cpu"
+	if vs := m.viewState(); strings.Contains(vs.Badges, "cpu") || !strings.Contains(vs.Expanded, "cpu") {
+		t.Fatalf("configured: front %q, expanded %q; want cpu moved to the expanded line", vs.Badges, vs.Expanded)
 	}
 }
 

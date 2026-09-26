@@ -21,11 +21,12 @@ const (
 	telemetryMem     = "mem"
 )
 
-// Defaults for the two telemetry lines: what predicts compaction and how fast
-// the model is, up front; the rest one ctrl+g away.
+// Defaults for the two telemetry lines: the context gauge, the speed and the
+// machine at the right of the help line, as the footer always had them; the
+// session's totals one ctrl+g away.
 const (
-	defaultFooterFront    = "context,speed"
-	defaultFooterExpanded = "usage,age,clock,cpu,mem"
+	defaultFooterFront    = "context,speed,clock,cpu,mem"
+	defaultFooterExpanded = "usage,age"
 )
 
 // telemetryItems parses a ui.footer_* value: item names separated by commas

@@ -505,37 +505,33 @@ func (Base) Footer(v ViewState, w int) string {
 	if v.NewOutput {
 		lines = append(lines, theme.NewOutputMarker())
 	}
-	if v.Badges != "" {
-		lines = append(lines, v.Badges)
-	}
 	if v.Expanded != "" {
-		lines = append(lines, v.Expanded)
+		lines = append(lines, rightAlign("", v.Expanded, w))
 	}
-	// The right hint goes at the end of the help line, or, when the help line
-	// has no room for it, at the end of the activity strip, which makes room
-	// for it: it is how the strip is reached, so it must not be lost on a
-	// narrow terminal.
-	hintW := lipgloss.Width(v.HelpRight)
-	hintOnHelp := v.HelpRight != "" && lipgloss.Width(v.Help)+2+hintW <= w
-	hintOnStrip := v.HelpRight != "" && !hintOnHelp && len(v.Footers) > 0
+	// The activity strip carries the hint that says how to reach it at its
+	// right end; the help line's right end is the telemetry's.
 	if len(v.Footers) > 0 {
+		// On a terminal too narrow for a chip beside it, the hint goes.
+		hint := v.HelpRight
 		budget := w
-		if hintOnStrip {
-			budget -= hintW + 2
+		if hint != "" && w-lipgloss.Width(hint)-2 >= minChipText+2 {
+			budget -= lipgloss.Width(hint) + 2
+		} else {
+			hint = ""
 		}
 		var chips []string
 		for _, r := range fitChips(v.Footers, budget) {
 			chips = append(chips, chipStyle(r))
 		}
 		strip := strings.Join(chips, chipSep)
-		if hintOnStrip {
-			strip = rightAlign(strip, v.HelpRight, w)
+		if hint != "" {
+			strip = rightAlign(strip, hint, w)
 		}
 		lines = append(lines, strip)
 	}
 	help := v.Help
-	if hintOnHelp {
-		help = rightAlign(help, v.HelpRight, w)
+	if v.Badges != "" {
+		help = rightAlign(help, v.Badges, w)
 	}
 	lines = append(lines, help)
 	if v.Err != "" {
@@ -546,14 +542,14 @@ func (Base) Footer(v ViewState, w int) string {
 
 // rightAlign puts right at the end of a w-cell line that starts with left.
 func rightAlign(left, right string, w int) string {
-	gap := max(w-lipgloss.Width(left)-lipgloss.Width(right), 2)
+	gap := max(w-lipgloss.Width(left)-lipgloss.Width(right), 1)
 	return left + strings.Repeat(" ", gap) + right
 }
 
 // FooterHeight reports how many terminal rows Footer occupies for this
-// ViewState at this width — 1 for the bare help line, up to 6 once the
-// new-output marker, both telemetry lines, the activity strip and an error
-// line are all present. The shared core budgets the viewport against it, so an answer that
+// ViewState at this width — 1 for the help line (with the front telemetry at
+// its right), up to 5 once the new-output marker, the expanded telemetry line,
+// the activity strip and an error line are all present. The shared core budgets the viewport against it, so an answer that
 // disagrees with Footer by even one row makes the composed frame overflow the
 // screen. Measuring the real output is the only way the two cannot drift.
 func (b Base) FooterHeight(v ViewState, w int) int {

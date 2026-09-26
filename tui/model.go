@@ -3790,7 +3790,8 @@ func (m Model) viewState() render.ViewState {
 		Dialogs: m.currentDialogs(),
 		Help:    help,
 		Tip:     tip,
-		Badges:  m.footerBadges(0),
+		// The front telemetry shares the help line, at its right.
+		Badges: m.footerBadges(lipgloss.Width(help) + 1),
 		Expanded: func() string {
 			if m.activityFocus {
 				return m.expandedBadges()

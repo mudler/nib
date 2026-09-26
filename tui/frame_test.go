@@ -121,7 +121,7 @@ func TestViewportBudgetsAgainstFooterHeight(t *testing.T) {
 
 	// The expanded telemetry line and an error line: two footer rows the
 	// fixed budget never accounted for.
-	m.hudClock = "12:00:00"
+	m.sessionCreated = time.Now()
 	m.activityFocus = true
 	m.err = errFrameTest
 	m.updateDimensions()

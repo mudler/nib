@@ -418,12 +418,13 @@ type UIConfig struct {
 	// spinner while the agent is thinking. Zero value (false) = funny lines
 	// and tips shown.
 	NoFunny bool `yaml:"no_funny,omitempty"`
-	// FooterFront lists the telemetry always shown in the footer, in
-	// priority order, separated by commas: context, speed, usage, age,
-	// clock, cpu, mem. "" = "context,speed"; "none" = nothing.
+	// FooterFront lists the telemetry shown at the right of the footer's
+	// help line, in priority order, separated by commas: context, speed,
+	// usage, age, clock, cpu, mem. "" = "context,speed,clock,cpu,mem";
+	// "none" = nothing.
 	FooterFront string `yaml:"footer_front,omitempty"`
 	// FooterExpanded lists the telemetry shown while the activity strip has
-	// focus (ctrl+g), in the same format. "" = "usage,age,clock,cpu,mem".
+	// focus (ctrl+g), in the same format. "" = "usage,age".
 	FooterExpanded string `yaml:"footer_expanded,omitempty"`
 }
 

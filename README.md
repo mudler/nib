@@ -195,27 +195,25 @@ and marks it with `~`.
 
 ### The footer
 
-The footer has four lines:
+The footer has two lines:
 
 ```
-ctx ▰▰▰▰▰▰▰▰│▰▱ 88.3k/100k · compacts at 76.7k  tok/s 12 · avg 13
-◐ todo 2/8 Wire the LoRA  ▷ shell 1 running  ↳ explore: scan the LoRA loader · bash · 3.1k  ↳ agents ×1
-enter send · ctrl+y use command · G/end newest · ctrl+c twice exit                  ctrl+g activity
+◐ todo 2/8 Wire the LoRA  ▷ shell 1 running  ↳ explore: Map the LoRA loader · bash · 3.1k     ctrl+g activity
+enter send · ctrl+y use command · G/end newest   ctx ▰▰▰▰▰▰▰▰│▰▱ 88.3k/100k · compacts at 76.7k  tok/s 12 · avg 13  16:29:49  cpu 27%  mem 24/84G
 ```
 
-- **Telemetry.** The context gauge (the tick marks the compaction point) and
-  the generation speed. `ui.footer_front` chooses these items.
 - **Activity strip.** One chip per area of work: the todo list, shell jobs,
   each running sub-agent (its type, a short title the model wrote for its
   task, what it is doing now, and its output so far), sub-agent history,
-  loops and the goal. A dim
-  chip has nothing running. A red `×N` counts failures you have not looked at
-  yet. Opening their view clears it.
-- **Keys** for what you can do now.
+  loops and the goal. A dim chip has nothing running. A red `×N` counts
+  failures you have not looked at yet. Opening their view clears it.
+- **Keys** for what you can do now, and at the right the telemetry: the
+  context gauge (the tick marks the compaction point), the generation speed,
+  the clock, CPU and memory. `ui.footer_front` chooses these items.
 
 Press `Ctrl+G` to move the keyboard to the activity strip. It also shows a
-second telemetry line (`ui.footer_expanded`: session tokens, session age,
-clock, CPU and memory by default).
+second telemetry line above it (`ui.footer_expanded`: session tokens and
+session age by default).
 
 | Key | Action |
 |---|---|
@@ -232,8 +230,8 @@ to show no items:
 
 ```yaml
 ui:
-  footer_front: context,speed,usage   # default: context,speed
-  footer_expanded: age,clock,cpu,mem  # default: usage,age,clock,cpu,mem
+  footer_front: context,speed,usage   # default: context,speed,clock,cpu,mem
+  footer_expanded: age,clock,cpu,mem  # default: usage,age
   hide_hud: false                     # true hides clock, cpu and mem everywhere
 ```
 
