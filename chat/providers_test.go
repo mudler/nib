@@ -62,6 +62,7 @@ func newTestSessionWithConfig(t *testing.T, cfg types.Config) *Session {
 		credStore:      credStore,
 
 		ignoreSavedEndpoint: cfg.IgnoreSavedEndpoint,
+		configRoot:          cfg.BaseDir,
 	}
 }
 

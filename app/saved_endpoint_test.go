@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/mudler/nib/auth"
+	"github.com/mudler/nib/config"
 	"github.com/mudler/nib/endpoint"
 	"github.com/mudler/nib/types"
 )
@@ -135,5 +136,27 @@ func TestNoSavedEndpointEnvIgnoresThePick(t *testing.T) {
 	}
 	if data, _ := os.ReadFile(filepath.Join(base, "provider.json")); string(data) != legacyRegoloPick {
 		t.Fatalf("provider.json = %s, want it untouched", data)
+	}
+}
+
+// loadConfig registers its options, so the session can read config.yaml
+// again the way the next start will, and fingerprint a pick saved after an
+// in-session edit against the edited file.
+func TestLoadConfigRegistersTheStartupSource(t *testing.T) {
+	base := t.TempDir()
+	o := Options{BaseDir: base, SkipBareEnv: true, Overrides: types.Config{BaseURL: "http://override/v1"}}
+	loadConfig(o)
+	if err := os.WriteFile(filepath.Join(base, "config.yaml"), []byte("model: edited\nbase_url: http://file/v1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, ok := config.ReloadStartupEndpoint(base)
+	if !ok {
+		t.Fatal("no startup source registered for the root")
+	}
+	if got.Model != "edited" {
+		t.Fatalf("reloaded Model = %q, want the edited file's", got.Model)
+	}
+	if got.BaseURL != "http://override/v1" {
+		t.Fatalf("reloaded BaseURL = %q, want the override to keep winning, as at the next start", got.BaseURL)
 	}
 }

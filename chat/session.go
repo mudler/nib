@@ -183,7 +183,10 @@ type Session struct {
 	// ignoreSavedEndpoint is types.Config.IgnoreSavedEndpoint: start on the
 	// config and never read or rewrite savedPath at startup.
 	ignoreSavedEndpoint bool
-	credStore           *auth.Store // credential store for /login-managed providers
+	// configRoot is types.Config.BaseDir, the raw root override the config
+	// was loaded from ("" for standalone nib). See writeSaved.
+	configRoot string
+	credStore  *auth.Store // credential store for /login-managed providers
 
 	// learnedWindow is the context window a backend stated in an overflow
 	// error, and learnedWindowModel is the model it was learned for. They are
@@ -585,6 +588,7 @@ func NewSession(ctx context.Context, cfg types.Config, callbacks Callbacks, tran
 		configErrs:           configErrs,
 		savedPath:            filepath.Join(plugin.BaseDirIn(cfg.BaseDir), ProviderStateFile),
 		ignoreSavedEndpoint:  cfg.IgnoreSavedEndpoint,
+		configRoot:           cfg.BaseDir,
 		endpointID:           endpoint.DefaultID,
 		credStore:            credStore,
 		apiKey:               mainProvider.APIKey,

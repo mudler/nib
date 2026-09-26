@@ -8,6 +8,7 @@ import (
 	"github.com/mudler/xlog"
 
 	"github.com/mudler/nib/auth"
+	"github.com/mudler/nib/config"
 	"github.com/mudler/nib/endpoint"
 	"github.com/mudler/nib/provider"
 	"github.com/mudler/nib/types"
@@ -246,10 +247,19 @@ func (s *Session) SaveModelAsDefault() error {
 
 // writeSaved records an endpoint pick in provider.json with the fingerprint
 // of the config as it is now, so the next start can tell a later config.yaml
-// edit from an unchanged one (endpoint.Set.Reconcile).
+// edit from an unchanged one (endpoint.Set.Reconcile). "Now" matters: the
+// session's endpoint set is built once, at start, and config.yaml can change
+// after that (/settings, another editor). A session loaded from a file
+// therefore loads it again here, with the options it was loaded with
+// (config.ReloadStartupEndpoint); a programmatic config registers none, has
+// no file to change, and uses the set's own config.
 func (s *Session) writeSaved(id, model string) error {
 	sv := endpoint.Saved{ID: id, Model: model}
-	sv.ConfigFingerprint = s.endpoints.Fingerprint(sv)
+	if cfg, ok := config.ReloadStartupEndpoint(s.configRoot); ok {
+		sv.ConfigFingerprint = endpoint.Fingerprint(cfg, sv)
+	} else {
+		sv.ConfigFingerprint = s.endpoints.Fingerprint(sv)
+	}
 	return endpoint.WriteSaved(s.savedPath, sv)
 }
 

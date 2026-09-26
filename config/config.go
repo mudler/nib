@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"sync"
 	"time"
 
 	"dario.cat/mergo"
@@ -188,36 +189,7 @@ func Load() types.Config { return LoadWith(LoadOptions{}) }
 
 // LoadWith is Load with injectable roots and behavior switches.
 func LoadWith(o LoadOptions) types.Config {
-	// Load from YAML file first
-	cfg := loadFromFileIn(o.BaseDir)
-
-	// Seed the gaps the file left. This runs before the env block and before
-	// withDefaults, which is what makes the precedence read, lowest to highest:
-	// nib's built-in defaults, the embedder's seeds, the config file, the
-	// environment, the embedder's overrides.
-	applySeeds(&cfg, o.Defaults)
-
-	// Override with environment variables if set. An embedder that publishes its
-	// own prefixed variables suppresses these, so a bare MODEL exported for some
-	// unrelated tool cannot silently retarget the agent.
-	if !o.SkipBareEnv {
-		if model := os.Getenv("MODEL"); model != "" {
-			cfg.Model = model
-		}
-		if apiKey := os.Getenv("API_KEY"); apiKey != "" {
-			cfg.APIKey = apiKey
-		}
-		if baseURL := os.Getenv("BASE_URL"); baseURL != "" {
-			cfg.BaseURL = baseURL
-		}
-	}
-
-	// Last word: the embedder's overrides go on top of the file and of the block
-	// above, which is what makes a host's CLI flag a flag rather than a wish.
-	// Anything left unset here falls through to whatever the rungs below
-	// resolved, so a zero Overrides is exactly today's load.
-	applyOverrides(&cfg, o.Overrides)
-
+	cfg := loadLayers(o)
 	cfg = withDefaults(cfg)
 	cfg.Compaction.OverflowPatterns = validOverflowPatterns(cfg.Compaction.OverflowPatterns)
 
@@ -476,4 +448,78 @@ func validOverflowPatterns(in []types.OverflowPattern) []types.OverflowPattern {
 		out = append(out, p)
 	}
 	return out
+}
+
+// loadLayers stacks the config rungs, lowest to highest: the embedder's seeds,
+// the config file, the environment, the embedder's overrides. It stops short
+// of nib's built-in defaults and of the skill, plugin and agent merges.
+func loadLayers(o LoadOptions) types.Config {
+	// Load from YAML file first
+	cfg := loadFromFileIn(o.BaseDir)
+
+	// Seed the gaps the file left. This runs before the env block and before
+	// withDefaults, which is what makes the precedence read, lowest to highest:
+	// nib's built-in defaults, the embedder's seeds, the config file, the
+	// environment, the embedder's overrides.
+	applySeeds(&cfg, o.Defaults)
+
+	// Override with environment variables if set. An embedder that publishes its
+	// own prefixed variables suppresses these, so a bare MODEL exported for some
+	// unrelated tool cannot silently retarget the agent.
+	if !o.SkipBareEnv {
+		if model := os.Getenv("MODEL"); model != "" {
+			cfg.Model = model
+		}
+		if apiKey := os.Getenv("API_KEY"); apiKey != "" {
+			cfg.APIKey = apiKey
+		}
+		if baseURL := os.Getenv("BASE_URL"); baseURL != "" {
+			cfg.BaseURL = baseURL
+		}
+	}
+
+	// Last word: the embedder's overrides go on top of the file and of the block
+	// above, which is what makes a host's CLI flag a flag rather than a wish.
+	// Anything left unset here falls through to whatever the rungs below
+	// resolved, so a zero Overrides is exactly today's load.
+	applyOverrides(&cfg, o.Overrides)
+
+	return cfg
+}
+
+// LoadStartupEndpoint loads only what decides where a session starts: the
+// provider, base_url, model, api_key_env and named endpoints, through the same
+// rungs as LoadWith, so it agrees with what the next LoadWith will return for
+// those fields. It skips the skill and plugin merges, which touch none of
+// them and write their load errors to stderr, where a running TUI draws.
+func LoadStartupEndpoint(o LoadOptions) types.Config {
+	cfg := loadLayers(o)
+	cfg.BaseDir = o.BaseDir
+	return cfg
+}
+
+// startupSources maps a BaseDir override to the options its config was loaded
+// with, for ReloadStartupEndpoint.
+var startupSources sync.Map
+
+// RegisterStartupSource records that the sessions rooted at o.BaseDir run on
+// a config loaded with o, so ReloadStartupEndpoint can load it again the way
+// the next start will. app registers the options it loads with; a program
+// that builds its types.Config by hand registers nothing, and its config is
+// used as it is. A later registration for the same root replaces the earlier.
+func RegisterStartupSource(o LoadOptions) { startupSources.Store(o.BaseDir, o) }
+
+// ReloadStartupEndpoint is LoadStartupEndpoint with the options registered for
+// baseDir, read from disk now. ok is false when nothing is registered.
+//
+// nib uses it when it saves an endpoint pick: the pick's fingerprint must
+// describe config.yaml as it is at that moment, including edits made after
+// the session started (/settings, another editor), and a session's own
+// endpoint set is only built once, at start.
+func ReloadStartupEndpoint(baseDir string) (types.Config, bool) {
+	v, ok := startupSources.Load(baseDir)
+	if !ok {
+		return types.Config{}, false
+	}
+	return LoadStartupEndpoint(v.(LoadOptions)), true
 }

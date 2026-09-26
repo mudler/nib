@@ -376,12 +376,7 @@ func runCtx(ctx context.Context, o Options) int {
 		return 0
 	}
 
-	cfg := config.LoadWith(config.LoadOptions{
-		BaseDir:     o.BaseDir,
-		Defaults:    o.Defaults,
-		Overrides:   o.Overrides,
-		SkipBareEnv: o.SkipBareEnv,
-	})
+	cfg := loadConfig(o)
 
 	// The name travels with the config because the system prompt is rendered
 	// from it, and that prompt tells the model what the user can type. Assigned
@@ -604,6 +599,21 @@ func parseHeight(s string) int {
 		return 20 // default
 	}
 	return height
+}
+
+// loadConfig loads the session config for o, and registers o as its source
+// so a saved endpoint pick is fingerprinted against config.yaml as it is when
+// the pick is saved, not as it was when the session started (see
+// config.ReloadStartupEndpoint).
+func loadConfig(o Options) types.Config {
+	opts := config.LoadOptions{
+		BaseDir:     o.BaseDir,
+		Defaults:    o.Defaults,
+		Overrides:   o.Overrides,
+		SkipBareEnv: o.SkipBareEnv,
+	}
+	config.RegisterStartupSource(opts)
+	return config.LoadWith(opts)
 }
 
 // envTrue reports whether an environment variable value is truthy. Empty,
