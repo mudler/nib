@@ -990,10 +990,11 @@ func (s *Session) StopAgents() {
 // reassigned, so reading it from cogito's spawn goroutines is safe.
 func (s *Session) emitAgentEvent(a *cogito.AgentState) {
 	ev := AgentEvent{
-		ID:     a.ID,
-		Type:   a.Type,
-		Task:   a.Task,
-		Status: AgentStatus(a.Status),
+		ID:         a.ID,
+		Type:       a.Type,
+		Task:       a.Task,
+		Status:     AgentStatus(a.Status),
+		Background: a.Background,
 		Result: a.Result,
 		Err:    a.Error,
 	}

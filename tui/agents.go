@@ -86,6 +86,9 @@ type agentJob struct {
 	// Title is the short title the model wrote for the task, "" until it
 	// arrives (see chat.Callbacks.OnAgentTitle).
 	Title string
+	// Background is true for a sub-agent that no longer holds up the turn:
+	// spawned in the background, or detached with ctrl+b.
+	Background bool
 }
 
 // approvalContent is what a tool-approval prompt shows above its menu.
@@ -145,11 +148,51 @@ func buildApprovalContent(req chat.ToolCallRequest) approvalContent {
 	return c
 }
 
-// firstRunningJobID returns the id of the first running job, or "".
-func (m Model) firstRunningJobID() string {
+// hasForegroundWork reports whether something holds up the turn that ctrl+b
+// can background: a foreground sub-agent or a foreground shell command.
+func (m Model) hasForegroundWork() bool {
 	for _, j := range m.jobs {
-		if j.Status == chat.AgentStatusRunning {
-			return j.ID
+		if j.Status == chat.AgentStatusRunning && !j.Background {
+			return true
+		}
+	}
+	if m.shellJobs != nil {
+		for _, j := range m.shellJobs.List() {
+			if j.Running && !j.Backgrounded {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// backgroundForeground backgrounds the work holding up the turn: the first
+// foreground sub-agent, otherwise the foreground shell command. It returns
+// what it backgrounded, or "" when there was nothing to.
+//
+// A sub-agent is marked background once detached: cogito accepts a second
+// detach of the same agent without error, so without the mark ctrl+b would
+// keep picking it. One that cannot be detached runs in the background
+// already, and is marked so too.
+func (m *Model) backgroundForeground() string {
+	detach := m.detachAgent
+	if detach == nil && m.session != nil && m.session.AgentManager() != nil {
+		detach = m.session.AgentManager().Detach
+	}
+	for i := range m.jobs {
+		j := &m.jobs[i]
+		if j.Status != chat.AgentStatusRunning || j.Background || detach == nil {
+			continue
+		}
+		err := detach(j.ID)
+		j.Background = true
+		if err == nil {
+			return "sub-agent " + m.agentTypeOf(j.ID)
+		}
+	}
+	if m.shellJobs != nil {
+		if id, ok := m.shellJobs.DetachForeground(); ok {
+			return "shell job " + id
 		}
 	}
 	return ""
@@ -166,7 +209,7 @@ func (m *Model) applyAgentEvent(ev chat.AgentEvent) {
 			return
 		}
 	}
-	m.jobs = append(m.jobs, agentJob{ID: ev.ID, Type: ev.Type, Task: ev.Task, Status: ev.Status, Title: m.earlyTitles[ev.ID]})
+	m.jobs = append(m.jobs, agentJob{ID: ev.ID, Type: ev.Type, Task: ev.Task, Status: ev.Status, Title: m.earlyTitles[ev.ID], Background: ev.Background})
 	delete(m.earlyTitles, ev.ID)
 }
 

@@ -13,6 +13,9 @@ const (
 
 	HelpDefault  = "enter send · ctrl+y use command · G/end newest · ctrl+c twice exit"
 	HelpApproval = "pick an option above · esc deny"
+	// HelpForegroundWork is the help line while the turn waits on a
+	// foreground sub-agent or shell command.
+	HelpForegroundWork = "ctrl+b background · enter queue · ctrl+c interrupt · ctrl+o logs"
 	// HelpActivity follows SideKeys on the help line while the footer's
 	// activity strip has focus (ctrl+g); HintActivity is the right-hand hint
 	// that says how to get there.
@@ -299,6 +302,10 @@ const (
 	CompEndpointDesc   = "switch endpoint"
 	CompAboutName      = "about"
 	CompAboutDesc      = "show version, config paths, and tool inventory"
+	CompHelpName       = "help"
+	CompHelpDesc       = "keys and commands"
+	// HelpMore closes /help: where the rest is documented.
+	HelpMore = "configuration and the rest: ask nib about itself, or see the README"
 
 	// ToolResultNoOutput is fmtBashResult's (chat/resultfmt.go) fallback for a
 	// failed bash/bash_job_output call whose stdout and stderr were both
@@ -425,9 +432,8 @@ const (
 	StatusInterrupting = "Interrupting…"
 	HintDraftCleared   = "draft cleared · ↑ to restore"
 	HintExitArmed      = "press ctrl+c again to exit"
-	HintQueueHeld      = "queue on hold · enter send it · ↑↓ pick · ^e edit · ^x delete"
 
 	NoticeGoalPaused       = "goal paused · /goal resume to continue, /goal clear to drop it"
-	NoticeQueueHeld        = "%d queued, on hold · press enter on an empty composer to send"
+	NoticeQueueSending     = "sending %d queued message(s) next"
 	NoticeStillRunningHelp = " · ctrl+o logs · /loop stop"
 )

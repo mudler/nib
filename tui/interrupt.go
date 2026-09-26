@@ -89,15 +89,14 @@ func (m Model) handleEsc() (tea.Model, tea.Cmd) {
 // interrupt cancels the in-flight turn. The turn's end (responseMsg) reports
 // what the interrupt stopped and what it did not.
 //
-// It holds the queue, so the next queued message does not start as soon as
-// the turn ends, and stops the self-paced loop, whose re-arming turn is the one
-// being cancelled.
+// The queue is not held: what the user queued behind the turn is sent when
+// the turn ends, as after any turn. It stops the self-paced loop, whose
+// re-arming turn is the one being cancelled.
 func (m Model) interrupt() (tea.Model, tea.Cmd) {
 	if m.session != nil {
 		m.session.Interrupt()
 	}
 	m.interruptArmed = true
-	m.queueHeld = true
 	m.selfPaced = 0
 	m.status = theme.StatusInterrupting
 	m.updateViewport()
@@ -156,14 +155,14 @@ func exitWarning(work []string) string {
 }
 
 // interruptNotice is the transcript line an interrupted turn leaves: what the
-// interrupt paused and held, and what it did not stop.
+// interrupt paused, what is sent next, and what it did not stop.
 func (m Model) interruptNotice() string {
 	lines := []string{"interrupted."}
 	if m.session != nil && m.session.GoalPaused() {
 		lines = append(lines, theme.NoticeGoalPaused)
 	}
-	if n := len(m.queue) + len(m.redispatch); n > 0 && m.queueHeld {
-		lines = append(lines, fmt.Sprintf(theme.NoticeQueueHeld, n))
+	if n := len(m.queue) + len(m.redispatch); n > 0 {
+		lines = append(lines, fmt.Sprintf(theme.NoticeQueueSending, n))
 	}
 	if work := m.backgroundWork(); len(work) > 0 {
 		lines = append(lines, "still running: "+strings.Join(work, ", ")+theme.NoticeStillRunningHelp)

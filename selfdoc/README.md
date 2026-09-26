@@ -108,8 +108,8 @@ base_url: https://api.openai.com/v1   # or your local endpoint, e.g. http://loca
 
 ## Usage
 
-Run `nib` to open the TUI, or press `Ctrl+Space` from your shell. Use `--cli` for a plain,
-pipe-friendly mode:
+Run `nib` to open the TUI, or press `Ctrl+Space` from your shell. In the TUI, `/help` lists
+every key and command. Use `--cli` for a plain, pipe-friendly mode:
 
 ```bash
 echo "how do I list every open port?" | nib --cli

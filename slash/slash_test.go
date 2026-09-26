@@ -317,3 +317,9 @@ func TestResolveClassifier(t *testing.T) {
 		t.Errorf("three args: got %+v, want KindError", got)
 	}
 }
+
+func TestResolveHelp(t *testing.T) {
+	if got := Resolve("/help", nil, nil, nil); got.Kind != KindHelp {
+		t.Fatalf("Resolve(/help).Kind = %v, want KindHelp", got.Kind)
+	}
+}

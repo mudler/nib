@@ -257,10 +257,6 @@ type Model struct {
 	// hint is a one-shot line shown in place of the help line (the exit
 	// warning, "draft cleared"). The next key other than Ctrl+C clears it.
 	hint string
-	// queueHeld stops the queue from being sent automatically. An interrupt
-	// sets it, so pressing stop does not start the next queued message; Enter
-	// on an empty composer releases it.
-	queueHeld bool
 	// parked is true while the live run is parked (the assistant replied but the
 	// run is still alive waiting on the injection channel — background work
 	// pending, or simply ready for a follow-up). While parked the composer is
@@ -504,6 +500,9 @@ type Model struct {
 	// sendToAgent sends a message to a sub-agent; nil uses the session's.
 	// Tests set it.
 	sendToAgent func(id, message string) error
+	// detachAgent backgrounds a sub-agent; nil uses the session's agent
+	// manager. Tests set it.
+	detachAgent func(id string) error
 	logVP       viewport.Model // scrollable full-log view
 
 	// Ctrl+T todo panel state.
@@ -1408,17 +1407,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case tea.KeyCtrlB:
 			// Background the running foreground work: a sub-agent first,
-			// otherwise a running foreground shell command.
-			if m.sessionReady && m.session != nil {
-				if id := m.firstRunningJobID(); id != "" {
-					// Detach the sub-agent so it keeps running in the background; its
-					// completion is auto-injected into the live run by cogito.
-					_ = m.session.AgentManager().Detach(id)
-					return m, nil
-				}
-			}
-			if id, ok := m.shellJobs.DetachForeground(); ok {
-				m.status = "Backgrounded shell job " + id
+			// otherwise a running foreground shell command. A detached
+			// sub-agent keeps running; cogito injects its completion into
+			// the live run.
+			if what := m.backgroundForeground(); what != "" {
+				m.status = "Backgrounded " + what
 				m.updateViewport()
 			}
 			return m, nil
@@ -1597,19 +1590,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			input := strings.TrimSpace(m.textarea.Value())
 			if input == "" {
-				// Enter on an empty composer releases a queue an interrupt
-				// held. While a run is live the queue drains at its next
-				// boundary; otherwise it is sent now.
-				if m.queueHeld && len(m.queue)+len(m.redispatch) > 0 {
-					m.queueHeld = false
-					if m.session != nil && m.session.RunLive() {
-						m.updateViewport()
-						return m, nil
-					}
-					cmd := m.flushQueueAsTurn()
-					m.updateViewport()
-					return m, cmd
-				}
 				return m, nil
 			}
 
@@ -1885,10 +1865,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if msg.err != nil && errors.Is(msg.err, context.Canceled) {
 			m.appendMessage(ChatMessage{Role: "agent", Content: m.interruptNotice()})
-		}
-		// A hold with nothing left to hold is over.
-		if len(m.queue)+len(m.redispatch) == 0 {
-			m.queueHeld = false
 		}
 		// Autosave at this turn boundary so /resume never loses more than the
 		// turn in flight when the process exits uncleanly. Save failures are
@@ -2668,6 +2644,9 @@ func (m *Model) dispatchResolved(input string) tea.Cmd {
 		return nil
 	case slash.KindAbout:
 		m.appendMessage(ChatMessage{Role: "agent", Content: aboutText(m.cfg)})
+		return nil
+	case slash.KindHelp:
+		m.appendMessage(ChatMessage{Role: "agent", Content: helpText(buildCompItems(m.cfg.Commands, m.cfg.Skills, m.cfg.Agents))})
 		return nil
 	default: // slash.KindSend
 		files, overrides := attachstage.BuildSend(m.pending, action)
@@ -4153,10 +4132,11 @@ func (m Model) helpLine() string {
 		return theme.EndpointFormHint
 	case m.loginWait.active:
 		return theme.LoginWaitHint
+	case m.loading && m.hasForegroundWork():
+		// The turn waits on work ctrl+b can move out of its way.
+		return theme.HelpForegroundWork
 	case m.parked:
 		return "enter add a follow-up · ctrl+c interrupt · ctrl+o logs"
-	case strings.TrimSpace(m.textarea.Value()) == "" && len(m.queue) > 0 && m.queueHeld:
-		return theme.HintQueueHeld
 	case strings.TrimSpace(m.textarea.Value()) == "" && len(m.queue) > 0:
 		return "↑↓ pick · ^e edit · ^x delete"
 	default:

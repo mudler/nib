@@ -55,6 +55,7 @@ func buildCompItems(cmds []types.CommandConfig, skills []types.Skill, agents []t
 		compItem{Cat: compBuiltin, Name: theme.CompLoginName, Desc: theme.CompLoginDesc, Insert: "/" + theme.CompLoginName + " "},
 		compItem{Cat: compBuiltin, Name: theme.CompLogoutName, Desc: theme.CompLogoutDesc, Insert: "/" + theme.CompLogoutName + " "},
 		compItem{Cat: compBuiltin, Name: theme.CompSettingsName, Desc: theme.CompSettingsDesc, Insert: "/" + theme.CompSettingsName + " "},
+		compItem{Cat: compBuiltin, Name: theme.CompHelpName, Desc: theme.CompHelpDesc, Insert: "/" + theme.CompHelpName},
 	)
 	for _, c := range cmds {
 		items = append(items, compItem{Cat: compCmd, Name: c.Name, Desc: c.Description, Insert: "/" + c.Name + " "})
