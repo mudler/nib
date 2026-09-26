@@ -20,6 +20,7 @@ import (
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textarea"
+	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/glamour"
@@ -496,6 +497,13 @@ type Model struct {
 	logSel      int            // selected index in the unified jobs list (list mode)
 	logOpenID   string         // when non-empty: drilled into this job's full log
 	logOpenKind string         // "agent" | "shell" for the open job
+	// agentInput is the input line of a running sub-agent's log, and
+	// agentInputNote the note under it about the last message sent.
+	agentInput     textinput.Model
+	agentInputNote string
+	// sendToAgent sends a message to a sub-agent; nil uses the session's.
+	// Tests set it.
+	sendToAgent func(id, message string) error
 	logVP       viewport.Model // scrollable full-log view
 
 	// Ctrl+T todo panel state.
@@ -1191,9 +1199,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, nil
 				case msg.Type == tea.KeyEnter:
 					if m.logSel >= 0 && m.logSel < len(jobs) {
-						m.logOpenID = jobs[m.logSel].ID
-						m.logOpenKind = jobs[m.logSel].Kind
-						m.syncLogViewport()
+						m.openJobLog(jobs[m.logSel])
+						m.reflowLayout()
 					}
 					return m, nil
 				case msg.Type == tea.KeyRunes && len(msg.Runes) == 1 && (msg.Runes[0] == 'k' || msg.Runes[0] == 'K'):
@@ -1203,6 +1210,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, nil
 				}
 				return m, nil // swallow other keys in list mode
+			}
+			// A running sub-agent's log takes input for the agent.
+			if m.agentInputOpen() {
+				if cmd, handled := m.handleAgentInputKey(msg); handled {
+					return m, cmd
+				}
 			}
 			// LOG mode (drilled into one job): Esc -> back to list; Ctrl+O -> close.
 			switch msg.Type {
@@ -2270,6 +2283,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.updateViewport()
 		return m, m.listenAgentTitles()
 
+	case agentSentMsg:
+		m.applyAgentSent(msg)
+		m.updateViewport()
+		return m, nil
+
 	case agentEventMsg:
 		// Update value-receiver copy via pointer helper, then write back.
 		ev := m.withStreamStats(chat.AgentEvent(msg))
@@ -3300,6 +3318,8 @@ func (m Model) renderComposer(w int) string {
 	switch {
 	case !m.sessionReady:
 		composer.WriteString(theme.Help.Render(theme.Starting))
+	case m.agentInputOpen():
+		composer.WriteString(m.renderAgentInput(w))
 	case m.showLogs:
 		// no input: the log viewer owns the body and the keystrokes
 	case m.panelOpen():
@@ -3383,7 +3403,8 @@ func (m *Model) applyDimensions(vs render.ViewState, footerHeight int) {
 	m.viewport.Width = m.width
 	m.viewport.Height = vpHeight
 	m.logVP.Width = m.width
-	m.logVP.Height = vpHeight
+	// The open log sits under the viewer's own rows (see renderLogsViewer).
+	m.logVP.Height = max(vpHeight-logViewerChrome, 1)
 	m.textarea.SetWidth(m.width - 2)
 }
 
@@ -4098,6 +4119,8 @@ func (m Model) helpLine() string {
 		return "esc close"
 	case m.activityFocus:
 		return theme.SideKeys + theme.HelpActivity
+	case m.agentInputOpen():
+		return "enter send · " + theme.ScrollKeys + " scroll · esc back · ctrl+o close"
 	case m.showLogs && m.logOpenID != "":
 		return theme.ScrollKeys + " scroll · esc back · ctrl+o close"
 	case m.showLogs:

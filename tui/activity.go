@@ -304,8 +304,8 @@ func (m *Model) openLogs(kind, id string) {
 	if id != "" {
 		for i, j := range jobs {
 			if j.ID == id && j.Kind == kind {
-				m.logSel, m.logOpenID, m.logOpenKind = i, j.ID, j.Kind
-				m.syncLogViewport()
+				m.logSel = i
+				m.openJobLog(j)
 				return
 			}
 		}
