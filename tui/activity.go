@@ -161,7 +161,7 @@ func (m Model) agentChipText(j agentJob) string {
 		typ = "agent"
 	}
 	parts := []string{typ}
-	if title := taskTitle(j.Task); title != "" {
+	if title := j.title(); title != "" {
 		parts[0] += ": " + title
 	}
 	doing := m.agentSpeed.doing(j.ID)
@@ -176,6 +176,15 @@ func (m Model) agentChipText(j agentJob) string {
 		parts = append(parts, chat.HumanTokens(int(math.Round(r.Total))))
 	}
 	return strings.Join(parts, " "+theme.Sep+" ")
+}
+
+// title names a sub-agent's work: the title the model wrote for it, or,
+// until one arrives, its task's first sentence.
+func (j agentJob) title() string {
+	if j.Title != "" {
+		return j.Title
+	}
+	return taskTitle(j.Task)
 }
 
 // maxTaskTitle caps a task title in runes, before the presenter's own fitting.

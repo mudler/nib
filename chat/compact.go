@@ -916,7 +916,7 @@ func (s *Session) summarizeWith(ctx context.Context, prefix string, pieces []sum
 	content, usage, aerr := s.summaryRequest(ctx, openai.ChatCompletionRequest{
 		Messages:  []openai.ChatCompletionMessage{{Role: cogito.UserMessageRole.String(), Content: prompt}},
 		MaxTokens: s.summaryOutputTokens(),
-	})
+	}, s.compactionProgress())
 	// Compaction is not free, and it fires exactly when a session has already
 	// grown expensive — so leaving it out would understate the runs that cost
 	// the most.
@@ -943,8 +943,9 @@ func (s *Session) summarizeWith(ctx context.Context, prefix string, pieces []sum
 // a proxy with a first-byte timeout (Cloudflare's 524 after 100 seconds) cuts
 // off a blocking request that takes that long, while the turns, streamed, get
 // through. The streamed deltas are not relayed: the summary is not part of the
-// transcript.
-func (s *Session) summaryRequest(ctx context.Context, req openai.ChatCompletionRequest) (string, cogito.LLMUsage, error) {
+// transcript. progress, when set, is called with the bytes of reasoning and of
+// reply streamed so far.
+func (s *Session) summaryRequest(ctx context.Context, req openai.ChatCompletionRequest, progress func(reasoned, written int)) (string, cogito.LLMUsage, error) {
 	llm, _ := s.currentLLM()
 	stream, ok := llm.(cogito.StreamingLLM)
 	if !ok || s.callbacks.OnStream == nil {
@@ -961,30 +962,20 @@ func (s *Session) summaryRequest(ctx context.Context, req openai.ChatCompletionR
 	}
 	var content strings.Builder
 	var usage cogito.LLMUsage
-	// A summary of a long conversation can take minutes. The status says
-	// what it is doing, at most once a second, so a slow summary does not
-	// look like a stuck one.
 	reasoned := 0
-	var shown time.Time
-	progress := func() {
-		if s.callbacks.OnStatus == nil || time.Since(shown) < time.Second {
-			return
+	report := func() {
+		if progress != nil {
+			progress(reasoned, content.Len())
 		}
-		shown = time.Now()
-		if content.Len() == 0 {
-			s.callbacks.OnStatus(fmt.Sprintf("Compacting conversation… thinking (~%s tokens)", formatTokenCount(max(reasoned/4, 1))))
-			return
-		}
-		s.callbacks.OnStatus(fmt.Sprintf("Compacting conversation… writing summary (~%s tokens)", formatTokenCount(max(content.Len()/4, 1))))
 	}
 	for ev := range events {
 		switch ev.Type {
 		case cogito.StreamEventReasoning:
 			reasoned += len(ev.Content)
-			progress()
+			report()
 		case cogito.StreamEventContent:
 			content.WriteString(ev.Content)
-			progress()
+			report()
 		case cogito.StreamEventDone:
 			usage = ev.Usage
 		case cogito.StreamEventError:
@@ -1000,6 +991,25 @@ func (s *Session) summaryRequest(ctx context.Context, req openai.ChatCompletionR
 		err = ctx.Err()
 	}
 	return content.String(), usage, err
+}
+
+// compactionProgress reports a summary's progress in the status line. A
+// summary of a long conversation can take minutes: the status says what it is
+// doing, at most once a second, so a slow summary does not look like a stuck
+// one.
+func (s *Session) compactionProgress() func(reasoned, written int) {
+	var shown time.Time
+	return func(reasoned, written int) {
+		if s.callbacks.OnStatus == nil || time.Since(shown) < time.Second {
+			return
+		}
+		shown = time.Now()
+		if written == 0 {
+			s.callbacks.OnStatus(fmt.Sprintf("Compacting conversation… thinking (~%s tokens)", formatTokenCount(max(reasoned/4, 1))))
+			return
+		}
+		s.callbacks.OnStatus(fmt.Sprintf("Compacting conversation… writing summary (~%s tokens)", formatTokenCount(max(written/4, 1))))
+	}
 }
 
 // summaryMessage wraps a compaction summary as the message that stands in for
