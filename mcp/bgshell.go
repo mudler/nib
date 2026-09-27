@@ -599,8 +599,11 @@ func outputResult(j *bgJob, offset, limit int, limits *OutputLimitsPolicy, artif
 	return res
 }
 
+// bgStartInput's Script and Command follow scriptArgs; see there for why
+// command is accepted.
 type bgStartInput struct {
-	Script string `json:"script" jsonschema:"the shell script to run in the background"`
+	Script  string `json:"script,omitempty" jsonschema:"the shell script to run in the background (required)"`
+	Command string `json:"command,omitempty" jsonschema:"alias for script, accepted for compatibility; use script"`
 }
 type bgStartOutput struct {
 	JobID   string `json:"job_id" jsonschema:"id of the started background job"`
@@ -630,7 +633,11 @@ func registerBackgroundShellTools(srvCtx context.Context, server *mcp.Server, mg
 		Name:        "bash_background",
 		Description: "Run a shell script in the background and return immediately with a job_id. Use this for long-running commands (servers, builds, watchers, downloads) so the conversation isn't blocked. Read progress with bash_job_output and stop it with bash_job_kill.",
 	}, func(_ context.Context, _ *mcp.CallToolRequest, in bgStartInput) (*mcp.CallToolResult, bgStartOutput, error) {
-		j := mgr.launch(srvCtx, in.Script, false)
+		script, err := scriptArgs{Script: in.Script, Command: in.Command}.resolve()
+		if err != nil {
+			return nil, bgStartOutput{}, err
+		}
+		j := mgr.launch(srvCtx, script, false)
 		return nil, bgStartOutput{JobID: j.id, Message: "Started background job " + j.id}, nil
 	})
 

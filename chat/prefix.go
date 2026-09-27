@@ -1,9 +1,10 @@
 package chat
 
 import (
-	"encoding/json"
 	"strings"
 	"unicode"
+
+	wizmcp "github.com/mudler/nib/mcp"
 )
 
 // Scoped "always allow" grants for the bash tool. A grant covers a command
@@ -64,17 +65,17 @@ func BashGrantPrefix(argsJSON string) (string, bool) {
 // otherwise. It is the shared core of BashGrantPrefix (prefix grants) and the
 // bash branch of IsReadOnly (read-only classification), so both inherit the
 // same anti-smuggling guarantees.
+//
+// The script comes from wizmcp.BashScript, the resolution the tool handler
+// uses, so a call that names its script with the command alias is judged by
+// the script that runs, and a call naming two different scripts is never
+// safe.
 func safeCommand(argsJSON string) (words []string, ok bool) {
-	var args struct {
-		Script string `json:"script"`
-	}
-	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
+	script, ok := wizmcp.BashScript(argsJSON)
+	if !ok {
 		return nil, false
 	}
-	script := strings.TrimSpace(args.Script)
-	if script == "" {
-		return nil, false
-	}
+	script = strings.TrimSpace(script)
 	for _, tok := range rejectedShellTokens {
 		if strings.Contains(script, tok) {
 			return nil, false

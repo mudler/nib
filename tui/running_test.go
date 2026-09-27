@@ -155,6 +155,11 @@ func TestFindForegroundJob(t *testing.T) {
 	if id, ok := findForegroundJob(jobs, `{"script":"make"}`); !ok || id != "old" {
 		t.Fatalf("want the running foreground job for the script, got %q %v", id, ok)
 	}
+	// A call that names its script with the command alias runs the same job,
+	// so ctrl+b must find it too.
+	if id, ok := findForegroundJob(jobs, `{"command":"make"}`); !ok || id != "old" {
+		t.Fatalf("want the job a command-alias call started, got %q %v", id, ok)
+	}
 	if _, ok := findForegroundJob(jobs, `{"script":"true"}`); ok {
 		t.Fatal("no job runs that script")
 	}

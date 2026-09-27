@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 
+	wizmcp "github.com/mudler/nib/mcp"
 	"github.com/mudler/nib/theme"
 )
 
@@ -58,7 +59,11 @@ var toolFormatters = map[string]func(map[string]any) string{
 }
 
 func fmtBash(a map[string]any) string {
-	s := "$ " + argStr(a, "script")
+	script, ok := shownScript(a)
+	if !ok {
+		return ""
+	}
+	s := "$ " + script
 	if t := argStr(a, "timeout"); t != "" {
 		s += "  (timeout " + t + "s)"
 	}
@@ -66,7 +71,29 @@ func fmtBash(a map[string]any) string {
 }
 
 func fmtBashBackground(a map[string]any) string {
-	return "$ " + argStr(a, "script") + "  (background)"
+	script, ok := shownScript(a)
+	if !ok {
+		return ""
+	}
+	return "$ " + script + "  (background)"
+}
+
+// shownScript returns the script a bash call runs, resolved by
+// wizmcp.BashScript as the tool handler resolves it, so a call using the
+// command alias shows its script. ok is false for a call that names two
+// different scripts: the formatter then returns "" and FormatToolCall falls
+// back to the argument card, which shows both to the user approving it.
+func shownScript(a map[string]any) (string, bool) {
+	if _, hasScript := a["script"]; !hasScript {
+		if _, hasCommand := a["command"]; !hasCommand {
+			return "", true // nothing named: show "$ " as before
+		}
+	}
+	raw, err := json.Marshal(a)
+	if err != nil {
+		return "", false
+	}
+	return wizmcp.BashScript(string(raw))
 }
 
 func fmtRead(a map[string]any) string {

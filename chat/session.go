@@ -779,6 +779,9 @@ func (s *Session) emitToolStart(approved bool, agentID, name, args string) {
 }
 
 func (s *Session) decideToolCall(req ToolCallRequest) cogito.ToolCallDecision {
+	// A bash call may name its script with the command alias. Every check
+	// below, hooks included, sees the documented {"script": ...} form.
+	req.Arguments = wizmcp.CanonicalBashArgs(req.Name, req.Arguments)
 	req.ExternalSources = s.activeExternalSourceIDs()
 	// Once external data has entered the conversation, consequential actions
 	// need a fresh human decision unless session-wide auto-approval is active.

@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"encoding/json"
 	"strings"
 	"time"
 
@@ -103,15 +102,14 @@ func (m Model) foregroundShellJob(args string) (string, bool) {
 // findForegroundJob returns the newest running, not backgrounded job whose
 // script is the bash call's (args is the call's JSON arguments).
 func findForegroundJob(jobs []wizmcp.ShellJobInfo, args string) (string, bool) {
-	var a struct {
-		Script string `json:"script"`
-	}
-	if json.Unmarshal([]byte(args), &a) != nil {
+	// The script the job runs, which a call can name with the command alias.
+	script, ok := wizmcp.BashScript(args)
+	if !ok {
 		return "", false
 	}
 	for i := len(jobs) - 1; i >= 0; i-- {
 		j := jobs[i]
-		if j.Running && !j.Backgrounded && j.Script == a.Script {
+		if j.Running && !j.Backgrounded && j.Script == script {
 			return j.ID, true
 		}
 	}

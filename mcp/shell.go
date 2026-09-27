@@ -8,9 +8,11 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-// Input type for executing shell scripts
+// Input type for executing shell scripts. Script and Command follow
+// scriptArgs; see there for why command is accepted.
 type executeCommandInput struct {
-	Script  string `json:"script" jsonschema:"the shell script to execute"`
+	Script  string `json:"script,omitempty" jsonschema:"the shell script to execute (required)"`
+	Command string `json:"command,omitempty" jsonschema:"alias for script, accepted for compatibility; use script"`
 	Timeout int    `json:"timeout,omitempty" jsonschema:"optional timeout in seconds (default: 30)"`
 }
 
@@ -49,6 +51,11 @@ func makeBashTool(srvCtx context.Context, mgr *bgJobManager, limits *OutputLimit
 		executeCommandOutput,
 		error,
 	) {
+		script, err := scriptArgs{Script: input.Script, Command: input.Command}.resolve()
+		if err != nil {
+			return nil, executeCommandOutput{}, err
+		}
+		input.Script = script
 		timeout := input.Timeout
 		if timeout <= 0 {
 			timeout = 30

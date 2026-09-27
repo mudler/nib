@@ -2,13 +2,13 @@ package chat
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
 	"strings"
 
 	"github.com/mudler/nib/classify"
+	wizmcp "github.com/mudler/nib/mcp"
 	"github.com/mudler/nib/types"
 	"github.com/mudler/xlog"
 )
@@ -126,11 +126,9 @@ func (a *Approver) state(req ToolCallRequest) (string, error) {
 		if _, ok := BashGrantPrefix(req.Arguments); !ok {
 			return "", errCompound
 		}
-		var args struct {
-			Script string `json:"script"`
-		}
-		_ = json.Unmarshal([]byte(req.Arguments), &args)
-		fmt.Fprintf(&b, "command: %s\n", args.Script)
+		// The script that runs, which the command alias can name too.
+		script, _ := wizmcp.BashScript(req.Arguments)
+		fmt.Fprintf(&b, "command: %s\n", script)
 	} else {
 		fmt.Fprintf(&b, "arguments: %s\n", req.Arguments)
 	}
