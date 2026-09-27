@@ -33,7 +33,7 @@ func renderMarkdownWith(r *glamour.TermRenderer, content string, width int) stri
 	if err != nil {
 		return render.Wrap(content, width)
 	}
-	return strings.Trim(out, "\n")
+	return render.FitWidth(strings.Trim(out, "\n"), width)
 }
 
 // nibMarkdownStyle is a minimal glamour style: no background fills, no document

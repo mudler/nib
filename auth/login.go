@@ -3,7 +3,9 @@ package auth
 import (
 	"context"
 	"fmt"
+	neturl "net/url"
 	"os"
+	osuser "os/user"
 	"strings"
 	"time"
 
@@ -77,6 +79,15 @@ func StartOAuthFlow(def provider.Definition) (*OAuthFlow, error) {
 func (f *OAuthFlow) AuthorizeURL() string {
 	challenge := oauth.GenerateChallenge(f.verifier)
 	return oauth.AuthorizeURL(f.def, challenge, f.state, f.redirectURI)
+}
+
+// RedirectHost returns the host of the redirect URI the provider sends the
+// browser to: the provider's callback host, "localhost" when it sets none.
+func (f *OAuthFlow) RedirectHost() string {
+	if u, err := neturl.Parse(f.redirectURI); err == nil && u.Hostname() != "" {
+		return u.Hostname()
+	}
+	return "localhost"
 }
 
 // ManualCallback parses a pasted callback URL and delivers it to the
@@ -320,7 +331,7 @@ func startOAuthLogin(ctx context.Context, store *Store, def provider.Definition,
 	if ssh {
 		lf.IsSSH = true
 		lf.SSHPortForward = sshPortForwardHint(port)
-		lf.Prompt = sshOAuthPrompt(url, lf.SSHPortForward, port)
+		lf.Prompt = sshOAuthPrompt(url, lf.SSHPortForward, flow.RedirectHost(), port)
 	} else {
 		lf.Prompt = localOAuthPrompt(url)
 	}
@@ -385,32 +396,46 @@ func isSSHSession() bool {
 	return os.Getenv("SSH_CONNECTION") != "" || os.Getenv("SSH_TTY") != ""
 }
 
-// sshHostPort extracts user@host from the environment to build an ssh -L
-// forwarding command hint. Returns "" if unavailable.
-func sshHostPort() string {
-	host := os.Getenv("SSH_CONNECTION")
-	if host == "" {
-		return ""
-	}
+// sshUserHost returns the user@host to put in an ssh -L forwarding hint.
+//
+// The host is the server address from SSH_CONNECTION ("client_ip
+// client_port server_ip server_port"), the address the user's ssh already
+// reached, and otherwise this machine's hostname. SSH_CONNECTION is often
+// missing even over SSH: a shell inside tmux or sudo keeps SSH_TTY but not
+// always SSH_CONNECTION. The parts that cannot be found become readable
+// placeholders, never an empty string, so the hint never shows a bare "@".
+func sshUserHost() string {
 	user := os.Getenv("USER")
 	if user == "" {
-		user = "user"
+		if u, err := osuser.Current(); err == nil {
+			user = u.Username
+		}
 	}
-	hostname, err := os.Hostname()
-	if err != nil || hostname == "" {
-		return ""
+	if user == "" {
+		user = "<user>"
 	}
-	return fmt.Sprintf("%s@%s", user, hostname)
+	host := ""
+	if f := strings.Fields(os.Getenv("SSH_CONNECTION")); len(f) >= 3 {
+		host = f[2]
+	}
+	if host == "" {
+		if h, err := os.Hostname(); err == nil {
+			host = h
+		}
+	}
+	if host == "" {
+		host = "<this-host>"
+	}
+	return user + "@" + host
 }
 
-// sshPortForwardHint returns an "ssh -L port:localhost:port user@host"
-// string, or a placeholder when user@host can't be determined.
+// sshPortForwardHint returns the "ssh -L port:127.0.0.1:port user@host"
+// command that carries the browser's redirect to the callback server. The
+// forward targets 127.0.0.1 because that is the address the callback server
+// binds (oauth.CallbackServer.Start). "localhost" on the remote side can
+// resolve to ::1 first, where nothing listens.
 func sshPortForwardHint(port int) string {
-	hp := sshHostPort()
-	if hp == "" {
-		hp = "<user>@<this-host>"
-	}
-	return fmt.Sprintf("ssh -L %d:localhost:%d %s", port, port, hp)
+	return fmt.Sprintf("ssh -L %d:127.0.0.1:%d %s", port, port, sshUserHost())
 }
 
 // localOAuthPrompt builds the prompt shown for an OAuth-code flow outside
@@ -425,7 +450,11 @@ func localOAuthPrompt(url string) string {
 // sshOAuthPrompt builds the multi-line prompt shown for an OAuth-code flow
 // over SSH: port-forward command, the authorize URL, and paste-URL fallback
 // instructions.
-func sshOAuthPrompt(url, forward string, port int) string {
+//
+// redirectHost is the host the browser is redirected to (the provider's
+// callback host, such as 127.0.0.1 for openai-codex), so the text names the
+// address the user will actually see fail.
+func sshOAuthPrompt(url, forward, redirectHost string, port int) string {
 	return fmt.Sprintf(
 		"You appear to be connected over SSH.\n"+
 			"The OAuth callback needs to reach this machine's localhost.\n"+
@@ -434,8 +463,8 @@ func sshOAuthPrompt(url, forward string, port int) string {
 			"Then open this URL in your LOCAL browser:\n  %s\n\n"+
 			"If you cannot set up port forwarding, complete the login in your\n"+
 			"browser. When the browser fails to connect (redirect to\n"+
-			"localhost:%d), copy the full URL from the address bar and paste it here.",
-		forward, url, port)
+			"%s:%d), copy the full URL from the address bar and paste it here.",
+		forward, url, redirectHost, port)
 }
 
 // StatusLine returns a one-line summary of a stored credential for display

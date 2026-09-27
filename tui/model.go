@@ -49,6 +49,11 @@ type ChatMessage struct {
 	Name      string // tool name, for Role == "tool"
 	Arguments string // marshaled call args, for Role == "tool"
 	AgentID   string // issuing sub-agent, for Role == "tool" (empty = root agent)
+	// Plain renders a Role == "agent" notice as written instead of as
+	// markdown: its line breaks and <placeholders> kept, URLs made
+	// clickable (see render.WrapLinked). For text the user must copy or
+	// click exactly, such as a login prompt.
+	Plain bool
 	// Transient marks a turn-level error line: it stays in the transcript so
 	// the failure is visible, but is dropped as soon as a reply arrives (a
 	// successful turn, or a parked reply) so a recovered run doesn't carry
@@ -3892,7 +3897,12 @@ func (m *Model) updateViewport() {
 			prevRole = render.RoleAssistant
 		case "agent":
 			mdWidth := presenter.ContentWidth(render.RoleAgent, contentWidth)
-			rendered := m.renderMarkdown(msg.Content, mdWidth)
+			var rendered string
+			if msg.Plain {
+				rendered = render.WrapLinked(msg.Content, mdWidth)
+			} else {
+				rendered = m.renderMarkdown(msg.Content, mdWidth)
+			}
 			sb.WriteString(presenter.Message(render.Message{
 				Role:    render.RoleAgent,
 				Content: rendered,

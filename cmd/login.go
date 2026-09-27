@@ -65,7 +65,7 @@ func RunLoginCommand(programName, baseDir string, args []string) int {
 		if def.DeviceURL == "" {
 			fmt.Fprintf(os.Stderr, "%s login: %s does not support device-code flow (no device authorization endpoint)\n", prog, def.ID)
 			fmt.Fprintf(os.Stderr, "Use the standard OAuth flow instead. Over SSH, set up port forwarding:\n")
-			fmt.Fprintf(os.Stderr, "  ssh -L %d:localhost:%d <user>@<this-host>\n", def.CallbackPort, def.CallbackPort)
+			fmt.Fprintf(os.Stderr, "  ssh -L %d:127.0.0.1:%d <user>@<this-host>\n", def.CallbackPort, def.CallbackPort)
 			return 1
 		}
 		// Temporarily switch the login kind to device-code.
