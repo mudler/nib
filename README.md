@@ -122,10 +122,15 @@ nib login xai-oauth          # xAI (device flow)
 **Over SSH**, the OAuth callback (a localhost HTTP server) can't receive
 the browser redirect — the browser is on your laptop, the server is on the
 remote machine. nib detects this and prints the exact `ssh -L` port-forward
-command to run from your local machine. It also offers a paste fallback: if
-port forwarding isn't possible, complete the login in your browser, and
-when the redirect fails, copy the full URL from the address bar and paste
-it into nib.
+command to run from your local machine.
+
+**Paste fallback.** If the browser cannot reach nib after you log in (over
+SSH without port forwarding, a browser on another machine, a firewall),
+the browser shows a connection error. Copy the full URL from its address
+bar and paste it into nib. `nib login` reads it from the terminal. In the
+TUI, `/login` shows a "redirect URL" field in its waiting dialog: paste the
+URL there and press Enter. This works for every OAuth provider that uses a
+browser redirect.
 
 For providers that support RFC 8628 device flow (Google, xAI, Kimi, Meta,
 and others), `--device` skips the localhost callback entirely — no port

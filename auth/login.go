@@ -225,16 +225,23 @@ type LoginFlow struct {
 	manualCB       func(string) error // feeds a pasted callback URL into the OAuth flow
 }
 
-// ManualCallback feeds a pasted callback URL into the OAuth flow. It is
-// the paste-the-code fallback for SSH sessions where the browser redirect
-// cannot reach the remote callback server. It is a no-op (returns nil)
-// when the flow does not support manual callback (e.g. device-code flows
-// or synchronous Copilot import).
+// ManualCallback feeds a pasted callback URL into the OAuth flow: the
+// fallback for when the browser redirect cannot reach the callback server.
+// That happens over SSH, but also when the browser runs on another machine
+// or in a sandbox, or a firewall blocks the port. It returns an error when
+// the flow does not support it (device-code flows, Copilot token import);
+// see AcceptsPastedURL.
 func (f *LoginFlow) ManualCallback(rawURL string) error {
 	if f.manualCB == nil {
 		return fmt.Errorf("this login flow does not support manual callback")
 	}
 	return f.manualCB(rawURL)
+}
+
+// AcceptsPastedURL reports whether ManualCallback can finish this flow, so a
+// caller knows whether to offer the user a place to paste the redirect URL.
+func (f *LoginFlow) AcceptsPastedURL() bool {
+	return f.manualCB != nil
 }
 
 // Complete finishes the login flow, returning the saved credential. It blocks
@@ -315,7 +322,7 @@ func startOAuthLogin(ctx context.Context, store *Store, def provider.Definition,
 		lf.SSHPortForward = sshPortForwardHint(port)
 		lf.Prompt = sshOAuthPrompt(url, lf.SSHPortForward, port)
 	} else {
-		lf.Prompt = "Open this URL to log in:\n" + url
+		lf.Prompt = localOAuthPrompt(url)
 	}
 	return lf, nil
 }
@@ -404,6 +411,15 @@ func sshPortForwardHint(port int) string {
 		hp = "<user>@<this-host>"
 	}
 	return fmt.Sprintf("ssh -L %d:localhost:%d %s", port, port, hp)
+}
+
+// localOAuthPrompt builds the prompt shown for an OAuth-code flow outside
+// SSH: the authorize URL, and the paste-URL fallback for a browser whose
+// redirect cannot reach this machine.
+func localOAuthPrompt(url string) string {
+	return "Open this URL to log in:\n" + url + "\n\n" +
+		"If the browser cannot connect after you log in, copy the full URL\n" +
+		"from its address bar and paste it here."
 }
 
 // sshOAuthPrompt builds the multi-line prompt shown for an OAuth-code flow

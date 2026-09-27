@@ -236,13 +236,23 @@ func (f loginForm) dialog() render.Dialog {
 
 // loginWait is the dialog shown while an OAuth or device-code flow waits on
 // the browser. cancel aborts the flow (closing the callback server).
-// flow holds the LoginFlow for manual-callback (paste-code) support over SSH.
+//
+// When the flow accepts a pasted redirect URL (every OAuth-code flow, over
+// SSH or not), the dialog has a field for it: the browser may not reach the
+// callback server, and the composer is hidden while the dialog is open, so
+// this field is the only place the user can put the URL.
 type loginWait struct {
 	active bool
 	entry  chat.ProviderEntry
 	prompt string // device-code instructions, repeated in the dialog
 	cancel context.CancelFunc
 	flow   *auth.LoginFlow
+	pasted []rune // the redirect URL typed or pasted so far
+	note   string // why the last URL was refused, or that it was accepted
+}
+
+func (w loginWait) acceptsPaste() bool {
+	return w.flow != nil && w.flow.AcceptsPastedURL()
 }
 
 // loginResultMsg is sent when an in-TUI login flow completes.
@@ -378,13 +388,84 @@ func (m *Model) cancelLoginWait() {
 	m.appendMessage(ChatMessage{Role: "agent", Content: theme.LoginCancelled})
 }
 
+// loginPasteShown is how many runes of a pasted URL the dialog shows. A
+// redirect URL runs to hundreds of characters; its tail is what changes as
+// the user types, and the whole of it would wrap the dialog.
+const loginPasteShown = 60
+
 func (w loginWait) dialog() render.Dialog {
-	d := render.Dialog{Kind: render.DialogModelPicker, Title: fmt.Sprintf(theme.LoginWaitTitle, w.entry.Name), Hint: theme.LoginWaitHint}
+	d := render.Dialog{Kind: render.DialogModelPicker, Title: fmt.Sprintf(theme.LoginWaitTitle, w.entry.Name), Hint: theme.LoginWaitHint, Selected: -1}
 	if w.prompt != "" {
 		d.Options = []render.DialogOption{{Text: w.prompt}}
-		d.Selected = -1
+	}
+	if w.acceptsPaste() {
+		shown := w.pasted
+		if len(shown) > loginPasteShown {
+			shown = append([]rune("…"), shown[len(shown)-loginPasteShown+1:]...)
+		}
+		d.Options = append(d.Options, render.DialogOption{Text: theme.LoginWaitPasteLabel + ": " + string(shown)})
+		d.Selected = len(d.Options) - 1
+		d.Hint = theme.LoginWaitPasteHint
+	}
+	if w.note != "" {
+		d.Hint = w.note + " · " + d.Hint
 	}
 	return d
+}
+
+// handleLoginWaitKey drives the dialog shown while a login waits on the
+// browser: esc cancels, and when the flow accepts a pasted redirect URL the
+// other keys edit it and enter submits it.
+func (m Model) handleLoginWaitKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	w := &m.loginWait
+	if msg.Type == tea.KeyEsc {
+		m.cancelLoginWait()
+		m.updateViewport()
+		return m, nil
+	}
+	if !w.acceptsPaste() {
+		return m, nil
+	}
+	switch msg.Type {
+	case tea.KeyBackspace:
+		if len(w.pasted) > 0 {
+			w.pasted = w.pasted[:len(w.pasted)-1]
+		}
+	case tea.KeyCtrlU:
+		w.pasted = nil
+	case tea.KeyEnter:
+		m.submitPastedLoginURL()
+	case tea.KeyRunes, tea.KeySpace:
+		// A paste arrives as one KeyRunes. A URL has no spaces, so any the
+		// terminal wrapped into the paste are dropped.
+		if s := strings.Join(strings.Fields(printableRunes(msg.Runes)), ""); s != "" {
+			w.pasted = append(w.pasted, []rune(s)...)
+			w.note = ""
+		}
+	}
+	m.updateViewport()
+	return m, nil
+}
+
+// submitPastedLoginURL hands the pasted redirect URL to the login flow. The
+// flow then finishes on its own and reports through loginResultMsg, the same
+// as when the browser reaches the callback server.
+func (m *Model) submitPastedLoginURL() {
+	w := &m.loginWait
+	raw := strings.TrimSpace(string(w.pasted))
+	if raw == "" {
+		return
+	}
+	if !strings.HasPrefix(raw, "http://") && !strings.HasPrefix(raw, "https://") {
+		w.note = theme.LoginWaitNotURL
+		return
+	}
+	if err := w.flow.ManualCallback(raw); err != nil {
+		w.note = err.Error()
+		return
+	}
+	w.pasted = nil
+	w.note = theme.LoginWaitPasted
 }
 
 // logout is Enter in the /logout picker.

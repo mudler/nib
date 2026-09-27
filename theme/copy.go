@@ -108,6 +108,10 @@ const (
 	LoginFormEnvHint          = "or set $%s instead"
 	LoginWaitTitle            = "waiting for %s login…"
 	LoginWaitHint             = "finish in the browser · esc cancel"
+	LoginWaitPasteHint        = "finish in the browser, or paste the URL it could not open · enter submit · esc cancel"
+	LoginWaitPasteLabel       = "redirect URL"
+	LoginWaitNotURL           = "that is not a URL: paste the full address from the browser"
+	LoginWaitPasted           = "URL received, finishing login…"
 	LoginCancelled            = "login cancelled"
 
 	// /endpoint picker (tui/endpointpicker.go): the same dialog as /login's,
