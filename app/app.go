@@ -291,8 +291,9 @@ func run(o Options) int {
 	return runCtx(ctx, o)
 }
 
-// dispatchManage runs the management subcommands: `plugin`, `skill`, and the
-// `mcp` verbs that manage configured servers rather than serving the agent.
+// dispatchManage runs the management subcommands: `plugin`, `skill`, `login`,
+// `logout`, `cleanup`, and the `mcp` verbs that manage configured servers
+// rather than serving the agent.
 // They need config but neither transports nor a context, so they early-exit
 // before any of the setup below. handled is false for every other argv.
 //
@@ -315,6 +316,8 @@ func dispatchManage(o Options) (code int, handled bool) {
 		return cmd.RunLoginCommand(o.name(), o.BaseDir, args[1:]), true
 	case len(args) >= 1 && args[0] == "logout":
 		return cmd.RunLogoutCommand(o.name(), o.BaseDir, args[1:]), true
+	case len(args) >= 1 && args[0] == "cleanup":
+		return cmd.RunCleanupCommand(o.name(), o.BaseDir, args[1:]), true
 	}
 	return 0, false
 }

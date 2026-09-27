@@ -363,6 +363,41 @@ bounded at 3 seconds, since it runs on the goroutine that draws the prompt),
 the switch still goes through and is marked unverified: a broken endpoint may
 be the very reason you are switching. Both the TUI and `--cli` support this.
 
+### Sessions: `/resume` and `nib cleanup`
+
+nib records each conversation in `~/.config/nib/sessions/` at the end of every
+turn and when you quit. To continue one, use `/resume` in the TUI or start nib
+with `nib --resume` (the newest session in this directory; add `--all` for any
+directory, or give a session id).
+
+A recorded session keeps three things:
+
+- the full transcript you saw, with a `Compacted N earlier messages` line where
+  each compaction ran. Compaction never removes messages from the transcript.
+- the model's context: after a compaction, the summary and the recent messages,
+  with every tool call and result.
+- the `artifact://` store: large tool output and the full text of each part
+  that compaction summarized, so the references in the context still work.
+
+A resumed session shows the full transcript and gives the model the same
+context it had before you quit. Sessions recorded by older versions of nib have
+only the transcript, so on resume the model gets that transcript as its context.
+
+nib keeps the 200 most recently updated sessions and deletes older ones. To
+change the limit, set `session_retention` in the config. To delete sessions
+yourself, use `nib cleanup`:
+
+```bash
+nib cleanup                          # show how many sessions there are; delete nothing
+nib cleanup --older-than 30d         # delete sessions not updated for 30 days (also 2w, 12h)
+nib cleanup --keep 20                # keep only the 20 most recently updated sessions
+nib cleanup --all --here             # delete every session recorded in this directory
+nib cleanup --older-than 2w --dry-run  # show what would be deleted
+```
+
+A session is deleted when any of `--all`, `--older-than` or `--keep` selects it.
+`nib cleanup` also removes temporary files that an interrupted save left behind.
+
 ### Reply suggestions
 
 When a [classifier](#classifier-approval-classify-mode) is configured, the TUI
