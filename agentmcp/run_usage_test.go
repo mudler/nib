@@ -25,7 +25,7 @@ func TestRunWritesUsageJSONOnShutdown(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		done <- Run(ctx, cfg, Options{HTTP: true, Addr: "127.0.0.1:0"}, nil)
+		done <- Run(ctx, cfg, Options{HTTP: true, Addr: "127.0.0.1:0"}, nil, nil)
 	}()
 
 	// Give the listener a moment to come up so this exercises a real shutdown

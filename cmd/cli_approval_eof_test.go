@@ -96,7 +96,7 @@ func runApprovalSession(t *testing.T, cfg types.Config, in io.Reader) (error, st
 	}
 
 	var out, errOut bytes.Buffer
-	runErr := RunCLI(ctx, cfg, Streams{In: in, Out: &out, Err: &errOut}, shellJobs, transports...)
+	runErr := RunCLI(ctx, cfg, Streams{In: in, Out: &out, Err: &errOut}, shellJobs, nil, transports...)
 	return runErr, out.String()
 }
 

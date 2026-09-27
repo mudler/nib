@@ -26,7 +26,7 @@ func runCLIScript(t *testing.T, cfg types.Config, script string) (string, string
 		In:  strings.NewReader(script),
 		Out: &out,
 		Err: &errOut,
-	}, nil)
+	}, nil, nil)
 	if err != nil {
 		t.Fatalf("RunCLI: %v", err)
 	}

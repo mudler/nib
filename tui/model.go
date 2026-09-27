@@ -202,12 +202,15 @@ type Model struct {
 	// tracking.
 	imgCounter int
 	// Chat state
-	messages     []ChatMessage
-	session      *chat.Session
-	ctx          context.Context
-	cancel       context.CancelFunc
-	transports   []mcp.Transport
-	shellJobs    *wizmcp.ShellJobs
+	messages   []ChatMessage
+	session    *chat.Session
+	ctx        context.Context
+	cancel     context.CancelFunc
+	transports []mcp.Transport
+	shellJobs  *wizmcp.ShellJobs
+	// artifacts is the store the tool servers were started with; every
+	// session this model creates uses it (see WithArtifactStore).
+	artifacts    *wizmcp.ArtifactStore
 	cfg          types.Config
 	sessionReady bool
 
@@ -361,7 +364,7 @@ type Model struct {
 	// tip is the usage hint shown as a dim line beneath the spinner.
 	// Picked at random each turn by startThinking(); empty when
 	// ui.no_funny is on.
-	tip string
+	tip       string
 	reasoning string
 	// reasoningCollapsed caps the live thinking trace to a few trailing lines
 	// so it does not flood the transcript. Per-session, persists across
@@ -489,10 +492,10 @@ type Model struct {
 	earlyTitles    map[string]string
 
 	// Ctrl+O log viewer state.
-	showLogs    bool           // viewer open
-	logSel      int            // selected index in the unified jobs list (list mode)
-	logOpenID   string         // when non-empty: drilled into this job's full log
-	logOpenKind string         // "agent" | "shell" for the open job
+	showLogs    bool   // viewer open
+	logSel      int    // selected index in the unified jobs list (list mode)
+	logOpenID   string // when non-empty: drilled into this job's full log
+	logOpenKind string // "agent" | "shell" for the open job
 	// agentInput is the input line of a running sub-agent's log, and
 	// agentInputNote the note under it about the last message sent.
 	agentInput     textinput.Model
@@ -763,6 +766,15 @@ type toolResultMsg chat.ToolResult
 type sessionReadyMsg struct {
 	session *chat.Session
 	err     error
+}
+
+// WithArtifactStore returns m with the store the tool servers were started
+// with, so every session m creates saves its artifacts where read and
+// search_artifacts look (see chat.Session.UseArtifactStore). nil keeps each
+// session's own store.
+func (m Model) WithArtifactStore(st *wizmcp.ArtifactStore) Model {
+	m.artifacts = st
+	return m
 }
 
 // NewModel creates a new TUI model
@@ -1122,6 +1134,7 @@ func (m Model) initSession() tea.Cmd {
 			// Wire the shell-job registry so backgrounded shell jobs keep the run
 			// parked and inject a completion notice when they finish.
 			session.SetShellJobs(m.shellJobs)
+			session.UseArtifactStore(m.artifacts)
 		}
 		return sessionReadyMsg{session: session, err: err}
 	}
@@ -3795,9 +3808,9 @@ func (m Model) viewState() render.ViewState {
 			}
 			return theme.Help.Render(theme.HintActivity)
 		}(),
-		Clock:   m.hudClock,
-		CPU:     m.hudCPU,
-		RAM:     int(m.hudMemUsed / (1 << 20)),
+		Clock: m.hudClock,
+		CPU:   m.hudCPU,
+		RAM:   int(m.hudMemUsed / (1 << 20)),
 		HeaderStats: render.HeaderStats{
 			Provider: m.headerProvider(),
 			Model:    m.headerModel(),
@@ -3939,8 +3952,8 @@ func (m *Model) updateViewport() {
 				// A one-line tool block (a collapsed read, a bare write) hugs
 				// the tool block after it, so a run of them reads as a list
 				// rather than a column of blank-separated lines.
-				HugNext: msg.bodyless() && i+1 < len(m.messages) && m.messages[i+1].Role == "tool",
-				Images:  m.toImageRefs(msg.Images),
+				HugNext:  msg.bodyless() && i+1 < len(m.messages) && m.messages[i+1].Role == "tool",
+				Images:   m.toImageRefs(msg.Images),
 				ImageOut: m.renderImageOut(msg.Images, contentWidth),
 			}, prevRole, contentWidth))
 			m.toolSpans = append(m.toolSpans, toolSpan{start: toolStart, end: strings.Count(sb.String(), "\n"), index: i})

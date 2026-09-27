@@ -15,11 +15,14 @@ import (
 // the shared background-shell registry (the same one StartTransports gave the
 // bash server); wiring it lets `bash_background` jobs keep a converse run parked
 // and push their completion as a nib/reply notification. It may be nil.
+// artifacts is the store those servers were started with, so the session
+// saves compaction artifacts where read and search_artifacts look; nil
+// leaves the session its own.
 //
 // A cfg.TraceDir that cannot be opened fails the call outright: this path has
 // no console to warn on, so serving untraced would hide the problem until
 // someone went looking for a transcript that was never written.
-func Run(ctx context.Context, cfg types.Config, opts Options, shellJobs *wizmcp.ShellJobs, transports ...mcp.Transport) error {
+func Run(ctx context.Context, cfg types.Config, opts Options, shellJobs *wizmcp.ShellJobs, artifacts *wizmcp.ArtifactStore, transports ...mcp.Transport) error {
 	r := newRouter()
 	pol := newPolicy(cfg)
 
@@ -39,6 +42,7 @@ func Run(ctx context.Context, cfg types.Config, opts Options, shellJobs *wizmcp.
 		// jobs, so they neither park the run nor inject a completion notice.
 		sess.SetShellJobs(shellJobs)
 	}
+	sess.UseArtifactStore(artifacts)
 
 	srv := newServer(ctx, sess, r)
 	return serve(ctx, srv, opts)

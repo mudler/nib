@@ -33,9 +33,9 @@ import (
 // caller's: app.run installs the handler for standalone nib, and an embedder
 // installs its own, because the program itself no longer listens for any. See
 // tuiProgramOptions for why that has to be exactly one owner.
-func RunTUI(ctx context.Context, cfg types.Config, height int, streams Streams, shellJobs *wizmcp.ShellJobs, pres render.Presenter, transports ...mcp.Transport) error {
+func RunTUI(ctx context.Context, cfg types.Config, height int, streams Streams, shellJobs *wizmcp.ShellJobs, artifacts *wizmcp.ArtifactStore, pres render.Presenter, transports ...mcp.Transport) error {
 
-	model := tui.NewModel(ctx, cfg, height, shellJobs, pres, transports...)
+	model := tui.NewModel(ctx, cfg, height, shellJobs, pres, transports...).WithArtifactStore(artifacts)
 
 	// Open /dev/tty directly for TUI - this is crucial when stdout is being captured
 	// (e.g., when run from a shell widget like `output=$(wiz --height 40%)`)

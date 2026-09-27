@@ -101,6 +101,17 @@ func (s *ArtifactStore) Restore(items []Artifact) {
 	}
 }
 
+// Replace drops every stored artifact and restores items in their place, for
+// a store that outlives one session: a resumed session must not see the
+// artifacts of the session it replaced. The ID counter never moves back, so
+// a URI handed out before the replace never names a different artifact.
+func (s *ArtifactStore) Replace(items []Artifact) {
+	s.mu.Lock()
+	s.items = make(map[int64]*Artifact, len(items))
+	s.mu.Unlock()
+	s.Restore(items)
+}
+
 // Count returns the number of stored artifacts.
 func (s *ArtifactStore) Count() int {
 	s.mu.RLock()
