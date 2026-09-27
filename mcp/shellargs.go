@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"strings"
@@ -69,13 +70,13 @@ func CanonicalBashArgs(tool, argsJSON string) string {
 	if !ok {
 		return argsJSON
 	}
-	enc, err := json.Marshal(script)
+	enc, err := marshalNoEscape(script)
 	if err != nil {
 		return argsJSON
 	}
 	delete(m, "command")
 	m["script"] = enc
-	out, err := json.Marshal(m)
+	out, err := marshalNoEscape(m)
 	if err != nil {
 		return argsJSON
 	}
@@ -98,4 +99,18 @@ func BashScript(argsJSON string) (script string, ok bool) {
 		return "", false
 	}
 	return s, true
+}
+
+// marshalNoEscape is json.Marshal without HTML escaping. json.Marshal writes
+// &, < and > as \u0026, \u003c and \u003e, which is valid JSON but no longer
+// the text the model sent: a hook that matches "&&" or ">" in the raw
+// arguments would miss them, and only on calls that used the alias.
+func marshalNoEscape(v any) ([]byte, error) {
+	var b bytes.Buffer
+	enc := json.NewEncoder(&b)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(v); err != nil {
+		return nil, err
+	}
+	return bytes.TrimSuffix(b.Bytes(), []byte("\n")), nil
 }

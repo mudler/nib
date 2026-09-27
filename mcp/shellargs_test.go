@@ -41,6 +41,10 @@ func TestCanonicalBashArgs(t *testing.T) {
 		{"bash", `{"command":"ls","timeout":5}`, `{"script":"ls","timeout":5}`},
 		{"bash_background", `{"command":"make"}`, `{"script":"make"}`},
 		{"bash", `{"script":"ls","command":"ls"}`, `{"script":"ls"}`},
+		// Shell operators stay as written, not \u0026 / \u003e, so a hook that
+		// matches the raw text sees the same thing for either key.
+		{"bash", `{"command":"make && cat a > b < c"}`, `{"script":"make && cat a > b < c"}`},
+		{"bash", `{"command":"x","note":"<&>"}`, `{"note":"<&>","script":"x"}`},
 		// Unchanged: already canonical, conflicting, empty, other tools, bad JSON.
 		{"bash", `{"script":"ls"}`, `{"script":"ls"}`},
 		{"bash", `{"script":"ls","command":"pwd"}`, `{"script":"ls","command":"pwd"}`},
