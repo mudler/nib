@@ -21,7 +21,7 @@ func runCLIUntilInputEnds(t *testing.T, script string) (error, string) {
 		In:  strings.NewReader(script),
 		Out: &out,
 		Err: &errOut,
-	}, nil)
+	}, nil, nil)
 	return err, out.String()
 }
 
@@ -64,7 +64,7 @@ func TestRunCLIReportsAReadErrorThatIsNotEOF(t *testing.T) {
 		In:  failingReader{err: boom},
 		Out: &bytes.Buffer{},
 		Err: &bytes.Buffer{},
-	}, nil)
+	}, nil, nil)
 	if !errors.Is(err, boom) {
 		t.Fatalf("RunCLI on a broken stdin = %v, want %v", err, boom)
 	}
@@ -80,7 +80,7 @@ func TestRunCLIStillReportsCancellation(t *testing.T) {
 		In:  strings.NewReader("help\n"),
 		Out: &bytes.Buffer{},
 		Err: &bytes.Buffer{},
-	}, nil)
+	}, nil, nil)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("RunCLI under a cancelled context = %v, want context.Canceled", err)
 	}
@@ -125,7 +125,7 @@ func TestCancellationBeatsAnAlreadyClosedStdin(t *testing.T) {
 	// "help" is handled entirely inside the loop, so the cancel lands without
 	// any turn being started.
 	p := &pipeThatCancelsAfterEOF{line: "help", cancel: cancel}
-	err := RunCLI(ctx, types.Config{}, Streams{In: p, Out: p, Err: io.Discard}, nil)
+	err := RunCLI(ctx, types.Config{}, Streams{In: p, Out: p, Err: io.Discard}, nil, nil)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("RunCLI = %v, want context.Canceled", err)
 	}

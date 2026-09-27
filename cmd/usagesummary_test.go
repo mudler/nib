@@ -76,7 +76,7 @@ func TestRunCLIWritesTheSummaryToStderrOnly(t *testing.T) {
 		In:  strings.NewReader("say something\nexit\n"),
 		Out: &out,
 		Err: &errOut,
-	}, nil); err != nil {
+	}, nil, nil); err != nil {
 		t.Fatalf("RunCLI: %v", err)
 	}
 

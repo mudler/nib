@@ -127,3 +127,23 @@ func TestArtifactStore_SnapshotRestore(t *testing.T) {
 		t.Fatalf("Snapshot = %+v, want IDs 1..3 in order", got)
 	}
 }
+
+func TestArtifactStore_ReplaceDropsOldAndNeverReusesIDs(t *testing.T) {
+	st := NewArtifactStore()
+	st.Save("bash", "old-1")
+	st.Save("bash", "old-2")
+	st.Save("bash", "old-3")
+
+	st.Replace([]Artifact{{ID: 1, Tool: "compaction", Content: "restored"}})
+	if a := st.Get(1); a == nil || a.Content != "restored" {
+		t.Fatalf("artifact 1 = %+v, want the restored one", a)
+	}
+	if st.Get(2) != nil || st.Get(3) != nil || st.Count() != 1 {
+		t.Fatalf("Replace kept artifacts of the previous session: count %d", st.Count())
+	}
+	// artifact://3 was handed out before the replace; a new save must not
+	// reuse it.
+	if uri := st.Save("bash", "new"); uri != ArtifactURI(4) {
+		t.Fatalf("Save after Replace = %s, want %s", uri, ArtifactURI(4))
+	}
+}
