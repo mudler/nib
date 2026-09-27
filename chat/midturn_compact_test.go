@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -423,7 +424,7 @@ func TestMidTurnCompactionLeavesTheFragmentCompacted(t *testing.T) {
 	if last := msgs[len(msgs)-1]; last.Role != "assistant" || last.Content != "done" {
 		t.Fatalf("the fragment does not end with the answer: %+v", last)
 	}
-	if len(display) == 0 || !strings.HasPrefix(display[0].Content, "Compacted ") {
+	if !slices.ContainsFunc(display, IsCompactionNotice) {
 		t.Fatalf("the display copy does not record the compaction: %+v", display)
 	}
 	if got := display[len(display)-1]; got.Role != "assistant" || got.Content != "done" {

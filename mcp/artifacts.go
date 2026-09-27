@@ -27,7 +27,7 @@ type ArtifactStore struct {
 // Artifact is one piece of spilled tool output.
 type Artifact struct {
 	ID        int64
-	Tool      string    // "bash", "read", "grep", etc.
+	Tool      string // "bash", "read", "grep", etc.
 	CreatedAt time.Time
 	Content   string
 }
@@ -64,6 +64,41 @@ func (s *ArtifactStore) Get(id int64) *Artifact {
 	}
 	cp := *a
 	return &cp
+}
+
+// Snapshot returns a copy of every stored artifact, ordered by ID. A recorded
+// session keeps it, so a resume can Restore the same artifact:// URIs.
+func (s *ArtifactStore) Snapshot() []Artifact {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]Artifact, 0, len(s.items))
+	for _, a := range s.items {
+		out = append(out, *a)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out
+}
+
+// Restore adds items under their own IDs, replacing any artifact with the
+// same ID, and moves the ID counter past the highest one, so a later Save
+// never reuses a restored URI. Items with an ID below 1 are skipped: no
+// artifact:// URI can name them.
+func (s *ArtifactStore) Restore(items []Artifact) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, a := range items {
+		if a.ID < 1 {
+			continue
+		}
+		cp := a
+		s.items[a.ID] = &cp
+		for {
+			cur := s.nextID.Load()
+			if cur >= a.ID || s.nextID.CompareAndSwap(cur, a.ID) {
+				break
+			}
+		}
+	}
 }
 
 // Count returns the number of stored artifacts.

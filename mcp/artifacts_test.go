@@ -108,3 +108,22 @@ func TestArtifactStore_SearchEmptyStore(t *testing.T) {
 		t.Fatalf("expected 0 results from empty store, got %d", len(results))
 	}
 }
+
+func TestArtifactStore_SnapshotRestore(t *testing.T) {
+	src := NewArtifactStore()
+	src.Save("bash", "one")
+	src.Save("compaction", "two")
+
+	dst := NewArtifactStore()
+	dst.Restore(src.Snapshot())
+	if a := dst.Get(2); a == nil || a.Content != "two" || a.Tool != "compaction" {
+		t.Fatalf("artifact 2 not restored under its own ID: %+v", a)
+	}
+	// A new artifact must not reuse a restored URI.
+	if uri := dst.Save("bash", "three"); uri != ArtifactURI(3) {
+		t.Fatalf("Save after Restore = %s, want %s", uri, ArtifactURI(3))
+	}
+	if got := dst.Snapshot(); len(got) != 3 || got[0].ID != 1 || got[2].ID != 3 {
+		t.Fatalf("Snapshot = %+v, want IDs 1..3 in order", got)
+	}
+}

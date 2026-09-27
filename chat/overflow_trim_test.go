@@ -3,6 +3,7 @@ package chat
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -187,8 +188,8 @@ func TestIterativeTrimHardTruncates(t *testing.T) {
 		t.Fatalf("artifact must hold the dropped history")
 	}
 	assertPaired(t, got)
-	if len(s.messages) == 0 || s.messages[0].Role != "assistant" {
-		t.Fatalf("display copy not rebuilt: %+v", s.messages)
+	if !slices.ContainsFunc(s.messages, IsCompactionNotice) || s.messages[0].Content != frag[0].Content {
+		t.Fatalf("display copy must keep the history and record the compaction: %+v", s.messages)
 	}
 }
 

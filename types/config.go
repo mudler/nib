@@ -333,6 +333,17 @@ type Config struct {
 	// and re-applied on every turn (see Session.SendMessage), so a seeded system
 	// message would duplicate it. Set at runtime, never from the YAML config.
 	InitialHistory []openai.ChatCompletionMessage `yaml:"-"`
+	// InitialContext seeds the model context of a resumed session: the
+	// messages Session.ExportContext returned, with the compaction summary,
+	// the tool calls and their results. InitialHistory then seeds only the
+	// display copy. Empty for sessions recorded before it was kept: those
+	// seed the model context from InitialHistory instead. Set at runtime,
+	// never from the YAML config.
+	InitialContext []openai.ChatCompletionMessage `yaml:"-"`
+	// InitialArtifacts restores the artifact:// store of a resumed session
+	// (Session.ExportArtifacts), so the references in its context still
+	// resolve. Set at runtime, never from the YAML config.
+	InitialArtifacts []Artifact `yaml:"-"`
 	// InitialGoal and InitialGoalPaused restore a resumed session's /goal
 	// alongside InitialHistory. Set at runtime by --resume and /resume,
 	// never from the YAML config.

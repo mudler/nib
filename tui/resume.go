@@ -65,6 +65,8 @@ func (m *Model) recordSession() {
 		Created:    m.sessionCreated,
 		Updated:    time.Now(),
 		Messages:   hist,
+		Context:    m.session.ExportContext(),
+		Artifacts:  m.session.ExportArtifacts(),
 		Goal:       m.session.Goal(),
 		GoalPaused: m.session.GoalPaused(),
 	}
@@ -198,6 +200,10 @@ func restoredTranscript(hist []openai.ChatCompletionMessage) []ChatMessage {
 				out = append(out, ChatMessage{Role: "user", Content: msg.Content})
 			}
 		case openai.ChatMessageRoleAssistant:
+			if chat.IsCompactionNotice(msg) {
+				out = append(out, ChatMessage{Role: "agent", Content: msg.Content})
+				continue
+			}
 			if strings.TrimSpace(msg.Content) != "" {
 				out = append(out, ChatMessage{Role: "assistant", Content: msg.Content})
 			}
@@ -240,6 +246,8 @@ func (m *Model) applyResume(rec chat.SessionRecord) tea.Cmd {
 		m.session.Close()
 	}
 	m.cfg.InitialHistory = rec.Messages
+	m.cfg.InitialContext = rec.Context
+	m.cfg.InitialArtifacts = rec.Artifacts
 	m.cfg.InitialGoal = rec.Goal
 	m.cfg.InitialGoalPaused = rec.GoalPaused
 	m.cfg.InitialEndpoint = rec.Endpoint

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -85,8 +86,8 @@ func TestBasicCompactRendersHeadAndKeepsTail(t *testing.T) {
 	if art == nil || !strings.Contains(art.Content, "RESULT-BODY") || !strings.Contains(art.Content, "u1 please do X") {
 		t.Fatalf("artifact must hold the full untruncated head, got %+v", art)
 	}
-	if len(s.messages) == 0 || s.messages[0].Role != "assistant" || s.messages[len(s.messages)-1].Content != "done" {
-		t.Fatalf("display copy not rebuilt: %+v", s.messages)
+	if !slices.ContainsFunc(s.messages, IsCompactionNotice) || s.messages[len(s.messages)-1].Content != "done" {
+		t.Fatalf("display copy does not record the compaction: %+v", s.messages)
 	}
 }
 

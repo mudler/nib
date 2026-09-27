@@ -154,6 +154,9 @@ func (s *Session) Suggest(ctx context.Context) ([]Suggestion, error) {
 	var in SuggestInput
 	for i := len(s.messages) - 1; i >= 0; i-- {
 		m := s.messages[i]
+		if IsCompactionNotice(m) {
+			continue
+		}
 		switch {
 		case m.Role == "assistant" && in.LastAssistant == "" && strings.TrimSpace(m.Content) != "":
 			in.LastAssistant = m.Content
