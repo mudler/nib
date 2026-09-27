@@ -299,6 +299,7 @@ var registry = map[string]Definition{
 		LoginKind:         LoginOAuthCode,
 		CallbackPort:      1455,
 		CallbackPath:      "/auth/callback",
+		CallbackHost:      "127.0.0.1",
 		AllowPortFallback: false,
 		ClientID:          "app_EMoamEEZ73f0CkXaXp7hrann",
 		AuthorizeURL:      "https://auth.openai.com/oauth/authorize",
