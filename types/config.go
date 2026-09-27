@@ -344,6 +344,12 @@ type Config struct {
 	// (Session.ExportArtifacts), so the references in its context still
 	// resolve. Set at runtime, never from the YAML config.
 	InitialArtifacts []Artifact `yaml:"-"`
+	// InitialPruning restores which tool results a resumed session had
+	// stubbed or shortened (Session.ExportPruning), so its first request
+	// matches the last one before the quit. Used only with InitialContext,
+	// whose tool_call_ids it refers to. Set at runtime, never from the YAML
+	// config.
+	InitialPruning PruningState `yaml:"-"`
 	// InitialGoal and InitialGoalPaused restore a resumed session's /goal
 	// alongside InitialHistory. Set at runtime by --resume and /resume,
 	// never from the YAML config.

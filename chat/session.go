@@ -671,6 +671,11 @@ func NewSession(ctx context.Context, cfg types.Config, callbacks Callbacks, tran
 	}
 	if len(cfg.InitialContext) > 0 {
 		s.fragment = cogito.NewFragment(slices.Clone(cfg.InitialContext)...)
+		// The pruning state names tool_call_ids in that context, so it is
+		// restored only with it. An id the context no longer holds is
+		// harmless: forgetAbsentIDs and forgetAbsentCompressed drop it on
+		// the first request.
+		s.restorePruning(cfg.InitialPruning)
 	}
 	if len(cfg.InitialArtifacts) > 0 {
 		s.artifacts.Restore(fromTypesArtifacts(cfg.InitialArtifacts))
@@ -1137,6 +1142,44 @@ func (s *Session) ExportArtifacts() []types.Artifact {
 		out[i] = types.Artifact{ID: a.ID, Tool: a.Tool, Created: a.CreatedAt, Content: a.Content}
 	}
 	return out
+}
+
+// ExportPruning returns a copy of which tool results the requests stubbed
+// (pruneMessages) or shortened (progressivePrune), and the pressure band of
+// the last request. A resume restores it via types.Config.InitialPruning.
+// Without it the first resumed request starts pruning from nothing: it
+// measures every stubbed result in full, so the context looks near the
+// threshold, and the sweep stubs results the model was still using.
+func (s *Session) ExportPruning() types.PruningState {
+	s.prunedMu.Lock()
+	defer s.prunedMu.Unlock()
+	st := types.PruningState{CompressBand: s.compressBand}
+	if len(s.prunedIDs) > 0 {
+		st.Pruned = maps.Clone(s.prunedIDs)
+	}
+	if len(s.compressed) > 0 {
+		st.Compressed = make(map[string]types.CompressedResult, len(s.compressed))
+		for id, c := range s.compressed {
+			st.Compressed[id] = types.CompressedResult{Level: int(c.level), Content: c.content}
+		}
+	}
+	return st
+}
+
+// restorePruning installs a state ExportPruning returned.
+func (s *Session) restorePruning(st types.PruningState) {
+	s.prunedMu.Lock()
+	defer s.prunedMu.Unlock()
+	if len(st.Pruned) > 0 {
+		s.prunedIDs = maps.Clone(st.Pruned)
+	}
+	if len(st.Compressed) > 0 {
+		s.compressed = make(map[string]compressedResult, len(st.Compressed))
+		for id, c := range st.Compressed {
+			s.compressed[id] = compressedResult{level: CompressionLevel(c.Level), content: c.Content}
+		}
+	}
+	s.compressBand = st.CompressBand
 }
 
 func fromTypesArtifacts(items []types.Artifact) []wizmcp.Artifact {

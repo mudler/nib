@@ -41,6 +41,10 @@ type SessionRecord struct {
 	// Artifacts is the session's artifact:// store (Session.ExportArtifacts),
 	// which Context refers to by URI.
 	Artifacts []types.Artifact `json:"artifacts,omitempty"`
+	// Pruning is which tool results in Context the requests stubbed or
+	// shortened (Session.ExportPruning). Empty in records saved before it
+	// was kept; resume then starts pruning from nothing.
+	Pruning types.PruningState `json:"pruning,omitzero"`
 	// Goal is the session's /goal when it was saved, and GoalPaused whether
 	// an interrupt had paused it. Resume restores both.
 	Goal       string `json:"goal,omitempty"`

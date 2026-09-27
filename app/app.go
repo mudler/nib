@@ -706,6 +706,7 @@ func applyResumeFlag(cfg *types.Config, id string, all bool) error {
 	cfg.InitialHistory = rec.Messages
 	cfg.InitialContext = rec.Context
 	cfg.InitialArtifacts = rec.Artifacts
+	cfg.InitialPruning = rec.Pruning
 	cfg.ResumeSessionID = rec.ID
 	cfg.ResumeSessionTitle = rec.Title
 	cfg.ResumeSessionCreated = rec.Created
