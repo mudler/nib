@@ -24,10 +24,10 @@ func parseMCPFlags(args []string) (agentmcp.Options, error) {
 // RunMCP serves nib's agent as an MCP server. args are the tokens after
 // `nib mcp`; shellJobs is the shared background-shell registry; transports are
 // the agent's tool servers.
-func RunMCP(ctx context.Context, cfg types.Config, args []string, shellJobs *wizmcp.ShellJobs, transports ...mcp.Transport) error {
+func RunMCP(ctx context.Context, cfg types.Config, args []string, shellJobs *wizmcp.ShellJobs, artifacts *wizmcp.ArtifactStore, transports ...mcp.Transport) error {
 	opts, err := parseMCPFlags(args)
 	if err != nil {
 		return err
 	}
-	return agentmcp.Run(ctx, cfg, opts, shellJobs, transports...)
+	return agentmcp.Run(ctx, cfg, opts, shellJobs, artifacts, transports...)
 }

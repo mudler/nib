@@ -305,7 +305,9 @@ func startThinkingSpin(spin *spinner, cfg types.Config) {
 	spin.startWithTip(line, tip)
 }
 
-func RunCLI(ctx context.Context, cfg types.Config, streams Streams, shellJobs *wizmcp.ShellJobs, transports ...mcp.Transport) error {
+// artifacts is the store the tool servers were started with (see
+// chat.Session.UseArtifactStore); nil leaves the session its own.
+func RunCLI(ctx context.Context, cfg types.Config, streams Streams, shellJobs *wizmcp.ShellJobs, artifacts *wizmcp.ArtifactStore, transports ...mcp.Transport) error {
 	in, out, errOut := streams.stdin(), streams.stdout(), streams.stderr()
 	reader := bufio.NewReader(in)
 	spin := newSpinner(out)
@@ -527,6 +529,7 @@ func RunCLI(ctx context.Context, cfg types.Config, streams Streams, shellJobs *w
 		// inject its completion notice, so bash_background work isn't orphaned.
 		session.SetShellJobs(shellJobs)
 	}
+	session.UseArtifactStore(artifacts)
 
 	fmt.Fprintln(out, theme.Brand.Render(theme.BrandName))
 	fmt.Fprintln(out, theme.Rule.Render(strings.Repeat("─", 50)))

@@ -296,6 +296,9 @@ type Session struct {
 	// tool result exceeds the spill threshold, the full output is saved here
 	// and the model gets a head+tail slice plus an artifact://N reference.
 	artifacts *wizmcp.ArtifactStore
+	// resumed is whether the session was seeded from a recorded one, which
+	// tells UseArtifactStore to replace the shared store's contents.
+	resumed bool
 
 	// overflowRetried counts context-overflow recoveries in the CURRENT turn.
 	// It exists so a retry can never become a loop, and so tests can assert on
@@ -680,6 +683,7 @@ func NewSession(ctx context.Context, cfg types.Config, callbacks Callbacks, tran
 	if len(cfg.InitialArtifacts) > 0 {
 		s.artifacts.Restore(fromTypesArtifacts(cfg.InitialArtifacts))
 	}
+	s.resumed = len(cfg.InitialHistory) > 0 || len(cfg.InitialContext) > 0
 	// A resumed session carries on with its goal, paused or not. Paused
 	// means nothing without a goal, as in PauseGoal.
 	s.goal = cfg.InitialGoal
@@ -1294,6 +1298,25 @@ func (s *Session) Interrupt() {
 	if s.turnCancel != nil {
 		s.turnCancel()
 	}
+}
+
+// UseArtifactStore makes the session use st, the store the tool servers were
+// started with (mcp.StartTransports), instead of its own. Without it the two
+// stores are separate: compaction saves the summarized conversation where
+// read and search_artifacts never look, both number from artifact://1, and a
+// recorded session keeps only half of what its context refers to.
+//
+// A resumed session moves the artifacts it was seeded with (InitialArtifacts)
+// into st, replacing whatever the previous session in this process left
+// there. A new session leaves st as it is. Call it before the first turn.
+func (s *Session) UseArtifactStore(st *wizmcp.ArtifactStore) {
+	if st == nil || st == s.artifacts {
+		return
+	}
+	if s.resumed {
+		st.Replace(s.artifacts.Snapshot())
+	}
+	s.artifacts = st
 }
 
 // SetShellJobs wires the shared shell-job registry into the session so the

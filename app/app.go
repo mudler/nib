@@ -484,7 +484,7 @@ func runCtx(ctx context.Context, o Options) int {
 	}
 
 	if mcpMode {
-		if err := cmd.RunMCP(ctx, cfg, mcpArgs, shellJobs, transports...); err != nil {
+		if err := cmd.RunMCP(ctx, cfg, mcpArgs, shellJobs, artifacts, transports...); err != nil {
 			fmt.Fprintf(o.stderr(), "Error: %v\n", err)
 			return 1
 		}
@@ -526,7 +526,7 @@ func runCtx(ctx context.Context, o Options) int {
 
 	switch mode {
 	case modeCLI:
-		if err := cmd.RunCLI(ctx, cfg, streams, shellJobs, transports...); err != nil {
+		if err := cmd.RunCLI(ctx, cfg, streams, shellJobs, artifacts, transports...); err != nil {
 			fmt.Fprintf(o.stderr(), "Error: %v\n", err)
 			// The one CLI failure a caller is expected to branch on rather than
 			// just report, so it gets its own code instead of the blanket 1.
@@ -548,13 +548,13 @@ func runCtx(ctx context.Context, o Options) int {
 				return 1
 			}
 		} else {
-			if err := cmd.RunTUI(ctx, cfg, height, streams, shellJobs, inline.New(), transports...); err != nil {
+			if err := cmd.RunTUI(ctx, cfg, height, streams, shellJobs, artifacts, inline.New(), transports...); err != nil {
 				fmt.Fprintf(o.stderr(), "Error: %v\n", err)
 				return 1
 			}
 		}
 	default: // modeTUI, fullscreen, direct (no tmux split)
-		if err := cmd.RunTUI(ctx, cfg, parseHeight("100%"), streams, shellJobs, full.New(), transports...); err != nil {
+		if err := cmd.RunTUI(ctx, cfg, parseHeight("100%"), streams, shellJobs, artifacts, full.New(), transports...); err != nil {
 			fmt.Fprintf(o.stderr(), "Error: %v\n", err)
 			return 1
 		}

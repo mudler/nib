@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/mudler/nib/chat"
+	wizmcp "github.com/mudler/nib/mcp"
 	"github.com/mudler/nib/types"
 	"github.com/mudler/xlog"
 	openai "github.com/sashabaranov/go-openai"
@@ -132,5 +133,59 @@ func TestSessionStoreKeepsContextAndArtifacts(t *testing.T) {
 	p := got.Pruning
 	if p.Pruned["c1"] != "dropped" || p.Compressed["c2"] != (types.CompressedResult{Level: 2, Content: "outline"}) || p.CompressBand != 1 {
 		t.Fatalf("Pruning = %+v", p)
+	}
+}
+
+// TestUseArtifactStoreSharesTheToolServersStore: the tool servers (read,
+// search_artifacts, bash spill) and the session must use one store. A
+// resumed session moves its restored artifacts into it and drops what the
+// previous session left; a new session leaves it as it is.
+func TestUseArtifactStoreSharesTheToolServersStore(t *testing.T) {
+	xlog.SetLogger(xlog.NewLogger(xlog.LogLevel("error"), ""))
+	srv := httptest.NewServer(messageCapturingOpenAI(func([]capturedMessage) {}))
+	defer srv.Close()
+	base := types.Config{
+		Model:        "fake-model",
+		APIKey:       "fake-key",
+		BaseURL:      srv.URL + "/v1",
+		LogLevel:     "error",
+		ApprovalMode: "auto",
+		AgentOptions: types.AgentOptions{Iterations: 10, MaxAttempts: 3, MaxRetries: 3},
+	}
+
+	shared := wizmcp.NewArtifactStore()
+	shared.Save("bash", "left by the previous session")
+
+	fresh, err := chat.NewSession(context.Background(), base, chat.Callbacks{})
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	fresh.UseArtifactStore(shared)
+	if fresh.ArtifactStore() != shared || shared.Count() != 1 {
+		t.Fatalf("a new session must adopt the shared store as it is (count %d)", shared.Count())
+	}
+	fresh.Close()
+
+	resumedCfg := base
+	resumedCfg.InitialHistory = []openai.ChatCompletionMessage{{Role: "user", Content: "hi"}}
+	resumedCfg.InitialContext = resumedCfg.InitialHistory
+	resumedCfg.InitialArtifacts = []types.Artifact{{ID: 1, Tool: "compaction", Content: "FULL-HEAD"}}
+	resumed, err := chat.NewSession(context.Background(), resumedCfg, chat.Callbacks{})
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	defer resumed.Close()
+	resumed.UseArtifactStore(shared)
+
+	if resumed.ArtifactStore() != shared {
+		t.Fatal("the resumed session does not use the shared store")
+	}
+	if a := shared.Get(1); a == nil || a.Content != "FULL-HEAD" || shared.Count() != 1 {
+		t.Fatalf("shared store after resume = %+v (count %d), want only the restored artifact", a, shared.Count())
+	}
+	// What the tool servers save from now on is what the session records.
+	shared.Save("bash", "spilled output")
+	if got := resumed.ExportArtifacts(); len(got) != 2 {
+		t.Fatalf("ExportArtifacts = %+v, want the restored and the spilled artifact", got)
 	}
 }
