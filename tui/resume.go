@@ -67,6 +67,7 @@ func (m *Model) recordSession() {
 		Messages:   hist,
 		Context:    m.session.ExportContext(),
 		Artifacts:  m.session.ExportArtifacts(),
+		Pruning:    m.session.ExportPruning(),
 		Goal:       m.session.Goal(),
 		GoalPaused: m.session.GoalPaused(),
 	}
@@ -248,6 +249,7 @@ func (m *Model) applyResume(rec chat.SessionRecord) tea.Cmd {
 	m.cfg.InitialHistory = rec.Messages
 	m.cfg.InitialContext = rec.Context
 	m.cfg.InitialArtifacts = rec.Artifacts
+	m.cfg.InitialPruning = rec.Pruning
 	m.cfg.InitialGoal = rec.Goal
 	m.cfg.InitialGoalPaused = rec.GoalPaused
 	m.cfg.InitialEndpoint = rec.Endpoint

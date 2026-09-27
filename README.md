@@ -370,7 +370,7 @@ turn and when you quit. To continue one, use `/resume` in the TUI or start nib
 with `nib --resume` (the newest session in this directory; add `--all` for any
 directory, or give a session id).
 
-A recorded session keeps three things:
+A recorded session keeps four things:
 
 - the full transcript you saw, with a `Compacted N earlier messages` line where
   each compaction ran. Compaction never removes messages from the transcript.
@@ -378,6 +378,8 @@ A recorded session keeps three things:
   with every tool call and result.
 - the `artifact://` store: large tool output and the full text of each part
   that compaction summarized, so the references in the context still work.
+- which old tool results nib had replaced with a short stub or shortened, so
+  the first request after a resume sends them the same way as before.
 
 A resumed session shows the full transcript and gives the model the same
 context it had before you quit. Sessions recorded by older versions of nib have

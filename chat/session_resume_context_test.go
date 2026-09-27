@@ -110,6 +110,11 @@ func TestSessionStoreKeepsContextAndArtifacts(t *testing.T) {
 		Messages:  []openai.ChatCompletionMessage{{Role: "user", Content: "hi"}},
 		Context:   []openai.ChatCompletionMessage{{Role: "user", Content: "SUMMARY"}},
 		Artifacts: []types.Artifact{{ID: 1, Tool: "bash", Content: "out"}},
+		Pruning: types.PruningState{
+			Pruned:       map[string]string{"c1": "dropped"},
+			Compressed:   map[string]types.CompressedResult{"c2": {Level: 2, Content: "outline"}},
+			CompressBand: 1,
+		},
 	}
 	if err := store.Save(rec); err != nil {
 		t.Fatalf("Save: %v", err)
@@ -123,5 +128,9 @@ func TestSessionStoreKeepsContextAndArtifacts(t *testing.T) {
 	}
 	if len(got.Artifacts) != 1 || got.Artifacts[0].Content != "out" || got.Artifacts[0].ID != 1 {
 		t.Fatalf("Artifacts = %+v", got.Artifacts)
+	}
+	p := got.Pruning
+	if p.Pruned["c1"] != "dropped" || p.Compressed["c2"] != (types.CompressedResult{Level: 2, Content: "outline"}) || p.CompressBand != 1 {
+		t.Fatalf("Pruning = %+v", p)
 	}
 }
