@@ -654,6 +654,15 @@ metadata:
 # (e.g. LFM2.5) — so it's the reliable way to turn a reasoning model's thinking off:
 reasoning_effort: "none"
 
+# Optional: send tools in strict mode ("strict": true, with each schema adjusted
+# to strict mode's rules). A backend that supports it then constrains the model's
+# tool arguments while it writes them, so a call with an unknown or misspelled
+# argument cannot happen. LocalAI turns on its tool grammar for such a request;
+# OpenAI enforces the schema. Off by default: some OpenAI-compatible servers
+# reject the field, and on LocalAI a model that uses the backend's chat template
+# can conflict with LocalAI's grammar. Try it on one endpoint first.
+strict_tools: false
+
 # Optional: agent behavior
 agent_options:
   iterations: 10
@@ -833,8 +842,9 @@ switching to it; bare `/models` still lists the current endpoint.
 Addressing never inherits from the default block: `provider`, `base_url`,
 `api_key`/`api_key_env` and `model` come from the entry alone, so a named
 endpoint can never point somewhere the default block did not say.
-`metadata` and `reasoning_effort` do inherit from the default block when an
-entry leaves them unset.
+`metadata`, `reasoning_effort` and `strict_tools` do inherit from the default
+block when an entry leaves them unset. Set `strict_tools: false` on an entry to
+turn it off for that endpoint only.
 
 Your last endpoint pick sticks. nib records the active endpoint (and the
 model picked with it) in `provider.json`, next to `credentials.json`, and

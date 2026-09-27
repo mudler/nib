@@ -258,6 +258,15 @@ type Config struct {
 	// LFM2.5), so it's the reliable way to disable a reasoning model's thinking
 	// ("none"). Empty leaves the field unset.
 	ReasoningEffort string `yaml:"reasoning_effort,omitempty"`
+	// StrictTools sends tools with "strict": true and a schema adjusted to
+	// strict mode's rules, so a backend that honors it constrains the model's
+	// tool arguments while it generates them (cogito's
+	// EnableStrictToolSchemas). LocalAI switches its tool grammar on for such a
+	// request; OpenAI enforces the schema. Off by default: some
+	// OpenAI-compatible servers reject the field, and on LocalAI a model that
+	// uses the backend's chat template can conflict with LocalAI's grammar.
+	// Test it per endpoint. A named endpoint inherits the top-level value.
+	StrictTools bool `yaml:"strict_tools,omitempty"`
 	// ThinkingMode selects how reasoning effort is expressed on the wire:
 	// "effort" (default) sends reasoning_effort; "budget" sends a thinking
 	// budget token count (see ThinkingBudgets). Empty means "effort".
@@ -506,12 +515,19 @@ type ModelProviderConfig struct {
 	MaxTokens       int               `yaml:"max_tokens,omitempty"`
 	Command         string            `yaml:"command,omitempty"`
 	Args            []string          `yaml:"args,omitempty"`
+	// StrictTools: see Config.StrictTools. nil inherits.
+	StrictTools *bool `yaml:"strict_tools,omitempty"`
 }
 
 func (c ModelProviderConfig) Configured() bool {
 	return c.Provider != "" || c.Model != "" || c.APIKey != "" || c.APIKeyEnv != "" || c.BaseURL != "" ||
 		len(c.Metadata) != 0 || c.ReasoningEffort != "" || c.ThinkingMode != "" || c.MaxTokens != 0 ||
-		c.Command != "" || len(c.Args) != 0
+		c.Command != "" || len(c.Args) != 0 || c.StrictTools != nil
+}
+
+// StrictToolsEnabled reports whether StrictTools is set and true.
+func (c ModelProviderConfig) StrictToolsEnabled() bool {
+	return c.StrictTools != nil && *c.StrictTools
 }
 
 // ResolvedAPIKey is the key to send: the inline one, else the value of the
@@ -547,6 +563,7 @@ func (c Config) ResolvedMainModel() ModelProviderConfig {
 		Metadata:        c.Metadata,
 		ReasoningEffort: c.ReasoningEffort,
 		ThinkingMode:    c.ThinkingMode,
+		StrictTools:     &c.StrictTools,
 	}
 	m.APIKey, m.APIKeyEnv = m.ResolvedAPIKey(), ""
 	return m
