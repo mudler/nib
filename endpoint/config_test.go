@@ -118,3 +118,24 @@ func TestConfigUnknownID(t *testing.T) {
 		t.Fatal("want an error for unknown provider no-such-provider")
 	}
 }
+
+func TestConfigNamedEndpointInheritsStrictTools(t *testing.T) {
+	off := false
+	cfg := types.Config{
+		StrictTools: true,
+		Endpoints: types.Endpoints{
+			{Name: "inherits", ModelProviderConfig: types.ModelProviderConfig{BaseURL: "http://a/v1"}},
+			{Name: "optsout", ModelProviderConfig: types.ModelProviderConfig{BaseURL: "http://b/v1", StrictTools: &off}},
+		},
+	}
+	set := testSet(t, cfg)
+	for id, want := range map[string]bool{DefaultID: true, "@inherits": true, "@optsout": false} {
+		got, err := set.Config(id)
+		if err != nil {
+			t.Fatalf("Config(%s): %v", id, err)
+		}
+		if got.StrictToolsEnabled() != want {
+			t.Errorf("Config(%s).StrictToolsEnabled() = %v, want %v", id, got.StrictToolsEnabled(), want)
+		}
+	}
+}

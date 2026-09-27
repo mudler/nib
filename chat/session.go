@@ -1788,6 +1788,12 @@ func (s *Session) toolOptions(turnCtx context.Context, goal, mainModel string) [
 	if s.toolEnabled("spawn_agent") {
 		opts = append(opts, cogito.EnableAgentSpawning)
 	}
+	s.modelMu.RLock()
+	strict := s.mainProvider.StrictToolsEnabled()
+	s.modelMu.RUnlock()
+	if strict {
+		opts = append(opts, cogito.EnableStrictToolSchemas)
+	}
 	if s.toolEnabled("ask_user") && !s.AutoApprove() {
 		opts = append(opts, s.withTool(askUserToolDefinition(func(req AskRequest) string {
 			if s.callbacks.OnAskUser != nil {

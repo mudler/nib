@@ -73,6 +73,7 @@ var settingDocs = map[string]string{
 	"base_url":                                "the OpenAI-compatible endpoint",
 	"log_level":                               "log verbosity (debug, info, warn, error)",
 	"reasoning_effort":                        "reasoning_effort sent on every request",
+	"strict_tools":                            "send tools in strict mode, so the backend constrains their arguments",
 	"transcribe_model":                        "model for audio attachments (empty = auto)",
 	"vision_model":                            "model for image attachments (empty = auto)",
 	"video_model":                             "model for video attachments (empty = auto)",

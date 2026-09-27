@@ -219,6 +219,9 @@ func (s *Set) endpointConfig(ep types.Endpoint) types.ModelProviderConfig {
 	if out.ReasoningEffort == "" {
 		out.ReasoningEffort = main.ReasoningEffort
 	}
+	if out.StrictTools == nil {
+		out.StrictTools = main.StrictTools
+	}
 	// No max_tokens inheritance: the key exists only on an endpoint, never
 	// at the top level, so there is nothing to inherit from.
 	return out
