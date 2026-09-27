@@ -304,10 +304,13 @@ var registry = map[string]Definition{
 		AuthorizeURL:      "https://auth.openai.com/oauth/authorize",
 		TokenURL:          "https://auth.openai.com/oauth/token",
 		TokenBodyFormat:   "form",
-		// DeviceURL enables `nib login openai-codex --device` (RFC 8628).
-		// OpenAI's auth server supports the device-code grant, which avoids
-		// the localhost callback entirely — ideal for SSH sessions.
-		DeviceURL: "https://auth.openai.com/oauth/device/code",
+		// NOTE: OpenAI's device-code flow is non-standard (custom JSON
+		// endpoints at /api/accounts/deviceauth/*, two-step code+PKCE
+		// exchange, 403/404 as "pending" signal). It cannot be served by
+		// the RFC 8628 implementation in auth/oauth/device.go. Do NOT set
+		// DeviceURL here until a custom device-flow handler is added.
+		// Over SSH, the port-forward hint + paste-the-code fallback covers
+		// openai-codex.
 		Scopes: []string{
 			"openid", "profile", "email", "offline_access",
 			"api.connectors.read", "api.connectors.invoke",
