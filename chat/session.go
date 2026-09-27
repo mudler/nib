@@ -660,10 +660,20 @@ func NewSession(ctx context.Context, cfg types.Config, callbacks Callbacks, tran
 	// the turn's own add), and it avoids a duplicated or missing system prompt on
 	// the first resumed turn. Token counters reset to zero and are recomputed from
 	// the first resumed request's usage, which reflects the full seeded context.
+	//
+	// A record that kept the model context (InitialContext) seeds the fragment
+	// from it: that is the summary a compaction left, plus the tool calls and
+	// results the display copy never had. An older record has only the
+	// display copy, so both come from it, as before.
 	if len(cfg.InitialHistory) > 0 {
-		seed := slices.Clone(cfg.InitialHistory)
-		s.messages = seed
-		s.fragment = cogito.NewFragment(seed...)
+		s.messages = slices.Clone(cfg.InitialHistory)
+		s.fragment = cogito.NewFragment(slices.Clone(cfg.InitialHistory)...)
+	}
+	if len(cfg.InitialContext) > 0 {
+		s.fragment = cogito.NewFragment(slices.Clone(cfg.InitialContext)...)
+	}
+	if len(cfg.InitialArtifacts) > 0 {
+		s.artifacts.Restore(fromTypesArtifacts(cfg.InitialArtifacts))
 	}
 	// A resumed session carries on with its goal, paused or not. Paused
 	// means nothing without a goal, as in PauseGoal.
@@ -1081,22 +1091,60 @@ func (s *Session) ClearHistory() {
 	s.historyMu.Unlock()
 }
 
-// ExportHistory returns a copy of the full conversation messages (the same
-// []openai.ChatCompletionMessage that backs the model context), suitable for
-// JSON serialization and persistence. Feed the result back via
-// types.Config.InitialHistory to resume the conversation losslessly — the model
-// then continues with real memory of it, not a summary.
+// ExportHistory returns a copy of the display copy: the user and assistant
+// text of the whole conversation, with a notice where each compaction ran
+// (see compactedDisplay). Compaction never removes from it, so it is the full
+// transcript a resume shows. It is NOT the model context: it has no tool calls
+// and no compaction summary. Persist ExportContext beside it and feed the two
+// back via types.Config.InitialHistory and InitialContext to resume without
+// loss.
 //
 // The returned slice is a copy, so mutating it (or its serialization) never
-// touches the live session. It EXCLUDES the system prompt: s.messages only ever
-// records user/assistant turns (the system prompt is regenerated per
-// model/locale and re-applied to the fragment on every turn), so there is no
-// system message to strip. Safe to call from another goroutine while a turn is
-// running; it takes the same lock SendMessage holds while appending.
+// touches the live session. It has no system prompt: s.messages only ever
+// records user/assistant turns. Safe to call from another goroutine while a
+// turn is running; it takes the same lock SendMessage holds while appending.
 func (s *Session) ExportHistory() []openai.ChatCompletionMessage {
 	s.historyMu.Lock()
 	defer s.historyMu.Unlock()
 	return slices.Clone(s.messages)
+}
+
+// ExportContext returns a copy of the model context: the messages the next
+// turn sends, which after a compaction start with its summary, with every
+// tool call and result. System messages are left out: the system prompt is
+// regenerated per model and locale and added again on the next turn (see
+// ensureSystemPrompt), so a stored copy would only go stale. Feed the result
+// back via types.Config.InitialContext.
+func (s *Session) ExportContext() []openai.ChatCompletionMessage {
+	s.historyMu.Lock()
+	defer s.historyMu.Unlock()
+	out := make([]openai.ChatCompletionMessage, 0, len(s.fragment.Messages))
+	for _, m := range s.fragment.Messages {
+		if m.Role != openai.ChatMessageRoleSystem {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+// ExportArtifacts returns a copy of the artifact:// store: spilled tool output
+// and the full text each compaction summarized. The model context refers to
+// them by URI, so a resume restores them via types.Config.InitialArtifacts.
+func (s *Session) ExportArtifacts() []types.Artifact {
+	items := s.artifacts.Snapshot()
+	out := make([]types.Artifact, len(items))
+	for i, a := range items {
+		out[i] = types.Artifact{ID: a.ID, Tool: a.Tool, Created: a.CreatedAt, Content: a.Content}
+	}
+	return out
+}
+
+func fromTypesArtifacts(items []types.Artifact) []wizmcp.Artifact {
+	out := make([]wizmcp.Artifact, len(items))
+	for i, a := range items {
+		out[i] = wizmcp.Artifact{ID: a.ID, Tool: a.Tool, CreatedAt: a.Created, Content: a.Content}
+	}
+	return out
 }
 
 // SetGoal sets (or replaces) the active session goal. While a goal is set, a

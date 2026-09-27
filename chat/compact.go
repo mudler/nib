@@ -1033,21 +1033,45 @@ func summaryMessage(summary, artifactURI string) openai.ChatCompletionMessage {
 	}
 }
 
-// compactedDisplay rebuilds the display copy after compaction: a notice
-// counting what went, then the user and assistant text of the kept tail.
+// compactionNoticeName marks the notice compactedDisplay inserts into the
+// display copy, so the next compaction counts only what came after it and a
+// resume can show it as a notice rather than as something the model said.
+const compactionNoticeName = "nib_compaction_notice"
+
+// IsCompactionNotice reports whether m is a notice compactedDisplay inserted.
+func IsCompactionNotice(m openai.ChatCompletionMessage) bool {
+	return m.Name == compactionNoticeName
+}
+
+// compactedDisplay marks a compaction in the display copy: it inserts a notice
+// counting the messages summarized since the previous one, placed before the
+// user and assistant text of the kept tail.
+//
+// It removes nothing. The display copy is what a recorded session keeps as
+// its transcript, and one that compaction cut down to the notice and the tail
+// lost the conversation for good the moment it was saved. The model context
+// (s.fragment) is what compaction shrinks; the display copy stays whole.
 func compactedDisplay(displayed, tail []openai.ChatCompletionMessage) []openai.ChatCompletionMessage {
-	displayTail := []openai.ChatCompletionMessage{}
+	kept := 0
 	for _, m := range tail {
 		if (m.Role == "user" || m.Role == "assistant") && strings.TrimSpace(m.Content) != "" {
-			displayTail = append(displayTail, openai.ChatCompletionMessage{Role: m.Role, Content: m.Content})
+			kept++
 		}
 	}
-	removed := len(displayed) - len(displayTail)
-	if removed < 0 {
-		removed = 0
+	start := 0 // first message after the previous notice
+	for i := len(displayed) - 1; i >= 0; i-- {
+		if IsCompactionNotice(displayed[i]) {
+			start = i + 1
+			break
+		}
 	}
-	return append([]openai.ChatCompletionMessage{{
+	at := max(len(displayed)-kept, start)
+	out := make([]openai.ChatCompletionMessage, 0, len(displayed)+1)
+	out = append(out, displayed[:at]...)
+	out = append(out, openai.ChatCompletionMessage{
 		Role:    "assistant",
-		Content: compactedNotice(removed),
-	}}, displayTail...)
+		Name:    compactionNoticeName,
+		Content: compactedNotice(at - start),
+	})
+	return append(out, displayed[at:]...)
 }

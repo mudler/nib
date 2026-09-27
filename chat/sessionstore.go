@@ -11,13 +11,14 @@ import (
 
 	openai "github.com/sashabaranov/go-openai"
 
+	"github.com/mudler/nib/types"
 	"github.com/mudler/xlog"
 )
 
 // SessionRecord is one recorded conversation: enough to repopulate
-// types.Config.InitialHistory and resume losslessly (see
-// Session.ExportHistory), plus the metadata the /resume picker lists by
-// (Title, Cwd, Updated, message count).
+// types.Config.InitialHistory, InitialContext and InitialArtifacts and resume
+// losslessly, plus the metadata the /resume picker lists by (Title, Cwd,
+// Updated, message count).
 type SessionRecord struct {
 	ID    string `json:"id"`
 	Title string `json:"title"`
@@ -26,10 +27,20 @@ type SessionRecord struct {
 	// Endpoint is the picker entry Model was running on (see
 	// Session.EndpointID), so resume puts the model back on the same
 	// endpoint. Empty in records saved before it was kept.
-	Endpoint string                         `json:"endpoint,omitempty"`
-	Created  time.Time                      `json:"created"`
-	Updated  time.Time                      `json:"updated"`
+	Endpoint string    `json:"endpoint,omitempty"`
+	Created  time.Time `json:"created"`
+	Updated  time.Time `json:"updated"`
+	// Messages is the display copy (Session.ExportHistory): the whole
+	// transcript the user saw, which a resume shows and the picker counts.
 	Messages []openai.ChatCompletionMessage `json:"messages"`
+	// Context is the model context (Session.ExportContext): after a
+	// compaction its summary and kept tail, with tool calls and results.
+	// Empty in records saved before it was kept; resume then rebuilds the
+	// model context from Messages.
+	Context []openai.ChatCompletionMessage `json:"context,omitempty"`
+	// Artifacts is the session's artifact:// store (Session.ExportArtifacts),
+	// which Context refers to by URI.
+	Artifacts []types.Artifact `json:"artifacts,omitempty"`
 	// Goal is the session's /goal when it was saved, and GoalPaused whether
 	// an interrupt had paused it. Resume restores both.
 	Goal       string `json:"goal,omitempty"`
@@ -79,6 +90,9 @@ func (s *SessionStore) maxSessions() int {
 func (s *SessionStore) path(id string) string {
 	return filepath.Join(s.Dir, id+".json")
 }
+
+// Path returns the file a session with this id is stored in.
+func (s *SessionStore) Path(id string) string { return s.path(id) }
 
 // Save writes rec atomically: marshal to a temp file created in the SAME
 // directory as the destination, then os.Rename over it. Same-directory

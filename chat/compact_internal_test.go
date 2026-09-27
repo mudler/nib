@@ -2,6 +2,7 @@ package chat
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
 
@@ -178,12 +179,20 @@ func TestCompactHistoryRebuildsAndSyncsDisplay(t *testing.T) {
 	if s.fragment.Messages[2].Content != "a3" {
 		t.Fatalf("tail not preserved, got %q", s.fragment.Messages[2].Content)
 	}
-	got := s.GetMessages()
-	if !strings.Contains(got[0].Content, "Compacted") {
-		t.Fatalf("display[0] should be the compaction marker, got %q", got[0].Content)
+	// The display copy keeps the whole transcript and marks where the
+	// summarized part ends: u1..a2 compacted, u3/a3 kept after the notice.
+	got := s.ExportHistory()
+	wantContent := []string{"u1", "a1", "u2", "a2", "Compacted 4 earlier messages", "u3", "a3"}
+	if len(got) != len(wantContent) {
+		t.Fatalf("display = %+v, want contents %v", got, wantContent)
 	}
-	if got[len(got)-1].Content != "a3" {
-		t.Fatalf("display tail not preserved, got %q", got[len(got)-1].Content)
+	for i, w := range wantContent {
+		if got[i].Content != w {
+			t.Fatalf("display[%d] = %q, want %q", i, got[i].Content, w)
+		}
+	}
+	if !IsCompactionNotice(got[4]) {
+		t.Fatalf("display[4] is not marked as the compaction notice: %+v", got[4])
 	}
 	if before == 0 || after == 0 {
 		t.Fatalf("expected non-zero before/after, got %d/%d", before, after)
@@ -243,5 +252,57 @@ func TestCompactHistoryEmptySummaryIsAtomic(t *testing.T) {
 	}
 	if llm.calls != 1 {
 		t.Fatalf("expected the LLM to have been called once, got %d", llm.calls)
+	}
+}
+
+// TestCompactedDisplayCountsSincePreviousNotice checks that a second
+// compaction keeps the first notice and everything around it, and counts only
+// the messages summarized since then.
+func TestCompactedDisplayCountsSincePreviousNotice(t *testing.T) {
+	disp := []openai.ChatCompletionMessage{
+		{Role: "user", Content: "u1"}, {Role: "assistant", Content: "a1"},
+		{Role: "user", Content: "u2"}, {Role: "assistant", Content: "a2"},
+	}
+	tail := []openai.ChatCompletionMessage{{Role: "user", Content: "u2"}, {Role: "assistant", Content: "a2"}}
+	disp = compactedDisplay(disp, tail)
+	disp = append(disp,
+		openai.ChatCompletionMessage{Role: "user", Content: "u3"},
+		openai.ChatCompletionMessage{Role: "assistant", Content: "a3"},
+	)
+	tail = []openai.ChatCompletionMessage{{Role: "assistant", Content: "a3"}}
+	disp = compactedDisplay(disp, tail)
+
+	want := []string{"u1", "a1", "Compacted 2 earlier messages", "u2", "a2", "u3", "Compacted 3 earlier messages", "a3"}
+	if len(disp) != len(want) {
+		t.Fatalf("display = %+v, want %v", disp, want)
+	}
+	for i, w := range want {
+		if disp[i].Content != w {
+			t.Fatalf("display[%d] = %q, want %q", i, disp[i].Content, w)
+		}
+	}
+}
+
+// TestExportContextAfterCompactionKeepsSummary checks what a recorded session
+// now keeps for the model: the summary and the tail, without the system
+// prompt.
+func TestExportContextAfterCompactionKeepsSummary(t *testing.T) {
+	frag := []openai.ChatCompletionMessage{
+		{Role: "system", Content: "sys"},
+		{Role: "user", Content: "u1"}, {Role: "assistant", Content: "a1"},
+		{Role: "user", Content: "u2"}, {Role: "assistant", Content: "a2"},
+	}
+	s := newCompactTestSession(&fakeSummaryLLM{reply: "SUMMARY-TEXT"}, 2, frag, slices.Clone(frag[1:]))
+	if _, _, err := s.CompactHistory(); err != nil {
+		t.Fatalf("CompactHistory: %v", err)
+	}
+	got := s.ExportContext()
+	if len(got) == 0 || !strings.Contains(got[0].Content, "SUMMARY-TEXT") {
+		t.Fatalf("ExportContext must start with the summary: %+v", got)
+	}
+	for _, m := range got {
+		if m.Role == "system" {
+			t.Fatalf("ExportContext must leave the system prompt out: %+v", got)
+		}
 	}
 }

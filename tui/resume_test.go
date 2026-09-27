@@ -790,3 +790,21 @@ func TestFreshStartupKeepsTheBootLog(t *testing.T) {
 		t.Fatal("fresh session collapsed its boot log before any message")
 	}
 }
+
+// TestRestoredTranscriptShowsCompactionAsNotice: the display copy now keeps
+// the whole transcript with a notice where each compaction ran. A resume
+// shows that notice as nib's own line, not as something the model said.
+func TestRestoredTranscriptShowsCompactionAsNotice(t *testing.T) {
+	got := restoredTranscript([]openai.ChatCompletionMessage{
+		{Role: "user", Content: "u1"},
+		{Role: "assistant", Content: "a1"},
+		{Role: "assistant", Name: "nib_compaction_notice", Content: "Compacted 2 earlier messages"},
+		{Role: "user", Content: "u2"},
+	})
+	if len(got) != 4 {
+		t.Fatalf("restoredTranscript = %+v, want 4 entries", got)
+	}
+	if got[2].Role != "agent" || got[2].Content != "Compacted 2 earlier messages" {
+		t.Fatalf("compaction notice = %+v, want an agent notice", got[2])
+	}
+}
