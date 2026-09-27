@@ -137,8 +137,8 @@ func loginFlow(ctx context.Context, prog string, store *auth.Store, def provider
 		openBrowser(flow.URL)
 	}
 
-	if flow.IsSSH {
-		return loginOAuthSSH(ctx, prog, def, flow)
+	if flow.AcceptsPastedURL() {
+		return loginOAuthWithPaste(ctx, prog, def, flow)
 	}
 
 	fmt.Println("Waiting for authorization...")
@@ -151,10 +151,10 @@ func loginFlow(ctx context.Context, prog string, store *auth.Store, def provider
 	return 0
 }
 
-// loginOAuthSSH handles the SSH paste-the-code fallback: races the
-// callback server (flow.Complete) against stdin, feeding pasted URLs
-// into flow.ManualCallback.
-func loginOAuthSSH(ctx context.Context, prog string, def provider.Definition, flow *auth.LoginFlow) int {
+// loginOAuthWithPaste races the callback server (flow.Complete) against
+// stdin, feeding pasted URLs into flow.ManualCallback: the fallback for a
+// browser whose redirect cannot reach this machine, over SSH or not.
+func loginOAuthWithPaste(ctx context.Context, prog string, def provider.Definition, flow *auth.LoginFlow) int {
 	fmt.Println("Waiting for authorization (callback or pasted URL)...")
 
 	type result struct {
