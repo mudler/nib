@@ -9,9 +9,10 @@
 //   - Codex identity headers (originator, version, chatgpt-account-id from JWT)
 //   - include: ["reasoning.encrypted_content"]
 //
-// Response decoding reuses the openairesponses package — the SSE stream's
-// terminal response.completed event carries the full response object in the
-// same JSON shape as a non-streaming Responses API response.
+// Response decoding reuses the openairesponses package. The SSE stream's
+// terminal response.completed event carries the response object in the same
+// JSON shape as a non-streaming Responses API response, except that its
+// output array is empty: the items come in response.output_item.done events.
 package codex
 
 import (
@@ -23,6 +24,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strings"
 
 	"github.com/mudler/cogito"
@@ -418,11 +420,53 @@ func translateToolChoice(choice any) any {
 
 // extractCompletedResponse reads an SSE stream, finds the terminal
 // response.completed event, and returns its response field as JSON.
+//
+// The Codex backend sends response.completed with an empty output array and
+// streams the items only in response.output_item.done events. When the
+// completed output is empty, the collected items are put in its place, in
+// output_index order.
 func extractCompletedResponse(sseBody []byte) ([]byte, error) {
 	scanner := bufio.NewScanner(bytes.NewReader(sseBody))
 	scanner.Buffer(make([]byte, 0, 1024*1024), 10*1024*1024)
 
 	var dataLines []string
+	var items []outputItem
+
+	// handle processes one event. It returns the final response JSON, or an
+	// error, when the event ends the stream.
+	handle := func(data string) ([]byte, error) {
+		if data == "[DONE]" {
+			return nil, nil
+		}
+		var ev struct {
+			Type        string          `json:"type"`
+			Response    json.RawMessage `json:"response"`
+			Item        json.RawMessage `json:"item"`
+			OutputIndex int             `json:"output_index"`
+			Error       *struct {
+				Code    string `json:"code"`
+				Message string `json:"message"`
+			} `json:"error"`
+		}
+		if err := json.Unmarshal([]byte(data), &ev); err != nil {
+			return nil, nil
+		}
+		switch ev.Type {
+		case "response.output_item.done":
+			if len(ev.Item) > 0 {
+				items = append(items, outputItem{index: ev.OutputIndex, raw: ev.Item})
+			}
+		case "response.completed":
+			if len(ev.Response) > 0 {
+				return fillOutput(ev.Response, items)
+			}
+		case "response.failed", "error":
+			if ev.Error != nil && ev.Error.Message != "" {
+				return nil, fmt.Errorf("codex: API error %s: %s", ev.Error.Code, ev.Error.Message)
+			}
+		}
+		return nil, nil
+	}
 
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -432,30 +476,8 @@ func extractCompletedResponse(sseBody []byte) ([]byte, error) {
 			if len(dataLines) > 0 {
 				data := strings.Join(dataLines, "\n")
 				dataLines = dataLines[:0]
-
-				if data == "[DONE]" {
-					continue
-				}
-
-				var ev struct {
-					Type     string          `json:"type"`
-					Response json.RawMessage `json:"response"`
-					Error    *struct {
-						Code    string `json:"code"`
-						Message string `json:"message"`
-					} `json:"error"`
-				}
-				if err := json.Unmarshal([]byte(data), &ev); err == nil {
-					switch ev.Type {
-					case "response.completed":
-						if len(ev.Response) > 0 {
-							return ev.Response, nil
-						}
-					case "response.failed", "error":
-						if ev.Error != nil && ev.Error.Message != "" {
-							return nil, fmt.Errorf("codex: API error %s: %s", ev.Error.Code, ev.Error.Message)
-						}
-					}
+				if resp, err := handle(data); resp != nil || err != nil {
+					return resp, err
 				}
 			}
 			continue
@@ -470,19 +492,46 @@ func extractCompletedResponse(sseBody []byte) ([]byte, error) {
 
 	// Process any remaining data after last event
 	if len(dataLines) > 0 {
-		data := strings.Join(dataLines, "\n")
-		if data != "[DONE]" {
-			var ev struct {
-				Type     string          `json:"type"`
-				Response json.RawMessage `json:"response"`
-			}
-			if err := json.Unmarshal([]byte(data), &ev); err == nil && ev.Type == "response.completed" && len(ev.Response) > 0 {
-				return ev.Response, nil
-			}
+		if resp, err := handle(strings.Join(dataLines, "\n")); resp != nil || err != nil {
+			return resp, err
 		}
 	}
 
 	return nil, fmt.Errorf("codex: no response.completed event in SSE stream")
+}
+
+// outputItem is one item from a response.output_item.done event.
+type outputItem struct {
+	index int
+	raw   json.RawMessage
+}
+
+// fillOutput returns the response with its output set to items when the
+// response has no output of its own.
+func fillOutput(response json.RawMessage, items []outputItem) ([]byte, error) {
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(response, &obj); err != nil {
+		return nil, fmt.Errorf("codex: parse completed response: %w", err)
+	}
+	var output []json.RawMessage
+	if raw, ok := obj["output"]; ok {
+		_ = json.Unmarshal(raw, &output)
+	}
+	if len(output) > 0 || len(items) == 0 {
+		return response, nil
+	}
+
+	sort.SliceStable(items, func(i, j int) bool { return items[i].index < items[j].index })
+	output = make([]json.RawMessage, len(items))
+	for i, it := range items {
+		output[i] = it.raw
+	}
+	raw, err := json.Marshal(output)
+	if err != nil {
+		return nil, fmt.Errorf("codex: marshal output: %w", err)
+	}
+	obj["output"] = raw
+	return json.Marshal(obj)
 }
 
 func parseAPIError(status int, body []byte) error {
