@@ -362,6 +362,29 @@ func TestOverflowDoesNotRetryAnInterruptedTurn(t *testing.T) {
 	}
 }
 
+// The same with a system prompt of real size. The hard truncation can drop the
+// prompt and come out smaller, but the retry adds the prompt back and sends
+// the request that just overflowed.
+func TestOverflowSkipsRetryWhenOnlyTheSystemPromptCouldGo(t *testing.T) {
+	llm := &overflowLLM{failures: 99}
+	s := newOverflowSession(t, llm)
+	s.systemPrompt = strings.Repeat("you are the overflow-test assistant. ", 20)
+	s.fragment = cogito.NewEmptyFragment()
+
+	if _, err := s.SendMessage("what changed?"); err == nil {
+		t.Fatal("expected an error")
+	}
+	if s.overflowRetries() != 0 {
+		t.Fatalf("overflow retries = %d when only the system prompt could go, want 0", s.overflowRetries())
+	}
+	llm.mu.Lock()
+	calls := llm.calls
+	llm.mu.Unlock()
+	if calls != 1 {
+		t.Fatalf("the backend got %d requests, want 1: the retry resent the request that overflowed", calls)
+	}
+}
+
 // Nothing to summarise means the retry would send a byte-identical request.
 func TestOverflowSkipsRetryWhenCompactionIsANoOp(t *testing.T) {
 	llm := &overflowLLM{failures: 99}

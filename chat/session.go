@@ -2438,6 +2438,7 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 					// truncation), then basicCompact when none of that
 					// fits. The whole chain is ONE recovery attempt.
 					cb := s.fragmentTokens()
+					beforeTrim := s.fragmentSnapshot()
 					status := ""
 					if terr := overflowTrim(s, turnCtx); terr == nil {
 						status = "Context window exceeded — compacting and retrying…"
@@ -2450,6 +2451,19 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 						} else {
 							xlog.Warn("overflow recovery: basic compaction failed", "error", berr)
 						}
+					}
+					if status != "" && !retryDiffers(beforeTrim.frag, s.fragmentSnapshot().frag, runFragment, newFragment) {
+						// The chain "succeeded" only by dropping the system
+						// prompt, which the retry adds straight back, and the
+						// run added nothing to the request: a retry would send
+						// the request that just overflowed. Put the history
+						// back and report the overflow instead.
+						xlog.Warn("overflow recovery skipped: trimming saved nothing the retry would not send again")
+						s.historyMu.Lock()
+						s.fragment = beforeTrim.frag
+						s.messages = beforeTrim.messages
+						s.historyMu.Unlock()
+						status = ""
 					}
 					if status != "" {
 						ca := s.fragmentTokens()

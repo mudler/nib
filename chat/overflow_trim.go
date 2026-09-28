@@ -243,3 +243,27 @@ func (s *Session) hardTruncate(cfg types.CompactionConfig, budget int) error {
 		}
 	}
 }
+
+// retryDiffers reports whether an overflow retry would send a request other
+// than the one that overflowed. The failed request carried the run's own
+// messages on top of the history it started from (run), so a run that grew
+// is always cut back by the retry. Otherwise the trim must have shrunk the
+// history outside its system messages: the retry adds the system prompt back
+// (ensureSystemPrompt), so dropping it saves nothing.
+func retryDiffers(before, after, run, failed cogito.Fragment) bool {
+	if len(failed.Messages) > len(run.Messages) {
+		return true
+	}
+	return estimateTokens(withoutSystem(after.Messages)) < estimateTokens(withoutSystem(before.Messages))
+}
+
+// withoutSystem returns msgs without their system messages.
+func withoutSystem(msgs []openai.ChatCompletionMessage) []openai.ChatCompletionMessage {
+	out := make([]openai.ChatCompletionMessage, 0, len(msgs))
+	for _, m := range msgs {
+		if m.Role != "system" {
+			out = append(out, m)
+		}
+	}
+	return out
+}
