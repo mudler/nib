@@ -12,7 +12,7 @@ const codexSSE = `event: response.created
 data: {"type":"response.created","response":{"id":"resp_1","status":"in_progress","output":[]}}
 
 event: response.output_item.done
-data: {"type":"response.output_item.done","item":{"id":"rs_1","type":"reasoning","summary":[]},"output_index":0}
+data: {"type":"response.output_item.done","item":{"id":"rs_1","type":"reasoning","summary":[{"type":"summary_text","text":"I checked the available operations."}],"encrypted_content":"opaque"},"output_index":0}
 
 event: response.output_item.done
 data: {"type":"response.output_item.done","item":{"id":"fc_1","type":"function_call","call_id":"call_1","name":"bash","arguments":"{\"command\":\"ls\"}"},"output_index":2}
@@ -40,6 +40,9 @@ func TestExtractCompletedResponseFillsOutputFromItems(t *testing.T) {
 	}
 	if len(msg.ToolCalls) != 1 || msg.ToolCalls[0].Function.Name != "bash" {
 		t.Errorf("tool calls = %+v, want one bash call", msg.ToolCalls)
+	}
+	if reply.ReasoningContent != "I checked the available operations." {
+		t.Errorf("reasoning = %q", reply.ReasoningContent)
 	}
 	if usage.TotalTokens != 13 {
 		t.Errorf("total tokens = %d, want 13", usage.TotalTokens)

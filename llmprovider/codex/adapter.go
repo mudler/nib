@@ -325,8 +325,9 @@ func (l *LLM) translateRequest(req openai.ChatCompletionRequest, meta requestMet
 	// Reasoning controls.
 	if l.config.ReasoningEffort != "" || l.config.ResponsesLite {
 		r := &codexReasoning{}
-		if l.config.ReasoningEffort != "" {
+		if l.config.ReasoningEffort != "" && l.config.ReasoningEffort != "none" {
 			r.Effort = l.config.ReasoningEffort
+			r.Summary = "auto"
 		}
 		if l.config.ResponsesLite {
 			r.Context = "all_turns"

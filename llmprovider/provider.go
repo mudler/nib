@@ -132,6 +132,10 @@ type ModelLister interface {
 	ListModels(ctx context.Context) ([]string, error)
 }
 
+type ModelLimitsProvider interface {
+	ModelLimits(ctx context.Context, model string) (catalog.Limits, error)
+}
+
 // ListModels returns the model IDs config's provider serves. OpenAI-compatible
 // endpoints (and Ollama's /v1) are queried at /models; native protocols are
 // asked through their adapter, with its own auth. Anything else returns

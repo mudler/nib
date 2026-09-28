@@ -33,7 +33,8 @@ func TestReasoningEffortSetInBody(t *testing.T) {
 
 	var cr struct {
 		Reasoning *struct {
-			Effort string `json:"effort"`
+			Effort  string `json:"effort"`
+			Summary string `json:"summary"`
 		} `json:"reasoning"`
 	}
 	if err := json.Unmarshal(body, &cr); err != nil {
@@ -44,6 +45,9 @@ func TestReasoningEffortSetInBody(t *testing.T) {
 	}
 	if cr.Reasoning.Effort != "high" {
 		t.Fatalf("effort = %q, want high", cr.Reasoning.Effort)
+	}
+	if cr.Reasoning.Summary != "auto" {
+		t.Fatalf("summary = %q, want auto", cr.Reasoning.Summary)
 	}
 }
 

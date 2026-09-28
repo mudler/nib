@@ -14,7 +14,9 @@ import (
 	"testing"
 
 	"github.com/mudler/cogito"
+	"github.com/mudler/nib/llmprovider/catalog"
 	"github.com/mudler/nib/trace"
+	"github.com/mudler/nib/types"
 	openai "github.com/sashabaranov/go-openai"
 )
 
@@ -230,6 +232,60 @@ func (g *gateLLM) CreateChatCompletion(ctx context.Context, req openai.ChatCompl
 
 func (g *gateLLM) Ask(ctx context.Context, f cogito.Fragment) (cogito.Fragment, error) {
 	return f.AddMessage("assistant", "ok"), nil
+}
+
+type gateLimitsLLM struct {
+	*gateLLM
+	window        int
+	limitsStarted chan struct{}
+}
+
+func (g *gateLimitsLLM) ModelLimits(context.Context, string) (catalog.Limits, error) {
+	close(g.limitsStarted)
+	<-g.release
+	return catalog.Limits{ContextWindow: g.window}, nil
+}
+
+func TestEnsureModelLimitsDiscardsStaleLookup(t *testing.T) {
+	oldLLM := &gateLimitsLLM{
+		gateLLM:       &gateLLM{started: make(chan struct{}, 1), release: make(chan struct{})},
+		window:        111000,
+		limitsStarted: make(chan struct{}),
+	}
+	s := &Session{
+		llm:                    oldLLM,
+		modelLimitsProvider:    oldLLM,
+		modelGeneration:        1,
+		llmModel:               "old-model",
+		compactionAutoDetected: true,
+		compaction:             types.CompactionConfig{MaxContextTokens: defaultContextTokens},
+	}
+
+	done := make(chan struct{})
+	go func() {
+		s.ensureModelLimits(context.Background())
+		close(done)
+	}()
+	<-oldLLM.limitsStarted
+
+	s.modelMu.Lock()
+	s.llm = &gateLLM{}
+	s.modelLimitsProvider = nil
+	s.modelGeneration++
+	s.llmModel = "new-model"
+	s.compaction.MaxContextTokens = 222000
+	s.modelMu.Unlock()
+	close(oldLLM.release)
+	<-done
+
+	s.modelMu.RLock()
+	defer s.modelMu.RUnlock()
+	if got := s.compaction.MaxContextTokens; got != 222000 {
+		t.Fatalf("context window = %d, want 222000", got)
+	}
+	if s.limitsFor != "" {
+		t.Fatalf("limitsFor = %q, want empty after stale lookup", s.limitsFor)
+	}
 }
 
 // TestSetModelDuringALiveTurn: turnMu is NOT held for the duration of a turn

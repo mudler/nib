@@ -27,8 +27,10 @@ import (
 func (s *Session) ensureModelLimits(ctx context.Context) {
 	s.modelMu.Lock()
 	model, provider := s.llmModel, s.mainProvider
+	generation := s.modelGeneration
 	done := s.limitsFor == model && model != ""
 	llm := s.llm
+	limitsProvider := s.modelLimitsProvider
 	s.modelMu.Unlock()
 	if done || model == "" {
 		return
@@ -37,15 +39,29 @@ func (s *Session) ensureModelLimits(ctx context.Context) {
 	baseURL, apiKey, _ := llmprovider.ModelsEndpoint(provider, s.credStore)
 
 	// The context window: only when the user did not name one. An explicit
-	// setting is never overwritten by a probe.
+	// setting is never overwritten by a probe. Native adapters get first chance
+	// because their model catalogs may not be OpenAI-compatible.
 	if s.compactionAutoDetected {
-		probeCtx, cancel := context.WithTimeout(ctx, probeTimeout)
-		if v := detectContextSize(probeCtx, baseURL, apiKey, model); v > 0 {
+		var window int
+		if limitsProvider != nil {
+			probeCtx, cancel := context.WithTimeout(ctx, probeTimeout)
+			if limits, err := limitsProvider.ModelLimits(probeCtx, model); err == nil {
+				window = limits.ContextWindow
+			}
+			cancel()
+		}
+		if window <= 0 {
+			probeCtx, cancel := context.WithTimeout(ctx, probeTimeout)
+			window = detectContextSize(probeCtx, baseURL, apiKey, model)
+			cancel()
+		}
+		if window > 0 {
 			s.modelMu.Lock()
-			s.compaction.MaxContextTokens = v
+			if s.llmModel == model && s.modelGeneration == generation {
+				s.compaction.MaxContextTokens = window
+			}
 			s.modelMu.Unlock()
 		}
-		cancel()
 	}
 
 	// The output cap: discovery only, since config and catalog were already
@@ -55,9 +71,9 @@ func (s *Session) ensureModelLimits(ctx context.Context) {
 		res := catalog.ResolveMaxTokens(probeCtx, provider, baseURL, apiKey)
 		cancel()
 		if !res.Omit && res.MaxTokens > 0 {
-			setter.SetMaxTokens(res.MaxTokens)
 			s.modelMu.Lock()
-			if s.llmModel == model {
+			if s.llmModel == model && s.modelGeneration == generation {
+				setter.SetMaxTokens(res.MaxTokens)
 				s.outputCap = res.MaxTokens
 			}
 			s.modelMu.Unlock()
@@ -65,7 +81,9 @@ func (s *Session) ensureModelLimits(ctx context.Context) {
 	}
 
 	s.modelMu.Lock()
-	s.limitsFor = model
+	if s.llmModel == model && s.modelGeneration == generation {
+		s.limitsFor = model
+	}
 	s.modelMu.Unlock()
 }
 

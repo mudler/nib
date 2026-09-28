@@ -40,15 +40,16 @@ import (
 
 // Session represents a chat session with the AI assistant
 type Session struct {
-	ctx          context.Context
-	turnMu       sync.Mutex
-	turnCancel   context.CancelFunc
-	llm          cogito.LLM // guarded by modelMu
-	clients      []*mcp.ClientSession
-	mcpClient    *mcp.Client
-	cfgClients   map[string]*mcp.ClientSession // config/plugin MCP servers, by name
-	cfgServers   map[string]types.MCPServer    // desired set, for diffing
-	skillsClient *mcp.ClientSession            // the load_skill server
+	ctx                 context.Context
+	turnMu              sync.Mutex
+	turnCancel          context.CancelFunc
+	llm                 cogito.LLM                      // guarded by modelMu
+	modelLimitsProvider llmprovider.ModelLimitsProvider // native capability hidden by tracing wrappers; guarded by modelMu
+	clients             []*mcp.ClientSession
+	mcpClient           *mcp.Client
+	cfgClients          map[string]*mcp.ClientSession // config/plugin MCP servers, by name
+	cfgServers          map[string]types.MCPServer    // desired set, for diffing
+	skillsClient        *mcp.ClientSession            // the load_skill server
 	// historyMu guards the parallel conversation state — fragment (the real
 	// model context handed to cogito) and messages (the {role,content} log
 	// surfaced to the UI). SendMessage mutates both as a turn progresses; the
@@ -162,10 +163,11 @@ type Session struct {
 	// turn on one client from start to finish while the switch applies from the
 	// next one. The rest of the endpoint state below (apiKey, baseURL,
 	// metadata, reasoningEffort) is fixed at construction and read lock-free.
-	modelMu      sync.RWMutex
-	llmModel     string                    // guarded by modelMu
-	mainProvider types.ModelProviderConfig // guarded by modelMu
-	endpointID   string                    // guarded by modelMu; endpoint.DefaultID until switched
+	modelMu         sync.RWMutex
+	modelGeneration uint64                    // incremented whenever the active provider/client is replaced
+	llmModel        string                    // guarded by modelMu
+	mainProvider    types.ModelProviderConfig // guarded by modelMu
+	endpointID      string                    // guarded by modelMu; endpoint.DefaultID until switched
 	// configProvider is the endpoint config.yaml describes, kept so the
 	// provider picker can switch back to it after using a named endpoint or a
 	// /login provider.
@@ -519,8 +521,9 @@ func NewSession(ctx context.Context, cfg types.Config, callbacks Callbacks, tran
 	if err != nil {
 		return nil, fmt.Errorf("create main LLM: %w", err)
 	}
-	// Read before tracing wraps the client and hides its SetMaxTokens.
+	// Read capabilities before tracing wraps the client and hides them.
 	outCap := factoryOutputCap(llm, mainProvider, credStore)
+	limitsProvider, _ := llm.(llmprovider.ModelLimitsProvider)
 	endpoints, configErrs := endpoint.New(cfg, credStore)
 	classifier, err := provenance.ClassifierForConfig(cfg)
 	if err != nil {
@@ -571,6 +574,8 @@ func NewSession(ctx context.Context, cfg types.Config, callbacks Callbacks, tran
 	s := &Session{
 		ctx:                  ctx,
 		llm:                  llm,
+		modelLimitsProvider:  limitsProvider,
+		modelGeneration:      1,
 		clients:              clients,
 		fragment:             cogito.NewEmptyFragment(),
 		messages:             []openai.ChatCompletionMessage{},
@@ -1016,8 +1021,8 @@ func (s *Session) emitAgentEvent(a *cogito.AgentState) {
 		Task:       a.Task,
 		Status:     AgentStatus(a.Status),
 		Background: a.Background,
-		Result: a.Result,
-		Err:    a.Error,
+		Result:     a.Result,
+		Err:        a.Error,
 	}
 	switch ev.Status {
 	case AgentStatusRunning:
@@ -3259,14 +3264,17 @@ func (s *Session) applyProvider(provider types.ModelProviderConfig, id string) e
 	if err != nil {
 		return err
 	}
-	// Read before tracing wraps the client and hides its SetMaxTokens.
+	// Read capabilities before tracing wraps the client and hides them.
 	outCap := factoryOutputCap(llm, provider, s.credStore)
+	limitsProvider, _ := llm.(llmprovider.ModelLimitsProvider)
 	if s.tracer != nil {
 		llm = trace.NewRecordingLLM(llm, s.tracer, name, "")
 	}
 
 	s.modelMu.Lock()
 	s.llm = llm
+	s.modelLimitsProvider = limitsProvider
+	s.modelGeneration++
 	s.llmModel = name
 	s.mainProvider = provider
 	s.outputCap = outCap
@@ -3292,29 +3300,16 @@ func (s *Session) applyProvider(provider types.ModelProviderConfig, id string) e
 
 	// The new model's context window and output cap are asked for at the start
 	// of the next turn (ensureModelLimits), not here: switching model must not
-	// block on the network, and a switch made offline still has to work.
-	// Still, clear limitsFor so ensureModelLimits re-runs for the new model,
-	// and give MaxContextTokens a best-effort early refresh (when the probe
-	// cannot resolve the new model and the static table does not know it,
-	// fall back to defaultContextTokens — mirroring NewSession — so the gauge
-	// refreshes on switch rather than showing the previous model's window).
+	// block on the network, and a switch made offline still has to work. Clear
+	// limitsFor so ensureModelLimits re-runs for this selection. Reset an
+	// auto-detected window to the safe fallback so the gauge cannot keep showing
+	// the previous model's value while discovery is pending.
 	s.modelMu.Lock()
 	s.limitsFor = ""
-	s.modelMu.Unlock()
 	if s.compactionAutoDetected {
-		// The probe needs the endpoint the client really talks to, which for a
-		// /login provider is its default URL and stored key, not the config's.
-		baseURL, apiKey, _ := llmprovider.ModelsEndpoint(provider, s.credStore)
-		probeCtx, cancel := context.WithTimeout(s.ctx, probeTimeout)
-		v := detectContextSize(probeCtx, baseURL, apiKey, name)
-		cancel()
-		if v <= 0 {
-			v = defaultContextTokens
-		}
-		s.modelMu.Lock()
-		s.compaction.MaxContextTokens = v
-		s.modelMu.Unlock()
+		s.compaction.MaxContextTokens = defaultContextTokens
 	}
+	s.modelMu.Unlock()
 	return nil
 }
 

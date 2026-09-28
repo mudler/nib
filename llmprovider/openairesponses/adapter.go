@@ -25,11 +25,12 @@ const defaultMaxTokens = 16384
 
 // Config holds the connection + auth parameters for the Responses adapter.
 type Config struct {
-	Model   string
-	BaseURL string // e.g. "https://api.openai.com"
-	APIKey  string // Bearer token (when IsOAuth is false)
-	Token   string // Bearer token (when IsOAuth is true)
-	IsOAuth bool
+	Model           string
+	BaseURL         string // e.g. "https://api.openai.com"
+	APIKey          string // Bearer token (when IsOAuth is false)
+	Token           string // Bearer token (when IsOAuth is true)
+	IsOAuth         bool
+	ReasoningEffort string
 }
 
 // LLM implements cogito.LLM against the OpenAI Responses API.
@@ -119,15 +120,21 @@ func (l *LLM) CreateChatCompletion(ctx context.Context, request openai.ChatCompl
 // ---------------------------------------------------------------------------
 
 type responsesRequest struct {
-	Model           string           `json:"model"`
-	Input           []responsesInput `json:"input"`
-	Instructions    string           `json:"instructions,omitempty"`
-	Tools           []responsesTool  `json:"tools,omitempty"`
-	ToolChoice      any              `json:"tool_choice,omitempty"`
-	MaxOutputTokens int              `json:"max_output_tokens,omitempty"`
-	Temperature     *float32         `json:"temperature,omitempty"`
-	TopP            *float32         `json:"top_p,omitempty"`
-	Store           bool             `json:"store"`
+	Model           string              `json:"model"`
+	Input           []responsesInput    `json:"input"`
+	Instructions    string              `json:"instructions,omitempty"`
+	Tools           []responsesTool     `json:"tools,omitempty"`
+	ToolChoice      any                 `json:"tool_choice,omitempty"`
+	MaxOutputTokens int                 `json:"max_output_tokens,omitempty"`
+	Temperature     *float32            `json:"temperature,omitempty"`
+	TopP            *float32            `json:"top_p,omitempty"`
+	Store           bool                `json:"store"`
+	Reasoning       *responsesReasoning `json:"reasoning,omitempty"`
+}
+
+type responsesReasoning struct {
+	Effort  string `json:"effort,omitempty"`
+	Summary string `json:"summary,omitempty"`
 }
 
 type responsesInput struct {
@@ -220,6 +227,12 @@ func (l *LLM) translateRequest(req openai.ChatCompletionRequest) ([]byte, error)
 	if req.ToolChoice != nil {
 		rr.ToolChoice = translateToolChoice(req.ToolChoice)
 	}
+	if l.config.ReasoningEffort != "" && l.config.ReasoningEffort != "none" {
+		rr.Reasoning = &responsesReasoning{
+			Effort:  l.config.ReasoningEffort,
+			Summary: "auto",
+		}
+	}
 
 	data, err := json.Marshal(rr)
 	if err != nil {
@@ -291,13 +304,15 @@ type responsesAPIResponse struct {
 }
 
 type responsesOutputItem struct {
-	Type      string                   `json:"type"`
-	Role      string                   `json:"role,omitempty"`
-	Content   []responsesOutputContent `json:"content,omitempty"`
-	CallID    string                   `json:"call_id,omitempty"`
-	Name      string                   `json:"name,omitempty"`
-	Arguments string                   `json:"arguments,omitempty"`
-	ID        string                   `json:"id,omitempty"`
+	Type             string                   `json:"type"`
+	Role             string                   `json:"role,omitempty"`
+	Content          []responsesOutputContent `json:"content,omitempty"`
+	Summary          []responsesOutputContent `json:"summary,omitempty"`
+	EncryptedContent string                   `json:"encrypted_content,omitempty"`
+	CallID           string                   `json:"call_id,omitempty"`
+	Name             string                   `json:"name,omitempty"`
+	Arguments        string                   `json:"arguments,omitempty"`
+	ID               string                   `json:"id,omitempty"`
 }
 
 type responsesOutputContent struct {
@@ -327,6 +342,7 @@ func (l *LLM) translateResponse(body []byte, requestModel string) (cogito.LLMRep
 	}
 
 	var textParts []string
+	var reasoningParts []string
 	var toolCalls []openai.ToolCall
 
 	for _, item := range ar.Output {
@@ -337,6 +353,12 @@ func (l *LLM) translateResponse(body []byte, requestModel string) (cogito.LLMRep
 					if c.Type == "output_text" {
 						textParts = append(textParts, c.Text)
 					}
+				}
+			}
+		case "reasoning":
+			for _, part := range item.Summary {
+				if part.Type == "summary_text" && strings.TrimSpace(part.Text) != "" {
+					reasoningParts = append(reasoningParts, part.Text)
 				}
 			}
 		case "function_call":
@@ -388,6 +410,7 @@ func (l *LLM) translateResponse(body []byte, requestModel string) (cogito.LLMRep
 
 	return cogito.LLMReply{
 		ChatCompletionResponse: response,
+		ReasoningContent:       strings.Join(reasoningParts, "\n"),
 	}, usage, nil
 }
 

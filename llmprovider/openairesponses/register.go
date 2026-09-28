@@ -23,11 +23,12 @@ func factory(def provider.Definition, config types.ModelProviderConfig, store *a
 		return nil, fmt.Errorf("openai-responses: no credentials — run 'nib login %s' or set %s", def.ID, def.EnvVar)
 	}
 	return New(Config{
-		Model:   config.Model,
-		BaseURL: orDefault(config.BaseURL, def.BaseURL),
-		APIKey:  resolved.APIKey,
-		Token:   resolved.APIKey,
-		IsOAuth: resolved.IsOAuth,
+		Model:           config.Model,
+		BaseURL:         orDefault(config.BaseURL, def.BaseURL),
+		APIKey:          resolved.APIKey,
+		Token:           resolved.APIKey,
+		IsOAuth:         resolved.IsOAuth,
+		ReasoningEffort: config.ReasoningEffort,
 	}), nil
 }
 
