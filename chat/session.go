@@ -59,6 +59,8 @@ type Session struct {
 	messages             []openai.ChatCompletionMessage
 	callbacks            Callbacks
 	systemPrompt         string
+	sentSystemPrompt     string // the system prompt as ensureSystemPrompt last put it in the fragment; guarded by historyMu
+	stampedModel         string // the model systemPrompt names (modelIdentity); guarded by historyMu
 	loadedSkills         string // eager-loaded /skill instructions, re-applied across reloads
 	skills               []types.Skill
 	cogitoOptions        types.AgentOptions
@@ -2881,11 +2883,19 @@ func (s *Session) Reload(cfg types.Config) error {
 	s.agentModels = agentModelSet(s.agentDefs)
 	s.hooks = hooks.New(cfg.Hooks)
 	if cfg.Prompt != "" {
-		s.systemPrompt = cfg.GetPrompt() + s.loadedSkills + s.agentModelGuidance()
+		prompt := cfg.GetPrompt() + s.loadedSkills + s.agentModelGuidance()
 		// Inject the harness/version identity so the model knows what it is.
 		// Appended after GetPrompt() (which already carries the self-knowledge
 		// suffix) so it lands at the end of the system prompt.
-		s.systemPrompt += s.harnessIdentity(cfg)
+		prompt += s.harnessIdentity(cfg)
+		// The model it runs on, restamped by applyProvider on a switch.
+		model := s.Model()
+		prompt += modelIdentity(model)
+		// Guarded: applyProvider restamps the prompt from the UI goroutine.
+		s.historyMu.Lock()
+		s.systemPrompt = prompt
+		s.stampedModel = model
+		s.historyMu.Unlock()
 	}
 	// Guarded because SetModel writes s.compaction.MaxContextTokens under the
 	// same lock when it re-detects the window for a new model. Reload runs at
@@ -3011,15 +3021,33 @@ func (s *Session) Close() error {
 // Appending is enough even though the prompt belongs at position 0: cogito's
 // normalizeSystemMessages hoists every system message into a single deduped
 // block at the front before the request goes out.
+//
+// When the prompt changed since it was last added (a /model or /endpoint
+// switch restamps the model it names, a /skill load, a reload), the old copy
+// is replaced in place rather than left next to the new one, so the context
+// never carries two system prompts that disagree.
 func (s *Session) ensureSystemPrompt() {
-	if s.systemPrompt == "" {
-		return
-	}
 	s.historyMu.Lock()
 	defer s.historyMu.Unlock()
-	if !fragmentHasSystemContent(s.fragment, s.systemPrompt) {
-		s.fragment = s.fragment.AddMessage("system", s.systemPrompt)
+	prompt := s.systemPrompt
+	if prompt == "" {
+		return
 	}
+	if fragmentHasSystemContent(s.fragment, prompt) {
+		s.sentSystemPrompt = prompt
+		return
+	}
+	if s.sentSystemPrompt != "" {
+		for i, m := range s.fragment.Messages {
+			if m.Role == "system" && m.Content == s.sentSystemPrompt {
+				s.fragment.Messages[i].Content = prompt
+				s.sentSystemPrompt = prompt
+				return
+			}
+		}
+	}
+	s.fragment = s.fragment.AddMessage("system", prompt)
+	s.sentSystemPrompt = prompt
 }
 
 // maybeInjectContextNudge injects a one-time user-role nudge to re-read
@@ -3233,6 +3261,15 @@ func (s *Session) applyProvider(provider types.ModelProviderConfig, id string) e
 	}
 	s.modelMu.Unlock()
 
+	// Restamp the model the system prompt names. The next turn's
+	// ensureSystemPrompt puts the new prompt in place of the old one.
+	s.historyMu.Lock()
+	if s.stampedModel != "" && s.stampedModel != name {
+		s.systemPrompt = strings.Replace(s.systemPrompt, modelIdentity(s.stampedModel), modelIdentity(name), 1)
+		s.stampedModel = name
+	}
+	s.historyMu.Unlock()
+
 	// The new model has never been asked for this session's prefix, so it is
 	// genuinely cold. Unlike a server restart or a KV eviction, which the
 	// session cannot see, a switch is something we know about, and PrefixWarm
@@ -3359,6 +3396,16 @@ func (s *Session) harnessIdentity(cfg types.Config) string {
 		v = "dev (local build)"
 	}
 	return fmt.Sprintf("\n\nYou are running as %s %s. When the user asks about your version, report this exactly. Do not fabricate version numbers.", prog, v)
+}
+
+// modelIdentity returns the system-prompt line that names the model the
+// session runs on, so the model can say which model it is without guessing.
+// applyProvider finds it by its exact text to restamp it on a switch.
+func modelIdentity(model string) string {
+	if model == "" {
+		return ""
+	}
+	return fmt.Sprintf("\n\nYou are running on the model %s. When the user asks which model you are, report this exactly.", model)
 }
 
 // ModelListTimeout bounds the endpoint lookup behind /model and /models. Both
