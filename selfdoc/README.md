@@ -743,13 +743,15 @@ log_level: error
 # window, compaction cannot help:
 # nib keeps the conversation as it was, does not compact (neither on
 # overflow nor automatically), and names the MCP servers that take the most
-# room, so you can disable them or filter their tools. When a tool call is
-# cut off because the reply ran out of room in the window (for example a
-# whole file in one write), nib retries the turn once with a note that asks
-# the model to split the call, after compacting when the prompt is large.
-# When the reasoning filled the window, the retry also uses one lower
-# reasoning effort. nib never caps the output for this. A stream that ends
-# before the reply is finished is retried at most 3 times, and a tool call
+# room, so you can disable them or filter their tools. When a tool call reaches
+# its output limit (for example a whole file in one write), nib retries once
+# with a note that asks the model to split the call. If the retry also reaches
+# the limit, nib compacts and retries once more only when the context window
+# reduced the output reservation and the prompt is large enough. It does not
+# compact when the model's output cap is the limit, because compaction cannot
+# increase that cap. When reasoning filled the window, the first retry also
+# uses one lower reasoning effort. nib never lowers the output cap for this. A
+# stream that ends before the reply is finished is retried at most 3 times, and
 # with invalid JSON arguments once. It knows the
 # wording of llama.cpp/LocalAI, vLLM, OpenAI,
 # Anthropic and Gemini. overflow_patterns teaches it another backend without a

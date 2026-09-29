@@ -208,22 +208,28 @@ func TestToolArgsInvalidRetriedOnce(t *testing.T) {
 	}
 }
 
-// The clamp lowered max_tokens and a tool call was truncated: the window ran
-// out, and the prompt is large enough that compaction can make room.
-func TestToolArgsTruncatedAfterClampCompacts(t *testing.T) {
-	llm := &toolArgsLLM{script: []toolArgsStep{
-		truncatedCall("write", `{"path":"a.txt","content":"`+strings.Repeat("x", 40000), "", 60000, 10000),
-	}}
+// A context-clamped call gets the split retry first. Only when that retry is
+// truncated too does nib compact, then make one final split-note retry.
+func TestToolArgsTruncatedAfterClampSplitsThenCompacts(t *testing.T) {
+	step := truncatedCall("write", `{"path":"a.txt","content":"`+strings.Repeat("x", 40000), "", 60000, 10000)
+	llm := &toolArgsLLM{script: []toolArgsStep{step, step}}
 	s := toolArgsSession(t, llm, 100000)
 
 	if _, err := s.SendMessage("write the file"); err != nil {
 		t.Fatalf("SendMessage: %v", err)
 	}
 	if llm.summaries == 0 {
-		t.Fatal("the recovery chain did not run (no summary requested)")
+		t.Fatal("the repeated truncation did not run the recovery chain")
 	}
-	if reqs := llm.requests(); len(reqs) != 2 {
-		t.Fatalf("turn requests = %d, want 2 (one retry)", len(reqs))
+	reqs := llm.requests()
+	if len(reqs) != 3 {
+		t.Fatalf("turn requests = %d, want 3 (split retry then compaction retry)", len(reqs))
+	}
+	if lastUserNote(reqs[1]) == "" || lastUserNote(reqs[2]) == "" {
+		t.Fatal("both recovery requests must carry the split-call note")
+	}
+	if reqs[1].MaxTokens > reqs[0].MaxTokens {
+		t.Fatalf("split retry max_tokens = %d, exceeds original safe reservation %d", reqs[1].MaxTokens, reqs[0].MaxTokens)
 	}
 }
 
@@ -237,8 +243,8 @@ func TestToolArgsTruncatedIncidentNotesTheRetry(t *testing.T) {
 	if _, err := s.SendMessage("rewrite big.go"); err != nil {
 		t.Fatalf("SendMessage: %v", err)
 	}
-	if llm.summaries == 0 {
-		t.Fatal("the recovery chain did not run")
+	if llm.summaries != 0 {
+		t.Fatal("the first truncation compacted before trying the split note")
 	}
 	reqs := llm.requests()
 	if len(reqs) != 2 {
@@ -323,9 +329,9 @@ func TestToolArgsNoOutputCeiling(t *testing.T) {
 	}
 }
 
-// The cap was reached with room left in the window: not exhausted, so no
-// compaction and the max_tokens message.
-func TestToolArgsTruncatedNotExhausted(t *testing.T) {
+// The cap was reached with room left in the window: retry once with the split
+// note, never compact, then return an actionable exhausted-recovery error.
+func TestToolArgsTruncatedAtModelCapSplitsOnceWithoutCompaction(t *testing.T) {
 	llm := &toolArgsLLM{repeat: func(req openai.ChatCompletionRequest) (cogito.LLMReply, cogito.LLMUsage, error) {
 		return truncatedCall("write", `{"path":"a","content":"zz`, "", 20000, req.MaxTokens)(req)
 	}}
@@ -338,16 +344,27 @@ func TestToolArgsTruncatedNotExhausted(t *testing.T) {
 	if llm.summaries != 0 {
 		t.Fatalf("compacted %d times, want none", llm.summaries)
 	}
-	if !strings.Contains(err.Error(), "longer than the output limit (max_tokens") {
-		t.Fatalf("err = %q, want the max_tokens message", err)
+	reqs := llm.requests()
+	if len(reqs) != 2*requestAttempts-2 {
+		t.Fatalf("provider requests = %d, want %d (one cogito cap retry in each turn attempt)", len(reqs), 2*requestAttempts-2)
 	}
-	if lastUserNote(llm.requests()[len(llm.requests())-1]) != "" {
-		t.Fatal("a note was sent although the turn was not retried")
+	first, retried := reqs[requestAttempts-2], reqs[len(reqs)-1]
+	if lastUserNote(reqs[0]) != "" || lastUserNote(reqs[requestAttempts-1]) == "" {
+		t.Fatal("only the turn retry should carry the split-call note")
+	}
+	if retried.MaxTokens != first.MaxTokens {
+		t.Fatalf("retry max_tokens = %d, want %d", retried.MaxTokens, first.MaxTokens)
+	}
+	if !strings.Contains(err.Error(), "still exceeded the output limit after a split retry") || strings.Contains(err.Error(), "Raise") {
+		t.Fatalf("err = %q, want exhausted split recovery without advice to raise max_tokens", err)
+	}
+	if historyHasNote(s) {
+		t.Fatal("the split-call note was persisted")
 	}
 }
 
-// No clamp (unknown limits) and no usage figures: no compaction, the
-// max_tokens message.
+// Unknown limits and no usage figures still get one bounded split retry. There
+// is no evidence that compaction can help, so a repeat stops without compacting.
 func TestToolArgsTruncatedWithoutClamp(t *testing.T) {
 	llm := &toolArgsLLM{repeat: truncatedCall("write", `{"path":"a","content":"zz`, "", 0, 0)}
 	s := toolArgsSession(t, llm, 0)
@@ -359,10 +376,10 @@ func TestToolArgsTruncatedWithoutClamp(t *testing.T) {
 	if llm.summaries != 0 {
 		t.Fatalf("compacted %d times, want none", llm.summaries)
 	}
-	if len(llm.requests()) != 1 {
-		t.Fatalf("turn requests = %d, want 1 (no retry)", len(llm.requests()))
+	if len(llm.requests()) != 2 {
+		t.Fatalf("turn requests = %d, want 2 (one split retry)", len(llm.requests()))
 	}
-	if !strings.Contains(err.Error(), "max_tokens") {
-		t.Fatalf("err = %q, want the max_tokens message", err)
+	if !strings.Contains(err.Error(), "still exceeded the output limit after a split retry") {
+		t.Fatalf("err = %q, want the exhausted split-retry message", err)
 	}
 }

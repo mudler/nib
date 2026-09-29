@@ -20,7 +20,8 @@ causes:
   room.
 
 The first output-cap truncation must no longer end the turn. nib must retry once
-with the same safe `max_tokens` value. The retry must include a transient
+without raising the safe `max_tokens` value. The context clamp can lower the
+reservation to account for the transient note. The retry must include a
 user-role note that tells the model to split the operation into smaller tool
 calls. For file changes, the note can suggest several `write` or `edit` calls.
 The note must not enter the stored conversation history.

@@ -93,19 +93,29 @@ func toolArgsTruncatedMessage(te *cogito.ToolArgumentsTruncatedError, cause trun
 		limit = fmt.Sprintf("the output limit (max_tokens %d)", te.MaxTokens)
 	}
 	return "the model's tool call was longer than " + limit +
-		". Raise the model's max_tokens, or ask for smaller edits."
+		". Ask for smaller edits, or use a model with a larger output limit."
 }
 
-// truncationNote is the one-turn user-role note sent with the retry after a
-// tool call was cut because the window ran out. It is never stored in the
-// history.
+// toolArgsSplitRetryMessage is the text after a tool call reaches the model's
+// output cap again despite the transient split-call note.
+func toolArgsSplitRetryMessage(te *cogito.ToolArgumentsTruncatedError) string {
+	limit := "the output limit"
+	if te.MaxTokens > 0 {
+		limit = fmt.Sprintf("the output limit (max_tokens %d)", te.MaxTokens)
+	}
+	return "the model's tool call still exceeded the output limit after a split retry (" + limit +
+		"). Ask for smaller edits, or use a model with a larger output limit."
+}
+
+// truncationNote is the one-turn user-role note sent after a tool call was cut
+// by an output limit. It is never stored in the history.
 func truncationNote(te *cogito.ToolArgumentsTruncatedError, cause truncationCause) string {
 	if cause == truncReasoning {
 		return fmt.Sprintf("Your previous reply was cut off: its reasoning (about %d tokens) ran out of room in the context window before the call to %s was complete. "+
 			"Keep the plan shorter and work in smaller steps (for example write a file in parts, or use edit for targeted changes).",
 			te.ReasoningBytes/4, te.ToolName)
 	}
-	return fmt.Sprintf("Your previous call to %s was cut off after about %d tokens because the reply ran out of room in the context window. "+
+	return fmt.Sprintf("Your previous call to %s was cut off after about %d tokens because it reached the reply's output limit. "+
 		"Split it into smaller calls (for example write the file in parts, or use edit for targeted changes).",
 		te.ToolName, te.ArgumentsBytes/4)
 }

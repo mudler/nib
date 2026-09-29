@@ -2001,9 +2001,10 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 	// neither compacts, so neither counts as an overflow recovery.
 	capRetried, budgetRetried := false, false
 	// Turn retries in a row per error class with its own budget (see
-	// classRetryBudget), and whether a truncated tool call was retried.
+	// classRetryBudget), and the bounded recovery state for a truncated tool
+	// call: one split-note retry, then at most one useful compaction retry.
 	classRetries := map[backendErrorClass]int{}
-	truncRetried := false
+	truncSplitRetried, truncCompacted := false, false
 	// Restores a reasoning effort lowered for this turn.
 	restoreEffort := func() {}
 	defer func() { restoreEffort() }()
@@ -2370,39 +2371,51 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 					turnOverflow.Kind = KindContext
 				}
 			}
-			// A tool call cut by finish_reason=length. When the window, not
-			// the cap, ran out, retry once with a note that asks for smaller
-			// calls: after compacting when the prompt is large enough for
-			// that to make room, else as it is (never with a lower output
-			// cap: a long write is legitimate). See truncationCause.
+			// A tool call cut by finish_reason=length. Every cause gets one
+			// transient split-call retry first. If an output-cap truncation then
+			// repeats, compaction is useful only when the request reservation was
+			// context-clamped and the prompt is large enough. Context-window and
+			// reasoning recovery otherwise retain their existing behavior.
 			var trunc *cogito.ToolArgumentsTruncatedError
 			truncNote := ""
 			var truncErr error
 			if turnCtx.Err() == nil && turnOverflow.Kind == KindNone && errors.As(err, &trunc) {
-				cause, compact := s.truncationCause(trunc, s.live.lastClamped())
+				clamped := s.live.lastClamped()
+				cause, compact := s.truncationCause(trunc, clamped)
 				friendly := &FriendlyError{err: err, msg: toolArgsTruncatedMessage(trunc, cause)}
-				switch {
-				case cause == truncCap || truncRetried:
-					err = friendly
-				case compact:
-					truncRetried = true
-					turnOverflow.Kind = KindContext
-					truncNote = truncationNote(trunc, cause)
-					truncErr = friendly
-					xlog.Warn("tool call truncated by the context window; compacting and retrying", "tool", trunc.ToolName, "prompt_tokens", trunc.PromptTokens)
-				default:
-					truncRetried = true
+				if !truncSplitRetried {
+					truncSplitRetried = true
 					if cause == truncReasoning {
 						restoreEffort()
 						restoreEffort = s.lowerReasoningForTurn(baseLLM)
 					}
-					xlog.Warn("reply filled the context window; retrying with a note", "tool", trunc.ToolName, "prompt_tokens", trunc.PromptTokens, "completion_tokens", trunc.CompletionTokens)
+					xlog.Warn("tool call reached the output limit; retrying with a split-call note", "tool", trunc.ToolName, "prompt_tokens", trunc.PromptTokens, "completion_tokens", trunc.CompletionTokens)
 					s.live.setNote(truncationNote(trunc, cause))
-					announce("Reply ran out of room in the context window — retrying in smaller steps…")
+					announce("Tool call reached the output limit — retrying in smaller steps…")
 					announce(retryResumeStatus)
 					resume, _ := resumableFragment(runFragment, newFragment)
 					s.commitRun(midTurn, resume)
 					continue
+				}
+				switch {
+				case cause == truncCap:
+					err = &FriendlyError{err: err, msg: toolArgsSplitRetryMessage(trunc)}
+				case clamped && compact && !truncCompacted:
+					truncCompacted = true
+					turnOverflow.Kind = KindContext
+					truncNote = truncationNote(trunc, cause)
+					truncErr = &FriendlyError{err: err, msg: toolArgsSplitRetryMessage(trunc)}
+					resume, _ := resumableFragment(runFragment, newFragment)
+					s.commitRun(midTurn, resume)
+					runFragment = resume
+					newFragment = resume
+					xlog.Warn("split retry was truncated with a context-clamped reservation; compacting and retrying", "tool", trunc.ToolName, "prompt_tokens", trunc.PromptTokens)
+				default:
+					if cause == truncReasoning {
+						err = friendly
+					} else {
+						err = &FriendlyError{err: err, msg: toolArgsSplitRetryMessage(trunc)}
+					}
 				}
 			}
 			if turnCtx.Err() == nil && turnOverflow.Kind == KindContext {
