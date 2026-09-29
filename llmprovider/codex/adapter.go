@@ -322,17 +322,21 @@ func (l *LLM) translateRequest(req openai.ChatCompletionRequest, meta requestMet
 	// Prompt cache key — derived from session ID for stable caching across turns.
 	cr.PromptCacheKey = meta.SessionID
 
-	// Reasoning controls.
-	if l.config.ReasoningEffort != "" || l.config.ResponsesLite {
-		r := &codexReasoning{}
-		if l.config.ReasoningEffort != "" && l.config.ReasoningEffort != "none" {
+	// Reasoning controls. The summary is requested whenever reasoning is not
+	// switched off, even with no effort configured: without it the backend
+	// sends no readable reasoning at all, and the model's default effort
+	// would think silently.
+	if l.config.ReasoningEffort != "none" {
+		r := &codexReasoning{Summary: "auto"}
+		if l.config.ReasoningEffort != "" {
 			r.Effort = l.config.ReasoningEffort
-			r.Summary = "auto"
 		}
 		if l.config.ResponsesLite {
 			r.Context = "all_turns"
 		}
 		cr.Reasoning = r
+	} else if l.config.ResponsesLite {
+		cr.Reasoning = &codexReasoning{Context: "all_turns"}
 	}
 
 	// Service tier — "auto" is never sent (omitting is equivalent).
