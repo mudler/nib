@@ -1602,17 +1602,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 
-			// /yolo acts at once, whatever state the run is in. It never starts a
-			// turn, and it is typed precisely when a run is prompting: queueing it
-			// behind the run (as slash commands otherwise are) left every tool
-			// call of that run still asking, and inside the approval prompt it
-			// went to the model as an adjustment to the call.
-			if k := slash.Resolve(input, m.cfg.Commands, m.cfg.Skills, m.cfg.Agents).Kind; k == slash.KindYolo || k == slash.KindApprove {
+			// A command that neither starts a turn nor rebuilds the session
+			// (/yolo, /help, /settings, ...) acts at once, whatever state the
+			// run is in. Queueing it behind the run left /yolo unable to stop
+			// the prompts of the very run it was typed for, and inside the
+			// approval prompt it went to the model as an adjustment to the call.
+			if runsAtOnce(slash.Resolve(input, m.cfg.Commands, m.cfg.Skills, m.cfg.Agents)) {
 				m.pushHistory(input)
 				m.textarea.Reset()
 				m.completion.sync("")
-				m.dispatchResolved(input)
-				// The prompt on screen is one yolo would not have raised.
+				m.dispatchInput(input)
+				// The prompt on screen is one auto-approval would not have raised.
 				if m.awaitingApproval && m.session.AutoApprove() {
 					return m.resolveApproval(chat.ToolCallResponse{Approved: true})
 				}

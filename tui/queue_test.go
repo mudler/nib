@@ -273,3 +273,51 @@ func TestReleaseQueueFrontTracksUndelivered(t *testing.T) {
 		t.Fatalf("entry should stay queued, got %v", m.queue)
 	}
 }
+
+// A command that only reports or flips guarded state runs as soon as it is
+// entered, even mid-run. It used to wait in the queue until the run ended,
+// so /help or /settings typed during a long turn showed nothing for minutes.
+func TestEnterRunsCommandsAtOnceMidRun(t *testing.T) {
+	for _, input := range []string{"/help", "/goal", "/attach list", "/nope-no-such-command"} {
+		t.Run(input, func(t *testing.T) {
+			m := newQueueTestModel()
+			m.session = &chat.Session{}
+			m.loading = true
+			m.textarea.SetValue(input)
+
+			next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+			nm := next.(Model)
+
+			if len(nm.queue) != 0 {
+				t.Fatalf("queue = %v, want %s run at once", nm.queue, input)
+			}
+			n := len(nm.messages)
+			if n < 2 || nm.messages[n-2].Role != "user" || nm.messages[n-2].Content != input {
+				t.Fatalf("want %s echoed then answered, messages = %+v", input, nm.messages)
+			}
+			if !nm.loading {
+				t.Fatal("the live run must keep loading")
+			}
+		})
+	}
+}
+
+// Input that starts a turn, swaps the model or session, or edits the system
+// prompt still waits for the live run to end.
+func TestEnterQueuesTurnAndSessionCommandsMidRun(t *testing.T) {
+	for _, input := range []string{"plain text", "/compact", "/goal ship it", "/model gpt-x", "/endpoint", "/resume"} {
+		t.Run(input, func(t *testing.T) {
+			m := newQueueTestModel()
+			m.session = &chat.Session{}
+			m.loading = true
+			m.textarea.SetValue(input)
+
+			next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+			nm := next.(Model)
+
+			if len(nm.queue) != 1 || nm.queue[0] != input {
+				t.Fatalf("queue = %v, want %q queued", nm.queue, input)
+			}
+		})
+	}
+}

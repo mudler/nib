@@ -41,6 +41,28 @@ func (m *Model) queueDeleteSel() string {
 	return removed
 }
 
+// runsAtOnce reports whether a resolved input runs as soon as it is entered,
+// even while a run is live, instead of waiting in the queue. That holds for
+// commands that only report or change state the session guards for a live
+// run. Anything that starts a turn (a message, /compact, /goal, /loop), swaps
+// the model, endpoint or session, edits the system prompt (/skill) or opens a
+// picker waits for the run to end.
+func runsAtOnce(a slash.Action) bool {
+	switch a.Kind {
+	case slash.KindError, slash.KindHelp, slash.KindAbout,
+		slash.KindYolo, slash.KindApprove, slash.KindSettings,
+		slash.KindModelList, slash.KindAttach,
+		slash.KindLoopList, slash.KindLoopStop,
+		slash.KindGoalShow, slash.KindGoalClear:
+		return true
+	case slash.KindClassifier:
+		return a.ClassifierOff || a.Endpoint != ""
+	case slash.KindLogout:
+		return a.Provider != ""
+	}
+	return false
+}
+
 // releaseQueueFront injects the oldest queued entry into the live run and
 // reflects it as a transcript line. It is a no-op (returns false) when the
 // queue is empty or no run is live; the entry stays queued and retries at the

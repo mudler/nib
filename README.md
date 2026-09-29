@@ -150,7 +150,16 @@ paste fallback.
 ## Usage
 
 Run `nib` to open the TUI, or press `Ctrl+Space` from your shell. In the TUI, `/help` lists
-every key and command. Use `--cli` for a plain, pipe-friendly mode:
+every key and command.
+
+A message you send while a turn runs waits in a queue and goes to the agent after
+the turn. A command that only shows or changes a setting (`/help`, `/about`, `/yolo`,
+`/approve`, `/settings`, `/models`, `/attach`, `/goal`, `/goal clear`, `/loop list`,
+`/loop stop`) runs at once. A command that starts a turn or changes the model,
+endpoint or session (`/compact`, `/goal <text>`, `/loop`, `/model`, `/endpoint`,
+`/resume`, `/skill`) waits in the queue.
+
+Use `--cli` for a plain, pipe-friendly mode:
 
 ```bash
 echo "how do I list every open port?" | nib --cli

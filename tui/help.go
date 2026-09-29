@@ -10,7 +10,7 @@ import (
 // helpKeys are the TUI's keys, in the order /help lists them. Keep it in step
 // with the key handling in Update.
 var helpKeys = [][2]string{
-	{"enter", "send; while a turn runs, queue it for after"},
+	{"enter", "send; while a turn runs, queue it for after (most commands run at once)"},
 	{"tab", "accept the suggestion or completion"},
 	{"shift+tab", "cycle the approval mode"},
 	{"↑ ↓", "history; with queued messages, pick one"},
