@@ -108,3 +108,24 @@ func mustDuration(t *testing.T, s string) time.Duration {
 	}
 	return d
 }
+
+// A step that folded on its answer but never got a boundary (cogito only
+// fires one when the step had reasoning, and a sub-agent's steps fire none)
+// must not swallow the next step's thinking. The tool starting is the step
+// end: the next trace is a new entry at the bottom, not text appended to the
+// old one above the tool calls.
+func TestNextStepThinkingAfterToolStartsNewEntry(t *testing.T) {
+	m := streamModel()
+	m.messages = []ChatMessage{{Role: "user", Content: "q"}}
+	for _, ev := range []reasoningEventsMsg{delta("first"), content("I'll look"), {{kind: reasoningEventStepEnd, gen: m.currentTurnGen()}}, delta("second")} {
+		n, _ := m.Update(ev)
+		m = n.(Model)
+	}
+	got := thoughts(m)
+	if len(got) != 1 || got[0] != "first" {
+		t.Fatalf("thoughts = %q, want the first entry untouched", got)
+	}
+	if m.reasoning != "second" {
+		t.Fatalf("live box = %q, want the new step's trace", m.reasoning)
+	}
+}

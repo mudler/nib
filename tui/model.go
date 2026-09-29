@@ -711,6 +711,13 @@ const (
 	// Applied in Update by appendStreamedContent, not by the reasoning-box
 	// logic below.
 	reasoningEventContentDelta
+	// reasoningEventStepEnd marks a tool starting to run: the step that chose
+	// it is over. cogito fires the step boundary only for a step that had
+	// reasoning, and never for a sub-agent's steps, so without this a step
+	// that folded on its answer would keep its thought entry as the target
+	// for the next step's thinking, and that trace would be written above the
+	// tool calls instead of in a new entry at the bottom.
+	reasoningEventStepEnd
 )
 
 // reasoningEvent is one item read off reasoningChan. The kinds are handled
@@ -1116,6 +1123,9 @@ func (m Model) initSession() tea.Cmd {
 				}
 			},
 			OnToolStart: func(ts chat.ToolStart) {
+				// Blocking, like the boundary: it has to stay ordered after
+				// this step's deltas and boundary on reasoningChan.
+				m.reasoningChan <- reasoningEvent{kind: reasoningEventStepEnd, gen: m.currentTurnGen()}
 				select {
 				case m.toolStartChan <- ts:
 				default:
@@ -2175,6 +2185,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.reasoning = ""
 				} else {
 					m.reasoning = ev.text
+				}
+				m.endThoughtStep()
+				m.reasoningResetPending = true
+			case reasoningEventStepEnd:
+				if ev.gen != m.currentTurnGen() {
+					continue
 				}
 				m.endThoughtStep()
 				m.reasoningResetPending = true

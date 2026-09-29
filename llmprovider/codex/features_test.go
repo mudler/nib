@@ -51,7 +51,7 @@ func TestReasoningEffortSetInBody(t *testing.T) {
 	}
 }
 
-func TestReasoningOmittedWhenNoEffort(t *testing.T) {
+func TestReasoningSummaryRequestedWithoutEffort(t *testing.T) {
 	l := New(Config{
 		Model: "gpt-5",
 		Token: "test-token",
@@ -68,13 +68,18 @@ func TestReasoningOmittedWhenNoEffort(t *testing.T) {
 	}
 
 	var cr struct {
-		Reasoning *json.RawMessage `json:"reasoning"`
+		Reasoning *struct {
+			Effort  string `json:"effort"`
+			Summary string `json:"summary"`
+		} `json:"reasoning"`
 	}
 	if err := json.Unmarshal(body, &cr); err != nil {
 		t.Fatal(err)
 	}
-	if cr.Reasoning != nil {
-		t.Fatal("reasoning should be omitted when no effort and no Lite")
+	// No effort configured still asks for the summary, or the backend sends
+	// no readable reasoning; the effort is left to the model's default.
+	if cr.Reasoning == nil || cr.Reasoning.Summary != "auto" || cr.Reasoning.Effort != "" {
+		t.Fatalf("reasoning = %+v, want summary auto and no effort", cr.Reasoning)
 	}
 }
 
