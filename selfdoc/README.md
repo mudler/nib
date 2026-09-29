@@ -169,6 +169,27 @@ Running out of input ends the session, so a piped question is answered and nib e
 `Ctrl+D` does the same thing interactively. `Ctrl+C` still exits non-zero, so a script can
 tell an interrupted run from a finished one.
 
+Use `--json` (implies `--cli`) when a script needs to parse the run. Each stdin line is one
+message, and stdout carries only JSON Lines events, in the order the agent produced them:
+
+```bash
+echo "what is 17*23?" | nib --json --yolo | jq -c 'select(.type != "reasoning_delta")'
+```
+
+| `type` | Meaning |
+| --- | --- |
+| `reasoning_delta`, `content_delta` | Live streamed text (`text`; `agent` for a sub-agent) |
+| `reasoning` | A step's complete reasoning, at the step boundary |
+| `step_content` | Commentary that came with a tool selection |
+| `tool_call` | A call that needs approval; `approved` is `false` since nothing can answer (use `--yolo`) |
+| `tool_start`, `tool_result` | A call running, and its output |
+| `agent` | Sub-agent lifecycle change |
+| `response` | The turn's final reply |
+| `error` | A failure (`message`) |
+| `usage` | Token totals, once, when the session ends |
+
+Logs stay on stderr. The exit codes match `--cli`.
+
 #### What a piped run may and may not do
 
 A piped run still uses tools, but only the ones that cannot change anything. In the default

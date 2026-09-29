@@ -348,6 +348,7 @@ func runCtx(ctx context.Context, o Options) int {
 	noTmuxFlag := fs.Bool("no-tmux", false, "Disable tmux popup even when in tmux")
 	tuiFlag := fs.Bool("tui", false, "Start the full-screen TUI directly (no tmux popup)")
 	cliFlag := fs.Bool("cli", false, "Run in plain CLI mode instead of the TUI")
+	jsonFlag := fs.Bool("json", false, "Machine-readable mode: read one message per stdin line, write JSON Lines events to stdout (implies --cli)")
 	setupFlag := fs.Bool("setup", false, "Run the interactive model setup wizard")
 	traceDirFlag := fs.String("trace-dir", "", "Write a session LLM trace (NDJSON) and token totals (usage.json) to this directory; also via NIB_TRACE_DIR")
 	yoloFlag := fs.Bool("yolo", false, "Auto-approve every tool call without prompting; also via NIB_YOLO")
@@ -497,7 +498,7 @@ func runCtx(ctx context.Context, o Options) int {
 	streams := cmd.Streams{In: o.Stdin, Out: o.Stdout, Err: o.Stderr}
 
 	mode := selectMode(modeInputs{
-		cli:    *cliFlag,
+		cli:    *cliFlag || *jsonFlag,
 		tui:    *tuiFlag,
 		tmux:   *tmuxFlag,
 		height: *heightFlag,
@@ -526,7 +527,11 @@ func runCtx(ctx context.Context, o Options) int {
 
 	switch mode {
 	case modeCLI:
-		if err := cmd.RunCLI(ctx, cfg, streams, shellJobs, artifacts, transports...); err != nil {
+		run := cmd.RunCLI
+		if *jsonFlag {
+			run = cmd.RunJSON
+		}
+		if err := run(ctx, cfg, streams, shellJobs, artifacts, transports...); err != nil {
 			fmt.Fprintf(o.stderr(), "Error: %v\n", err)
 			// The one CLI failure a caller is expected to branch on rather than
 			// just report, so it gets its own code instead of the blanket 1.
