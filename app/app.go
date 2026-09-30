@@ -568,13 +568,17 @@ func runCtx(ctx context.Context, o Options) int {
 }
 
 // newLogger builds the xlog logger at level, writing to w. LOG_FORMAT=json
-// selects JSON output, the same switch xlog.NewLogger honors.
-func newLogger(w io.Writer, level string) *slog.Logger {
-	opts := &slog.HandlerOptions{Level: xlog.LogLevel(level).ToSlogLevel()}
+// selects JSON output, the same switch xlog.NewLogger honors. It returns an
+// *xlog.Logger because that is what xlog.SetLogger takes; a bare *slog.Logger
+// only compiled against xlog v0.0.1 and broke every embedder on a newer xlog.
+func newLogger(w io.Writer, level string) *xlog.Logger {
+	lvl := xlog.LogLevel(level)
+	opts := &slog.HandlerOptions{Level: lvl.ToSlogLevel()}
+	var h slog.Handler = slog.NewTextHandler(w, opts)
 	if os.Getenv("LOG_FORMAT") == "json" {
-		return slog.New(slog.NewJSONHandler(w, opts))
+		h = slog.NewJSONHandler(w, opts)
 	}
-	return slog.New(slog.NewTextHandler(w, opts))
+	return xlog.NewLoggerWithHandler(h, lvl)
 }
 
 // openLogFile opens (appending) nib.log in the nib base directory. It returns
