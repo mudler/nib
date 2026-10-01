@@ -166,6 +166,22 @@ func (m Model) listenToolEvents() tea.Cmd {
 		}
 	}
 }
+
+// toolCallbacks snapshots the lifecycle generation for one SendMessage.
+func (m Model) toolCallbacks() (func(chat.ToolStart), func(chat.ToolResult)) {
+	gen := m.toolEvents.generation()
+	reasoningGen := m.currentTurnGen()
+	return func(ts chat.ToolStart) {
+			// Order the boundary after the step's reasoning/content, not by
+			// arrival of the independent tool mailbox. Capture the turn here,
+			// so a retained old producer cannot close a newer turn's thought.
+			m.reasoningChan <- reasoningEvent{kind: reasoningEventStepEnd, gen: reasoningGen}
+			m.toolEvents.pushFor(gen, toolEvent{start: &ts})
+		}, func(res chat.ToolResult) {
+			m.toolEvents.pushFor(gen, toolEvent{result: &res})
+		}
+}
+
 func (m *Model) applyToolEvents(events []toolEvent) {
 	for _, e := range events {
 		if m.toolEvents != nil && e.gen != m.toolEvents.generation() {
@@ -176,7 +192,6 @@ func (m *Model) applyToolEvents(events []toolEvent) {
 			*m = next.(Model)
 		}
 		if e.start != nil {
-			m.endThoughtStep()
 			m.startTool(*e.start)
 		}
 		if e.result != nil {

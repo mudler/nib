@@ -1115,14 +1115,7 @@ func (m Model) initSession() tea.Cmd {
 				default:
 				}
 			},
-			ToolCallbacks: func() (func(chat.ToolStart), func(chat.ToolResult)) {
-				gen := m.toolEvents.generation()
-				return func(ts chat.ToolStart) {
-						m.toolEvents.pushFor(gen, toolEvent{start: &ts})
-					}, func(res chat.ToolResult) {
-						m.toolEvents.pushFor(gen, toolEvent{result: &res})
-					}
-			},
+			ToolCallbacks: m.toolCallbacks,
 		}
 
 		session, err := chat.NewSession(m.ctx, m.cfg, callbacks, m.transports...)
