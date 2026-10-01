@@ -746,3 +746,118 @@ func TestBoundaryAfterTurnEndDoesNotReappearNextTurn(t *testing.T) {
 		})
 	}
 }
+
+// Tool wakeups and reasoning listener commands can reach Update in either
+// order. Only the reasoning stream may close a thought step.
+func TestToolMailboxReasoningOrder(t *testing.T) {
+	for _, mailboxFirst := range []bool{true, false} {
+		name := "delayed tool mailbox"
+		if mailboxFirst {
+			name = "delayed authoritative boundary"
+		}
+		t.Run(name, func(t *testing.T) {
+			m := runningTestModel()
+			m.reasoningChan = make(chan reasoningEvent, 16)
+			m.toolEvents = newToolEventQueue()
+			m.toolEvents.begin()
+			start, _ := m.toolCallbacks()
+			m = update(m, delta("partial thought"))
+			m = update(m, content("checking now"))
+			// The content folded this thought, but the authoritative text
+			// remains queued when the tool starts.
+			m.reasoningChan <- reasoningEvent{kind: reasoningEventBoundary, text: "complete thought"}
+			start(chat.ToolStart{ID: "read-1", Name: "read"})
+			if mailboxFirst {
+				m = update(m, toolEventsReadyMsg{})
+			}
+			m = update(m, m.listenReasoningEvents()())
+			got := thoughts(m)
+			if len(got) != 1 || got[0] != "complete thought" {
+				t.Fatalf("thoughts = %q, want one authoritative thought", got)
+			}
+			if !m.reasoningResetPending {
+				t.Fatal("step end did not arm reasoning reset")
+			}
+			m = update(m, delta("next thought"))
+			if !mailboxFirst {
+				m = update(m, toolEventsReadyMsg{})
+			}
+			if m.reasoning != "next thought" || len(thoughts(m)) != 1 {
+				t.Fatalf("tool mailbox folded next step: live=%q thoughts=%q", m.reasoning, thoughts(m))
+			}
+			if len(m.running) != 1 {
+				t.Fatalf("running tools = %d, want 1", len(m.running))
+			}
+		})
+	}
+}
+
+func TestToolStartEmitsGenerationSafeReasoningMarker(t *testing.T) {
+	m := runningTestModel()
+	m.turnGen = new(atomic.Int32)
+	m.reasoningChan = make(chan reasoningEvent, 16)
+	m.toolEvents = newToolEventQueue()
+	m.toolEvents.begin()
+	start, _ := m.toolCallbacks()
+	start(chat.ToolStart{ID: "old", Name: "read"})
+	if len(m.reasoningChan) != 1 {
+		t.Fatal("tool start must enqueue a step-end marker on the reasoning stream")
+	}
+	marker := <-m.reasoningChan
+	if marker.kind != reasoningEventStepEnd || marker.gen != m.currentTurnGen() {
+		t.Fatalf("unexpected step-end marker: %+v", marker)
+	}
+	m = update(m, delta("tool-only thought"))
+	m = update(m, reasoningEventsMsg{marker})
+	if m.reasoning != "" || !m.reasoningResetPending || len(thoughts(m)) != 1 {
+		t.Fatal("tool-only step did not fold and arm reset")
+	}
+	// Parking advances the reasoning generation, but resumes the same
+	// SendMessage and therefore reuses its captured tool callback.
+	m = update(m, parkMsg{parked: true})
+	m = update(m, parkMsg{parked: false})
+	resumedGen := m.currentTurnGen()
+	m = update(m, reasoningEventsMsg{{kind: reasoningEventDelta, text: "resumed thought", gen: resumedGen}})
+	start(chat.ToolStart{ID: "resumed", Name: "read"})
+	resumedMarker := <-m.reasoningChan
+	if resumedMarker.gen != resumedGen || resumedMarker.toolGen != marker.toolGen {
+		t.Fatalf("resumed marker must keep its run and use the current epoch: %+v", resumedMarker)
+	}
+	m.reasoningChan <- resumedMarker
+	m = update(m, toolEventsReadyMsg{})
+	if m.reasoning != "resumed thought" {
+		t.Fatal("tool mailbox must not fold the resumed thought")
+	}
+	m = update(m, m.listenReasoningEvents()())
+	if m.reasoning != "" || !m.reasoningResetPending {
+		t.Fatalf("resumed tool start did not close thought: live=%q reset=%v", m.reasoning, m.reasoningResetPending)
+	}
+	got := thoughts(m)
+	if len(got) != 2 || got[1] != "resumed thought" {
+		t.Fatalf("thoughts = %q, want ordered resumed thought", got)
+	}
+	m.toolEvents.end()
+	start(chat.ToolStart{ID: "ended", Name: "read"})
+	if len(m.reasoningChan) != 0 {
+		t.Fatal("ended run callback enqueued a reasoning marker")
+	}
+	m.sendMessage("new run") // dispatch only; no session needed
+	m = update(m, reasoningEventsMsg{{kind: reasoningEventDelta, text: "new turn", gen: m.currentTurnGen()}})
+	// An already queued marker and a callback retained by an old producer
+	// must not close the new turn's live trace.
+	m = update(m, reasoningEventsMsg{marker})
+	// A run can end between the callback's lifecycle check and epoch read.
+	// Even a marker stamped with the new epoch must retain its old run ID.
+	marker.gen = m.currentTurnGen()
+	m = update(m, reasoningEventsMsg{marker})
+	start(chat.ToolStart{ID: "late-old", Name: "read"})
+	if len(m.reasoningChan) != 0 {
+		t.Fatal("old run callback enqueued a reasoning marker")
+	}
+	for len(m.reasoningChan) > 0 {
+		m = update(m, reasoningEventsMsg{<-m.reasoningChan})
+	}
+	if m.reasoning != "new turn" || m.reasoningResetPending {
+		t.Fatalf("stale tool start closed new thought: live=%q reset=%v", m.reasoning, m.reasoningResetPending)
+	}
+}

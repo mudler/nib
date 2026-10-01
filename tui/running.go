@@ -3,7 +3,10 @@ package tui
 import (
 	"encoding/json"
 	"strings"
+	"sync"
 	"time"
+
+	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/mudler/nib/chat"
 	wizmcp "github.com/mudler/nib/mcp"
@@ -20,8 +23,8 @@ import (
 
 // runningTool is a started root-agent tool call with no result yet.
 type runningTool struct {
-	name, args string
-	started    time.Time
+	id, name, args string
+	started        time.Time
 	// flipped inverts the ctrl+r fold state for this block alone (a click).
 	flipped bool
 }
@@ -35,41 +38,175 @@ const runningToolOutputLines = 1000
 
 // startTool records a call that just started.
 func (m *Model) startTool(ts chat.ToolStart) {
-	m.running = append(m.running, runningTool{name: ts.Name, args: ts.Arguments, started: time.Now()})
-}
-
-// finishTool drops the running entry a result belongs to and returns the
-// elapsed time the call ran for (zero when no matching entry was found).
-// There is no call id to match on, so it takes the oldest entry with the
-// same name and arguments, or failing that the oldest with the same name.
-func (m *Model) finishTool(res chat.ToolResult) time.Duration {
-	at := -1
-	for i, r := range m.running {
-		if r.name == res.Name && r.args == res.Arguments {
-			at = i
-			break
-		}
+	if !m.loading || m.interruptArmed {
+		return
 	}
-	if at < 0 {
-		for i, r := range m.running {
-			if r.name == res.Name {
-				at = i
-				break
+	key := toolKey(ts.ID, ts.Name, ts.Arguments)
+	if m.finishedTools[key] > 0 {
+		if ts.ID == "" {
+			m.finishedTools[key]--
+		}
+		return
+	}
+	if ts.ID != "" {
+		for _, r := range m.running {
+			if r.id == ts.ID {
+				return
 			}
 		}
 	}
-	if at < 0 {
-		return 0
-	}
-	took := time.Since(m.running[at].started)
-	m.running = append(m.running[:at:at], m.running[at+1:]...)
-	return took
+	m.running = append(m.running, runningTool{id: ts.ID, name: ts.Name, args: ts.Arguments, started: time.Now()})
 }
 
-// clearRunning forgets every running call: the turn ended, so none of them
-// will report back.
+type toolIdentity struct{ id, name, args string }
+
+func toolKey(id, name, args string) toolIdentity {
+	if id != "" {
+		return toolIdentity{id: id}
+	}
+	return toolIdentity{name: name, args: args}
+}
+
+// ID-less producers get exact name/argument FIFO matching, never name-only.
+// An unmatched result consumes one later start, rather than banning all calls
+// with those arguments. Identified completions remain tombstoned for the turn.
+func (m *Model) finishTool(res chat.ToolResult) time.Duration {
+	key := toolKey(res.ID, res.Name, res.Arguments)
+	if m.finishedTools == nil {
+		m.finishedTools = make(map[toolIdentity]int)
+	}
+	for i, r := range m.running {
+		if toolKey(r.id, r.name, r.args) == key {
+			took := time.Since(r.started)
+			m.running = append(m.running[:i:i], m.running[i+1:]...)
+			if res.ID != "" {
+				m.finishedTools[key] = 1
+			}
+			return took
+		}
+	}
+	m.finishedTools[key]++
+	return 0
+}
+
 func (m *Model) clearRunning() {
 	m.running = nil
+	m.finishedTools = nil
+}
+
+// One unbounded mailbox orders starts and results without blocking producers
+// or dropping bursts. Only Update drains it; a wakeup never owns events, so
+// response completion can flush results even if its wakeup is still in flight.
+type toolEvent struct {
+	gen    uint64
+	start  *chat.ToolStart
+	result *chat.ToolResult
+	park   *parkEvent
+}
+type toolEventsMsg []toolEvent
+type toolEventsReadyMsg struct{}
+type toolEventQueue struct {
+	mu     sync.Mutex
+	events []toolEvent
+	ready  chan struct{}
+	gen    uint64
+	active bool
+}
+
+func newToolEventQueue() *toolEventQueue { return &toolEventQueue{ready: make(chan struct{}, 1)} }
+func (q *toolEventQueue) begin() {
+	if q == nil {
+		return
+	}
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.gen++
+	q.active = true
+}
+func (q *toolEventQueue) end() {
+	if q == nil {
+		return
+	}
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.active = false
+}
+func (q *toolEventQueue) generation() uint64 { q.mu.Lock(); defer q.mu.Unlock(); return q.gen }
+func (q *toolEventQueue) activeGeneration(gen uint64) bool {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return q.active && q.gen == gen
+}
+func (q *toolEventQueue) push(e toolEvent) { q.pushFor(q.generation(), e) }
+func (q *toolEventQueue) pushFor(gen uint64, e toolEvent) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if gen != q.gen || (!q.active && (e.start != nil || e.park != nil)) {
+		return
+	}
+	e.gen = gen
+	q.events = append(q.events, e)
+	select {
+	case q.ready <- struct{}{}:
+	default:
+	}
+}
+func (q *toolEventQueue) drain() []toolEvent {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	events := q.events
+	q.events = nil
+	return events
+}
+func (m Model) listenToolEvents() tea.Cmd {
+	if m.toolEvents == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		select {
+		case <-m.toolEvents.ready:
+			return toolEventsReadyMsg{}
+		case <-m.ctx.Done():
+			return nil
+		}
+	}
+}
+
+// toolCallbacks snapshots the lifecycle generation for one SendMessage.
+func (m Model) toolCallbacks() (func(chat.ToolStart), func(chat.ToolResult)) {
+	gen := m.toolEvents.generation()
+	return func(ts chat.ToolStart) {
+			if !m.toolEvents.activeGeneration(gen) {
+				return
+			}
+			// Park/resume keeps this run but advances its reasoning epoch.
+			// Order the marker with reasoning, using the current epoch. Update
+			// rechecks both generations in case the run ends during this send.
+			// Never hold the mailbox lock across a blocking channel send.
+			m.reasoningChan <- reasoningEvent{kind: reasoningEventStepEnd, gen: m.currentTurnGen(), toolGen: gen}
+			m.toolEvents.pushFor(gen, toolEvent{start: &ts})
+		}, func(res chat.ToolResult) {
+			m.toolEvents.pushFor(gen, toolEvent{result: &res})
+		}
+}
+
+func (m *Model) applyToolEvents(events []toolEvent) {
+	for _, e := range events {
+		if m.toolEvents != nil && e.gen != m.toolEvents.generation() {
+			continue
+		}
+		if e.park != nil && !m.interruptArmed {
+			next, _ := m.Update(parkMsg(*e.park))
+			*m = next.(Model)
+		}
+		if e.start != nil {
+			m.startTool(*e.start)
+		}
+		if e.result != nil {
+			m.applyToolResult(*e.result)
+		}
+	}
+	m.updateViewport()
 }
 
 // toolsExpanded is the ctrl+r fold state that tool blocks share with the

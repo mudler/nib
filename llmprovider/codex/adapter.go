@@ -93,11 +93,26 @@ func (l *LLM) Ask(ctx context.Context, fragment cogito.Fragment) (cogito.Fragmen
 // CreateChatCompletion translates an OpenAI Chat Completion request to the
 // Codex Responses API, calls it via SSE, and translates the response back.
 func (l *LLM) CreateChatCompletion(ctx context.Context, request openai.ChatCompletionRequest) (cogito.LLMReply, cogito.LLMUsage, error) {
+	resp, err := l.openResponse(ctx, request)
+	if err != nil {
+		return cogito.LLMReply{}, cogito.LLMUsage{}, err
+	}
+	defer resp.Body.Close()
+	responseJSON, err := readCompletedResponse(resp.Body, nil)
+	if err != nil {
+		return cogito.LLMReply{}, cogito.LLMUsage{}, err
+	}
+	return openairesponses.TranslateResponse(responseJSON, request.Model)
+}
+
+// openResponse shares authentication, compression retry and session handling
+// between buffered and streaming consumers. The caller owns the response body.
+func (l *LLM) openResponse(ctx context.Context, request openai.ChatCompletionRequest) (*http.Response, error) {
 	meta := l.session.prepareTurn(request.Messages)
 
 	body, err := l.translateRequest(request, meta)
 	if err != nil {
-		return cogito.LLMReply{}, cogito.LLMUsage{}, err
+		return nil, err
 	}
 
 	url := codexBaseURL + codexEndpoint
@@ -112,7 +127,7 @@ func (l *LLM) CreateChatCompletion(ctx context.Context, request openai.ChatCompl
 
 	resp, err := l.sendRequest(ctx, url, body, compressed, meta, useZstd)
 	if err != nil {
-		return cogito.LLMReply{}, cogito.LLMUsage{}, err
+		return nil, err
 	}
 
 	// Retry without compression if server rejects zstd encoding.
@@ -120,27 +135,19 @@ func (l *LLM) CreateChatCompletion(ctx context.Context, request openai.ChatCompl
 		resp.Body.Close()
 		resp, err = l.sendRequest(ctx, url, body, nil, meta, false)
 		if err != nil {
-			return cogito.LLMReply{}, cogito.LLMUsage{}, err
+			return nil, err
 		}
 	}
-	defer resp.Body.Close()
-
 	l.session.captureTurnState(resp.Header)
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return cogito.LLMReply{}, cogito.LLMUsage{}, fmt.Errorf("codex: read response: %w", err)
-	}
 	if resp.StatusCode != http.StatusOK {
-		return cogito.LLMReply{}, cogito.LLMUsage{}, parseAPIError(resp.StatusCode, respBody)
+		defer resp.Body.Close()
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return nil, fmt.Errorf("codex: read response: %w", err)
+		}
+		return nil, parseAPIError(resp.StatusCode, body)
 	}
-
-	responseJSON, err := extractCompletedResponse(respBody)
-	if err != nil {
-		return cogito.LLMReply{}, cogito.LLMUsage{}, err
-	}
-
-	return openairesponses.TranslateResponse(responseJSON, request.Model)
+	return resp, nil
 }
 
 // setHeaders applies the Codex-specific request headers.
@@ -431,7 +438,11 @@ func translateToolChoice(choice any) any {
 // completed output is empty, the collected items are put in its place, in
 // output_index order.
 func extractCompletedResponse(sseBody []byte) ([]byte, error) {
-	scanner := bufio.NewScanner(bytes.NewReader(sseBody))
+	return readCompletedResponse(bytes.NewReader(sseBody), nil)
+}
+
+func readCompletedResponse(reader io.Reader, observe func([]byte) error) ([]byte, error) {
+	scanner := bufio.NewScanner(reader)
 	scanner.Buffer(make([]byte, 0, 1024*1024), 10*1024*1024)
 
 	var dataLines []string
@@ -454,7 +465,12 @@ func extractCompletedResponse(sseBody []byte) ([]byte, error) {
 			} `json:"error"`
 		}
 		if err := json.Unmarshal([]byte(data), &ev); err != nil {
-			return nil, nil
+			return nil, fmt.Errorf("codex: parse SSE event: %w", err)
+		}
+		if observe != nil {
+			if err := observe([]byte(data)); err != nil {
+				return nil, err
+			}
 		}
 		switch ev.Type {
 		case "response.output_item.done":
@@ -465,10 +481,25 @@ func extractCompletedResponse(sseBody []byte) ([]byte, error) {
 			if len(ev.Response) > 0 {
 				return fillOutput(ev.Response, items)
 			}
-		case "response.failed", "error":
+		case "response.failed", "response.incomplete", "error":
+			if ev.Error == nil && len(ev.Response) > 0 {
+				var nested struct {
+					Error *struct {
+						Code    string `json:"code"`
+						Message string `json:"message"`
+					} `json:"error"`
+				}
+				_ = json.Unmarshal(ev.Response, &nested)
+				ev.Error = nested.Error
+			}
 			if ev.Error != nil && ev.Error.Message != "" {
 				return nil, fmt.Errorf("codex: API error %s: %s", ev.Error.Code, ev.Error.Message)
 			}
+			var message struct {
+				Message string `json:"message"`
+			}
+			_ = json.Unmarshal([]byte(data), &message)
+			return nil, fmt.Errorf("codex: %s: %s", ev.Type, message.Message)
 		}
 		return nil, nil
 	}
@@ -493,6 +524,10 @@ func extractCompletedResponse(sseBody []byte) ([]byte, error) {
 		} else if strings.HasPrefix(line, "data:") {
 			dataLines = append(dataLines, strings.TrimPrefix(line, "data:"))
 		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("codex: read SSE: %w", err)
 	}
 
 	// Process any remaining data after last event

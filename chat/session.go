@@ -777,21 +777,25 @@ func (s *Session) AutoApprove() bool { return s.autoApprove.Load() }
 // result callback would show nothing. It is a no-op for the root agent
 // (agentID == "", whose tools stream with their output via the result
 // callback), for denied calls, and when no callback is registered.
-func (s *Session) emitSubAgentToolLine(approved bool, agentID, name, args string) {
-	if !approved || agentID == "" || s.callbacks.OnToolResult == nil {
+func (c Callbacks) emitSubAgentToolLine(approved bool, agentID, name, args string) {
+	if !approved || agentID == "" || c.OnToolResult == nil {
 		return
 	}
-	s.callbacks.OnToolResult(ToolResult{Name: name, Arguments: args, AgentID: agentID})
+	c.OnToolResult(ToolResult{Name: name, Arguments: args, AgentID: agentID})
 }
 
 // emitToolStart tells the UI that an approved root-agent call is about to
 // run. A sub-agent's call is not announced here (emitSubAgentToolLine covers
 // it), and a denied call never runs.
-func (s *Session) emitToolStart(approved bool, agentID, name, args string) {
-	if !approved || agentID != "" || s.callbacks.OnToolStart == nil {
+func (c Callbacks) emitToolStart(approved bool, agentID, name, args string, ids ...string) {
+	if !approved || agentID != "" || c.OnToolStart == nil {
 		return
 	}
-	s.callbacks.OnToolStart(ToolStart{Name: name, Arguments: args})
+	id := ""
+	if len(ids) > 0 {
+		id = ids[0]
+	}
+	c.OnToolStart(ToolStart{ID: id, Name: name, Arguments: args})
 }
 
 func (s *Session) decideToolCall(req ToolCallRequest) cogito.ToolCallDecision {
@@ -1969,6 +1973,10 @@ func (s *Session) toolOptions(turnCtx context.Context, goal, mainModel string) [
 }
 
 func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error) {
+	toolCallbacks := s.callbacks
+	if toolCallbacks.ToolCallbacks != nil {
+		toolCallbacks.OnToolStart, toolCallbacks.OnToolResult = toolCallbacks.ToolCallbacks()
+	}
 	if s.hooks != nil {
 		s.hooks.Fire(s.ctx, hooks.EventUserPromptSubmit, "", map[string]any{"event": "UserPromptSubmit", "prompt": text})
 	}
@@ -2138,11 +2146,11 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 				AgentID:   state.AgentID,
 				Change:    change,
 			})
-			if decision.Approved && state.AgentID == "" && s.callbacks.OnToolResult != nil {
+			if decision.Approved && state.AgentID == "" && toolCallbacks.OnToolResult != nil {
 				s.changes.put(changeKey(tool.ID, tool.Name, string(args)), change)
 			}
-			s.emitSubAgentToolLine(decision.Approved, state.AgentID, tool.Name, string(args))
-			s.emitToolStart(decision.Approved, state.AgentID, tool.Name, string(args))
+			toolCallbacks.emitSubAgentToolLine(decision.Approved, state.AgentID, tool.Name, string(args))
+			toolCallbacks.emitToolStart(decision.Approved, state.AgentID, tool.Name, string(args), tool.ID)
 			return decision
 		}),
 		cogito.WithToolCallResultCallback(func(status cogito.ToolStatus) {
@@ -2155,7 +2163,7 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 					"result": status.Result,
 				})
 			}
-			if s.callbacks.OnToolResult != nil {
+			if toolCallbacks.OnToolResult != nil {
 				argsJSON := ""
 				if b, err := json.Marshal(status.ToolArguments.Arguments); err == nil {
 					argsJSON = string(b)
@@ -2168,7 +2176,8 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 						change.settle(s.workingDir)
 					}
 				}
-				s.callbacks.OnToolResult(ToolResult{
+				toolCallbacks.OnToolResult(ToolResult{
+					ID:        status.ToolArguments.ID,
 					Name:      status.Name,
 					Result:    status.Result,
 					Arguments: argsJSON,

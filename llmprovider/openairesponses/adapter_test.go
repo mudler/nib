@@ -26,22 +26,54 @@ func TestTranslateRequestIncludesReasoningSummary(t *testing.T) {
 	}
 }
 
-func TestTranslateRequestOmitsDisabledReasoning(t *testing.T) {
-	for _, effort := range []string{"", "none"} {
-		t.Run(effort, func(t *testing.T) {
-			l := New(Config{Model: "gpt-5", ReasoningEffort: effort})
-			body, err := l.translateRequest(openai.ChatCompletionRequest{
-				Messages: []openai.ChatCompletionMessage{{Role: openai.ChatMessageRoleUser, Content: "hi"}},
-			})
-			if err != nil {
-				t.Fatal(err)
+func TestTranslateRequestReasoningOptions(t *testing.T) {
+	tests := []struct {
+		name, model, configModel, configEffort, requestEffort, effort, summary string
+	}{
+		{name: "default", model: "gpt-5", summary: "auto"},
+		{name: "config model", configModel: "gpt-5.2", summary: "auto"},
+		{name: "request model wins", model: "gpt-4o", configModel: "gpt-5"},
+		{name: "request effort", model: "gpt-5", requestEffort: "low", effort: "low", summary: "auto"},
+		{name: "config override", model: "gpt-5", configEffort: "high", requestEffort: "low", effort: "high", summary: "auto"},
+		{name: "request none", model: "gpt-5", requestEffort: "none", effort: "none"},
+		{name: "config none", model: "gpt-5", configEffort: "none", requestEffort: "high", effort: "none"},
+		{name: "override none", model: "gpt-5", configEffort: "high", requestEffort: "none", effort: "high", summary: "auto"},
+		{name: "nonreasoning", model: "gpt-4o"},
+		{name: "nonreasoning explicit", model: "gpt-4o", requestEffort: "high", effort: "high"},
+		{name: "o3 mini explicit", model: "o3-mini", requestEffort: "low", effort: "low"},
+		{name: "chat variant", model: "gpt-5-chat-latest"},
+		{name: "unknown deployment", model: "my-deployment"},
+		{name: "explicit deployment", model: "my-deployment", requestEffort: "high", effort: "high", summary: "auto"},
+		{name: "o3", model: "o3-2025-04-16", summary: "auto"},
+		{name: "o4 mini", model: "o4-mini", summary: "auto"},
+		{name: "o3 mini lacks summaries", model: "o3-mini"},
+		{name: "o1 lacks summaries", model: "o1"},
+		{name: "codex mini", model: "codex-mini-latest", summary: "auto"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := openai.ChatCompletionRequest{Model: tt.model, ReasoningEffort: tt.requestEffort}
+			l := New(Config{Model: tt.configModel, ReasoningEffort: tt.configEffort})
+			check := func(body []byte, err error) {
+				t.Helper()
+				if err != nil {
+					t.Fatal(err)
+				}
+				var got responsesRequest
+				if err := json.Unmarshal(body, &got); err != nil {
+					t.Fatal(err)
+				}
+				if tt.effort == "" && tt.summary == "" {
+					if got.Reasoning != nil {
+						t.Fatalf("reasoning = %+v, want omitted", got.Reasoning)
+					}
+				} else if got.Reasoning == nil || got.Reasoning.Effort != tt.effort || got.Reasoning.Summary != tt.summary {
+					t.Fatalf("reasoning = %+v, want effort %q summary %q", got.Reasoning, tt.effort, tt.summary)
+				}
 			}
-			var got responsesRequest
-			if err := json.Unmarshal(body, &got); err != nil {
-				t.Fatal(err)
-			}
-			if got.Reasoning != nil {
-				t.Fatalf("reasoning = %+v, want omitted", got.Reasoning)
+			check(l.translateRequest(req))
+			if tt.configModel == "" && tt.configEffort == "" {
+				check(TranslateRequest(req))
 			}
 		})
 	}

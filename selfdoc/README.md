@@ -322,9 +322,24 @@ its output as it prints them, and the hint `ctrl+b background`:
   ok   github.com/mudler/nib/mcp    1.4s
 ```
 
-When the call finishes, its block shows the first 12 lines of the output. Press
-`Ctrl+R` to expand or fold all tool output and model thinking together. In
-full-screen mode, click a block to expand or fold only that block.
+When the call finishes, its block shows the first 12 lines of the output.
+Completed calls no longer appear as running, including fast calls and concurrent
+calls to the same tool. Late events from a previous turn do not restart them.
+Press `Ctrl+R` to expand or fold all tool output and model thinking together.
+In full-screen mode, click a block to expand or fold only that block.
+
+The ChatGPT/Codex HTTP provider (`openai-codex`) streams public reasoning summaries
+as the server sends them, before the final answer completes. If the server sends
+summaries only at completion, nib shows them then. These are public summaries,
+not raw or encrypted reasoning. nib requests summaries by default for this
+provider unless `reasoning_effort` is `none`.
+
+The shared Responses adapter preserves the request's reasoning effort unless its
+configuration overrides it. It requests public summaries by default for supported
+reasoning models, even without an explicit effort. It sends explicit `none`
+without requesting summaries. Unknown deployment names need an explicit effort
+to request summaries. Ordinary OpenAI and custom endpoints keep their existing
+routing.
 
 ### `/loop` — recurring & self-paced tasks
 

@@ -7,7 +7,6 @@ import (
 
 	"github.com/charmbracelet/bubbles/viewport"
 
-	"github.com/mudler/nib/chat"
 	"github.com/mudler/nib/theme"
 )
 
@@ -31,9 +30,8 @@ func TestToolResultMessageRenders(t *testing.T) {
 
 	t.Run("sub-agent tool result appends a compact agent_tool line", func(t *testing.T) {
 		m := newTestModel(Model{
-			ctx:            context.Background(),
-			viewport:       viewport.New(80, 10),
-			toolResultChan: make(chan chat.ToolResult, 1),
+			ctx:      context.Background(),
+			viewport: viewport.New(80, 10),
 		})
 		before := len(m.messages)
 		next, _ := m.Update(toolResultMsg{Name: "bash", Arguments: `{"command":"go build ./..."}`, Result: "y", AgentID: "agent1234"})
@@ -65,9 +63,8 @@ func TestToolResultMessageRenders(t *testing.T) {
 
 	t.Run("root result is appended via Update", func(t *testing.T) {
 		m := newTestModel(Model{
-			ctx:            context.Background(),
-			viewport:       viewport.New(80, 10),
-			toolResultChan: make(chan chat.ToolResult, 1),
+			ctx:      context.Background(),
+			viewport: viewport.New(80, 10),
 		})
 		next, _ := m.Update(toolResultMsg{Name: "bash", Result: "hi"})
 		nm := next.(Model)

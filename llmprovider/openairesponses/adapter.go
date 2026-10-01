@@ -227,10 +227,11 @@ func (l *LLM) translateRequest(req openai.ChatCompletionRequest) ([]byte, error)
 	if req.ToolChoice != nil {
 		rr.ToolChoice = translateToolChoice(req.ToolChoice)
 	}
-	if l.config.ReasoningEffort != "" && l.config.ReasoningEffort != "none" {
-		rr.Reasoning = &responsesReasoning{
-			Effort:  l.config.ReasoningEffort,
-			Summary: "auto",
+	effort := firstNonEmpty(l.config.ReasoningEffort, req.ReasoningEffort)
+	if effort != "" || supportsReasoningSummary(rr.Model, false) {
+		rr.Reasoning = &responsesReasoning{Effort: effort}
+		if effort != "none" && supportsReasoningSummary(rr.Model, effort != "") {
+			rr.Reasoning.Summary = "auto"
 		}
 	}
 
@@ -239,6 +240,28 @@ func (l *LLM) translateRequest(req openai.ChatCompletionRequest) ([]byte, error)
 		return nil, fmt.Errorf("openai-responses: marshal request: %w", err)
 	}
 	return data, nil
+}
+
+// supportsReasoningSummary is deliberately narrower than reasoning-effort
+// support: o1 and o3-mini accept effort but do not support public summaries.
+// The catalog exposes effort choices, not summary support. Unknown deployment
+// aliases opt in only through an explicit effort; never guess their capability
+// from a provider-wide default.
+func supportsReasoningSummary(model string, explicitEffort bool) bool {
+	model = strings.ToLower(model)
+	if strings.HasPrefix(model, "gpt-5") {
+		return !strings.Contains(model, "chat")
+	}
+	if model == "o3" || strings.HasPrefix(model, "o3-") {
+		return !strings.HasPrefix(model, "o3-mini")
+	}
+	if model == "o4-mini" || strings.HasPrefix(model, "o4-mini-") || model == "codex-mini-latest" {
+		return true
+	}
+	if strings.HasPrefix(model, "gpt-") || model == "o1" || strings.HasPrefix(model, "o1-") {
+		return false
+	}
+	return explicitEffort
 }
 
 func translateTools(tools []openai.Tool) []responsesTool {

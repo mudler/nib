@@ -579,8 +579,8 @@ type Model struct {
 	statusChan       chan string
 	toolRequestChan  chan chat.ToolCallRequest
 	toolResponseChan chan chat.ToolCallResponse
-	toolResultChan   chan chat.ToolResult
-	toolStartChan    chan chat.ToolStart
+	toolEvents       *toolEventQueue
+	finishedTools    map[toolIdentity]int
 	autoApprovedChan chan autoApprovedMsg
 	// suggest is the reply autosuggestion shown in the composer.
 	suggest suggestState
@@ -724,15 +724,17 @@ const (
 // with different precedence in Update — see reasoningResetPending (for the
 // two reasoning kinds) and streamingActive (for reasoningEventContentDelta).
 //
-// gen is the turn generation (Model.turnGen) that was current at the moment
-// OnStream enqueued this event — see turnGen's doc. Only reasoningEventDelta
-// and reasoningEventContentDelta are checked against it; a mismatch means
-// this event belongs to a turn that has already ended and a later one is now
-// in flight, and Update drops it rather than applying it.
+// gen is the turn generation (Model.turnGen) current when the producer
+// enqueued this event — see turnGen's doc. All kinds are checked against it.
+// A mismatch means this event belongs to a turn that has already ended;
+// Update drops it rather than applying it to a later turn.
 type reasoningEvent struct {
 	kind reasoningEventKind
 	text string
 	gen  int32
+	// toolGen identifies the SendMessage lifecycle for a step-end marker.
+	// Unlike gen, it stays stable across park/resume.
+	toolGen uint64
 }
 
 // reasoningEventsMsg carries one or more reasoningEvent values, in the exact
@@ -856,8 +858,7 @@ func NewModel(ctx context.Context, cfg types.Config, height int, shellJobs *wizm
 		turnGen:            new(atomic.Int32),
 		toolRequestChan:    make(chan chat.ToolCallRequest),
 		toolResponseChan:   make(chan chat.ToolCallResponse),
-		toolResultChan:     make(chan chat.ToolResult, 64),
-		toolStartChan:      make(chan chat.ToolStart, 64),
+		toolEvents:         newToolEventQueue(),
 		autoApprovedChan:   make(chan autoApprovedMsg, 64),
 		askRequestChan:     make(chan chat.AskRequest),
 		askResponseChan:    make(chan string),
@@ -1074,16 +1075,10 @@ func (m Model) initSession() tea.Cmd {
 				}
 			},
 			OnParked: func(reply string) {
-				select {
-				case m.parkChan <- parkEvent{parked: true, reply: reply}:
-				default:
-				}
+				m.toolEvents.push(toolEvent{park: &parkEvent{parked: true, reply: reply}})
 			},
 			OnResumed: func() {
-				select {
-				case m.parkChan <- parkEvent{parked: false}:
-				default:
-				}
+				m.toolEvents.push(toolEvent{park: &parkEvent{parked: false}})
 			},
 			OnAgentEvent: func(ev chat.AgentEvent) {
 				select {
@@ -1122,21 +1117,7 @@ func (m Model) initSession() tea.Cmd {
 				default:
 				}
 			},
-			OnToolStart: func(ts chat.ToolStart) {
-				// Blocking, like the boundary: it has to stay ordered after
-				// this step's deltas and boundary on reasoningChan.
-				m.reasoningChan <- reasoningEvent{kind: reasoningEventStepEnd, gen: m.currentTurnGen()}
-				select {
-				case m.toolStartChan <- ts:
-				default:
-				}
-			},
-			OnToolResult: func(res chat.ToolResult) {
-				select {
-				case m.toolResultChan <- res:
-				default:
-				}
-			},
+			ToolCallbacks: m.toolCallbacks,
 		}
 
 		session, err := chat.NewSession(m.ctx, m.cfg, callbacks, m.transports...)
@@ -1750,7 +1731,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.appendMessage(ChatMessage{Role: "agent", Content: fmt.Sprintf("Reloaded %d durable loop(s).", n)})
 		}
 		// Start listening for callbacks
-		cmds = append(cmds, m.listenStatus(), m.listenReasoningEvents(), m.listenToolRequest(), m.listenToolResult(), m.listenToolStart(), m.listenAutoApproved(), m.listenAskRequest(), m.listenAgentEvents(), m.shellTick(), m.loopTick(), m.listenWakeup(), m.listenCronFire(), m.listenPark(), m.listenCompact(), m.listenPrune(), m.listenAgentTitles())
+		cmds = append(cmds, m.listenStatus(), m.listenReasoningEvents(), m.listenToolRequest(), m.listenToolEvents(), m.listenAutoApproved(), m.listenAskRequest(), m.listenAgentEvents(), m.shellTick(), m.loopTick(), m.listenWakeup(), m.listenCronFire(), m.listenPark(), m.listenCompact(), m.listenPrune(), m.listenAgentTitles())
 
 	case bootTickMsg:
 		if m.boot != nil {
@@ -1802,6 +1783,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case responseMsg:
+		if m.toolEvents != nil {
+			m.toolEvents.end()
+			m.applyToolEvents(m.toolEvents.drain())
+		}
 		// The run returned: it is no longer parked (all background work drained).
 		m.loading = false
 		m.parked = false
@@ -2189,7 +2174,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.endThoughtStep()
 				m.reasoningResetPending = true
 			case reasoningEventStepEnd:
-				if ev.gen != m.currentTurnGen() {
+				if ev.gen != m.currentTurnGen() || (m.toolEvents != nil && !m.toolEvents.activeGeneration(ev.toolGen)) {
 					continue
 				}
 				m.endThoughtStep()
@@ -2336,38 +2321,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.updateViewportFollow()
 		return m, m.listenAutoApproved()
 
+	case toolEventsReadyMsg:
+		m.applyToolEvents(m.toolEvents.drain())
+		cmds = append(cmds, m.listenToolEvents())
+	case toolEventsMsg:
+		m.applyToolEvents(msg)
 	case toolStartMsg:
 		m.startTool(chat.ToolStart(msg))
 		m.updateViewport()
-		cmds = append(cmds, m.listenToolStart())
-
 	case toolResultMsg:
-		res := chat.ToolResult(msg)
-		if res.AgentID == "" {
-			// Root agent: the running block gives way to the finished one.
-			elapsed := m.finishTool(res)
-			m.appendMessage(toolMessage(res, elapsed))
-			m.updateViewport()
-		} else {
-			// Sub-agent: append a compact, body-less line to its inline thread.
-			// The output body lives in the Ctrl+O log viewer.
-			label := chat.FormatToolCall(res.Name, res.Arguments)
-			if nl := strings.IndexByte(label, '\n'); nl >= 0 {
-				label = label[:nl]
-			}
-			if label == "" {
-				label = res.Name
-			}
-			m.appendMessage(ChatMessage{Role: "agent_tool", Name: res.Name, Arguments: res.Arguments, AgentID: res.AgentID, Content: label})
-			m.updateViewport()
-			if m.showLogs && m.logOpenID != "" {
-				m.syncLogViewport()
-			}
-		}
-		// A step just completed: release the next queued follow-up into the run.
-		m.releaseQueueFront()
-		// Continue listening for more tool results
-		cmds = append(cmds, m.listenToolResult())
+		m.applyToolResult(chat.ToolResult(msg))
 
 	case animTickMsg:
 		m.advanceAnimation()
@@ -2790,6 +2753,7 @@ func (m *Model) startGoalTurn(kickoff string) tea.Cmd {
 // turn's OnStream stamps is distinguishable from a straggler out of this one.
 func (m Model) sendMessage(text string) tea.Cmd {
 	m.bumpTurnGen()
+	m.toolEvents.begin()
 	return func() tea.Msg {
 		response, err := m.session.SendMessage(text)
 		return responseMsg{content: response, err: err}
@@ -2801,6 +2765,7 @@ func (m Model) sendMessage(text string) tea.Cmd {
 // bumpTurnGen: see sendMessage's doc.
 func (m Model) sendWithAttachmentsCmd(text string, files []string, overrides map[string]attachments.Override) tea.Cmd {
 	m.bumpTurnGen()
+	m.toolEvents.begin()
 	return func() tea.Msg {
 		reply, blocked, err := m.session.SendWithAttachments(m.ctx, text, files, overrides)
 		return responseMsg{content: reply, err: err, blocked: blocked, images: attachmentImages(files)}
@@ -3034,28 +2999,30 @@ func (m Model) listenToolRequest() tea.Cmd {
 	}
 }
 
-// listenToolStart listens for tool calls that start running.
-func (m Model) listenToolStart() tea.Cmd {
-	return func() tea.Msg {
-		select {
-		case ts := <-m.toolStartChan:
-			return toolStartMsg(ts)
-		case <-m.ctx.Done():
-			return nil
+func (m *Model) applyToolResult(res chat.ToolResult) {
+	if res.AgentID == "" {
+		// Root agent: the running block gives way to the finished one.
+		elapsed := m.finishTool(res)
+		m.appendMessage(toolMessage(res, elapsed))
+		m.updateViewport()
+	} else {
+		// Sub-agent: append a compact, body-less line to its inline thread.
+		// The output body lives in the Ctrl+O log viewer.
+		label := chat.FormatToolCall(res.Name, res.Arguments)
+		if nl := strings.IndexByte(label, '\n'); nl >= 0 {
+			label = label[:nl]
+		}
+		if label == "" {
+			label = res.Name
+		}
+		m.appendMessage(ChatMessage{Role: "agent_tool", Name: res.Name, Arguments: res.Arguments, AgentID: res.AgentID, Content: label})
+		m.updateViewport()
+		if m.showLogs && m.logOpenID != "" {
+			m.syncLogViewport()
 		}
 	}
-}
-
-// listenToolResult listens for finished tool results from the session.
-func (m Model) listenToolResult() tea.Cmd {
-	return func() tea.Msg {
-		select {
-		case res := <-m.toolResultChan:
-			return toolResultMsg(res)
-		case <-m.ctx.Done():
-			return nil
-		}
-	}
+	// A step just completed: release the next queued follow-up into the run.
+	m.releaseQueueFront()
 }
 
 // listenAskRequest listens for ask_user requests from the session.
