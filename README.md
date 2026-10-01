@@ -269,35 +269,37 @@ and marks it with `~`.
 The footer has three lines:
 
 ```
-Working · last model text received 12s ago · background: agents 2, shell 1
-◐ todo 2/8 Wire the LoRA  ▷ shell 1 running  ↳ explore: Map the LoRA loader · bash · 3.1k     ctrl+g activity
+◐ Working · 12m
+◐ todo 2/8 Wire the LoRA  ▷ shell 1 running  ↳ explore: Map the LoRA loader · bash · 3.1k  History 4 ×1     ctrl+g activity
 enter send · ctrl+y use command · G/end newest   ctx ▰▰▰▰▰▰▰▰│▰▱ 88.3k/100k · compacts at 76.7k  tok/s 12 · avg 13  16:29:49  cpu 27%  mem 24/84G
 ```
 
-- **Session summary.** A pinned, noninteractive row shows factual state such as
-  Working, Approval needed, Parked, or Ready, plus the latest root-session
-  observation age. Ages refresh even during silence; silence never implies a
-  stalled run or hidden thinking. Unavailable receipt ages say unknown. Child
-  activity has independent ages in existing logs. On narrow terminals, background
-  counts disappear first, then observation detail, then the state is shortened.
-  Actual received reasoning and its folding controls remain in the transcript.
-- **Activity strip.** One chip per area of work: the todo list, shell jobs,
-  each running sub-agent (its type, a short title the model wrote for its
-  task, what it is doing now, and its output so far), sub-agent history,
-  loops and the goal. A dim chip has nothing running. A red `×N` counts
-  failures you have not looked at yet. Opening their view clears it.
+- **Session summary.** A pinned, noninteractive row shows a marker and the
+  current lifecycle phase. Phases include Working, Running, Approval needed,
+  Waiting for your answer, Parked, Interrupting, and Ready. The optional
+  duration measures the current phase. If nib does not know when that phase
+  started, it omits the duration. On narrow terminals, nib removes the duration
+  first. It then uses shorter phase text and truncates it if necessary.
+- **Activity strip.** Live chips show the todo list, background shell jobs,
+  each running sub-agent, loops, and the goal. A sub-agent chip includes its
+  type, task title, current action, and output size. `History N` combines
+  terminal sub-agent jobs with retained background shell jobs. It includes
+  completed and failed jobs, but excludes foreground shell work and root
+  transcript tool calls. Running jobs stay in their live chips. A red `×N`
+  on History counts failures you have not opened. Technical timing, job status,
+  and logs remain available in activity details.
 - **Keys** for what you can do now, and at the right the telemetry: the
   context gauge (the tick marks the compaction point), the generation speed,
   the clock, CPU and memory. `ui.footer_front` chooses these items.
 
-Press `Ctrl+G` to move the keyboard to the activity strip. It also shows a
-second telemetry line above it (`ui.footer_expanded`: session tokens and
-session age by default).
+Press `Ctrl+G` to move the keyboard to the activity strip. An unseen History
+failure gets focus first. The key also shows a second telemetry line above the
+strip (`ui.footer_expanded`: session tokens and session age by default).
 
 | Key | Action |
 |---|---|
 | `←` `→`, `Tab` | Select the previous or next chip |
-| `Enter` | Open the chip: the todo panel, the sub-agent's or shell job's log (a running sub-agent's log takes a message for it), or the loops or goal panel |
+| `Enter` | Open the selected chip. History opens the combined job list. Live job chips open their logs, and a running sub-agent's log accepts a message. Other chips open their matching panel. |
 | `Esc`, `Ctrl+G` | Go back to the composer |
 
 Any other key goes back to the composer and is typed there.
