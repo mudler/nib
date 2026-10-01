@@ -44,11 +44,12 @@ import (
 
 // ChatMessage represents a message in the chat history
 type ChatMessage struct {
-	Role      string
-	Content   string
-	Name      string // tool name, for Role == "tool"
-	Arguments string // marshaled call args, for Role == "tool"
-	AgentID   string // issuing sub-agent, for Role == "tool" (empty = root agent)
+	displayContent string
+	Role           string
+	Content        string
+	Name           string // tool name, for Role == "tool"
+	Arguments      string // marshaled call args, for Role == "tool"
+	AgentID        string // issuing sub-agent, for Role == "tool" (empty = root agent)
 	// Transient marks a turn-level error line: it stays in the transcript so
 	// the failure is visible, but is dropped as soon as a reply arrives (a
 	// successful turn, or a parked reply) so a recovered run doesn't carry
@@ -99,6 +100,15 @@ func (m *Model) appendMessage(msgs ...ChatMessage) {
 	m.streamingActive = false
 	now := time.Now()
 	for i := range msgs {
+		if msgs[i].Role == "user" {
+			var d inputDraft
+			if snap, ok := m.draftCopies[msgs[i].Content]; ok {
+				_ = d.Restore(snap)
+			} else {
+				_, _ = d.Replace(0, 0, msgs[i].Content, true)
+			}
+			msgs[i].displayContent = d.Projection().Text
+		}
 		if msgs[i].arrived.IsZero() {
 			msgs[i].arrived = now
 		}
@@ -182,9 +192,12 @@ func (m *Model) appendStreamedContent(delta string) {
 // Model represents the TUI state
 type Model struct {
 	// UI components
-	viewport viewport.Model
-	textarea textarea.Model
-	spinner  spinner.Model
+	viewport    viewport.Model
+	textarea    textarea.Model
+	draft       inputDraft
+	draftCopies map[string]draftSnapshot
+	pastePanel  *pastePanel
+	spinner     spinner.Model
 
 	// presenter renders every block. Chosen once at construction from the run
 	// mode; the model never branches on mode itself. Every production path
@@ -797,7 +810,7 @@ func NewModel(ctx context.Context, cfg types.Config, height int, shellJobs *wizm
 	ta.Focus()
 	ta.Prompt = theme.PromptGlyph + " "
 	ta.FocusedStyle.Prompt = theme.Prompt
-	ta.CharLimit = 4096
+	ta.CharLimit = 0 // inputDraft enforces the UTF-8 byte limit before insertion
 	ta.SetWidth(80)
 	// Single-line input: Enter sends (newline insertion is disabled), so a
 	// taller textarea would just repeat the `›` prompt on every empty row.
@@ -1137,6 +1150,10 @@ func (m Model) initSession() tea.Cmd {
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 	var cmd tea.Cmd
+	m.syncComposer()
+	if k, ok := msg.(tea.KeyMsg); ok && m.pastePanel != nil {
+		return m.handlePastePanel(k)
+	}
 
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
@@ -1289,6 +1306,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.updateViewport()
 			return m, nil
 		}
+		if !m.awaitingResume && (!m.awaitingApproval || m.approvalEditing) {
+			if msg.Paste {
+				m.pasteComposer(string(msg.Runes))
+				return m, nil
+			}
+			if msg.String() == "alt+p" {
+				m.openPastePanel()
+				return m, nil
+			}
+		}
 		// Tool approval is a distinct key-driven mode: in choice mode the chat
 		// input is hidden and a numbered menu takes single keypresses (1/2/3,
 		// with y/a/A as silent legacy aliases, n/Esc deny, e edits); edit mode
@@ -1319,7 +1346,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						return m.resolveApproval(chat.ToolCallResponse{Approved: false})
 					case 'e', 'E':
 						m.approvalEditing = true
-						m.textarea.Reset()
+						m.clearComposer()
 						m.updateViewport()
 						return m, nil
 					}
@@ -1329,7 +1356,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			} else if msg.Type == tea.KeyEsc {
 				// Edit mode: Esc cancels back to choice mode without denying.
 				m.approvalEditing = false
-				m.textarea.Reset()
+				m.clearComposer()
 				m.updateViewport()
 				return m, nil
 			}
@@ -1426,7 +1453,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if strings.TrimSpace(m.textarea.Value()) == "" && len(m.queue) > 0 {
 				entry := m.queueDeleteSel()
 				if entry != "" {
-					m.textarea.SetValue(entry)
+					m.setComposer(entry)
 					m.textarea.Focus()
 					m.completion.sync(entry)
 					m.updateViewport()
@@ -1511,7 +1538,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			if m.completion.active {
 				if ins, ok := m.completion.accept(); ok {
-					m.textarea.SetValue(ins)
+					m.applyComposerDisplay(ins)
 					m.completion.sync(ins)
 				}
 				// Accepting narrows the popup to one row, or closes it: either
@@ -1557,7 +1584,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// accepts as before.
 			if m.completion.active && !m.completion.exact(m.textarea.Value()) {
 				if ins, ok := m.completion.accept(); ok {
-					m.textarea.SetValue(ins)
+					m.applyComposerDisplay(ins)
 					m.completion.sync(ins)
 				}
 				m.reflowLayout()
@@ -1582,7 +1609,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					// yet: fall through to the empty-input no-op below, same as
 					// the old behaviour.
 				} else {
-					return m.resolveAsk(parseAskAnswer(m.textarea.Value(), *m.pendingAsk))
+					return m.resolveAsk(parseAskAnswer(m.rememberDraft(), *m.pendingAsk))
 				}
 			}
 
@@ -1590,8 +1617,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 
-			input := strings.TrimSpace(m.textarea.Value())
-			if input == "" {
+			input := m.rememberDraft()
+			if strings.TrimSpace(input) == "" {
 				return m, nil
 			}
 
@@ -1600,9 +1627,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// run is in. Queueing it behind the run left /yolo unable to stop
 			// the prompts of the very run it was typed for, and inside the
 			// approval prompt it went to the model as an adjustment to the call.
-			if runsAtOnce(slash.Resolve(input, m.cfg.Commands, m.cfg.Skills, m.cfg.Agents)) {
+			if runsAtOnce(m.resolveComposer(input)) {
 				m.pushHistory(input)
-				m.textarea.Reset()
+				m.clearComposer()
 				m.completion.sync("")
 				m.dispatchInput(input)
 				// The prompt on screen is one auto-approval would not have raised.
@@ -1627,7 +1654,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// and waiting, so release the front entry immediately to resume it.
 			if m.loading || m.parked {
 				m.queue = append(m.queue, input)
-				m.textarea.Reset()
+				m.clearComposer()
 				m.completion.sync("")
 				m.interruptArmed = false
 				if m.parked {
@@ -1638,7 +1665,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 			// Echo + resolve + dispatch (command/skill/message).
-			m.textarea.Reset()
+			m.clearComposer()
 			m.completion.sync("")
 			cmd := m.dispatchInput(input)
 			m.updateViewportFollow()
@@ -2362,6 +2389,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// Update textarea. The composer is always editable — even while a run is in
 	// flight — so the user can type follow-ups that queue into the live run.
 	m.textarea, cmd = m.textarea.Update(msg)
+	m.applyComposerDisplay(m.textarea.Value())
 	cmds = append(cmds, cmd)
 	m.completion.sync(m.textarea.Value())
 	// The keystroke just changed the composer's height — the `/` completion
@@ -2403,7 +2431,7 @@ func (m *Model) dispatchInput(input string) tea.Cmd {
 // transcript — for re-dispatched undelivered follow-ups, whose transcript
 // line was already written when they were released into the previous run.
 func (m *Model) dispatchResolved(input string) tea.Cmd {
-	action := slash.Resolve(input, m.cfg.Commands, m.cfg.Skills, m.cfg.Agents)
+	action := m.resolveComposer(input)
 	switch action.Kind {
 	case slash.KindError:
 		m.appendMessage(ChatMessage{Role: "error", Content: action.Err})
@@ -2681,14 +2709,14 @@ func (m *Model) historyUp() {
 		return
 	}
 	if m.histPos >= n {
-		m.histDraft = m.textarea.Value()
+		m.histDraft = m.rememberDraft()
 		m.histPos = n - 1
 	} else if m.histPos > 0 {
 		m.histPos--
 	} else {
 		return
 	}
-	m.textarea.SetValue(m.history[m.histPos])
+	m.setComposer(m.history[m.histPos])
 }
 
 // historyDown recalls the next (newer) submitted input, restoring the stashed
@@ -2700,9 +2728,9 @@ func (m *Model) historyDown() {
 	}
 	m.histPos++
 	if m.histPos >= n {
-		m.textarea.SetValue(m.histDraft)
+		m.setComposer(m.histDraft)
 	} else {
-		m.textarea.SetValue(m.history[m.histPos])
+		m.setComposer(m.history[m.histPos])
 	}
 }
 
@@ -3044,8 +3072,7 @@ func (m Model) listenAskRequest() tea.Cmd {
 // input is treated as a plain approval. (Choice-mode keypresses are handled by
 // the interception block in Update and never reach here.)
 func (m Model) handleToolApproval(input string) (tea.Model, tea.Cmd) {
-	input = strings.TrimSpace(input)
-	if input == "" {
+	if strings.TrimSpace(input) == "" {
 		return m.resolveApproval(chat.ToolCallResponse{Approved: true})
 	}
 	return m.resolveApproval(chat.ToolCallResponse{Approved: true, Adjustment: input})
@@ -3057,7 +3084,7 @@ func (m Model) resolveApproval(resp chat.ToolCallResponse) (tea.Model, tea.Cmd) 
 	m.awaitingApproval = false
 	m.approvalEditing = false
 	m.pendingTool = nil
-	m.textarea.Reset()
+	m.clearComposer()
 	// The trace that led to this call is answered now; leaving it up reads as
 	// the model re-thinking a step the user already decided.
 	m.clearReasoning()
@@ -3085,7 +3112,7 @@ func (m Model) answerToolCall(resp chat.ToolCallResponse) tea.Cmd {
 // the KeyEnter case, which used to each duplicate this teardown inline.
 func (m Model) resolveAsk(answer string) (tea.Model, tea.Cmd) {
 	m.appendMessage(ChatMessage{Role: "user", Content: answer})
-	m.textarea.Reset()
+	m.clearComposer()
 	m.awaitingAsk = false
 	m.pendingAsk = nil
 	m.askList = nil
@@ -3278,6 +3305,9 @@ func (m Model) effectiveHeight() int {
 // made possible, so the two can no longer drift the way a guessed constant
 // invited.
 func (m Model) renderComposer(w int) string {
+	if m.pastePanel != nil {
+		return m.pastePanelView()
+	}
 	var composer strings.Builder
 	if comp := renderCompletion(m.completion, strings.TrimSpace(m.textarea.Value()), w); comp != "" {
 		composer.WriteString(comp)
@@ -3307,6 +3337,12 @@ func (m Model) renderComposer(w int) string {
 		// no input: the picker/login dialog handles all keys.
 	default:
 		composer.WriteString(m.composerView())
+		for _, s := range m.draft.projection.Spans {
+			if s.Kind == draftPaste {
+				composer.WriteString("\nalt+p: preview/edit/remove paste at cursor")
+				break
+			}
+		}
 	}
 	return composer.String()
 }
@@ -3872,7 +3908,7 @@ func (m *Model) updateViewport() {
 
 		switch msg.Role {
 		case "user":
-			sb.WriteString(presenter.Message(render.Message{Role: render.RoleUser, Content: msg.Content, Arriving: m.arriving(msg)}, prevRole, contentWidth))
+			sb.WriteString(presenter.Message(render.Message{Role: render.RoleUser, Content: userDisplay(msg), Arriving: m.arriving(msg)}, prevRole, contentWidth))
 			prevRole = render.RoleUser
 		case "assistant":
 			// Markdown is width-cached model state (glamour), not something a

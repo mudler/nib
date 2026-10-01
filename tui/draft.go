@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -68,6 +69,27 @@ func makeDraftSegment(id uint64, kind draftKind, text string) draftSegment {
 	s := draftSegment{draftSegmentSnapshot: draftSegmentSnapshot{id, kind, text}, runes: utf8.RuneCountInString(text), display: text}
 	if kind == draftPaste {
 		s.display = fmt.Sprintf("[paste #%d: %d lines, %d bytes]", id, strings.Count(text, "\n")+1, len(text))
+	}
+	// Keep inline source rune-for-rune addressable, but never feed control
+	// characters to textarea's lossy sanitizer (tabs expand, CR becomes LF).
+	// Visible control pictures are projection only; the original bytes remain
+	// in Text, and editing one picture edits precisely that source rune.
+	if kind == draftText {
+		s.display = strings.Map(func(r rune) rune {
+			if r == '\n' {
+				return r
+			}
+			if r < 32 {
+				return '\u2400' + r
+			}
+			if r == 127 {
+				return '\u2421'
+			}
+			if unicode.IsControl(r) {
+				return '\ufffd'
+			}
+			return r
+		}, text)
 	}
 	s.displayRunes = utf8.RuneCountInString(s.display)
 	return s

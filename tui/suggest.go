@@ -140,7 +140,7 @@ func (m *Model) acceptSuggestion() bool {
 	if g == "" {
 		return false
 	}
-	m.textarea.SetValue(m.textarea.Value() + g)
+	m.applyComposerDisplay(m.textarea.Value() + g)
 	m.textarea.CursorEnd()
 	return true
 }

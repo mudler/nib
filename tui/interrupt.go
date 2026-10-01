@@ -46,9 +46,9 @@ func (m Model) foregroundBusy() bool {
 // One step per press is the point. Ctrl+C used to quit whenever nothing was
 // running, so a press meant to clear a draft or close a dialog closed nib.
 func (m Model) handleCtrlC() (tea.Model, tea.Cmd) {
-	if draft := m.textarea.Value(); strings.TrimSpace(draft) != "" {
+	if draft := m.rememberDraft(); strings.TrimSpace(draft) != "" {
 		m.pushHistory(draft)
-		m.textarea.Reset()
+		m.clearComposer()
 		m.completion.sync("")
 		m.hint = theme.HintDraftCleared
 		m.reflowLayout()

@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/mudler/nib/slash"
@@ -75,7 +76,7 @@ func (m *Model) releaseQueueFront() bool {
 	// Only plain messages inject into a live run. Slash commands / skills can't
 	// run mid-turn, so leave them queued; flushQueueAsTurn resolves them when the
 	// run ends.
-	action := slash.Resolve(front, m.cfg.Commands, m.cfg.Skills, m.cfg.Agents)
+	action := m.resolveComposer(front)
 	if action.Kind != slash.KindSend {
 		return false
 	}
@@ -137,7 +138,7 @@ func (m *Model) flushQueueAsTurn() tea.Cmd {
 	// Undelivered follow-ups: already echoed, so collect without re-echoing.
 	for len(m.redispatch) > 0 {
 		input := m.redispatch[0]
-		action := slash.Resolve(input, m.cfg.Commands, m.cfg.Skills, m.cfg.Agents)
+		action := m.resolveComposer(input)
 		if action.Kind == slash.KindSend && len(action.Files) == 0 && len(m.pending) == 0 {
 			m.redispatch = m.redispatch[1:]
 			texts = append(texts, action.Text)
@@ -156,7 +157,7 @@ func (m *Model) flushQueueAsTurn() tea.Cmd {
 	// Queued entries: echo each, then collect plain sends to combine.
 	for len(m.queue) > 0 {
 		input := m.queue[0]
-		action := slash.Resolve(input, m.cfg.Commands, m.cfg.Skills, m.cfg.Agents)
+		action := m.resolveComposer(input)
 		if action.Kind == slash.KindSend && len(action.Files) == 0 && len(m.pending) == 0 {
 			if m.boot != nil && !m.boot.collapsed {
 				m.boot.collapsed = true
@@ -206,7 +207,13 @@ func renderQueue(queue []string, sel, width int) string {
 		if i == sel {
 			marker = "> "
 		}
-		flat := strings.ReplaceAll(strings.TrimSpace(entry), "\n", " ")
+		// Inspect only a bounded prefix, not the entire hidden queued payload.
+		// clipLine is rune-aware; allow four UTF-8 bytes per visible column.
+		prefix := entry[:min(len(entry), max(1, width)*4)]
+		for !utf8.ValidString(prefix) && len(prefix) > 0 {
+			prefix = prefix[:len(prefix)-1]
+		}
+		flat := strings.ReplaceAll(strings.TrimSpace(prefix), "\n", " ")
 		line := fmt.Sprintf("%s%d. %s", marker, i+1, clipLine(flat, width-6))
 		b.WriteString(theme.Help.Render(line))
 		if i < len(queue)-1 {
