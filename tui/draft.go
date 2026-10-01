@@ -119,6 +119,34 @@ func (d *inputDraft) rebuild() {
 	d.projection = p
 }
 
+// Leave headroom below bubbles textarea's 10,000 logical-line limit. Individual
+// small pastes can otherwise overflow it even though each is safe in isolation.
+const draftProjectionMaxLines = 9000
+
+// foldInlineRuns bounds the aggregate display without discarding source. Each
+// contiguous text run becomes one editable paste, retaining its first ID; IDs
+// of absorbed segments are retired (nextID never moves backwards). Existing
+// paste identities remain intact. Snapshots therefore retain the folded shape.
+func (d *inputDraft) foldInlineRuns() {
+	segments := make([]draftSegment, 0, len(d.segments))
+	for i := 0; i < len(d.segments); {
+		s := d.segments[i]
+		if s.Kind == draftPaste {
+			segments = append(segments, s)
+			i++
+			continue
+		}
+		var text strings.Builder
+		for i < len(d.segments) && d.segments[i].Kind == draftText {
+			text.WriteString(d.segments[i].Text)
+			i++
+		}
+		segments = append(segments, makeDraftSegment(s.ID, draftPaste, text.String()))
+	}
+	d.segments = segments
+	d.rebuild()
+}
+
 // Projection is cached on mutation and never scans hidden payload. The returned
 // spans are a defensive copy; the text is immutable and bounded per paste block.
 func (d *inputDraft) Projection() draftProjection {

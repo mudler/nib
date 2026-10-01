@@ -4,6 +4,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/atotto/clipboard"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/mudler/nib/slash"
 )
@@ -18,7 +19,11 @@ func (m *Model) rememberDraft() string {
 	m.draftCopies[text] = m.draft.Snapshot()
 	return text
 }
-func (m *Model) clearComposer() { m.draft = inputDraft{}; m.textarea.Reset() }
+func (m *Model) clearComposer() {
+	m.draft = inputDraft{}
+	m.composerProjectionInvalid = false
+	m.textarea.Reset()
+}
 func (m *Model) setComposer(text string) {
 	var d inputDraft
 	var err error
@@ -40,9 +45,30 @@ func (m *Model) composerOffset() int {
 	return n
 }
 func (m *Model) projectDraft(cursor int) {
-	text := m.draft.Projection().Text
+	p := m.draft.Projection()
+	expandedCursor := p.ExpandedOffset(cursor, true)
+	if strings.Count(p.Text, "\n")+1 >= draftProjectionMaxLines {
+		m.draft.foldInlineRuns()
+		p = m.draft.Projection()
+		cursor = p.DisplayOffset(expandedCursor, true)
+	}
+	text := p.Text
 	m.textarea.CharLimit = 0
 	m.textarea.SetValue(text)
+	// Never interpret widget sanitization/truncation as an intentional edit.
+	// Folding is also a lossless fallback if a future widget changes its limits.
+	if m.textarea.Value() != text {
+		m.draft.foldInlineRuns()
+		p = m.draft.Projection()
+		text = p.Text
+		cursor = p.DisplayOffset(expandedCursor, true)
+		m.textarea.SetValue(text)
+	}
+	m.composerProjectionInvalid = m.textarea.Value() != text
+	if m.composerProjectionInvalid {
+		m.hint = "cannot display draft; original payload retained"
+		return
+	}
 	// SetValue finishes on the last logical line. Move to the requested row,
 	// then set a rune column (never a terminal-cell offset).
 	prefix := string([]rune(text)[:min(max(cursor, 0), utf8.RuneCountInString(text))])
@@ -70,8 +96,13 @@ func (m *Model) syncComposer() {
 }
 
 // applyComposerDisplay reconciles ordinary textarea edits as one rune range.
-// Touching any part of an opaque span removes the whole span atomically.
+// Deletion touching an opaque span is atomic; replacement text must never
+// derive from a transformed display label.
 func (m *Model) applyComposerDisplay(text string) {
+	if m.composerProjectionInvalid {
+		m.projectDraft(0)
+		return
+	}
 	old := m.draft.Projection().Text
 	if old == text {
 		return
@@ -85,6 +116,15 @@ func (m *Model) applyComposerDisplay(text string) {
 	for ae > start && be > start && a[ae-1] == b[be-1] {
 		ae--
 		be--
+	}
+	if be > start {
+		for _, span := range m.draft.projection.Spans {
+			if span.Kind == draftPaste && start < span.End && ae > span.Start {
+				m.hint = errDraftOpaque.Error()
+				m.projectDraft(start)
+				return
+			}
+		}
 	}
 	cursor, err := m.draft.Replace(start, ae, string(b[start:be]), false)
 	if err != nil {
@@ -236,4 +276,18 @@ func userDisplay(msg ChatMessage) string {
 		return msg.displayContent
 	}
 	return msg.Content
+}
+
+// Own the clipboard result: bubbles' private paste message has already crossed
+// a lossy textarea boundary by the time ordinary display reconciliation runs.
+var readComposerClipboard = clipboard.ReadAll
+
+type composerClipboardMsg struct {
+	text string
+	err  error
+}
+
+func pasteComposerClipboard() tea.Msg {
+	text, err := readComposerClipboard()
+	return composerClipboardMsg{text, err}
 }

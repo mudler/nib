@@ -192,12 +192,13 @@ func (m *Model) appendStreamedContent(delta string) {
 // Model represents the TUI state
 type Model struct {
 	// UI components
-	viewport    viewport.Model
-	textarea    textarea.Model
-	draft       inputDraft
-	draftCopies map[string]draftSnapshot
-	pastePanel  *pastePanel
-	spinner     spinner.Model
+	viewport                  viewport.Model
+	textarea                  textarea.Model
+	draft                     inputDraft
+	composerProjectionInvalid bool // widget roundtrip failed; never reconcile clipped display
+	draftCopies               map[string]draftSnapshot
+	pastePanel                *pastePanel
+	spinner                   spinner.Model
 
 	// presenter renders every block. Chosen once at construction from the run
 	// mode; the model never branches on mode itself. Every production path
@@ -1151,7 +1152,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 	var cmd tea.Cmd
 	m.syncComposer()
+	if result, ok := msg.(composerClipboardMsg); ok {
+		if result.err != nil {
+			m.hint = result.err.Error()
+			return m, nil
+		}
+		// Reuse the bracketed-paste route, including its modal and dialog policy.
+		return m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(result.text), Paste: true})
+	}
 	if k, ok := msg.(tea.KeyMsg); ok && m.pastePanel != nil {
+		if !k.Paste && key.Matches(k, m.textarea.KeyMap.Paste) {
+			return m, pasteComposerClipboard
+		}
 		return m.handlePastePanel(k)
 	}
 
@@ -1307,6 +1319,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if !m.awaitingResume && (!m.awaitingApproval || m.approvalEditing) {
+			if !msg.Paste && key.Matches(msg, m.textarea.KeyMap.Paste) {
+				return m, pasteComposerClipboard
+			}
 			if msg.Paste {
 				m.pasteComposer(string(msg.Runes))
 				return m, nil

@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"errors"
 	tea "github.com/charmbracelet/bubbletea"
 	"strings"
 	"testing"
@@ -197,5 +198,118 @@ func TestComposerCompactTranscriptAndFailedCommand(t *testing.T) {
 	m.historyUp()
 	if m.draft.Expanded() != payload {
 		t.Fatal("failed command recovery lost source")
+	}
+}
+
+func TestComposerOpaqueCaseKeys(t *testing.T) {
+	for _, k := range []rune{'u', 'l', 'c'} {
+		t.Run(string(k), func(t *testing.T) {
+			m := newQueueTestModel()
+			m.loading = true
+			payload := strings.Repeat("original\n", 8)
+			m = composerPaste(m, payload)
+			m = update(m, tea.KeyMsg{Type: tea.KeyHome})
+			m = update(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{k}, Alt: true})
+			if m.draft.Expanded() != payload {
+				t.Fatal("case transformation replaced opaque payload")
+			}
+			m = update(m, tea.KeyMsg{Type: tea.KeyEnter})
+			if len(m.queue) != 1 || m.queue[0] != payload {
+				t.Fatal("submitted label instead of payload")
+			}
+		})
+	}
+}
+
+func TestComposerClipboardBinding(t *testing.T) {
+	original := readComposerClipboard
+	t.Cleanup(func() { readComposerClipboard = original })
+	for _, payload := range []string{"a\tb\r\n", strings.Repeat("a\n", 10001)} {
+		readComposerClipboard = func() (string, error) { return payload, nil }
+		m := newQueueTestModel()
+		m.loading = true
+		next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlV})
+		m = next.(Model)
+		if cmd == nil {
+			t.Fatal("no clipboard command")
+		}
+		msg := cmd()
+		if _, ok := msg.(composerClipboardMsg); !ok {
+			t.Fatalf("clipboard bypasses raw route: %T", msg)
+		}
+		m = update(m, msg)
+		if m.draft.Expanded() != payload {
+			t.Fatal("clipboard payload lost")
+		}
+		m = update(m, tea.KeyMsg{Type: tea.KeyEnter})
+		if len(m.queue) != 1 || m.queue[0] != payload {
+			t.Fatal("clipboard send lost payload")
+		}
+	}
+	m := newQueueTestModel()
+	m = composerPaste(m, strings.Repeat("x", 1001))
+	m = update(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}, Alt: true})
+	m = composerKey(m, "e")
+	payload := "\tRAW\r\n"
+	readComposerClipboard = func() (string, error) { return payload, nil }
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlV})
+	m = next.(Model)
+	if cmd == nil {
+		t.Fatal("modal clipboard command missing")
+	}
+	m = update(m, cmd())
+	if m.pastePanel.text != payload+strings.Repeat("x", 1001) {
+		t.Fatal("modal raw paste lost")
+	}
+	before := m.pastePanel.text
+	readComposerClipboard = func() (string, error) { return "", errors.New("clipboard unavailable") }
+	next, cmd = m.Update(tea.KeyMsg{Type: tea.KeyCtrlV})
+	m = next.(Model)
+	m = update(m, cmd())
+	if m.pastePanel.text != before || !strings.Contains(m.hint, "clipboard unavailable") {
+		t.Fatal("modal clipboard error not retained")
+	}
+	m = update(m, tea.KeyMsg{Type: tea.KeyEsc})
+	before = m.draft.Expanded()
+	next, cmd = m.Update(tea.KeyMsg{Type: tea.KeyCtrlV})
+	m = next.(Model)
+	m = update(m, cmd())
+	if m.draft.Expanded() != before || !strings.Contains(m.hint, "clipboard unavailable") {
+		t.Fatal("clipboard error not retained")
+	}
+}
+
+func TestComposerAggregateSmallPastes(t *testing.T) {
+	m := newQueueTestModel()
+	m.loading = true
+	// Equivalent to 10,000 small paste insertions without quadratic test setup.
+	snapshot := draftSnapshot{NextID: 10001}
+	for i := 1; i <= 10000; i++ {
+		snapshot.Segments = append(snapshot.Segments, draftSegmentSnapshot{uint64(i), draftText, "a\n"})
+	}
+	if err := m.draft.Restore(snapshot); err != nil {
+		t.Fatal(err)
+	}
+	m.projectDraft(len(m.draft.Projection().Text))
+	want := strings.Repeat("a\n", 10000)
+	if m.textarea.Value() != m.draft.Projection().Text {
+		t.Fatal("projection clipped by textarea")
+	}
+	m = update(m, tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = update(m, tea.KeyMsg{Type: tea.KeyLeft})
+	m = update(m, tea.KeyMsg{Type: tea.KeyEnd})
+	m = composerPaste(m, "tail\t\r\n")
+	want += "tail\t\r\n"
+	if m.draft.Expanded() != want {
+		t.Fatal("aggregate update lost payload")
+	}
+	m = update(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if len(m.queue) != 1 || m.queue[0] != want {
+		t.Fatal("aggregate send lost payload")
+	}
+	m = update(m, tea.KeyMsg{Type: tea.KeyCtrlE})
+	m = update(m, tea.WindowSizeMsg{Width: 120, Height: 40})
+	if m.draft.Expanded() != want {
+		t.Fatal("aggregate recovery lost payload")
 	}
 }
