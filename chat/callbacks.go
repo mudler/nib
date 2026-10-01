@@ -160,8 +160,23 @@ type CronRequest struct {
 
 // Callbacks defines the interface for UI interactions.
 type Callbacks struct {
-	OnStatus    func(status string)
-	OnReasoning func(reasoning string)
+	// ObservationCallbacks is optional and captured once per SendMessage.
+	// It must return a nonblocking metadata sink bound to the originating run.
+	// It does not enable streaming or replace existing content/lifecycle paths.
+	// The sink is serialized per run, must not re-enter the emitter, and remains
+	// captured across retries and park/resume. A new SendMessage captures a new
+	// sink; callbacks retained by children keep their original sink and RunID.
+	// Chat leaves Observation.Scope zero: the lifecycle consumer owns generation
+	// and foreground epochs. Ordered "parked"/"resumed" receipts precede the
+	// corresponding public callbacks and let that consumer close/reopen a segment
+	// at receipt (not UI drain) time. Do not freeze one epoch for the whole sink,
+	// or stamp old queued receipts with a new epoch. RunID never changes on resume.
+	// Boundary reasoning/status ownership is unknown. Untyped child streams and
+	// parent tool results cannot prove child model-text receipt; missing callbacks
+	// must remain unknown. Unmapped tool results also have unknown ownership.
+	ObservationCallbacks func() func(Observation)
+	OnStatus             func(status string)
+	OnReasoning          func(reasoning string)
 	// OnStream, when set, receives live token-level deltas during generation
 	// (reasoning/answer/tool-selection) so a UI can render progress as it
 	// happens. Setting it opts the session into cogito's streaming path; the

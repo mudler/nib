@@ -1974,6 +1974,11 @@ func (s *Session) toolOptions(turnCtx context.Context, goal, mainModel string) [
 
 func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error) {
 	toolCallbacks := s.callbacks
+	var observe func(Observation)
+	if s.callbacks.ObservationCallbacks != nil {
+		observe = s.callbacks.ObservationCallbacks()
+	}
+	observations := newObservationEmitter(observe, time.Now)
 	if toolCallbacks.ToolCallbacks != nil {
 		toolCallbacks.OnToolStart, toolCallbacks.OnToolResult = toolCallbacks.ToolCallbacks()
 	}
@@ -2112,11 +2117,13 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 		cogito.WithMaxAttempts(s.cogitoOptions.MaxAttempts),
 		cogito.WithMaxRetries(s.cogitoOptions.MaxRetries),
 		cogito.WithStatusCallback(func(status string) {
+			observations.record("", false, "status received", "", false)
 			if s.callbacks.OnStatus != nil {
 				s.callbacks.OnStatus(status)
 			}
 		}),
 		cogito.WithReasoningCallback(func(reasoning string) {
+			observations.record("", false, "reasoning received", "", reasoning != "")
 			if s.callbacks.OnReasoning != nil {
 				s.callbacks.OnReasoning(reasoning)
 			}
@@ -2125,6 +2132,7 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 		// model only when desktop control is armed for this session.
 		cogito.WithToolImageForwarding(s.computerEnabled),
 		cogito.WithToolCallBack(func(tool *cogito.ToolChoice, state *cogito.SessionState) cogito.ToolCallDecision {
+			observations.record(state.AgentID, true, "tool requested", tool.ID, false)
 			// Capture sub-agent activity so the agent_logs tool can surface what
 			// a backgrounded sub-agent is doing.
 			if state.AgentID != "" {
@@ -2150,11 +2158,17 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 				s.changes.put(changeKey(tool.ID, tool.Name, string(args)), change)
 			}
 			toolCallbacks.emitSubAgentToolLine(decision.Approved, state.AgentID, tool.Name, string(args))
+			if decision.Approved {
+				observations.record(state.AgentID, true, "tool started", tool.ID, false)
+			}
 			toolCallbacks.emitToolStart(decision.Approved, state.AgentID, tool.Name, string(args), tool.ID)
 			return decision
 		}),
 		cogito.WithToolCallResultCallback(func(status cogito.ToolStatus) {
 			s.agentLogs.recordResult(status) // no-op for root-agent tool calls
+			// An absent log mapping cannot prove root ownership for a result.
+			owner := s.agentLogs.agentFor(status.ToolArguments.ID)
+			observations.record(owner, owner != "", "tool completed", status.ToolArguments.ID, false)
 			s.recordExternalResult(status.Name, status.Result)
 			if s.hooks != nil {
 				s.hooks.Fire(s.ctx, hooks.EventPostToolUse, status.Name, map[string]any{
@@ -2196,6 +2210,7 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 			return s.agentManager.HasRunning() || s.shellJobs.HasRunning()
 		}),
 		cogito.WithOnPark(func(reply string) {
+			observations.record("", true, "parked", "", false)
 			// cogito hands us the no-tool reply text recorded in the fragment
 			// right before the loop blocked — the parked reply the UI surfaces.
 			if s.callbacks.OnParked != nil {
@@ -2203,6 +2218,7 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 			}
 		}),
 		cogito.WithOnResume(func() {
+			observations.record("", true, "resumed", "", false)
 			if s.callbacks.OnResumed != nil {
 				s.callbacks.OnResumed()
 			}
@@ -2223,13 +2239,15 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 	// is identical to before. The step-boundary callbacks still fire either way.
 	if s.callbacks.OnStream != nil {
 		cogitoOpts = append(cogitoOpts, cogito.WithStreamCallback(func(ev cogito.StreamEvent) {
-			s.callbacks.OnStream(StreamEvent{
+			evUI := StreamEvent{
 				Kind:     string(ev.Type),
 				Content:  ev.Content,
 				ToolName: ev.ToolName,
 				ToolArgs: ev.ToolArgs,
 				AgentID:  ev.AgentID,
-			})
+			}
+			observations.stream(evUI)
+			s.callbacks.OnStream(evUI)
 		}))
 	}
 

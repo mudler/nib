@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -143,6 +144,9 @@ func TestParkedReplySurfacedToOnParked(t *testing.T) {
 	defer srv.Close()
 
 	parked := make(chan string, 8)
+	var receiptMu sync.Mutex
+	var receipts []Observation
+	captures := 0
 	cfg := types.Config{
 		Model:        "fake-model",
 		APIKey:       "fake-key",
@@ -156,6 +160,11 @@ func TestParkedReplySurfacedToOnParked(t *testing.T) {
 	}
 	session, err := NewSession(context.Background(), cfg, Callbacks{
 		OnParked: func(reply string) { parked <- reply },
+		OnStream: func(StreamEvent) {},
+		ObservationCallbacks: func() func(Observation) {
+			captures++
+			return func(o Observation) { receiptMu.Lock(); defer receiptMu.Unlock(); receipts = append(receipts, o) }
+		},
 	})
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
@@ -199,4 +208,31 @@ func TestParkedReplySurfacedToOnParked(t *testing.T) {
 	case <-time.After(15 * time.Second):
 		t.Fatal("run did not return after sub-agent completion")
 	}
+	receiptMu.Lock()
+	defer receiptMu.Unlock()
+	if captures != 1 {
+		t.Fatalf("captures = %d, want one for continued run", captures)
+	}
+	parkOrder, resumeOrder := uint64(0), uint64(0)
+	resumedText := false
+	for _, o := range receipts {
+		switch o.Kind {
+		case "parked":
+			parkOrder = o.Order
+		case "resumed":
+			resumeOrder = o.Order
+		}
+		if resumeOrder != 0 && o.Order > resumeOrder && o.OwnerKnown && o.Owner == "" && o.HasText {
+			resumedText = true
+		}
+	}
+	for _, o := range receipts {
+		if o.RunID == 0 || o.RunID != receipts[0].RunID {
+			t.Fatalf("run identity changed: %+v", receipts)
+		}
+	}
+	if parkOrder == 0 || resumeOrder <= parkOrder || !resumedText {
+		t.Fatalf("missing ordered park/resume and continued root text: %+v", receipts)
+	}
+
 }

@@ -23,6 +23,7 @@ func TestResumedAgentPreservesToolLifecycleAttribution(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
 	var mu sync.Mutex
+	var observations []Observation
 	var starts []ToolStart
 	var results []ToolResult
 	calls := 0
@@ -68,6 +69,9 @@ func TestResumedAgentPreservesToolLifecycleAttribution(t *testing.T) {
 	mcpServer := httptest.NewServer(sdkmcp.NewStreamableHTTPHandler(func(*http.Request) *sdkmcp.Server { return server }, nil))
 	defer mcpServer.Close()
 	session, err := NewSession(ctx, types.Config{Model: "synthetic", APIKey: "synthetic", BaseURL: srv.URL + "/v1", ApprovalMode: "auto", WorkingDir: t.TempDir(), AgentOptions: types.AgentOptions{Iterations: 5, MaxAttempts: 1, MaxRetries: 1}}, Callbacks{
+		ObservationCallbacks: func() func(Observation) {
+			return func(o Observation) { mu.Lock(); defer mu.Unlock(); observations = append(observations, o) }
+		},
 		OnToolStart:  func(s ToolStart) { mu.Lock(); defer mu.Unlock(); starts = append(starts, s) },
 		OnToolResult: func(r ToolResult) { mu.Lock(); defer mu.Unlock(); results = append(results, r) },
 	})
@@ -119,4 +123,18 @@ func TestResumedAgentPreservesToolLifecycleAttribution(t *testing.T) {
 		t.Error("resumed child tool missing agent-tagged thread event")
 	}
 	t.Logf("requests=%d root starts=%d result events=%d", calls, len(starts), len(results))
+	childRequest, childStart := false, false
+	for _, o := range observations {
+		if o.OwnerKnown && o.Owner == "finished-child" {
+			if o.HasText {
+				t.Errorf("fabricated resumed child text: %+v", o)
+			}
+			childRequest = childRequest || o.Kind == "tool requested"
+			childStart = childStart || o.Kind == "tool started"
+		}
+	}
+	if !childRequest || !childStart {
+		t.Fatalf("missing resumed child receipts: %+v", observations)
+	}
+
 }
