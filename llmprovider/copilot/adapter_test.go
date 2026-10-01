@@ -255,9 +255,15 @@ func TestCreateChatCompletionChatRoute(t *testing.T) {
 
 func TestCreateChatCompletionResponsesRoute(t *testing.T) {
 	var capturedPath string
+	var captured struct {
+		Reasoning struct{ Effort, Summary string }
+	}
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		capturedPath = r.URL.Path
+		if err := json.NewDecoder(r.Body).Decode(&captured); err != nil {
+			t.Error(err)
+		}
 		// Minimal Responses API response.
 		resp := `{
 			"id": "resp_test",
@@ -282,13 +288,16 @@ func TestCreateChatCompletionResponsesRoute(t *testing.T) {
 	llm.resolved = true
 
 	reply, _, err := llm.CreateChatCompletion(context.Background(), openai.ChatCompletionRequest{
-		Model:    "gpt-5",
+		Model: "gpt-5", ReasoningEffort: "low",
 		Messages: []openai.ChatCompletionMessage{{Role: "user", Content: "hi"}},
 	})
 	if err != nil {
 		t.Fatalf("CreateChatCompletion: %v", err)
 	}
 
+	if captured.Reasoning.Effort != "low" || captured.Reasoning.Summary != "auto" {
+		t.Errorf("reasoning = %+v, want low/auto", captured.Reasoning)
+	}
 	if capturedPath != "/responses" {
 		t.Errorf("path = %q, want /responses", capturedPath)
 	}
