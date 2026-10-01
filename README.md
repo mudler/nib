@@ -258,7 +258,7 @@ message shows in its log and in the transcript, and `Esc` clears what you
 typed. A finished agent's log takes no input: ask nib to follow up with it.
 
 While the model works, the working indicator shows its generation speed and the
-tokens generated this turn, e.g. `thinking · 42 tok/s ▃▅▆▇ · 1.2k tokens`. When a
+tokens generated this turn, e.g. `42 tok/s ▃▅▆▇ · 1.2k tokens`. When a
 sub-agent finishes, its line reports the same: `sub-agent explore finished · 3 tools ·
 12.4k tokens (812 out) · 38 tok/s · 1m 03s`. The total comes from the backend's
 usage report. When the backend reports no usage, nib counts the streamed output
@@ -266,13 +266,21 @@ and marks it with `~`.
 
 ### The footer
 
-The footer has two lines:
+The footer has three lines:
 
 ```
+Working · last model text received 12s ago · background: agents 2, shell 1
 ◐ todo 2/8 Wire the LoRA  ▷ shell 1 running  ↳ explore: Map the LoRA loader · bash · 3.1k     ctrl+g activity
 enter send · ctrl+y use command · G/end newest   ctx ▰▰▰▰▰▰▰▰│▰▱ 88.3k/100k · compacts at 76.7k  tok/s 12 · avg 13  16:29:49  cpu 27%  mem 24/84G
 ```
 
+- **Session summary.** A pinned, noninteractive row shows factual state such as
+  Working, Approval needed, Parked, or Ready, plus the latest root-session
+  observation age. Ages refresh even during silence; silence never implies a
+  stalled run or hidden thinking. Unavailable receipt ages say unknown. Child
+  activity has independent ages in existing logs. On narrow terminals, background
+  counts disappear first, then observation detail, then the state is shortened.
+  Actual received reasoning and its folding controls remain in the transcript.
 - **Activity strip.** One chip per area of work: the todo list, shell jobs,
   each running sub-agent (its type, a short title the model wrote for its
   task, what it is doing now, and its output so far), sub-agent history,

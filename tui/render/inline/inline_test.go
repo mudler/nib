@@ -151,8 +151,12 @@ func TestChipsStyledByState(t *testing.T) {
 
 	chip := func(row render.FooterRow) string {
 		out := p.Footer(render.ViewState{Footers: []render.FooterRow{row}}, width)
-		// The strip is the first line; the (empty) help line follows it.
-		line, _, _ := strings.Cut(out, "\n")
+		// The summary precedes the strip; the empty help line follows it.
+		lines := strings.Split(out, "\n")
+		if len(lines) != 3 || lines[0] != "Ready" {
+			t.Fatalf("summary/strip/help rows: %q", out)
+		}
+		line := lines[1]
 		return line
 	}
 
@@ -179,7 +183,11 @@ func TestChipsFitOneLine(t *testing.T) {
 		{Glyph: "o", Text: "todo 2/8 Review the existing repository state and clone it"},
 		{Glyph: ">", Text: "shell 3 done", Alert: "×1"},
 	}}, width)
-	line, _, _ := strings.Cut(out, "\n")
+	lines := strings.Split(out, "\n")
+	if len(lines) != 3 || lines[0] != "Ready" {
+		t.Fatalf("summary/strip/help rows: %q", out)
+	}
+	line := lines[1]
 	if w := lipgloss.Width(line); w > width {
 		t.Fatalf("strip is %d cells wide, want at most %d: %q", w, width, line)
 	}

@@ -95,7 +95,7 @@ func StyledLines(style lipgloss.Style, content string) string {
 	return strings.Join(lines, "\n")
 }
 
-// Reasoning renders the working indicator (spinner + status verb) and, when
+// Reasoning renders explicit status notices, generation telemetry and, when
 // loading, the collapsible reasoning trace beneath it. Renders nothing when
 // !v.Loading. The trace itself is capped through CollapsibleBox: v.Reasoning
 // .Collapsed/MaxLines are populated by the model in viewState() from
@@ -109,11 +109,18 @@ func (Base) Reasoning(v ViewState, w int) string {
 		return ""
 	}
 	var b strings.Builder
-	b.WriteString(Loader(v.Spinner, v.Status))
-	if v.Speed != "" {
-		b.WriteString(" " + theme.SepStyle.Render(theme.Sep) + " " + v.Speed)
+	if v.Status != "" {
+		b.WriteString(Loader(v.Spinner, v.Status))
 	}
-	b.WriteString("\n")
+	if v.Speed != "" {
+		if v.Status != "" {
+			b.WriteString(" " + theme.SepStyle.Render(theme.Sep) + " ")
+		}
+		b.WriteString(v.Speed)
+	}
+	if b.Len() > 0 {
+		b.WriteString("\n")
+	}
 	if v.Tip != "" {
 		b.WriteString(theme.Hint.Render("  Tip: "+v.Tip) + "\n")
 	}
@@ -502,7 +509,7 @@ func chipStyle(row FooterRow) string {
 // Footer renders everything between the composer and the bottom of the
 // screen: the new-output marker (when scrolled up with unread content below
 // the fold), the front telemetry line, the expanded telemetry line while the
-// activity strip has focus, the activity strip, the help line with its right
+// activity strip has focus, the summary, the activity strip, the help line with its right
 // hint, and the error line.
 func (Base) Footer(v ViewState, w int) string {
 	var lines []string
@@ -511,6 +518,9 @@ func (Base) Footer(v ViewState, w int) string {
 	}
 	if v.Expanded != "" {
 		lines = append(lines, rightAlign("", v.Expanded, w))
+	}
+	if w > 0 {
+		lines = append(lines, summaryLine(v.Summary, w))
 	}
 	// The activity strip carries the hint that says how to reach it at its
 	// right end; the help line's right end is the telemetry's.

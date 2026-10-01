@@ -791,7 +791,7 @@ func TestFooterHeightMatchesFooter(t *testing.T) {
 	// below holds at both widths.
 	for _, w := range []int{20, 60} {
 		for _, tc := range footerStates() {
-			want := 1 // the help line, always present
+			want := 2 // summary and help lines, always present
 			if tc.state.NewOutput {
 				want++
 			}
@@ -866,11 +866,11 @@ func TestFooterHeightGrowsWithRows(t *testing.T) {
 	}
 	for name, p := range presenters() {
 		lo, hi := p.FooterHeight(bare, w), p.FooterHeight(busy, w)
-		if lo != 1 {
-			t.Errorf("%s FooterHeight(bare) = %d, want 1", name, lo)
+		if lo != 2 {
+			t.Errorf("%s FooterHeight(bare) = %d, want 2", name, lo)
 		}
-		if hi != 4 {
-			t.Errorf("%s FooterHeight(busy) = %d, want 4 (marker + activity strip + help + error)", name, hi)
+		if hi != 5 {
+			t.Errorf("%s FooterHeight(busy) = %d, want 5 (summary + marker + activity strip + help + error)", name, hi)
 		}
 	}
 }

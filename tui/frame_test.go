@@ -55,8 +55,8 @@ func TestViewStateIsComplete(t *testing.T) {
 	if !agent {
 		t.Errorf("viewState Footers = %+v, want a chip for the running explore agent", vs.Footers)
 	}
-	if vs.Brand == "" || vs.Status == "" {
-		t.Errorf("viewState left Brand/Status empty: %q / %q", vs.Brand, vs.Status)
+	if vs.Brand == "" || vs.Summary.Primary == "" {
+		t.Errorf("viewState left Brand/Summary empty: %q / %q", vs.Brand, vs.Summary.Primary)
 	}
 }
 

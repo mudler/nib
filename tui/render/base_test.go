@@ -89,7 +89,7 @@ func TestBaseFooterHeightMatchesFooter(t *testing.T) {
 	}
 	const w = 60
 	got := b.FooterHeight(v, w)
-	want := 4 // marker + activity strip + help (with the badges) + error
+	want := 5 // summary + marker + activity strip + help (with the badges) + error
 	if got != want {
 		t.Errorf("FooterHeight = %d, want %d", got, want)
 	}

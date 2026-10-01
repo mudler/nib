@@ -3163,13 +3163,15 @@ func (m Model) footerHeight(vs render.ViewState) int {
 // plain strings/ints, so joining them with NUL separators can't collide two
 // distinct row lists onto the same key.
 type footerCache struct {
-	valid             bool
-	width             int
-	help, badges, err string
-	newOutput         bool
-	footers           string
-	rendered          string
-	height            int
+	valid               bool
+	width               int
+	help, badges, err   string
+	expanded, helpRight string
+	summary             render.ActivitySummary
+	newOutput           bool
+	footers             string
+	rendered            string
+	height              int
 }
 
 // footerCacheKey builds the comparable snapshot of v's Footer-relevant
@@ -3177,9 +3179,10 @@ type footerCache struct {
 func footerCacheKey(v render.ViewState, w int) footerCache {
 	var rows strings.Builder
 	for _, r := range v.Footers {
-		fmt.Fprintf(&rows, "%d\x00%s\x00%s\x00", r.Kind, r.Glyph, r.Text)
+		fmt.Fprintf(&rows, "%d\x00%s\x00%s\x00%s\x00%d\x00%t\x00", r.Kind, r.Glyph, r.Text, r.Alert, r.State, r.Selected)
 	}
 	return footerCache{
+		summary: v.Summary, expanded: v.Expanded, helpRight: v.HelpRight,
 		width:     w,
 		help:      v.Help,
 		badges:    v.Badges,
@@ -3217,6 +3220,7 @@ func (m Model) renderFooter(v render.ViewState, w int) (string, int) {
 	key := footerCacheKey(v, w)
 	if m.footerCache != nil && m.footerCache.valid &&
 		key.width == m.footerCache.width &&
+		key.summary == m.footerCache.summary && key.expanded == m.footerCache.expanded && key.helpRight == m.footerCache.helpRight &&
 		key.help == m.footerCache.help &&
 		key.badges == m.footerCache.badges &&
 		key.err == m.footerCache.err &&
@@ -3414,7 +3418,8 @@ func (m *Model) applyDimensions(vs render.ViewState, footerHeight int) {
 	budget := m.layoutBudget(vs, footerHeight)
 
 	vpHeight := m.effectiveHeight() - budget
-	minimumViewportHeight := 5
+	// Reserve chrome first; keep one usable transcript row on tiny terminals.
+	minimumViewportHeight := 1
 	if vpHeight < minimumViewportHeight {
 		vpHeight = minimumViewportHeight
 	}
@@ -3769,15 +3774,19 @@ func (m Model) reasoningBoxHit(y int) bool {
 // mutates nothing; updateDimensions budgets the layout against the same value
 // View will render from.
 func (m Model) viewState() render.ViewState {
+	return m.viewStateAt(time.Now())
+}
+
+// viewStateAt projects receipt ages from one clock sample for the whole snapshot.
+// The existing one-second HUD tick refreshes this even when parked or ready;
+// no extra timer, observation, or transcript redraw is needed for summary ages.
+func (m Model) viewStateAt(now time.Time) render.ViewState {
 	status := m.status
+	if status == "Thinking…" {
+		status = ""
+	}
 	tip := ""
-	if status == "" || status == "Thinking…" {
-		if m.thinkingLine != "" {
-			status = m.thinkingLine
-		} else {
-			status = theme.VerbThinking
-		}
-		// Tip only shows while thinking
+	if status == "" {
 		tip = m.tip
 	}
 
@@ -3788,6 +3797,7 @@ func (m Model) viewState() render.ViewState {
 	}
 
 	return render.ViewState{
+		Summary:     m.activitySummary(now),
 		Width:       m.width,
 		Cwd:         shortenPath(currentDir()),
 		Brand:       theme.BrandName,

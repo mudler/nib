@@ -157,65 +157,79 @@ nib · first para
 
 
 === footer help only ===
+Ready
 tab complete
 
 === footer help and badges ===
+Ready
 tab complete                                         12k ctx
 
 === footer new output marker ===
 ↓ new output
+Ready
 tab complete
 
 === footer error line ===
+Ready
 tab complete
 × something failed
 
 === footer jobs row ===
+Ready
 * 2 jobs running
 tab complete
 
 === footer shell row ===
+Ready
 > 1 shell job
 tab complete
 
 === footer loops row ===
+Ready
 ~ loop every 5m
 tab complete
 
 === footer goal row ===
+Ready
 o goal: ship it
 tab complete
 
 === footer unset kind row ===
+Ready
 unset kind row
 tab complete
 
 === footer todo chip ===
+Ready
 o todo 2/5 writing tests
 tab complete
 
 === footer focused strip ===
                             session 1k in / 2k out  12:00:00
+Ready
 o todo -  ▸ shell 3 done x1  > explore 3.1k
 lt/rt move · enter open · esc back                   12k ctx
 
 === footer help right hint ===
+Ready
 tab complete
 
 === footer every row ===
 ↓ new output
+Ready
 * 2 jobs ru…  > 1 shell job  ~ loop every …  o goal: ship it
 tab complete                                         12k ctx
 × something failed
 
 === footer height every row ===
-4
+5
 
 === frame without dialogs ===
 nib                                            ~/src/project
 ────────────────────────────────────────────────────────────
 BODY-MARKER
 COMPOSER-MARKER
+Ready
 tab complete
 
 === frame with dialogs ===
@@ -223,5 +237,6 @@ nib                                            ~/src/project
 ────────────────────────────────────────────────────────────
 BODY-ONLY-CONTENT
 COMPOSER-MARKER
+Ready
 tab complete
 
