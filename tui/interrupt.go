@@ -97,6 +97,8 @@ func (m Model) interrupt() (tea.Model, tea.Cmd) {
 		m.session.Interrupt()
 	}
 	m.interruptArmed = true
+	m.toolEvents.end()
+	m.clearRunning()
 	m.selfPaced = 0
 	m.status = theme.StatusInterrupting
 	m.updateViewport()

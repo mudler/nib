@@ -23,7 +23,7 @@ type AgentEvent struct {
 	// the UI records that itself.
 	Background bool
 	Result     string
-	Err    error
+	Err        error
 	// Populated on completion/failure events (zero otherwise):
 	ToolCount   int           // tools the sub-agent executed
 	TotalTokens int           // cumulative tokens consumed across the run
@@ -100,6 +100,7 @@ type ToolImage struct {
 // ToolResult is the outcome of a tool execution, surfaced to the UI after the
 // tool runs.
 type ToolResult struct {
+	ID        string // upstream tool call identity; empty for legacy producers
 	Name      string
 	Result    string
 	Arguments string // marshaled JSON of the call's arguments, for display
@@ -118,6 +119,7 @@ type ToolResult struct {
 // ToolStart announces an approved root-agent tool call that is about to run,
 // so a UI can show it while it runs. Its ToolResult follows when it finishes.
 type ToolStart struct {
+	ID        string // upstream tool call identity; empty for legacy producers
 	Name      string
 	Arguments string // marshaled JSON of the call's arguments
 }
@@ -193,6 +195,10 @@ type Callbacks struct {
 	// OnToolStart is called when an approved root-agent tool call is about
 	// to run. OnToolResult reports the same call when it ends. Optional.
 	OnToolStart func(ts ToolStart)
+	// ToolCallbacks, when set, snapshots tool callbacks once per SendMessage.
+	// Consumers can bind a run identity here so callbacks retained by background
+	// work cannot be mistaken for events from a later run.
+	ToolCallbacks func() (func(ToolStart), func(ToolResult))
 	// OnToolResult is called after a tool finishes, with its output. Optional.
 	OnToolResult func(res ToolResult)
 	// OnAgentEvent is called on sub-agent lifecycle changes. Optional.

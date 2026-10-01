@@ -27,8 +27,6 @@ func runningTestModel() Model {
 		height:             30,
 		loading:            true,
 		reasoningCollapsed: true,
-		toolStartChan:      make(chan chat.ToolStart, 1),
-		toolResultChan:     make(chan chat.ToolResult, 1),
 	})
 }
 
@@ -176,5 +174,153 @@ func TestJoinShellOutput(t *testing.T) {
 	}
 	if !strings.HasSuffix(long, fmt.Sprintf("out %d", runningToolOutputLines+5)) {
 		t.Fatal("the cut should keep the newest lines")
+	}
+}
+
+func TestLifecycleResultBeforeStart(t *testing.T) {
+	m := runningTestModel()
+	m = update(m, toolResultMsg{Name: "read", Arguments: "{}"})
+	m = update(m, toolStartMsg{Name: "read", Arguments: "{}"})
+	if len(m.running) != 0 {
+		t.Fatal("completed call resurrected")
+	}
+}
+
+func TestLifecycleLateStartAfterCompletion(t *testing.T) {
+	m := runningTestModel()
+	m = update(m, responseMsg{content: "done"})
+	m = update(m, toolStartMsg{Name: "read"})
+	if len(m.running) != 0 {
+		t.Fatal("late start survived completion")
+	}
+}
+
+func TestLifecycleEmptyIDDoesNotMatchDifferentArguments(t *testing.T) {
+	m := runningTestModel()
+	m.startTool(chat.ToolStart{Name: "read", Arguments: "a"})
+	m.finishTool(chat.ToolResult{Name: "read", Arguments: "b"})
+	if len(m.running) != 1 {
+		t.Fatal("unrelated empty-ID call removed")
+	}
+}
+
+func TestLifecycleIDsAndDuplicates(t *testing.T) {
+	m := runningTestModel()
+	m.startTool(chat.ToolStart{ID: "a", Name: "read", Arguments: "{}"})
+	m.startTool(chat.ToolStart{ID: "b", Name: "read", Arguments: "{}"})
+	m.finishTool(chat.ToolResult{ID: "b", Name: "read", Arguments: "{}"})
+	if len(m.running) != 1 || m.running[0].id != "a" {
+		t.Fatalf("wrong call remains: %+v", m.running)
+	}
+	m.startTool(chat.ToolStart{ID: "b", Name: "read", Arguments: "{}"})
+	if len(m.running) != 1 {
+		t.Fatal("completed ID resurrected")
+	}
+}
+
+func TestLifecycleQueueBurstAndGeneration(t *testing.T) {
+	q := newToolEventQueue()
+	q.begin()
+	for i := 0; i < 500; i++ {
+		q.push(toolEvent{start: &chat.ToolStart{ID: fmt.Sprint(i), Name: "read"}})
+		q.push(toolEvent{result: &chat.ToolResult{ID: fmt.Sprint(i), Name: "read"}})
+	}
+	events := q.drain()
+	if len(events) != 1000 {
+		t.Fatalf("lost events: %d", len(events))
+	}
+	for i, e := range events {
+		if (i%2 == 0) != (e.start != nil) {
+			t.Fatal("reordered events")
+		}
+	}
+	m := runningTestModel()
+	m.toolEvents = q
+	m = update(m, toolEventsMsg(events))
+	if len(m.running) != 0 || len(m.messages) != 500 {
+		t.Fatalf("burst not delivered: %d running, %d results", len(m.running), len(m.messages))
+	}
+	q.end()
+	q.push(toolEvent{start: &chat.ToolStart{Name: "late"}})
+	if len(q.drain()) != 0 {
+		t.Fatal("accepted late start")
+	}
+	q.begin()
+	m = update(m, toolEventsMsg(events))
+	if len(m.messages) != 500 {
+		t.Fatal("accepted stale generation")
+	}
+}
+
+func TestLifecycleCanceledLateStart(t *testing.T) {
+	m := runningTestModel()
+	next, _ := m.interrupt()
+	m = next.(Model)
+	m = update(m, toolStartMsg{Name: "late"})
+	if len(m.running) != 0 {
+		t.Fatal("accepted canceled start")
+	}
+}
+
+func TestLifecycleParkResumeOrderedWithTools(t *testing.T) {
+	m := runningTestModel()
+	m.toolEvents = newToolEventQueue()
+	m.toolEvents.begin()
+	q := m.toolEvents
+	q.push(toolEvent{start: &chat.ToolStart{ID: "first", Name: "read"}})
+	q.push(toolEvent{result: &chat.ToolResult{ID: "first", Name: "read"}})
+	q.push(toolEvent{park: &parkEvent{parked: true}})
+	q.push(toolEvent{start: &chat.ToolStart{ID: "late", Name: "read"}})
+	q.push(toolEvent{park: &parkEvent{parked: false}})
+	q.push(toolEvent{start: &chat.ToolStart{ID: "second", Name: "read"}})
+	m.applyToolEvents(q.drain())
+	if len(m.running) != 1 || m.running[0].id != "second" {
+		t.Fatalf("park/resume reordered: %+v", m.running)
+	}
+}
+
+func TestLifecycleOldProducerAfterNewRun(t *testing.T) {
+	m := runningTestModel()
+	m.toolEvents = newToolEventQueue()
+	q := m.toolEvents
+	q.begin()
+	old := q.generation()
+	q.end()
+	q.begin()
+	q.pushFor(old, toolEvent{start: &chat.ToolStart{ID: "same", Name: "read"}})
+	q.pushFor(old, toolEvent{result: &chat.ToolResult{ID: "same", Name: "read"}})
+	q.push(toolEvent{start: &chat.ToolStart{ID: "same", Name: "read"}})
+	m.applyToolEvents(q.drain())
+	if len(m.running) != 1 || len(m.messages) != 0 {
+		t.Fatalf("old producer contaminated new turn: %+v", m.running)
+	}
+}
+
+func TestLifecycleEmptyIdenticalCallsRemainIndependent(t *testing.T) {
+	m := runningTestModel()
+	for i := 0; i < 3; i++ {
+		m.startTool(chat.ToolStart{Name: "read", Arguments: "{}"})
+	}
+	for i := 2; i >= 0; i-- {
+		m.finishTool(chat.ToolResult{Name: "read", Arguments: "{}"})
+		if len(m.running) != i {
+			t.Fatalf("want %d running, got %d", i, len(m.running))
+		}
+	}
+	m.startTool(chat.ToolStart{Name: "read", Arguments: "{}"})
+	if len(m.running) != 1 {
+		t.Fatal("subsequent identical call suppressed")
+	}
+}
+
+func TestLifecycleCompletionFlushesMailbox(t *testing.T) {
+	m := runningTestModel()
+	m.toolEvents = newToolEventQueue()
+	m.toolEvents.begin()
+	m.toolEvents.push(toolEvent{start: &chat.ToolStart{ID: "a", Name: "read"}})
+	m.toolEvents.push(toolEvent{result: &chat.ToolResult{ID: "a", Name: "read", Result: "finished"}})
+	m = update(m, responseMsg{content: "done"})
+	if len(m.running) != 0 || len(m.messages) != 2 || m.messages[0].Role != "tool" {
+		t.Fatalf("completion lost/reordered tool result: %+v", m.messages)
 	}
 }

@@ -11,7 +11,7 @@ func TestEmitToolStart(t *testing.T) {
 
 	t.Run("approved root tool emits name and args", func(t *testing.T) {
 		got = nil
-		s.emitToolStart(true, "", "bash", `{"script":"go test ./..."}`)
+		s.callbacks.emitToolStart(true, "", "bash", `{"script":"go test ./..."}`)
 		if len(got) != 1 {
 			t.Fatalf("expected 1 emit, got %d", len(got))
 		}
@@ -22,7 +22,7 @@ func TestEmitToolStart(t *testing.T) {
 
 	t.Run("sub-agent tool does not emit", func(t *testing.T) {
 		got = nil
-		s.emitToolStart(true, "agent-1", "read", "{}")
+		s.callbacks.emitToolStart(true, "agent-1", "read", "{}")
 		if len(got) != 0 {
 			t.Fatalf("sub-agent tool must not emit; got %d", len(got))
 		}
@@ -30,13 +30,22 @@ func TestEmitToolStart(t *testing.T) {
 
 	t.Run("denied tool does not emit", func(t *testing.T) {
 		got = nil
-		s.emitToolStart(false, "", "bash", "{}")
+		s.callbacks.emitToolStart(false, "", "bash", "{}")
 		if len(got) != 0 {
 			t.Fatalf("denied tool must not emit; got %d", len(got))
 		}
 	})
 
 	t.Run("nil callback is a safe no-op", func(t *testing.T) {
-		(&Session{}).emitToolStart(true, "", "bash", "{}")
+		(Callbacks{}).emitToolStart(true, "", "bash", "{}")
 	})
+}
+
+func TestToolLifecycleIdentity(t *testing.T) {
+	var got ToolStart
+	s := &Session{callbacks: Callbacks{OnToolStart: func(ts ToolStart) { got = ts }}}
+	s.callbacks.emitToolStart(true, "", "bash", "{}", "call-1")
+	if got.ID != "call-1" {
+		t.Fatalf("lost ID: %+v", got)
+	}
 }
