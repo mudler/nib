@@ -132,7 +132,12 @@ func (q *toolEventQueue) end() {
 	q.active = false
 }
 func (q *toolEventQueue) generation() uint64 { q.mu.Lock(); defer q.mu.Unlock(); return q.gen }
-func (q *toolEventQueue) push(e toolEvent)   { q.pushFor(q.generation(), e) }
+func (q *toolEventQueue) activeGeneration(gen uint64) bool {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return q.active && q.gen == gen
+}
+func (q *toolEventQueue) push(e toolEvent) { q.pushFor(q.generation(), e) }
 func (q *toolEventQueue) pushFor(gen uint64, e toolEvent) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -170,12 +175,15 @@ func (m Model) listenToolEvents() tea.Cmd {
 // toolCallbacks snapshots the lifecycle generation for one SendMessage.
 func (m Model) toolCallbacks() (func(chat.ToolStart), func(chat.ToolResult)) {
 	gen := m.toolEvents.generation()
-	reasoningGen := m.currentTurnGen()
 	return func(ts chat.ToolStart) {
-			// Order the boundary after the step's reasoning/content, not by
-			// arrival of the independent tool mailbox. Capture the turn here,
-			// so a retained old producer cannot close a newer turn's thought.
-			m.reasoningChan <- reasoningEvent{kind: reasoningEventStepEnd, gen: reasoningGen}
+			if !m.toolEvents.activeGeneration(gen) {
+				return
+			}
+			// Park/resume keeps this run but advances its reasoning epoch.
+			// Order the marker with reasoning, using the current epoch. Update
+			// rechecks both generations in case the run ends during this send.
+			// Never hold the mailbox lock across a blocking channel send.
+			m.reasoningChan <- reasoningEvent{kind: reasoningEventStepEnd, gen: m.currentTurnGen(), toolGen: gen}
 			m.toolEvents.pushFor(gen, toolEvent{start: &ts})
 		}, func(res chat.ToolResult) {
 			m.toolEvents.pushFor(gen, toolEvent{result: &res})

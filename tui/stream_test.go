@@ -812,14 +812,48 @@ func TestToolStartEmitsGenerationSafeReasoningMarker(t *testing.T) {
 	if m.reasoning != "" || !m.reasoningResetPending || len(thoughts(m)) != 1 {
 		t.Fatal("tool-only step did not fold and arm reset")
 	}
-	m.bumpTurnGen()
+	// Parking advances the reasoning generation, but resumes the same
+	// SendMessage and therefore reuses its captured tool callback.
+	m = update(m, parkMsg{parked: true})
+	m = update(m, parkMsg{parked: false})
+	resumedGen := m.currentTurnGen()
+	m = update(m, reasoningEventsMsg{{kind: reasoningEventDelta, text: "resumed thought", gen: resumedGen}})
+	start(chat.ToolStart{ID: "resumed", Name: "read"})
+	resumedMarker := <-m.reasoningChan
+	if resumedMarker.gen != resumedGen || resumedMarker.toolGen != marker.toolGen {
+		t.Fatalf("resumed marker must keep its run and use the current epoch: %+v", resumedMarker)
+	}
+	m.reasoningChan <- resumedMarker
+	m = update(m, toolEventsReadyMsg{})
+	if m.reasoning != "resumed thought" {
+		t.Fatal("tool mailbox must not fold the resumed thought")
+	}
+	m = update(m, m.listenReasoningEvents()())
+	if m.reasoning != "" || !m.reasoningResetPending {
+		t.Fatalf("resumed tool start did not close thought: live=%q reset=%v", m.reasoning, m.reasoningResetPending)
+	}
+	got := thoughts(m)
+	if len(got) != 2 || got[1] != "resumed thought" {
+		t.Fatalf("thoughts = %q, want ordered resumed thought", got)
+	}
 	m.toolEvents.end()
-	m.toolEvents.begin()
+	start(chat.ToolStart{ID: "ended", Name: "read"})
+	if len(m.reasoningChan) != 0 {
+		t.Fatal("ended run callback enqueued a reasoning marker")
+	}
+	m.sendMessage("new run") // dispatch only; no session needed
 	m = update(m, reasoningEventsMsg{{kind: reasoningEventDelta, text: "new turn", gen: m.currentTurnGen()}})
 	// An already queued marker and a callback retained by an old producer
 	// must not close the new turn's live trace.
 	m = update(m, reasoningEventsMsg{marker})
+	// A run can end between the callback's lifecycle check and epoch read.
+	// Even a marker stamped with the new epoch must retain its old run ID.
+	marker.gen = m.currentTurnGen()
+	m = update(m, reasoningEventsMsg{marker})
 	start(chat.ToolStart{ID: "late-old", Name: "read"})
+	if len(m.reasoningChan) != 0 {
+		t.Fatal("old run callback enqueued a reasoning marker")
+	}
 	for len(m.reasoningChan) > 0 {
 		m = update(m, reasoningEventsMsg{<-m.reasoningChan})
 	}

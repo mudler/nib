@@ -724,15 +724,17 @@ const (
 // with different precedence in Update — see reasoningResetPending (for the
 // two reasoning kinds) and streamingActive (for reasoningEventContentDelta).
 //
-// gen is the turn generation (Model.turnGen) that was current at the moment
-// OnStream enqueued this event — see turnGen's doc. Only reasoningEventDelta
-// and reasoningEventContentDelta are checked against it; a mismatch means
-// this event belongs to a turn that has already ended and a later one is now
-// in flight, and Update drops it rather than applying it.
+// gen is the turn generation (Model.turnGen) current when the producer
+// enqueued this event — see turnGen's doc. All kinds are checked against it.
+// A mismatch means this event belongs to a turn that has already ended;
+// Update drops it rather than applying it to a later turn.
 type reasoningEvent struct {
 	kind reasoningEventKind
 	text string
 	gen  int32
+	// toolGen identifies the SendMessage lifecycle for a step-end marker.
+	// Unlike gen, it stays stable across park/resume.
+	toolGen uint64
 }
 
 // reasoningEventsMsg carries one or more reasoningEvent values, in the exact
@@ -2172,7 +2174,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.endThoughtStep()
 				m.reasoningResetPending = true
 			case reasoningEventStepEnd:
-				if ev.gen != m.currentTurnGen() {
+				if ev.gen != m.currentTurnGen() || (m.toolEvents != nil && !m.toolEvents.activeGeneration(ev.toolGen)) {
 					continue
 				}
 				m.endThoughtStep()
