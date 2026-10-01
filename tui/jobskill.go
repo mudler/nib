@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/mudler/nib/chat"
 	"github.com/mudler/nib/theme"
@@ -39,9 +40,15 @@ func (m Model) unifiedJobs() []jobRef {
 // jobActivityTail returns recent activity for a job: a sub-agent's captured
 // agent_logs, or a shell job's captured output.
 func (m Model) jobActivityTail(j jobRef) string {
+	return m.jobActivityTailAt(j, time.Now())
+}
+
+func (m Model) jobActivityTailAt(j jobRef, now time.Time) string {
 	switch j.Kind {
 	case "agent":
 		var b strings.Builder
+		b.WriteString(receiptDetails(m.childObservation(j.ID), now))
+		b.WriteString("\n\n")
 		if job, ok := m.jobByID(j.ID); ok && strings.TrimSpace(job.Task) != "" {
 			b.WriteString("task:\n")
 			b.WriteString(strings.TrimSpace(job.Task))
