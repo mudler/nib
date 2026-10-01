@@ -58,26 +58,17 @@ func summaryLine(s ActivitySummary, spinner string, w int) string {
 	if w <= 0 {
 		return ""
 	}
-	clean := func(s string) string {
-		s = strings.Map(func(r rune) rune {
-			if unicode.IsControl(r) || unicode.IsSpace(r) {
-				return ' '
-			}
-			return r
-		}, ansi.Strip(s))
-		return strings.Join(strings.Fields(s), " ")
-	}
-	primary, compact := clean(s.Primary), clean(s.Compact)
+	primary, compact := cleanSummaryLabel(s.Primary), cleanSummaryLabel(s.Compact)
 	if primary == "" {
 		primary = "Ready"
 	}
-	marker := clean(summaryMarker(s.Marker, spinner))
+	marker := cleanSummaryLabel(summaryMarker(s.Marker, spinner))
 	if marker == "" {
 		marker = theme.ReadyMarker
 	}
 	prefix := marker + " "
 	full := prefix + primary
-	if secondary := clean(s.Secondary); secondary != "" {
+	if secondary := cleanSummaryLabel(s.Secondary); secondary != "" {
 		withDuration := full + " · " + secondary
 		if ansi.StringWidth(withDuration) <= w {
 			return withDuration
@@ -98,4 +89,31 @@ func summaryLine(s ActivitySummary, spinner string, w int) string {
 	}
 	line := marker + " " + ansi.Truncate(primary, w-ansi.StringWidth(prefix), "")
 	return strings.TrimRight(line, " ")
+}
+
+func cleanSummaryLabel(s string) string {
+	s = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) || unicode.IsSpace(r) {
+			return ' '
+		}
+		return r
+	}, ansi.Strip(s))
+	return strings.Join(strings.Fields(s), " ")
+}
+
+// CompactSummaryWidth reserves the readable compact state before telemetry.
+// It uses the same label sanitization and marker fallback as summaryLine.
+func CompactSummaryWidth(s ActivitySummary, spinner string, w int) int {
+	label := cleanSummaryLabel(s.Compact)
+	if label == "" {
+		label = cleanSummaryLabel(s.Primary)
+	}
+	if label == "" {
+		label = "Ready"
+	}
+	marker := cleanSummaryLabel(summaryMarker(s.Marker, spinner))
+	if marker == "" {
+		marker = theme.ReadyMarker
+	}
+	return min(max(w, 0), ansi.StringWidth(marker+" "+label))
 }

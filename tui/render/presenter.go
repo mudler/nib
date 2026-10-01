@@ -49,8 +49,8 @@ type Caps struct {
 //
 // FooterHeight is the same query at the bottom: the core
 // budgets the viewport's height by subtracting the footer, and Footer emits
-// anywhere from one row (the help line alone) to seven (new-output marker,
-// error line, four job-status rows). A fixed guess makes an over-tall frame,
+// a permanent status row plus optional contextual help, telemetry, activity,
+// new-output and error rows. A fixed guess makes an over-tall frame,
 // which on the alt screen scrolls the header off the top. It must agree with
 // Footer exactly, for the same ViewState and width.
 //

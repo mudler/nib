@@ -80,7 +80,7 @@ func TestActivitySummaryFooterPositionAndHeight(t *testing.T) {
 	lines := strings.Split(out, "\n")
 	for i, l := range lines {
 		if strings.HasSuffix(l, "Parked") {
-			if i+1 >= len(lines) || !strings.Contains(lines[i+1], "logs") {
+			if i < 2 || lines[i-1] != "help" || !strings.Contains(lines[i-2], "logs") {
 				t.Fatal(out)
 			}
 			if b.FooterHeight(v, 80) != len(lines) {

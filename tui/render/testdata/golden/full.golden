@@ -157,68 +157,68 @@ nib  yolo                                      ~/src/project
 
 
 === footer help only ===
-• Ready
 tab complete
+• Ready
 
 === footer help and badges ===
-• Ready
-tab complete                                         12k ctx
+tab complete
+• Ready                                              12k ctx
 
 === footer new output marker ===
 ↓ new output
-• Ready
 tab complete
+• Ready
 
 === footer error line ===
-• Ready
 tab complete
+• Ready
 × something failed
 
 === footer jobs row ===
-• Ready
 * 2 jobs running
 tab complete
+• Ready
 
 === footer shell row ===
-• Ready
 > 1 shell job
 tab complete
+• Ready
 
 === footer loops row ===
-• Ready
 ~ loop every 5m
 tab complete
+• Ready
 
 === footer goal row ===
-• Ready
 o goal: ship it
 tab complete
+• Ready
 
 === footer unset kind row ===
-• Ready
 unset kind row
 tab complete
+• Ready
 
 === footer todo chip ===
-• Ready
 o todo 2/5 writing tests
 tab complete
+• Ready
 
 === footer focused strip ===
                             session 1k in / 2k out  12:00:00
-• Ready
 o todo -  ▸ shell 3 done x1  > explore 3.1k
-lt/rt move · enter open · esc back                   12k ctx
+lt/rt move · enter open · esc back
+• Ready                                              12k ctx
 
 === footer help right hint ===
-• Ready
 tab complete
+• Ready
 
 === footer every row ===
 ↓ new output
-• Ready
 * 2 jobs ru…  > 1 shell job  ~ loop every …  o goal: ship it
-tab complete                                         12k ctx
+tab complete
+• Ready                                              12k ctx
 × something failed
 
 === footer height every row ===
@@ -229,8 +229,8 @@ nib                                            ~/src/project
 ────────────────────────────────────────────────────────────
 BODY-MARKER
 COMPOSER-MARKER
-• Ready
 tab complete
+• Ready
 
 === frame with dialogs ===
 nib                                            ~/src/project
@@ -239,6 +239,6 @@ BODY-ONLY-CONTENT
 ▏ OVERLAY-MARKER-QUESTION
 ▏ ▸ ◉ OVERLAY-MARKER-OPTION
 COMPOSER-MARKER
-• Ready
 tab complete
+• Ready
 

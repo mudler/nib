@@ -720,6 +720,7 @@ func footerStates() []struct {
 		name  string
 		state render.ViewState
 	}{
+		{"ordinary status", render.ViewState{}},
 		{"help only", render.ViewState{Help: help}},
 		{"help and badges", render.ViewState{Help: help, Badges: "12k ctx"}},
 		{"new output marker", render.ViewState{Help: help, NewOutput: true}},
@@ -792,11 +793,14 @@ func TestFooterHeightMatchesFooter(t *testing.T) {
 	// below holds at both widths.
 	for _, w := range []int{20, 60} {
 		for _, tc := range footerStates() {
-			want := 2 // summary and help lines, always present
+			want := 1 // permanent combined status row
+			if tc.state.Help != "" {
+				want++
+			}
 			if tc.state.NewOutput {
 				want++
 			}
-			// The front telemetry shares the help line.
+			// The front telemetry shares the status row.
 			if tc.state.Expanded != "" {
 				want++
 			}

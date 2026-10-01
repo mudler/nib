@@ -304,7 +304,7 @@ type ViewState struct {
 	Reasoning Reasoning
 	Dialogs   []Dialog
 	Help      string
-	// HelpRight is a dim hint drawn at the right end of the help line.
+	// HelpRight is a dim hint drawn at the right end of the activity strip.
 	HelpRight string
 	// Badges is the front telemetry line (ui.footer_front), already rendered.
 	Badges string

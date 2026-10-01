@@ -107,7 +107,7 @@ func TestFooterActivityRowFitsEveryTerminalWidth(t *testing.T) {
 		if len(lines) < 2 {
 			t.Fatalf("width %d footer lost activity row: %q", w, out)
 		}
-		activity := baseTestSGR.ReplaceAllString(lines[len(lines)-2], "")
+		activity := baseTestSGR.ReplaceAllString(lines[0], "")
 		if got := lipgloss.Width(activity); got > w {
 			t.Fatalf("width %d rendered %d-cell activity row: %q", w, got, activity)
 		}
@@ -237,5 +237,52 @@ func TestBaseReasoningRendersNothingWhenIdle(t *testing.T) {
 	v := ViewState{Loading: false, Spinner: "|", Status: "Working", Reasoning: Reasoning{Text: "thinking"}}
 	if out := b.Reasoning(v, 50); out != "" {
 		t.Errorf("Reasoning(idle) = %q, want empty", out)
+	}
+}
+
+func TestCompactExpandedExactFit(t *testing.T) {
+	b := Base{}
+	for _, w := range []int{-1, 0, 1, 2, 8, 20, 40, 80, 120} {
+		v := ViewState{Expanded: "12:34:56"}
+		out := b.Footer(v, w)
+		if w <= 0 {
+			if out != "" || b.FooterHeight(v, w) != 0 {
+				t.Fatal("nonpositive footer")
+			}
+			continue
+		}
+		for _, line := range strings.Split(out, "\n") {
+			if lipgloss.Width(line) > w {
+				t.Fatalf("width %d overflow: %q", w, line)
+			}
+		}
+	}
+}
+
+func TestCompactStatusPriorityAndReturnedSpace(t *testing.T) {
+	b := Base{}
+	v := ViewState{Summary: ActivitySummary{Primary: "Running very long tool 界界", Compact: "Running", Secondary: "12m", Marker: SummaryMarkerRunning}, Spinner: "*", Badges: "12345678"}
+	for w := 1; w <= 160; w++ {
+		out := b.Footer(v, w)
+		if lipgloss.Width(out) > w || strings.Contains(out, "\n") {
+			t.Fatalf("width %d: %q", w, out)
+		}
+		if w >= 9 && !strings.Contains(out, "Running") {
+			t.Fatalf("lost readable compact status: %q", out)
+		}
+		if w < 18 && strings.Contains(out, v.Badges) {
+			t.Fatalf("telemetry displaced compact status: %q", out)
+		}
+		if w >= 18 && (!strings.HasSuffix(out, v.Badges) || lipgloss.Width(out) != w) {
+			t.Fatalf("missing right telemetry: %q", out)
+		}
+	}
+	v.Badges = ""
+	if got := b.Footer(v, 80); !strings.Contains(got, "very long tool 界界 · 12m") {
+		t.Fatalf("unused space not returned: %q", got)
+	}
+	v.Summary = ActivitySummary{Primary: "\x1b[31m界界\x1b[0m\nlong", Compact: "\t"}
+	if got := CompactSummaryWidth(v.Summary, "", 80); got != 11 {
+		t.Fatalf("sanitized fallback width %d want 11", got)
 	}
 }

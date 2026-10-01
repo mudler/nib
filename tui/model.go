@@ -3831,14 +3831,19 @@ func (m Model) viewStateAt(now time.Time) render.ViewState {
 		tip = m.tip
 	}
 
-	help := theme.Help.Render(m.helpLine())
+	help := m.helpLine()
+	if help != "" {
+		help = theme.Help.Render(help)
+	}
+	summary := m.activitySummary(now)
+	spinner := m.spinner.View()
 	errText := ""
 	if m.err != nil {
 		errText = m.err.Error()
 	}
 
 	return render.ViewState{
-		Summary:     m.activitySummary(now),
+		Summary:     summary,
 		Width:       m.width,
 		Cwd:         shortenPath(currentDir()),
 		Brand:       theme.BrandName,
@@ -3851,7 +3856,7 @@ func (m Model) viewStateAt(now time.Time) render.ViewState {
 		}(),
 		Loading: m.loading,
 		Status:  status,
-		Spinner: m.spinner.View(),
+		Spinner: spinner,
 		Speed:   m.liveSpeed(),
 		Reasoning: render.Reasoning{
 			Text:      m.visibleReasoning(),
@@ -3864,8 +3869,8 @@ func (m Model) viewStateAt(now time.Time) render.ViewState {
 		Dialogs: m.currentDialogs(),
 		Help:    help,
 		Tip:     tip,
-		// The front telemetry shares the help line, at its right.
-		Badges: m.footerBadges(lipgloss.Width(help) + 1),
+		// Compact lifecycle status gets priority over front telemetry.
+		Badges: m.footerBadges(render.CompactSummaryWidth(summary, spinner, m.width) + 1),
 		Expanded: func() string {
 			if m.activityFocus {
 				return m.expandedBadges()
@@ -4236,7 +4241,7 @@ func (m Model) helpLine() string {
 	case strings.TrimSpace(m.textarea.Value()) == "" && len(m.queue) > 0:
 		return "↑↓ pick · ^e edit · ^x delete"
 	default:
-		return theme.HelpDefault
+		return ""
 	}
 }
 

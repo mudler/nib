@@ -22,7 +22,7 @@ const (
 )
 
 // Defaults for the two telemetry lines: the context gauge, the speed and the
-// machine at the right of the help line, as the footer always had them; the
+// machine at the right of the lifecycle row, as the footer always had them; the
 // session's totals one ctrl+g away.
 const (
 	defaultFooterFront    = "context,speed,clock,cpu,mem"
@@ -88,8 +88,7 @@ func (m Model) telemetryForms(item string) []string {
 
 // telemetryLine renders items on one line of width cells, in order, which is
 // also their priority. Each item takes its widest form that still fits, an
-// item with no form that fits is left out, and the first item is always kept
-// in its narrowest form, since the context gauge predicts compaction.
+// item with no complete form that fits is left out, including the first item.
 func (m Model) telemetryLine(items []string, width int) string {
 	const sep = "  "
 	var parts []string
@@ -110,9 +109,6 @@ func (m Model) telemetryLine(items []string, width int) string {
 				break
 			}
 		}
-		if pick == "" && len(parts) == 0 {
-			pick = forms[len(forms)-1]
-		}
 		if pick == "" {
 			continue
 		}
@@ -123,9 +119,9 @@ func (m Model) telemetryLine(items []string, width int) string {
 }
 
 // footerBadges renders the front telemetry line (ui.footer_front) for a
-// line that already holds helpWidth cells.
-func (m Model) footerBadges(helpWidth int) string {
-	return m.telemetryLine(telemetryItems(m.cfg.UI.FooterFront, defaultFooterFront), m.width-helpWidth)
+// line that already reserves statusWidth cells (including the gap).
+func (m Model) footerBadges(statusWidth int) string {
+	return m.telemetryLine(telemetryItems(m.cfg.UI.FooterFront, defaultFooterFront), m.width-statusWidth)
 }
 
 // expandedBadges renders the expanded telemetry line (ui.footer_expanded).

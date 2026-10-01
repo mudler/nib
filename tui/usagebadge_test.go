@@ -76,7 +76,7 @@ func TestNarrowFooterDropsUsageAndKeepsContext(t *testing.T) {
 	m.cfg.Compaction.MaxContextTokens = 128000
 	m.cfg.UI.FooterFront = "context,usage"
 
-	got := m.footerBadges(20)
+	got := m.footerBadges(7)
 	if strings.Contains(got, "312k") {
 		t.Fatalf("usage survived a narrow footer: %q", got)
 	}

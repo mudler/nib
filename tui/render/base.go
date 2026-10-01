@@ -593,22 +593,21 @@ func chipStyle(row FooterRow) string {
 
 // Footer renders everything between the composer and the bottom of the
 // screen: the new-output marker (when scrolled up with unread content below
-// the fold), the front telemetry line, the expanded telemetry line while the
-// activity strip has focus, the summary, the activity strip, the help line with its right
-// hint, and the error line.
+// the fold), expanded telemetry, activity chips, optional contextual help,
+// the combined lifecycle/telemetry row, and the error line.
 func (Base) Footer(v ViewState, w int) string {
+	if w <= 0 {
+		return ""
+	}
 	var lines []string
 	if v.NewOutput {
 		lines = append(lines, theme.NewOutputMarker())
 	}
-	if v.Expanded != "" {
+	if v.Expanded != "" && lipgloss.Width(v.Expanded) <= w {
 		lines = append(lines, rightAlign("", v.Expanded, w))
 	}
-	if w > 0 {
-		lines = append(lines, summaryLine(v.Summary, v.Spinner, w))
-	}
 	// The activity strip carries the hint that says how to reach it at its
-	// right end; the help line's right end is the telemetry's.
+	// right end; the lifecycle row's right end is the telemetry's.
 	if len(v.Footers) > 0 {
 		// On a terminal too narrow for a chip beside it, the hint goes.
 		hint := v.HelpRight
@@ -628,11 +627,24 @@ func (Base) Footer(v ViewState, w int) string {
 		}
 		lines = append(lines, strip)
 	}
-	help := v.Help
-	if v.Badges != "" {
-		help = rightAlign(help, v.Badges, w)
+	if v.Help != "" {
+		lines = append(lines, ansi.Truncate(v.Help, w, "…"))
 	}
-	lines = append(lines, help)
+	badges := v.Badges
+	// ViewState normally contains pre-fitted telemetry. Reject oversized direct
+	// presenter input as a whole rather than clipping a numeric value.
+	if lipgloss.Width(badges) > w-CompactSummaryWidth(v.Summary, v.Spinner, w)-1 {
+		badges = ""
+	}
+	budget := w
+	if badges != "" {
+		budget -= lipgloss.Width(badges) + 1
+	}
+	status := summaryLine(v.Summary, v.Spinner, budget)
+	if badges != "" {
+		status = rightAlign(status, badges, w)
+	}
+	lines = append(lines, status)
 	if v.Err != "" {
 		lines = append(lines, theme.Error.Render(theme.Cross+" "+v.Err))
 	}
@@ -641,17 +653,21 @@ func (Base) Footer(v ViewState, w int) string {
 
 // rightAlign puts right at the end of a w-cell line that starts with left.
 func rightAlign(left, right string, w int) string {
-	gap := max(w-lipgloss.Width(left)-lipgloss.Width(right), 1)
+	minimumGap := 0
+	if left != "" {
+		minimumGap = 1
+	}
+	gap := max(w-lipgloss.Width(left)-lipgloss.Width(right), minimumGap)
 	return left + strings.Repeat(" ", gap) + right
 }
 
 // FooterHeight reports how many terminal rows Footer occupies for this
-// ViewState at this width — 1 for the help line (with the front telemetry at
-// its right), up to 5 once the new-output marker, the expanded telemetry line,
-// the activity strip and an error line are all present. The shared core budgets the viewport against it, so an answer that
-// disagrees with Footer by even one row makes the composed frame overflow the
-// screen. Measuring the real output is the only way the two cannot drift.
+// ViewState at this width. Measure the actual output so contextual help and
+// optional rows always re-budget the viewport together with their content.
 func (b Base) FooterHeight(v ViewState, w int) int {
+	if w <= 0 {
+		return 0
+	}
 	return lipgloss.Height(b.Footer(v, w))
 }
 

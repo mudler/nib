@@ -266,15 +266,15 @@ and marks it with `~`.
 
 ### The footer
 
-The footer has three lines:
+The footer keeps lifecycle status and front telemetry on one permanent row,
+with activity chips above it when present:
 
 ```
-◐ Working · 12m
-◐ todo 2/8 Wire the LoRA  ▷ shell 1 running  ↳ explore: Map the LoRA loader · bash · 3.1k  History 4 ×1     ctrl+g activity
-enter send · ctrl+y use command · G/end newest   ctx ▰▰▰▰▰▰▰▰│▰▱ 88.3k/100k · compacts at 76.7k  tok/s 12 · avg 13  16:29:49  cpu 27%  mem 24/84G
+◐ todo 2/8 Wire the LoRA  ▷ shell 1 running  History 4 ×1                ctrl+g details
+◐ Working · 12m                         ctx 88.3k/100k  tok/s 12  16:29:49  cpu 27%
 ```
 
-- **Session summary.** A pinned, noninteractive row shows a marker and the
+- **Session summary.** The left side of the pinned, noninteractive row shows a marker and the
   current lifecycle phase. Phases include Working, Running, Approval needed,
   Waiting for your answer, Parked, Interrupting, and Ready. The optional
   duration measures the current phase. If nib does not know when that phase
@@ -288,9 +288,17 @@ enter send · ctrl+y use command · G/end newest   ctx ▰▰▰▰▰▰▰▰�
   transcript tool calls. Running jobs stay in their live chips. A red `×N`
   on History counts failures you have not opened. Technical timing, job status,
   and logs remain available in activity details.
-- **Keys** for what you can do now, and at the right the telemetry: the
+- **Front telemetry** is right-aligned beside the lifecycle summary: the
   context gauge (the tick marks the compaction point), the generation speed,
   the clock, CPU and memory. `ui.footer_front` chooses these items.
+  On narrow terminals, compact lifecycle status takes priority. Telemetry uses
+  complete fitting forms or disappears; numeric values are never cut short.
+- **Contextual shortcuts** appear on a separate row immediately above status
+  while a panel, picker, approval, or other actionable context is active. They
+  disappear when that context ends, without leaving a blank row. The ordinary
+  shortcut legend is no longer pinned; use `/help` for the full key reference.
+  Key bindings are unchanged. Long contextual hints are clipped to terminal
+  width and return in full when there is room.
 
 Press `Ctrl+G` to move the keyboard to the activity strip. An unseen History
 failure gets focus first. The key also shows a second telemetry line above the

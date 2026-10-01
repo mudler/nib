@@ -42,8 +42,8 @@ func TestViewStateIsComplete(t *testing.T) {
 
 	vs := m.viewState()
 
-	if vs.Help == "" {
-		t.Error("viewState did not populate Help")
+	if vs.Help != "" {
+		t.Error("ordinary viewState populated contextual Help")
 	}
 	if vs.Err != errFrameTest.Error() {
 		t.Errorf("viewState Err = %q, want %q", vs.Err, errFrameTest.Error())
@@ -149,15 +149,15 @@ func TestViewportBudgetsAgainstFooterHeight(t *testing.T) {
 	m := frameModel()
 	bare := m.viewport.Height
 
-	// The expanded telemetry line and an error line: two footer rows the
+	// Contextual help, expanded telemetry, and an error: three footer rows the
 	// fixed budget never accounted for.
 	m.sessionCreated = time.Now()
 	m.activityFocus = true
 	m.err = errFrameTest
 	m.updateDimensions()
 
-	if got := m.viewport.Height; got != bare-2 {
-		t.Errorf("viewport height with two extra footer rows = %d, want %d", got, bare-2)
+	if got := m.viewport.Height; got != bare-3 {
+		t.Errorf("viewport height with three extra footer rows = %d, want %d", got, bare-3)
 	}
 }
 

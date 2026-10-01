@@ -127,12 +127,12 @@ func TestChipsStyledByState(t *testing.T) {
 
 	chip := func(row render.FooterRow) string {
 		out := p.Footer(render.ViewState{Footers: []render.FooterRow{row}}, width)
-		// The summary precedes the strip; the empty help line follows it.
+		// The activity strip precedes the permanent combined status row.
 		lines := strings.Split(out, "\n")
-		if len(lines) != 3 || lines[0] != theme.ReadyMarker+" Ready" {
-			t.Fatalf("summary/strip/help rows: %q", out)
+		if len(lines) != 2 || lines[1] != theme.ReadyMarker+" Ready" {
+			t.Fatalf("strip/status rows: %q", out)
 		}
-		line := lines[1]
+		line := lines[0]
 		return line
 	}
 

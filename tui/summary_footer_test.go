@@ -146,3 +146,182 @@ func TestSummaryFooterCachedSelectionAndExpandedHeight(t *testing.T) {
 		t.Fatal("cached output differs from presenter")
 	}
 }
+
+func TestCompactFooterPlacementAndFit(t *testing.T) {
+	for _, p := range []render.Presenter{inline.New(), full.New()} {
+		for _, phase := range []string{"ready", "working", "running"} {
+			m := frameModel()
+			m.presenter = p
+			m.cfg.UI.FooterFront = "clock"
+			m.hudClock = "12:34:56"
+			m.loading = phase != "ready"
+			if phase == "running" {
+				m.startTool(chat.ToolStart{Name: "bash", Arguments: "{}"})
+			}
+			for _, hint := range []string{"", "\x1b[31mcontext 界 guidance with many keys\x1b[0m"} {
+				m.hint = hint
+				for w := 0; w <= 160; w++ {
+					m.width = w
+					v := m.viewStateAt(time.Unix(100, 0))
+					out, height := m.renderFooter(v, w)
+					if w == 0 {
+						if out != "" || height != 0 {
+							t.Fatalf("zero width: %q / %d", out, height)
+						}
+						continue
+					}
+					if hint == "" && v.Help != "" {
+						t.Fatalf("ordinary legend remains: %q", v.Help)
+					}
+					lines := strings.Split(out, "\n")
+					wantHeight := 1
+					if hint != "" {
+						wantHeight++
+					}
+					if len(v.Footers) > 0 {
+						wantHeight++
+					}
+					if height != wantHeight {
+						t.Fatalf("width %d: height %d want %d: %q", w, height, wantHeight, out)
+					}
+					for _, line := range lines {
+						if lipgloss.Width(line) > w {
+							t.Fatalf("width %d overflow: %q", w, line)
+						}
+					}
+					last := lines[len(lines)-1]
+					if v.Badges != "" && (!strings.HasSuffix(last, v.Badges) || lipgloss.Width(last) != w) {
+						t.Fatalf("telemetry not flush right with status: %q", out)
+					}
+					if w >= 80 && !strings.Contains(last, v.Summary.Primary) {
+						t.Fatalf("missing status: %q", out)
+					}
+				}
+			}
+		}
+	}
+}
+
+func TestCompactTelemetryStrictFit(t *testing.T) {
+	m := frameModel()
+	m.hudClock = "12:34:56"
+	m.hudCPU, m.hudCPUOK = 7, true
+	for w := -1; w <= 8; w++ {
+		got := m.telemetryLine([]string{"clock", "cpu"}, w)
+		if lipgloss.Width(got) > max(w, 0) {
+			t.Fatalf("width %d forced telemetry: %q", w, got)
+		}
+		if strings.Contains(got, "12:") && !strings.Contains(got, "12:34:56") {
+			t.Fatal("partial clock")
+		}
+	}
+	if got := m.telemetryLine([]string{"clock", "cpu"}, 6); !strings.Contains(got, "cpu 7%") {
+		t.Fatalf("later fitting item omitted: %q", got)
+	}
+}
+
+// Ordered from highest to lowest priority, matching the established focus routing.
+func TestCompactFooterContextsAndPrecedence(t *testing.T) {
+	cases := []struct {
+		name, want string
+		set        func(*Model)
+	}{
+		{"transient", "temporary hint", func(m *Model) { m.hint = "temporary hint" }},
+		{"todo", theme.ScrollKeys + " scroll · esc/ctrl+t close", func(m *Model) { m.showTodo = true }},
+		{"info", "esc close", func(m *Model) { m.infoPanel = "info" }},
+		{"activity", theme.SideKeys + theme.HelpActivity, func(m *Model) { m.activityFocus = true }},
+		{"agent input", "enter send · " + theme.ScrollKeys + " scroll · esc back · ctrl+o close", func(m *Model) {
+			m.showLogs = true
+			m.logOpenKind = "agent"
+			m.logOpenID = "a"
+			m.jobs = []agentJob{{ID: "a", Status: chat.AgentStatusRunning}}
+		}},
+		{"individual log", theme.ScrollKeys + " scroll · esc back · ctrl+o close", func(m *Model) { m.showLogs = true; m.logOpenID = "a" }},
+		{"logs", theme.ScrollKeys + " select · enter open · k kill · esc close", func(m *Model) { m.showLogs = true }},
+		{"approval edit", theme.HelpApprovalEdit, func(m *Model) { m.awaitingApproval = true; m.approvalEditing = true }},
+		{"approval", theme.HelpApproval, func(m *Model) { m.awaitingApproval = true }},
+		{"ask", theme.HelpAsk, func(m *Model) { m.awaitingAsk = true }},
+		{"resume", theme.HelpResume, func(m *Model) { m.awaitingResume = true }},
+		{"typed model", theme.ModelPickerTypeName, func(m *Model) { m.modelPicker.active = true; m.modelPicker.typed = true }},
+		{"model", theme.ModelPickerKeyHint, func(m *Model) { m.modelPicker.active = true }},
+		{"logout", theme.ProviderPickerLogoutHint, func(m *Model) { m.providerPicker.active = true; m.providerPicker.mode = pickerLogout }},
+		{"endpoint picker", theme.EndpointPickerKeyHint, func(m *Model) { m.providerPicker.active = true; m.providerPicker.mode = pickerEndpoint }},
+		{"provider", theme.ProviderPickerKeyHint, func(m *Model) { m.providerPicker.active = true }},
+		{"login", theme.LoginFormHint, func(m *Model) { m.loginForm.active = true }},
+		{"endpoint form", theme.EndpointFormHint, func(m *Model) { m.endpointForm.active = true }},
+		{"login wait", theme.LoginWaitHint, func(m *Model) { m.loginWait.active = true }},
+		{"foreground", theme.HelpForegroundWork, func(m *Model) { m.loading = true; m.jobs = []agentJob{{ID: "a", Status: chat.AgentStatusRunning}} }},
+		{"parked", "enter add a follow-up · ctrl+c interrupt · ctrl+o logs", func(m *Model) { m.parked = true }},
+		{"queue", "↑↓ pick · ^e edit · ^x delete", func(m *Model) { m.queue = []string{"queued"} }},
+	}
+	for i, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := frameModel()
+			tc.set(&m)
+			if got := m.helpLine(); got != tc.want {
+				t.Fatalf("hint %q want %q", got, tc.want)
+			}
+			for _, p := range []render.Presenter{inline.New(), full.New()} {
+				v := render.ViewState{Help: theme.Help.Render(m.helpLine()), Summary: render.ActivitySummary{Primary: "Approval needed"}}
+				lines := strings.Split(p.Footer(v, 240), "\n")
+				if len(lines) != 2 || !strings.Contains(lines[0], tc.want) || !strings.Contains(lines[1], "Approval needed") {
+					t.Fatalf("context placement: %q", lines)
+				}
+			}
+			// Exercise each overlapping lower-priority context without changing its text.
+			for j := i + 1; j < len(cases); j++ {
+				n := frameModel()
+				cases[j].set(&n)
+				tc.set(&n)
+				if got := n.helpLine(); got != tc.want {
+					t.Fatalf("over %s: %q want %q", cases[j].name, got, tc.want)
+				}
+			}
+		})
+	}
+}
+
+func TestCompactFooterCacheLayoutTransitions(t *testing.T) {
+	for _, p := range []render.Presenter{inline.New(), full.New()} {
+		for _, h := range []int{8, 24, 40} {
+			m := frameModel()
+			m.presenter = p
+			m.height = h
+			m.footerCache = &footerCache{}
+			m.cfg.UI.FooterFront = "clock"
+			m.hudClock = "12:34:56"
+			for _, w := range []int{120, 40, 8, 2, 1, 0, 80} {
+				m.width = w
+				m.updateDimensions() // Real resize path owns geometry changes.
+				for _, hint := range []string{"", "first hint", "second hint", ""} {
+					m.hint = hint
+					v := m.viewStateAt(time.Unix(100, 0))
+					m.syncLayout(v)
+					out, fh := m.renderFooter(v, w)
+					if out != p.Footer(v, w) || fh != p.FooterHeight(v, w) {
+						t.Fatal("stale cached footer")
+					}
+					if m.viewport.Height != max(1, m.effectiveHeight()-m.layoutBudget(v, fh)) {
+						t.Fatal("stale viewport budget")
+					}
+					again, ah := m.renderFooter(v, w)
+					if again != out || ah != fh {
+						t.Fatal("unstable cache")
+					}
+					if w > 0 {
+						want := 1
+						if hint != "" {
+							want++
+						}
+						if len(v.Footers) > 0 {
+							want++
+						}
+						if fh != want {
+							t.Fatalf("height %d want %d", fh, want)
+						}
+					}
+				}
+			}
+		}
+	}
+}
