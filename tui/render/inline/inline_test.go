@@ -40,6 +40,25 @@ func TestMessageRendersRolePrefixes(t *testing.T) {
 	}
 }
 
+func TestInlineFooterHistoryAlertFitsNarrowWidths(t *testing.T) {
+	p := New()
+	v := render.ViewState{Help: "send", HelpRight: "ctrl+g details", Footers: []render.FooterRow{
+		{Glyph: "界", Text: "long live agent", State: render.ChipActive},
+		{Text: "History 12", Alert: "×3", Selected: true},
+	}}
+	for w := 1; w < 100; w++ {
+		out := p.Footer(v, w)
+		lines := strings.Split(strings.TrimSuffix(out, "\n"), "\n")
+		activity := stripANSI(lines[len(lines)-2])
+		if got := lipgloss.Width(activity); got > w {
+			t.Fatalf("width %d rendered %d-cell activity: %q", w, got, activity)
+		}
+		if w >= 2 && !strings.Contains(activity, "×3") {
+			t.Fatalf("width %d cut displayable alert: %q", w, activity)
+		}
+	}
+}
+
 func TestContinuationLinesAreIndentedToPrefixWidth(t *testing.T) {
 	p := New()
 	out := p.Message(render.Message{

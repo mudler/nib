@@ -8,18 +8,19 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/mudler/nib/chat"
+	wizmcp "github.com/mudler/nib/mcp"
 	"github.com/mudler/nib/theme"
 	"github.com/mudler/nib/tui/render"
 )
 
 // Activity chip kinds. A chip's kind decides what enter opens.
 const (
-	chipTodo   = "todo"
-	chipShell  = "shell"
-	chipAgent  = "agent"  // one running sub-agent; jobID names it
-	chipAgents = "agents" // sub-agent history when none is running
-	chipLoops  = "loops"
-	chipGoal   = "goal"
+	chipTodo    = "todo"
+	chipShell   = "shell"
+	chipAgent   = "agent"   // one running sub-agent; jobID names it
+	chipHistory = "history" // retained terminal shell and sub-agent work
+	chipLoops   = "loops"
+	chipGoal    = "goal"
 )
 
 // activityItem is one chip of the footer's activity strip, with what the
@@ -30,10 +31,25 @@ type activityItem struct {
 	jobID string
 }
 
-// unseenFailures is how many failures of kind the user has not looked at:
-// failed now, less what was failed when they last opened the kind's view.
-func (m Model) unseenFailures(kind string, failed int) int {
-	return max(failed-m.seenFailed[kind], 0)
+func failureKey(kind, id string) string { return kind + "\x00" + id }
+
+func (m Model) unseenHistoryFailures() int {
+	n := 0
+	for _, j := range m.jobs {
+		if j.Status == chat.AgentStatusFailed {
+			if _, ok := m.seenFailures[failureKey(chipAgent, j.ID)]; !ok {
+				n++
+			}
+		}
+	}
+	for _, j := range m.shellJobs.List() {
+		if j.Backgrounded && j.Status == "failed" {
+			if _, ok := m.seenFailures[failureKey(chipShell, j.ID)]; !ok {
+				n++
+			}
+		}
+	}
+	return n
 }
 
 // alert renders n unseen failures as "✗n", or "" when there are none.
@@ -44,10 +60,36 @@ func alert(n int) string {
 	return fmt.Sprintf("%s%d", theme.Cross, n)
 }
 
-// activityItems builds the activity strip: todo, shell and sub-agents always
-// (so the line does not jump when work starts), then loops and the goal when
-// there are any. Each running sub-agent has a chip of its own, so the user can
-// open exactly the one they want to follow.
+// historyCounts counts retained terminal work. Running jobs remain directly
+// navigable chips and root transcript tools never enter either collection.
+func historyCounts(agents []agentJob, shells []wizmcp.ShellJobInfo) (terminal, failed int) {
+	for _, j := range shells {
+		if !j.Backgrounded {
+			continue
+		}
+		switch j.Status {
+		case "completed":
+			terminal++
+		case "failed":
+			terminal++
+			failed++
+		}
+	}
+	for _, j := range agents {
+		switch j.Status {
+		case chat.AgentStatusCompleted:
+			terminal++
+		case chat.AgentStatusFailed:
+			terminal++
+			failed++
+		}
+	}
+	return terminal, failed
+}
+
+// activityItems builds the activity strip: todo, live shell and sub-agent
+// work, unified terminal history, then loops and the goal when present. Each
+// running sub-agent has a chip of its own, so it remains directly navigable.
 func (m Model) activityItems() []activityItem {
 	var items []activityItem
 	add := func(kind, jobID string, row render.FooterRow) {
@@ -56,51 +98,27 @@ func (m Model) activityItems() []activityItem {
 
 	add(chipTodo, "", m.todoChip())
 
-	var running, done, failed int
-	for _, j := range m.shellJobs.List() {
-		switch j.Status {
-		case "running":
+	shellJobs := m.shellJobs.List()
+	terminal, _ := historyCounts(m.jobs, shellJobs)
+	var running int
+	for _, j := range shellJobs {
+		switch {
+		case j.Backgrounded && j.Status == "running":
 			running++
-		case "completed":
-			done++
-		case "failed":
-			failed++
 		}
 	}
-	shell := render.FooterRow{Glyph: theme.ShellJob, Text: "shell " + theme.Idle, Kind: render.FooterShell,
-		Alert: alert(m.unseenFailures(chipShell, failed))}
-	switch {
-	case running > 0:
-		shell.Text, shell.State = fmt.Sprintf("shell %d running", running), render.ChipActive
-	case done+failed > 0:
-		shell.Text = fmt.Sprintf("shell %d done", done+failed)
+	if running > 0 {
+		add(chipShell, "", render.FooterRow{Glyph: theme.ShellJob, Text: fmt.Sprintf("shell %d running", running), Kind: render.FooterShell, State: render.ChipActive})
 	}
-	add(chipShell, "", shell)
 
-	failed, done = 0, 0
 	for _, j := range m.jobs {
 		switch j.Status {
 		case chat.AgentStatusRunning:
 			add(chipAgent, j.ID, render.FooterRow{Glyph: theme.SubAgent, Text: m.agentChipText(j), Kind: render.FooterJobs, State: render.ChipActive})
-		case chat.AgentStatusFailed:
-			failed++
-		default:
-			done++
 		}
 	}
-	// The history chip stands in for sub-agents while none runs, and stays
-	// beside running ones while a failure is unseen, so the alert never
-	// sits on an agent that did not fail.
-	agentAlert := alert(m.unseenFailures(chipAgents, failed))
-	if len(items) == 2 || agentAlert != "" {
-		text := "agents " + theme.Idle
-		switch {
-		case done > 0:
-			text = fmt.Sprintf("agents %d done", done)
-		case failed > 0:
-			text = "agents"
-		}
-		add(chipAgents, "", render.FooterRow{Glyph: theme.SubAgent, Text: text, Kind: render.FooterJobs, Alert: agentAlert})
+	if terminal > 0 {
+		add(chipHistory, "", render.FooterRow{Text: fmt.Sprintf("History %d", terminal), Kind: render.FooterJobs, Alert: alert(m.unseenHistoryFailures())})
 	}
 
 	if n := m.loopCount(); n > 0 {
@@ -285,8 +303,8 @@ func (m *Model) openActivity(it activityItem) {
 		m.showTodo = true
 	case chipAgent:
 		m.openLogs("agent", it.jobID)
-	case chipAgents:
-		m.openLogs("agent", "")
+	case chipHistory:
+		m.openLogs("", "")
 	case chipShell:
 		m.openLogs("shell", "")
 	case chipLoops, chipGoal:
@@ -296,9 +314,12 @@ func (m *Model) openActivity(it activityItem) {
 
 // openLogs opens the log viewer. With an id it opens that job's log straight
 // away; otherwise it selects the job of kind most worth a look (running, then
-// failed, then the newest) in the list. Opening marks the kind's failures seen.
+// failed, then the newest) in the list. Only the unfiltered History route
+// acknowledges retained failures; direct live-job routes leave alerts intact.
 func (m *Model) openLogs(kind, id string) {
-	m.markFailuresSeen()
+	if kind == "" && id == "" {
+		m.markFailuresSeen()
+	}
 	m.showLogs, m.logSel, m.logOpenID, m.logOpenKind = true, 0, "", ""
 	jobs := m.unifiedJobs()
 	if id != "" {
@@ -334,22 +355,19 @@ func (m *Model) openLogs(kind, id string) {
 // markFailuresSeen records the failures on screen as looked at, which clears
 // the chips' alerts until something else fails.
 func (m *Model) markFailuresSeen() {
-	if m.seenFailed == nil {
-		m.seenFailed = map[string]int{}
+	if m.seenFailures == nil {
+		m.seenFailures = map[string]struct{}{}
 	}
-	shell := 0
 	for _, j := range m.shellJobs.List() {
-		if j.Status == "failed" {
-			shell++
+		if j.Backgrounded && j.Status == "failed" {
+			m.seenFailures[failureKey(chipShell, j.ID)] = struct{}{}
 		}
 	}
-	agents := 0
 	for _, j := range m.jobs {
 		if j.Status == chat.AgentStatusFailed {
-			agents++
+			m.seenFailures[failureKey(chipAgent, j.ID)] = struct{}{}
 		}
 	}
-	m.seenFailed[chipShell], m.seenFailed[chipAgents] = shell, agents
 }
 
 // renderInfoPanel renders the loops or goal detail panel, which replaces the

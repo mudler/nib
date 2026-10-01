@@ -1,14 +1,20 @@
 package tui
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/mudler/nib/chat"
 	"github.com/mudler/nib/loop"
+	wizmcp "github.com/mudler/nib/mcp"
+	"github.com/mudler/nib/types"
 )
+
+const testChipHistory = "history"
 
 func kt(t tea.KeyType) tea.KeyMsg { return tea.KeyMsg{Type: t} }
 
@@ -29,11 +35,10 @@ func chipTexts(m Model) []string {
 	return out
 }
 
-// The strip always has todo, shell and sub-agents, so it does not jump when
-// work starts, and each running sub-agent gets a chip of its own.
+// Each running sub-agent gets a chip of its own; empty history is omitted.
 func TestActivityChipsPerRunningAgent(t *testing.T) {
 	m := newQueueTestModel()
-	if got := strings.Join(chipTexts(m), " | "); got != "todo – | shell – | agents –" {
+	if got := strings.Join(chipTexts(m), " | "); got != "todo –" {
 		t.Fatalf("idle strip = %q", got)
 	}
 	m.jobs = []agentJob{
@@ -41,7 +46,7 @@ func TestActivityChipsPerRunningAgent(t *testing.T) {
 		{ID: "a2", Type: "plan", Task: "draft", Status: chat.AgentStatusRunning},
 	}
 	got := chipTexts(m)
-	if len(got) != 4 || got[2] != "explore: Scan the LoRA loader · starting" || got[3] != "plan: draft · starting" {
+	if len(got) != 3 || got[1] != "explore: Scan the LoRA loader · starting" || got[2] != "plan: draft · starting" {
 		t.Fatalf("strip = %q, want one titled chip per running agent and no history chip", got)
 	}
 }
@@ -75,7 +80,7 @@ func TestFailureAlertIsOnTheHistoryChip(t *testing.T) {
 	}
 	items := m.activityItems()
 	last := items[len(items)-1]
-	if last.kind != chipAgents || last.row.Alert == "" {
+	if last.kind != chipHistory || last.row.Alert == "" {
 		t.Fatalf("last chip = %+v, want the history chip carrying the alert", last)
 	}
 	for _, it := range items {
@@ -86,8 +91,153 @@ func TestFailureAlertIsOnTheHistoryChip(t *testing.T) {
 
 	m = stripKeys(t, m, kt(tea.KeyCtrlO), kt(tea.KeyCtrlO))
 	for _, it := range m.activityItems() {
-		if it.row.Alert != "" || it.kind == chipAgents {
-			t.Fatalf("after opening the logs, strip still has %+v", it)
+		if it.row.Alert != "" {
+			t.Fatalf("after opening the logs, strip still has an alert: %+v", it)
+		}
+	}
+}
+
+func TestActivityHistoryUnifiesTerminalJobsAndPersistsAfterSeen(t *testing.T) {
+	m := newQueueTestModel()
+	m.jobs = []agentJob{
+		{ID: "running", Type: "explore", Status: chat.AgentStatusRunning},
+		{ID: "done", Type: "plan", Status: chat.AgentStatusCompleted},
+		{ID: "failed", Type: "edit", Status: chat.AgentStatusFailed},
+	}
+
+	items := m.activityItems()
+	var histories []activityItem
+	for _, it := range items {
+		if it.kind == testChipHistory {
+			histories = append(histories, it)
+		}
+		if strings.HasPrefix(it.row.Text, "agents ") || strings.Contains(it.row.Text, " done") {
+			t.Fatalf("legacy terminal-work chip remains: %+v", it)
+		}
+	}
+	if len(histories) != 1 || histories[0].row.Text != "History 2" || histories[0].row.Alert != "×1" {
+		t.Fatalf("history = %+v, want one History 2 ×1", histories)
+	}
+
+	m.openActivity(histories[0])
+	if !m.showLogs || m.logOpenID != "" {
+		t.Fatalf("history should open the unified list, showLogs=%v openID=%q", m.showLogs, m.logOpenID)
+	}
+	items = m.activityItems()
+	found := false
+	for _, it := range items {
+		if it.kind == testChipHistory {
+			found = true
+			if it.row.Text != "History 2" || it.row.Alert != "" {
+				t.Fatalf("seen history = %+v, want retained records without alert", it.row)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("marking failures seen removed history")
+	}
+}
+
+func TestOnlyOpeningHistoryMarksFailuresSeen(t *testing.T) {
+	m := newQueueTestModel()
+	m.jobs = []agentJob{
+		{ID: "live", Type: "explore", Status: chat.AgentStatusRunning},
+		{ID: "failed", Type: "edit", Status: chat.AgentStatusFailed},
+	}
+
+	m.openLogs("agent", "live")
+	if got := historyAlert(m); got != "×1" {
+		t.Fatalf("opening a live agent cleared history alert: %q", got)
+	}
+	m.showLogs = false
+	m.openLogs("shell", "")
+	if got := historyAlert(m); got != "×1" {
+		t.Fatalf("opening live shell routing cleared history alert: %q", got)
+	}
+	m.showLogs = false
+	m.openActivity(activityItem{kind: chipHistory})
+	if got := historyAlert(m); got != "" {
+		t.Fatalf("opening History left alert %q", got)
+	}
+}
+
+func TestSeenHistoryTracksFailureIdentityAcrossRetention(t *testing.T) {
+	m := newQueueTestModel()
+	m.jobs = []agentJob{{ID: "old", Status: chat.AgentStatusFailed}}
+	m.openActivity(activityItem{kind: chipHistory})
+	if got := historyAlert(m); got != "" {
+		t.Fatalf("old failure remained unseen: %q", got)
+	}
+
+	// Retention evicts the failure the user saw, then a distinct failure arrives.
+	m.jobs = []agentJob{{ID: "new", Status: chat.AgentStatusFailed}}
+	if got := historyAlert(m); got != "×1" {
+		t.Fatalf("new failure after eviction alert = %q, want ×1", got)
+	}
+}
+
+func TestCtrlGSelectsUnseenHistoryBeforeLiveWorkAndEnterOpensUnifiedList(t *testing.T) {
+	m := newQueueTestModel()
+	m.jobs = []agentJob{
+		{ID: "live", Type: "explore", Status: chat.AgentStatusRunning},
+		{ID: "failed", Type: "edit", Status: chat.AgentStatusFailed},
+	}
+	m = stripKeys(t, m, kt(tea.KeyCtrlG))
+	if got := m.activityItems()[m.activitySel].kind; got != chipHistory {
+		t.Fatalf("ctrl+g selected %q, want unseen History", got)
+	}
+	m = stripKeys(t, m, kt(tea.KeyEnter))
+	if !m.showLogs || m.logOpenID != "" || m.logOpenKind != "" {
+		t.Fatalf("History Enter did not open unified list: show=%v id=%q kind=%q", m.showLogs, m.logOpenID, m.logOpenKind)
+	}
+	jobs := m.unifiedJobs()
+	if len(jobs) != 2 || jobs[0].ID != "live" || jobs[1].ID != "failed" {
+		t.Fatalf("unified ordering = %+v", jobs)
+	}
+}
+
+func historyAlert(m Model) string {
+	for _, it := range m.activityItems() {
+		if it.kind == chipHistory {
+			return it.row.Alert
+		}
+	}
+	return ""
+}
+
+func TestActivityOmitsEmptyHistory(t *testing.T) {
+	m := newQueueTestModel()
+	m.jobs = []agentJob{{ID: "running", Type: "explore", Status: chat.AgentStatusRunning}}
+	for _, it := range m.activityItems() {
+		if it.kind == testChipHistory || strings.HasPrefix(it.row.Text, "History ") {
+			t.Fatalf("empty history rendered: %+v", it)
+		}
+	}
+}
+
+func TestHistoryCountsMixedTerminalJobsOnly(t *testing.T) {
+	agents := []agentJob{
+		{Status: chat.AgentStatusRunning},
+		{Status: chat.AgentStatusCompleted},
+		{Status: chat.AgentStatusFailed},
+	}
+	shells := []wizmcp.ShellJobInfo{
+		{Status: "running", Backgrounded: true},
+		{Status: "completed", Backgrounded: true},
+		{Status: "failed", Backgrounded: true},
+	}
+	terminal, failed := historyCounts(agents, shells)
+	if terminal != 4 || failed != 2 {
+		t.Fatalf("historyCounts = %d, %d; want 4, 2", terminal, failed)
+	}
+}
+
+func TestRootTranscriptToolsDoNotCreateHistory(t *testing.T) {
+	m := newQueueTestModel()
+	m.running = []runningTool{{name: "bash"}}
+	for _, it := range m.activityItems() {
+		if it.kind == testChipHistory {
+			t.Fatalf("root tool created history: %+v", it)
 		}
 	}
 }
@@ -107,12 +257,8 @@ func TestActivityFocusNavigation(t *testing.T) {
 	}
 
 	m = stripKeys(t, m, kt(tea.KeyLeft))
-	if m.activitySel != 1 {
-		t.Fatalf("sel after left = %d, want 1", m.activitySel)
-	}
-	m = stripKeys(t, m, kt(tea.KeyRight), kt(tea.KeyRight))
 	if m.activitySel != 0 {
-		t.Fatalf("sel after two rights from 1 = %d, want 0 (it wraps)", m.activitySel)
+		t.Fatalf("sel after left = %d, want 0", m.activitySel)
 	}
 	m = stripKeys(t, m, kt(tea.KeyEnter))
 	if m.activityFocus || !m.showTodo {
@@ -217,5 +363,49 @@ func TestActivityHintSurvivesNarrowTerminal(t *testing.T) {
 	out := m.presenter.Footer(m.viewState(), m.width)
 	if !strings.Contains(out, "ctrl+g activity") {
 		t.Fatalf("footer at 70 cells lost the hint:\n%s", out)
+	}
+}
+
+func TestHistoryUsesOnlyRetainedBackgroundShellRegistryJobs(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	jobs := wizmcp.NewShellJobs()
+	transports, err := wizmcp.StartTransports(ctx, types.Config{}, jobs, nil, nil)
+	if err != nil {
+		t.Fatalf("start transports: %v", err)
+	}
+	client := sdkmcp.NewClient(&sdkmcp.Implementation{Name: "history-test", Version: "v0"}, nil)
+	session, err := client.Connect(ctx, transports[0], nil)
+	if err != nil {
+		t.Fatalf("connect bash transport: %v", err)
+	}
+	defer session.Close()
+	for _, call := range []*sdkmcp.CallToolParams{
+		{Name: "bash", Arguments: map[string]any{"script": "true"}},
+		{Name: "bash_background", Arguments: map[string]any{"script": "true"}},
+	} {
+		if _, err := session.CallTool(ctx, call); err != nil {
+			t.Fatalf("call %s: %v", call.Name, err)
+		}
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		listed := jobs.List()
+		if len(listed) == 2 && listed[0].Status != "running" && listed[1].Status != "running" {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	m := newQueueTestModel()
+	m.shellJobs = jobs
+	var history []activityItem
+	for _, item := range m.activityItems() {
+		if item.kind == "history" {
+			history = append(history, item)
+		}
+	}
+	if len(history) != 1 || history[0].row.Text != "History 1" {
+		t.Fatalf("history = %+v, want only the completed retained background job", history)
 	}
 }

@@ -208,7 +208,7 @@ func TestObservationSummaryChildDetails(t *testing.T) {
 	emit(chat.Observation{Order: 2, OwnerKnown: true, Owner: "a1", HasText: true, Received: now.Add(time.Second)})
 	emit(chat.Observation{Order: 3, OwnerKnown: true, Owner: "a1", Kind: "tool completed", Received: now.Add(2 * time.Second)})
 	got := m.jobActivityTailAt(jobRef{Kind: "agent", ID: "a1"}, now.Add(3*time.Second))
-	for _, want := range []string{"latest event: tool completed 1s ago", "last model text received 2s ago"} {
+	for _, want := range []string{"event receipt: 1s ago", "last model text: 2s ago", "current phase start: unavailable"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("missing %q in %q", want, got)
 		}
@@ -220,7 +220,7 @@ func TestObservationSummaryChildDetails(t *testing.T) {
 		t.Fatal(summary)
 	}
 	got = m.jobActivityTailAt(jobRef{Kind: "agent", ID: "a2"}, now)
-	if !strings.Contains(got, "latest event age: unknown") || !strings.Contains(got, "last model text age: unknown") {
+	if !strings.Contains(got, "event receipt: unavailable") || !strings.Contains(got, "last model text: unavailable") {
 		t.Fatal(got)
 	}
 	m.toolEvents.end()

@@ -32,6 +32,9 @@ func (m Model) unifiedJobs() []jobRef {
 		out = append(out, jobRef{Kind: "agent", ID: j.ID, Status: string(j.Status), Label: typ + " · " + j.Task})
 	}
 	for _, s := range m.shellJobs.List() {
+		if !s.Backgrounded {
+			continue
+		}
 		out = append(out, jobRef{Kind: "shell", ID: s.ID, Status: s.Status, Label: s.Script})
 	}
 	return out
@@ -48,6 +51,12 @@ func (m Model) jobActivityTailAt(j jobRef, now time.Time) string {
 	case "agent":
 		var b strings.Builder
 		b.WriteString(receiptDetails(m.childObservation(j.ID), now))
+		b.WriteString("\n")
+		if m.phaseStartedAt.IsZero() {
+			b.WriteString("current phase start: unavailable")
+		} else {
+			b.WriteString(fmt.Sprintf("current phase start: %ds ago", receiptSeconds(now, m.phaseStartedAt)))
+		}
 		b.WriteString("\n\n")
 		if job, ok := m.jobByID(j.ID); ok && strings.TrimSpace(job.Task) != "" {
 			b.WriteString("task:\n")

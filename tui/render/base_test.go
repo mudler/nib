@@ -4,9 +4,132 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/charmbracelet/lipgloss"
 )
 
 var baseTestSGR = regexp.MustCompile(`\x1b\[[0-9;]*m`)
+
+func TestFooterNeverClipsMultiDigitFailureIntoAnotherCount(t *testing.T) {
+	v := ViewState{Footers: []FooterRow{{Text: "History 123", Alert: "×123", Selected: true}}}
+	for w := 1; w < 30; w++ {
+		out := baseTestSGR.ReplaceAllString((Base{}).Footer(v, w), "")
+		if strings.Contains(out, "×1") && !strings.Contains(out, "×123") {
+			t.Fatalf("width %d rendered a false partial failure count: %q", w, out)
+		}
+		if !strings.Contains(out, "×") {
+			t.Fatalf("width %d lost the failure marker: %q", w, out)
+		}
+		for _, line := range strings.Split(strings.TrimSuffix(out, "\n"), "\n") {
+			if got := lipgloss.Width(line); got > w {
+				t.Fatalf("width %d rendered %d cells: %q", w, got, line)
+			}
+		}
+	}
+}
+
+func TestFooterChipFitPreservesSelectedAndAlerts(t *testing.T) {
+	rows := []FooterRow{
+		{Glyph: "↳", Text: "explore: \x1b[31m非常に長い\x1b[0m\nlabel", State: ChipActive},
+		{Text: "History 12", Alert: "×3", Selected: true},
+		{Glyph: "○", Text: "idle detail"},
+	}
+	for w := 18; w < 100; w++ {
+		got := fitChips(rows, w)
+		var selected bool
+		for _, row := range got {
+			if strings.Contains(row.Text, "\x1b") || strings.ContainsAny(row.Text, "\r\n") {
+				t.Fatalf("width %d retained control input: %+v", w, row)
+			}
+			if row.Selected {
+				selected = true
+				if row.Alert != "×3" {
+					t.Fatalf("width %d cut failure alert: %+v", w, row)
+				}
+			}
+		}
+		if !selected {
+			t.Fatalf("width %d dropped selected history: %+v", w, got)
+		}
+		var parts []string
+		for _, row := range got {
+			part := chipText(row)
+			if row.Alert != "" {
+				part += " " + row.Alert
+			}
+			parts = append(parts, part)
+		}
+		if gotWidth := lipgloss.Width(strings.Join(parts, chipSep)); gotWidth > w {
+			t.Fatalf("width %d produced %d cells: %+v", w, gotWidth, got)
+		}
+	}
+}
+
+func TestFooterSelectedNoAlertChipFitsEveryWidth(t *testing.T) {
+	cases := []FooterRow{
+		{Glyph: "o", Text: "todo 1/4 trace lifecycle", Kind: FooterTodo, Selected: true},
+		{Text: "History 12", Kind: FooterJobs, Selected: true},
+		{Glyph: "@", Text: "explore: trace lifecycle · working", Kind: FooterJobs, State: ChipActive, Selected: true},
+	}
+	for _, row := range cases {
+		for width := 1; width <= 99; width++ {
+			fitted := fitChips([]FooterRow{row}, width)
+			var rendered string
+			for i, got := range fitted {
+				if i > 0 {
+					rendered += chipSep
+				}
+				rendered += chipText(got)
+				if got.Alert != "" {
+					rendered += " " + got.Alert
+				}
+			}
+			if got := lipgloss.Width(rendered); got > width {
+				t.Errorf("%q at width %d rendered %q (%d cells)", row.Text, width, rendered, got)
+			}
+		}
+	}
+}
+
+func TestFooterActivityRowFitsEveryTerminalWidth(t *testing.T) {
+	v := ViewState{
+		Help:      "enter send",
+		HelpRight: "ctrl+g details",
+		Footers: []FooterRow{
+			{Glyph: "界", Text: "live \x1b[31magent\x1b[0m\ncontrol", State: ChipActive},
+			{Glyph: "!", Text: "History 12", Alert: "×3", Selected: true},
+			{Glyph: "○", Text: "idle detail"},
+		},
+	}
+	for w := 1; w < 100; w++ {
+		out := (Base{}).Footer(v, w)
+		lines := strings.Split(strings.TrimSuffix(out, "\n"), "\n")
+		if len(lines) < 2 {
+			t.Fatalf("width %d footer lost activity row: %q", w, out)
+		}
+		activity := baseTestSGR.ReplaceAllString(lines[len(lines)-2], "")
+		if got := lipgloss.Width(activity); got > w {
+			t.Fatalf("width %d rendered %d-cell activity row: %q", w, got, activity)
+		}
+		if w >= lipgloss.Width("×3") && !strings.Contains(activity, "×3") {
+			t.Fatalf("width %d cut displayable failure alert: %q", w, activity)
+		}
+		if strings.ContainsAny(activity, "\r\n") || strings.Contains(activity, "\x1b") {
+			t.Fatalf("width %d retained unsafe input: %q", w, activity)
+		}
+	}
+}
+
+func TestFooterDropsDetailsHintBeforeUsefulHistory(t *testing.T) {
+	v := ViewState{
+		Help: "enter send", HelpRight: "ctrl+g details",
+		Footers: []FooterRow{{Text: "History 12", Alert: "×3", Selected: true}},
+	}
+	out := baseTestSGR.ReplaceAllString((Base{}).Footer(v, 16), "")
+	if strings.Contains(out, v.HelpRight) || !strings.Contains(out, "History") || !strings.Contains(out, "×3") {
+		t.Fatalf("hint competed with useful selected history: %q", out)
+	}
+}
 
 // TestBaseContentWidthUsesInjectedPrefix pins the embedding fix Task 17
 // depends on: Base cannot call back into an embedder's own contentPrefix (Go

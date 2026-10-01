@@ -150,12 +150,13 @@ func backgroundCounts(jobs []agentJob, shellJobs []wizmcp.ShellJobInfo) string {
 
 // receiptDetails keeps event and model-text clocks separate in existing logs.
 func receiptDetails(s receiptState, now time.Time) string {
-	event := "latest event age: unknown"
+	event := "event receipt: unavailable"
 	if !s.Latest.Received.IsZero() {
-		event = "latest event: " + observationAge(s, now)
-		if s.Latest.HasText {
-			event = fmt.Sprintf("latest event: model text received %ds ago", receiptSeconds(now, s.Latest.Received))
-		}
+		event = fmt.Sprintf("event receipt: %ds ago", receiptSeconds(now, s.Latest.Received))
 	}
-	return event + "\n" + textReceiptAge(s, now)
+	text := "last model text: unavailable"
+	if !s.Text.IsZero() {
+		text = fmt.Sprintf("last model text: %ds ago", receiptSeconds(now, s.Text))
+	}
+	return event + "\n" + text
 }

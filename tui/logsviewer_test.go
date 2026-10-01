@@ -91,6 +91,26 @@ func TestLogsViewerRendersList(t *testing.T) {
 	}
 }
 
+func TestHistoryListKeepsUnifiedOrderAndEnterAccess(t *testing.T) {
+	m := newLogsModel()
+	m.jobs[0].Status = chat.AgentStatusCompleted
+	m.jobs[1].Status = chat.AgentStatusFailed
+	m.openActivity(activityItem{kind: chipHistory})
+
+	out := m.renderLogsViewer()
+	first, second := strings.Index(out, "a1"), strings.Index(out, "a2")
+	if first < 0 || second <= first {
+		t.Fatalf("unified History order lost: %q", out)
+	}
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m = next.(Model)
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(Model)
+	if m.logOpenID != "a2" || m.logOpenKind != "agent" {
+		t.Fatalf("History Enter opened %q/%q, want agent/a2", m.logOpenKind, m.logOpenID)
+	}
+}
+
 // TestLogsViewerCtrlCCloses verifies Ctrl+C closes the viewer, as Esc does,
 // instead of falling through to quit.
 func TestLogsViewerCtrlCCloses(t *testing.T) {

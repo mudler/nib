@@ -538,9 +538,9 @@ type Model struct {
 	// (ctrl+g), with activitySel the selected chip.
 	activityFocus bool
 	activitySel   int
-	// seenFailed counts the failures, per chip kind, that were on screen
-	// when the user last opened the kind's view. Only newer ones alert.
-	seenFailed map[string]int
+	// seenFailures records stable retained-job identities visible when History
+	// was opened. A newly retained failure still alerts after an old one evicts.
+	seenFailures map[string]struct{}
 
 	// Unified `/` completion state
 	completion compState

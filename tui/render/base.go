@@ -4,8 +4,10 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/mudler/nib/theme"
 	"github.com/mudler/nib/types"
@@ -452,7 +454,25 @@ const minChipText = 10
 // only then shortens labels further. Alerts are never cut.
 func fitChips(rows []FooterRow, w int) []FooterRow {
 	out := append([]FooterRow(nil), rows...)
+	clean := func(s string) string {
+		s = ansi.Strip(s)
+		s = strings.Map(func(r rune) rune {
+			if unicode.IsControl(r) || unicode.IsSpace(r) {
+				return ' '
+			}
+			return r
+		}, s)
+		return strings.Join(strings.Fields(s), " ")
+	}
+	for i := range out {
+		out[i].Glyph = clean(out[i].Glyph)
+		out[i].Text = clean(out[i].Text)
+		out[i].Alert = clean(out[i].Alert)
+	}
 	width := func() int {
+		if len(out) == 0 {
+			return 0
+		}
 		n := lipgloss.Width(chipSep) * (len(out) - 1)
 		for _, r := range out {
 			n += lipgloss.Width(chipText(r))
@@ -474,7 +494,7 @@ func fitChips(rows []FooterRow, w int) []FooterRow {
 				return
 			}
 			cur := lipgloss.Width(out[widest].Text)
-			out[widest].Text = TruncateRunes(out[widest].Text, max(cur-over, floor))
+			out[widest].Text = ansi.Truncate(out[widest].Text, max(cur-over, floor), "…")
 		}
 	}
 	shrink(minChipText)
@@ -484,6 +504,68 @@ func fitChips(rows []FooterRow, w int) []FooterRow {
 		}
 	}
 	shrink(1)
+	for i := range out {
+		if width() <= w {
+			break
+		}
+		out[i].Glyph = ""
+	}
+	for len(out) > 1 && width() > w {
+		drop := -1
+		for i, r := range out {
+			if !r.Selected && r.Alert == "" && r.State == ChipIdle {
+				drop = i
+				break
+			}
+		}
+		if drop < 0 {
+			for i, r := range out {
+				if !r.Selected && r.Alert == "" {
+					drop = i
+					break
+				}
+			}
+		}
+		if drop < 0 {
+			for i, r := range out {
+				if !r.Selected {
+					drop = i
+					break
+				}
+			}
+		}
+		if drop < 0 {
+			drop = len(out) - 1
+		}
+		out = append(out[:drop], out[drop+1:]...)
+	}
+	if len(out) == 1 && width() > w {
+		r := &out[0]
+		r.Glyph = ""
+		if r.Alert != "" {
+			r.Text = ""
+			r.Selected = false // the alert itself is the useful narrow-width signal
+			if w < lipgloss.Width(r.Alert) {
+				// A clipped count lies: ×123 must never become the valid-looking
+				// but false ×1 or ×12. Degrade to the non-numeric failure marker.
+				r.Alert = theme.Cross
+				if w < lipgloss.Width(r.Alert) {
+					r.Alert = ""
+				}
+			}
+		} else {
+			textWidth := max(w, 0)
+			if r.Selected {
+				selectionWidth := lipgloss.Width(theme.Cursor) + 1
+				if w < selectionWidth {
+					r.Selected = false
+				} else {
+					textWidth -= selectionWidth
+				}
+			}
+			r.Text = ansi.Truncate(r.Text, textWidth, "")
+		}
+	}
 	return out
 }
 
@@ -501,7 +583,10 @@ func chipStyle(row FooterRow) string {
 		s = theme.Help.Render(text)
 	}
 	if row.Alert != "" {
-		s += " " + theme.Error.Render(row.Alert)
+		if text != "" {
+			s += " "
+		}
+		s += theme.Error.Render(row.Alert)
 	}
 	return s
 }

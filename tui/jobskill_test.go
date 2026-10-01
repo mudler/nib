@@ -3,6 +3,7 @@ package tui
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mudler/nib/chat"
 )
@@ -18,6 +19,23 @@ func TestUnifiedJobsAgents(t *testing.T) {
 	jobs := m.unifiedJobs()
 	if len(jobs) != 1 || jobs[0].Kind != "agent" || jobs[0].ID != "agent-123456789" {
 		t.Fatalf("unifiedJobs = %+v", jobs)
+	}
+}
+
+func TestJobActivityDetailsDistinguishTechnicalClocks(t *testing.T) {
+	now := time.Unix(100, 0)
+	m := newTestModel(Model{})
+	m.jobs = []agentJob{{ID: "a1", Type: "explore", Task: "trace it"}}
+
+	out := m.jobActivityTailAt(jobRef{Kind: "agent", ID: "a1"}, now)
+	for _, want := range []string{
+		"event receipt: unavailable",
+		"current phase start: unavailable",
+		"last model text: unavailable",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("details missing %q:\n%s", want, out)
+		}
 	}
 }
 

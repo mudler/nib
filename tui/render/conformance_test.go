@@ -729,6 +729,7 @@ func footerStates() []struct {
 		{"every row", render.ViewState{Help: help, Badges: "12k ctx", NewOutput: true, Err: "something failed", Footers: rows}},
 		{"expanded telemetry", render.ViewState{Help: help, HelpRight: "ctrl+g activity", Badges: "12k ctx", Expanded: "12:00:00", Footers: rows}},
 		{"a row with no glyph", render.ViewState{Help: help, Footers: []render.FooterRow{{Text: "unset kind row"}}}},
+		{"selected history alert", render.ViewState{Help: help, HelpRight: "ctrl+g details", Footers: []render.FooterRow{{Text: "History 12", Alert: "×3", Selected: true}}}},
 	}
 }
 
