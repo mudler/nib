@@ -520,7 +520,7 @@ func (Base) Footer(v ViewState, w int) string {
 		lines = append(lines, rightAlign("", v.Expanded, w))
 	}
 	if w > 0 {
-		lines = append(lines, summaryLine(v.Summary, w))
+		lines = append(lines, summaryLine(v.Summary, v.Spinner, w))
 	}
 	// The activity strip carries the hint that says how to reach it at its
 	// right end; the help line's right end is the telemetry's.

@@ -20,6 +20,22 @@ func containsEmoji(s string) bool {
 // TestNoEmojiInRenderHelpers guards the calm, no-emoji editorial voice: the
 // user-facing render helpers must not emit emoji glyphs.
 func TestNoEmojiInRenderHelpers(t *testing.T) {
+	// The pinned lifecycle summary is part of the real footer, not an isolated
+	// theme constant. Render every stable state through the presenter so this
+	// guard catches profile glyphs that only become visible after projection.
+	for _, summary := range []render.ActivitySummary{
+		{Primary: "Ready", Marker: render.SummaryMarkerReady},
+		{Primary: "Waiting for your answer", Marker: render.SummaryMarkerWaiting},
+		{Primary: "Approval needed", Marker: render.SummaryMarkerApproval},
+		{Primary: "Parked", Marker: render.SummaryMarkerParked},
+		{Primary: "Interrupting", Marker: render.SummaryMarkerInterrupting},
+	} {
+		footer := testPresenter().Footer(render.ViewState{Summary: summary}, 80)
+		if containsEmoji(footer) {
+			t.Fatalf("lifecycle summary/footer contains emoji: %q", footer)
+		}
+	}
+
 	// The ask_user dialog: question + options, rendered through the presenter
 	// (buildAskDialog replaced the old renderAsk plain-text block).
 	req := chat.AskRequest{Question: "Pick one", Options: []string{"alpha", "beta"}}

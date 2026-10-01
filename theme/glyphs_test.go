@@ -60,7 +60,7 @@ func TestApplyGlyphProfile(t *testing.T) {
 	t.Cleanup(applyGlyphProfile)
 
 	swappable := func() []string {
-		return []string{PromptGlyph, ApprovalGutter, MsgGutter, SubAgent, Arrow, Loop, ShellJob, Goal, ScrollKeys, ReasoningGlyph, NewOutputGlyph, HairlineGlyph, BoxRule, RadioOn, RadioOff, CheckOn, CheckOff, Cursor}
+		return []string{PromptGlyph, ApprovalGutter, MsgGutter, SubAgent, Arrow, Loop, ShellJob, Goal, ScrollKeys, ReasoningGlyph, NewOutputGlyph, HairlineGlyph, BoxRule, RadioOn, RadioOff, CheckOn, CheckOff, Cursor, ReadyMarker, WaitingMarker, ApprovalMarker, ParkedMarker, InterruptingMarker}
 	}
 
 	t.Setenv("NIB_ASCII", "1")
@@ -81,6 +81,30 @@ func TestApplyGlyphProfile(t *testing.T) {
 	}
 	if !anyNonASCII {
 		t.Fatal("full profile should restore non-ASCII typographic glyphs")
+	}
+}
+
+func TestLifecycleMarkersCarryStableDistinctMeanings(t *testing.T) {
+	t.Cleanup(applyGlyphProfile)
+	for _, ascii := range []string{"0", "1"} {
+		t.Setenv("NIB_ASCII", ascii)
+		applyGlyphProfile()
+		markers := []string{ReadyMarker, WaitingMarker, ApprovalMarker, ParkedMarker, InterruptingMarker}
+		seen := map[string]bool{}
+		for _, marker := range markers {
+			if marker == "" || seen[marker] {
+				t.Fatalf("NIB_ASCII=%s lifecycle markers are not distinct and nonempty: %q", ascii, markers)
+			}
+			seen[marker] = true
+			if ascii == "1" && !isASCII(marker) {
+				t.Fatalf("restricted lifecycle marker %q is not ASCII", marker)
+			}
+			for _, r := range marker {
+				if (r >= 0x1F000 && r <= 0x1FAFF) || (r >= 0x2600 && r <= 0x27BF) {
+					t.Fatalf("NIB_ASCII=%s lifecycle marker %q contains emoji rune %U", ascii, marker, r)
+				}
+			}
+		}
 	}
 }
 

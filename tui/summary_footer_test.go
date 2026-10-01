@@ -7,6 +7,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/mudler/nib/chat"
+	"github.com/mudler/nib/theme"
 	"github.com/mudler/nib/tui/render"
 	"github.com/mudler/nib/tui/render/full"
 	"github.com/mudler/nib/tui/render/inline"
@@ -19,6 +20,7 @@ func TestSummaryFooterCacheInputs(t *testing.T) {
 		func(v *render.ViewState) { v.Summary.Compact = "Wait" },
 		func(v *render.ViewState) { v.Summary.Secondary = "received 2s ago" },
 		func(v *render.ViewState) { v.Summary.Counts = "shell 1" },
+		func(v *render.ViewState) { v.Summary.Marker = render.SummaryMarkerWorking },
 		func(v *render.ViewState) { v.Expanded = "more telemetry" },
 		func(v *render.ViewState) { v.HelpRight = "hint" },
 		func(v *render.ViewState) { v.Footers[0].Selected = true },
@@ -32,6 +34,25 @@ func TestSummaryFooterCacheInputs(t *testing.T) {
 		if before == footerCacheKey(next, 80) {
 			t.Fatalf("cache ignored changed footer: %+v", next)
 		}
+	}
+}
+
+func TestSummaryFooterCacheTracksActiveSpinnerOnly(t *testing.T) {
+	m := frameModel()
+	m.footerCache = &footerCache{}
+	v := render.ViewState{Summary: render.ActivitySummary{Primary: "Working", Marker: render.SummaryMarkerWorking}, Spinner: theme.SpinnerFrames()[0]}
+	a, _ := m.renderFooter(v, 80)
+	v.Spinner = theme.SpinnerFrames()[1]
+	b, _ := m.renderFooter(v, 80)
+	if a == b {
+		t.Fatalf("active cached footer did not animate: %q", a)
+	}
+	v.Summary = render.ActivitySummary{Primary: "Ready", Marker: render.SummaryMarkerReady}
+	a, _ = m.renderFooter(v, 80)
+	v.Spinner = theme.SpinnerFrames()[2]
+	b, _ = m.renderFooter(v, 80)
+	if a != b {
+		t.Fatalf("stable cached footer changed with spinner: %q != %q", a, b)
 	}
 }
 func TestSummaryFooterSilentIdleTick(t *testing.T) {

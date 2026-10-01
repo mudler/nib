@@ -1,9 +1,25 @@
 package render
 
 import (
-	"github.com/charmbracelet/x/ansi"
 	"strings"
 	"unicode"
+
+	"github.com/charmbracelet/x/ansi"
+	"github.com/mudler/nib/theme"
+)
+
+// SummaryMarker selects the semantic lifecycle marker. Active modes consume
+// the already-selected ViewState spinner frame; every other mode is stable.
+type SummaryMarker uint8
+
+const (
+	SummaryMarkerReady SummaryMarker = iota + 1
+	SummaryMarkerWorking
+	SummaryMarkerRunning
+	SummaryMarkerWaiting
+	SummaryMarkerApproval
+	SummaryMarkerParked
+	SummaryMarkerInterrupting
 )
 
 // ActivitySummary is factual presentation data. Fitting and footer placement
@@ -13,11 +29,32 @@ type ActivitySummary struct {
 	Compact   string
 	Secondary string
 	Counts    string
+	Marker    SummaryMarker
+}
+
+func summaryMarker(mode SummaryMarker, spinner string) string {
+	switch mode {
+	case SummaryMarkerWorking, SummaryMarkerRunning:
+		if spinner == "" {
+			return theme.SpinnerFrames()[0]
+		}
+		return spinner
+	case SummaryMarkerWaiting:
+		return theme.WaitingMarker
+	case SummaryMarkerApproval:
+		return theme.ApprovalMarker
+	case SummaryMarkerParked:
+		return theme.ParkedMarker
+	case SummaryMarkerInterrupting:
+		return theme.InterruptingMarker
+	default:
+		return theme.ReadyMarker
+	}
 }
 
 // summaryLine treats labels as plain text, stripping terminal commands before
 // measuring cells. No callback-supplied control may move or wrap the pinned row.
-func summaryLine(s ActivitySummary, w int) string {
+func summaryLine(s ActivitySummary, spinner string, w int) string {
 	if w <= 0 {
 		return ""
 	}
@@ -34,29 +71,31 @@ func summaryLine(s ActivitySummary, w int) string {
 	if primary == "" {
 		primary = "Ready"
 	}
-	parts := []string{primary}
+	marker := clean(summaryMarker(s.Marker, spinner))
+	if marker == "" {
+		marker = theme.ReadyMarker
+	}
+	prefix := marker + " "
+	full := prefix + primary
 	if secondary := clean(s.Secondary); secondary != "" {
-		parts = append(parts, secondary)
-	}
-	if counts := clean(s.Counts); counts != "" {
-		parts = append(parts, counts)
-	}
-	for len(parts) > 1 {
-		line := strings.Join(parts, " · ")
-		if ansi.StringWidth(line) <= w {
-			return line
+		withDuration := full + " · " + secondary
+		if ansi.StringWidth(withDuration) <= w {
+			return withDuration
 		}
-		parts = parts[:len(parts)-1]
 	}
-	if ansi.StringWidth(primary) <= w {
-		return primary
+	if ansi.StringWidth(full) <= w {
+		return full
 	}
 	if compact != "" {
 		primary = compact
 	}
-	line := ansi.Truncate(primary, w, "")
-	if line == "" {
-		return " "
-	} // a wide first rune still occupies one row
-	return line
+	compactLine := prefix + primary
+	if ansi.StringWidth(compactLine) <= w {
+		return compactLine
+	}
+	if ansi.StringWidth(marker) >= w {
+		return ansi.Truncate(marker, w, "")
+	}
+	line := marker + " " + ansi.Truncate(primary, w-ansi.StringWidth(prefix), "")
+	return strings.TrimRight(line, " ")
 }

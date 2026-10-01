@@ -3203,6 +3203,7 @@ type footerCache struct {
 	expanded, helpRight string
 	summary             render.ActivitySummary
 	newOutput           bool
+	spinner             string
 	footers             string
 	rendered            string
 	height              int
@@ -3215,6 +3216,10 @@ func footerCacheKey(v render.ViewState, w int) footerCache {
 	for _, r := range v.Footers {
 		fmt.Fprintf(&rows, "%d\x00%s\x00%s\x00%s\x00%d\x00%t\x00", r.Kind, r.Glyph, r.Text, r.Alert, r.State, r.Selected)
 	}
+	spinner := ""
+	if v.Summary.Marker == render.SummaryMarkerWorking || v.Summary.Marker == render.SummaryMarkerRunning {
+		spinner = v.Spinner
+	}
 	return footerCache{
 		summary: v.Summary, expanded: v.Expanded, helpRight: v.HelpRight,
 		width:     w,
@@ -3222,6 +3227,7 @@ func footerCacheKey(v render.ViewState, w int) footerCache {
 		badges:    v.Badges,
 		err:       v.Err,
 		newOutput: v.NewOutput,
+		spinner:   spinner,
 		footers:   rows.String(),
 	}
 }
@@ -3259,6 +3265,7 @@ func (m Model) renderFooter(v render.ViewState, w int) (string, int) {
 		key.badges == m.footerCache.badges &&
 		key.err == m.footerCache.err &&
 		key.newOutput == m.footerCache.newOutput &&
+		key.spinner == m.footerCache.spinner &&
 		key.footers == m.footerCache.footers {
 		return m.footerCache.rendered, m.footerCache.height
 	}

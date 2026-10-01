@@ -48,29 +48,34 @@ var (
 // (see init below). Render through these names rather than hardcoding the rune
 // so a single switch covers every call site.
 var (
-	Sep            = "·"  // separator between label and message / list items
-	PromptGlyph    = "›"  // input prompt
-	ApprovalGutter = "▏"  // left rule on a tool-approval block
-	MsgGutter      = "▏"  // left rule marking a user/assistant message block (full surface)
-	SubAgent       = "↳"  // sub-agent line marker
-	Cross          = "×"  // error marker
-	Arrow          = "→"  // tool-call / edit / mapping arrow
-	Loop           = "↻"  // recurring-loop footer marker
-	Goal           = "◎"  // active-goal footer marker
-	Todo           = "◐"  // todo-list footer marker
-	ShellJob       = "▷"  // shell-jobs footer marker
-	ScrollKeys     = "↑↓" // up/down navigation hint
-	SideKeys       = "←→" // left/right navigation hint
-	Idle           = "–"  // an activity chip with nothing in it
-	ReasoningGlyph = "✻"  // marks a block of model thinking/reasoning
-	NewOutputGlyph = "↓"  // footer marker: new content arrived while scrolled up
-	HairlineGlyph  = "─"  // the one-cell rule repeated under the header
-	BoxRule        = "│"  // vertical rule down the side of a collapsed trace box
-	Check          = "✓"  // tool call succeeded
-	DiffGap        = "⋯"  // elided unchanged lines between two diff hunks
-	NoticeGlyph    = "∙"  // housekeeping notice (context pruned / compacted)
-	StreamCursor   = "▍"  // end of a reply that is still streaming
-	RunningDot     = "●"  // pulses on a tool block while its call runs
+	Sep                = "·"  // separator between label and message / list items
+	PromptGlyph        = "›"  // input prompt
+	ApprovalGutter     = "▏"  // left rule on a tool-approval block
+	MsgGutter          = "▏"  // left rule marking a user/assistant message block (full surface)
+	SubAgent           = "↳"  // sub-agent line marker
+	Cross              = "×"  // error marker
+	Arrow              = "→"  // tool-call / edit / mapping arrow
+	Loop               = "↻"  // recurring-loop footer marker
+	Goal               = "◎"  // active-goal footer marker
+	Todo               = "◐"  // todo-list footer marker
+	ShellJob           = "▷"  // shell-jobs footer marker
+	ScrollKeys         = "↑↓" // up/down navigation hint
+	SideKeys           = "←→" // left/right navigation hint
+	Idle               = "–"  // an activity chip with nothing in it
+	ReasoningGlyph     = "✻"  // marks a block of model thinking/reasoning
+	NewOutputGlyph     = "↓"  // footer marker: new content arrived while scrolled up
+	HairlineGlyph      = "─"  // the one-cell rule repeated under the header
+	BoxRule            = "│"  // vertical rule down the side of a collapsed trace box
+	Check              = "✓"  // tool call succeeded
+	DiffGap            = "⋯"  // elided unchanged lines between two diff hunks
+	NoticeGlyph        = "∙"  // housekeeping notice (context pruned / compacted)
+	StreamCursor       = "▍"  // end of a reply that is still streaming
+	RunningDot         = "●"  // pulses on a tool block while its call runs
+	ReadyMarker        = "•"
+	WaitingMarker      = "?"
+	ApprovalMarker     = "!"
+	ParkedMarker       = "Ⅱ"
+	InterruptingMarker = "×"
 
 	// RadioOn/RadioOff mark a single-select ask_user option; CheckOn/CheckOff
 	// mark a multi-select one. Cursor marks whichever row is highlighted,
@@ -144,6 +149,8 @@ func applyGlyphProfile() {
 		NoticeGlyph = "-"
 		StreamCursor = "_"
 		RunningDot = "*"
+		ReadyMarker, WaitingMarker, ApprovalMarker = "ok", "?", "!"
+		ParkedMarker, InterruptingMarker = "||", "x"
 		RadioOn, RadioOff = "(*)", "( )"
 		CheckOn, CheckOff = "[x]", "[ ]"
 		Cursor = ">"
@@ -167,6 +174,8 @@ func applyGlyphProfile() {
 	NoticeGlyph = "∙"
 	StreamCursor = "▍"
 	RunningDot = "●"
+	ReadyMarker, WaitingMarker, ApprovalMarker = "•", "?", "!"
+	ParkedMarker, InterruptingMarker = "Ⅱ", "×"
 	RadioOn, RadioOff = "◉", "○"
 	CheckOn, CheckOff = "◼", "◻"
 	Cursor = "▸"

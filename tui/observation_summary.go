@@ -88,15 +88,19 @@ func observationAge(s receiptState, now time.Time) string {
 // receipt metadata cannot establish a phase or clear an approval/cancellation.
 func (m Model) activitySummary(now time.Time) render.ActivitySummary {
 	phase := m.currentActivityPhase()
-	s := render.ActivitySummary{Primary: "Ready", Compact: "Ready"}
+	s := render.ActivitySummary{Primary: "Ready", Compact: "Ready", Marker: render.SummaryMarkerReady}
 	switch phase.state {
 	case phaseInterrupting:
 		s.Primary, s.Compact = "Interrupting", "Interrupting"
+		s.Marker = render.SummaryMarkerInterrupting
 	case phaseApproval:
 		s.Primary, s.Compact = "Approval needed", "Approval"
+		s.Marker = render.SummaryMarkerApproval
 	case phaseWaiting:
 		s.Primary, s.Compact = "Waiting for your answer", "Answer needed"
+		s.Marker = render.SummaryMarkerWaiting
 	case phaseRunning:
+		s.Marker = render.SummaryMarkerRunning
 		s.Primary = fmt.Sprintf("%d tools active", phase.count)
 		s.Compact = "Tools active"
 		if phase.count == 1 {
@@ -108,8 +112,10 @@ func (m Model) activitySummary(now time.Time) render.ActivitySummary {
 		}
 	case phaseWorking:
 		s.Primary, s.Compact = "Working", "Working"
+		s.Marker = render.SummaryMarkerWorking
 	case phaseParked:
 		s.Primary, s.Compact = "Parked", "Parked"
+		s.Marker = render.SummaryMarkerParked
 	}
 	if phase.state != phaseReady && phase == m.activityPhase && !m.phaseStartedAt.IsZero() {
 		elapsed := now.Sub(m.phaseStartedAt)

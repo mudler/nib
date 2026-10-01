@@ -129,7 +129,7 @@ func TestChipsStyledByState(t *testing.T) {
 		out := p.Footer(render.ViewState{Footers: []render.FooterRow{row}}, width)
 		// The summary precedes the strip; the empty help line follows it.
 		lines := strings.Split(out, "\n")
-		if len(lines) != 3 || lines[0] != "Ready" {
+		if len(lines) != 3 || lines[0] != theme.ReadyMarker+" Ready" {
 			t.Fatalf("summary/strip/help rows: %q", out)
 		}
 		line := lines[1]

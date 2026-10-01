@@ -3,21 +3,22 @@ package render
 import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/mudler/nib/theme"
 	"strings"
 	"testing"
 )
 
 func TestActivitySummaryFit(t *testing.T) {
-	s := ActivitySummary{Primary: "Approval needed", Compact: "Approval", Secondary: "received 12s ago", Counts: "background: agents 2"}
+	s := ActivitySummary{Primary: "Waiting for your answer", Compact: "Answer needed", Secondary: "12s", Marker: SummaryMarkerWaiting}
 	for _, tc := range []struct {
 		width int
 		want  string
 	}{
-		{100, "Approval needed · received 12s ago · background: agents 2"},
-		{34, "Approval needed · received 12s ago"},
-		{20, "Approval needed"}, {10, "Approval"}, {3, "App"},
+		{100, theme.WaitingMarker + " Waiting for your answer · 12s"},
+		{26, theme.WaitingMarker + " Waiting for your answer"},
+		{16, theme.WaitingMarker + " Answer needed"}, {8, theme.WaitingMarker + " Answer"}, {1, theme.WaitingMarker},
 	} {
-		if got := summaryLine(s, tc.width); got != tc.want {
+		if got := summaryLine(s, theme.SpinnerFrames()[0], tc.width); got != tc.want {
 			t.Errorf("width %d: %q want %q", tc.width, got, tc.want)
 		}
 	}
@@ -29,10 +30,46 @@ func TestActivitySummarySingleSafeRow(t *testing.T) {
 		{},
 	} {
 		for w := 1; w < 100; w++ {
-			got := summaryLine(s, w)
+			got := summaryLine(s, theme.SpinnerFrames()[0], w)
 			if lipgloss.Width(got) > w || strings.ContainsAny(got, "\n\r\t\x07\x1b\u2028\u2029") || lipgloss.Height(got) != 1 {
 				t.Fatalf("width %d: %q", w, got)
 			}
+		}
+	}
+}
+
+func TestActivitySummaryMarkersAnimateOnlyActiveStates(t *testing.T) {
+	frames := theme.SpinnerFrames()
+	for _, marker := range []SummaryMarker{SummaryMarkerWorking, SummaryMarkerRunning} {
+		a := summaryLine(ActivitySummary{Primary: "Working", Marker: marker}, frames[0], 80)
+		b := summaryLine(ActivitySummary{Primary: "Working", Marker: marker}, frames[1], 80)
+		if a == b {
+			t.Fatalf("active marker %v did not animate: %q", marker, a)
+		}
+	}
+	for _, marker := range []SummaryMarker{SummaryMarkerReady, SummaryMarkerWaiting, SummaryMarkerApproval, SummaryMarkerParked, SummaryMarkerInterrupting} {
+		a := summaryLine(ActivitySummary{Primary: "state", Marker: marker}, frames[0], 80)
+		b := summaryLine(ActivitySummary{Primary: "state", Marker: marker}, frames[1], 80)
+		if a != b {
+			t.Fatalf("stable marker %v animated: %q != %q", marker, a, b)
+		}
+	}
+}
+
+func TestActivitySummaryStableMarkerCopy(t *testing.T) {
+	for _, tc := range []struct {
+		mode SummaryMarker
+		want string
+	}{
+		{SummaryMarkerReady, theme.ReadyMarker},
+		{SummaryMarkerWaiting, theme.WaitingMarker},
+		{SummaryMarkerApproval, theme.ApprovalMarker},
+		{SummaryMarkerParked, theme.ParkedMarker},
+		{SummaryMarkerInterrupting, theme.InterruptingMarker},
+	} {
+		got := summaryLine(ActivitySummary{Primary: "state", Marker: tc.mode}, "different-frame", 80)
+		if got != tc.want+" state" {
+			t.Errorf("marker %v = %q, want %q", tc.mode, got, tc.want+" state")
 		}
 	}
 }
@@ -42,7 +79,7 @@ func TestActivitySummaryFooterPositionAndHeight(t *testing.T) {
 	out := ansi.Strip(b.Footer(v, 80))
 	lines := strings.Split(out, "\n")
 	for i, l := range lines {
-		if l == "Parked" {
+		if strings.HasSuffix(l, "Parked") {
 			if i+1 >= len(lines) || !strings.Contains(lines[i+1], "logs") {
 				t.Fatal(out)
 			}
