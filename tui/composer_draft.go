@@ -118,11 +118,29 @@ func (m *Model) applyComposerDisplay(text string) {
 		be--
 	}
 	if be > start {
-		for _, span := range m.draft.projection.Spans {
-			if span.Kind == draftPaste && start < span.End && ae > span.Start {
+		for i, span := range m.draft.projection.Spans {
+			if start >= span.End || ae <= span.Start {
+				continue
+			}
+			if span.Kind == draftPaste {
 				m.hint = errDraftOpaque.Error()
 				m.projectDraft(start)
 				return
+			}
+			// A range diff can include unchanged control pictures between
+			// changed letters (e.g. Alt+U). Those pictures are not source.
+			// Reject ambiguous replacements, but allow insertions, deletions,
+			// and edits around controls. Literal pictures remain ordinary text.
+			seg := m.draft.segments[i]
+			if seg.Text != seg.display {
+				source := []rune(seg.Text)
+				for pos := max(start, span.Start); pos < min(ae, span.End); pos++ {
+					if source[pos-span.Start] != a[pos] {
+						m.hint = "cannot replace projected control characters; original payload retained"
+						m.projectDraft(start)
+						return
+					}
+				}
 			}
 		}
 	}

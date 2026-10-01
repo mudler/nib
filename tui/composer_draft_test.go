@@ -313,3 +313,53 @@ func TestComposerAggregateSmallPastes(t *testing.T) {
 		t.Fatal("aggregate recovery lost payload")
 	}
 }
+
+func TestComposerInlineCaseKeysPreserveSource(t *testing.T) {
+	for _, separator := range []string{"\t", "\r", "␉", "␍", "\t␉\r␍"} {
+		for _, tc := range []struct{ key, input, changed string }{
+			{"u", "a%sb", "A%sB"},
+			{"l", "A%sB", "a%sb"},
+			{"c", "a%sb", "A%sb"},
+		} {
+			t.Run(tc.key+"/"+separator, func(t *testing.T) {
+				payload := strings.ReplaceAll(tc.input, "%s", separator)
+				want := strings.ReplaceAll(tc.changed, "%s", separator)
+				// Multi-rune replacements spanning projected controls are rejected.
+				// Capitalization only changes the initial rune and remains safe.
+				if tc.key != "c" && strings.ContainsAny(separator, "\t\r") {
+					want = payload
+				}
+				m := newQueueTestModel()
+				m.loading = true
+				m = composerPaste(m, payload)
+				m = update(m, tea.KeyMsg{Type: tea.KeyHome})
+				m = update(m, tea.KeyMsg{Type: tea.KeyRunes, Alt: true, Runes: []rune(tc.key)})
+				if got := m.draft.Expanded(); got != want {
+					t.Fatalf("case key corrupted source: got %q, want %q", got, want)
+				}
+				m = update(m, tea.KeyMsg{Type: tea.KeyEnter})
+				if len(m.queue) != 1 || m.queue[0] != want {
+					t.Fatalf("queue source: %q, want %q", m.queue, want)
+				}
+			})
+		}
+	}
+}
+
+func TestComposerTypingAndDeletionAroundInlineTab(t *testing.T) {
+	m := newQueueTestModel()
+	m = composerPaste(m, "a\tb␉")
+	m = update(m, tea.KeyMsg{Type: tea.KeyHome})
+	m = update(m, tea.KeyMsg{Type: tea.KeyRight})
+	m = composerKey(m, "x")
+	m = update(m, tea.KeyMsg{Type: tea.KeyRight})
+	m = composerKey(m, "y")
+	if got := m.draft.Expanded(); got != "ax\tyb␉" {
+		t.Fatalf("typing around tab: %q", got)
+	}
+	m = update(m, tea.KeyMsg{Type: tea.KeyBackspace})
+	m = update(m, tea.KeyMsg{Type: tea.KeyBackspace})
+	if got := m.draft.Expanded(); got != "axb␉" {
+		t.Fatalf("deleting tab: %q", got)
+	}
+}
