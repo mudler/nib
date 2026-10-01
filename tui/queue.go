@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -102,6 +103,7 @@ func (m *Model) releaseQueueFront() bool {
 	m.parked = false
 	m.loading = true
 	m.interruptArmed = false
+	m.syncActivityPhase(time.Now())
 	m.startThinking()
 	return true
 }
@@ -132,6 +134,7 @@ func (m *Model) flushQueueAsTurn() tea.Cmd {
 		m.loading = true
 		m.interruptArmed = false
 		m.status = ""
+		m.syncActivityPhase(time.Now())
 		return m.sendMessage(combined)
 	}
 

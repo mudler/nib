@@ -55,6 +55,7 @@ func (m *Model) dispatchLoop(payload string) tea.Cmd {
 			m.parked = false
 			m.loading = true
 			m.interruptArmed = false
+			m.syncActivityPhase(time.Now())
 			m.startThinking()
 			m.updateViewport()
 		}
@@ -68,6 +69,7 @@ func (m *Model) dispatchLoop(payload string) tea.Cmd {
 		m.appendMessage(ChatMessage{Role: "user", Content: payload})
 		m.loading = true
 		m.interruptArmed = false
+		m.syncActivityPhase(time.Now())
 		m.startThinking()
 		m.updateViewport()
 		return m.sendMessage(text)
@@ -96,6 +98,7 @@ func (m *Model) startLoop(a slash.Action) tea.Cmd {
 		m.appendMessage(ChatMessage{Role: "user", Content: a.Payload})
 		m.loading = true
 		m.interruptArmed = false
+		m.syncActivityPhase(time.Now())
 		m.startThinking()
 		m.updateViewport()
 		return m.sendMessage(selfPacedPreamble(a.Payload) + first)
@@ -113,6 +116,7 @@ func (m *Model) startLoop(a slash.Action) tea.Cmd {
 	m.appendMessage(ChatMessage{Role: "user", Content: a.Payload})
 	m.loading = true
 	m.interruptArmed = false
+	m.syncActivityPhase(time.Now())
 	m.startThinking()
 	m.updateViewport()
 	return m.sendMessage(first)

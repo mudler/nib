@@ -35,34 +35,41 @@ func TestSummaryFooterCacheInputs(t *testing.T) {
 	}
 }
 func TestSummaryFooterSilentIdleTick(t *testing.T) {
-	for _, parked := range []bool{false, true} {
-		m := frameModel()
-		m.footerCache = &footerCache{}
-		m.parked = parked
-		m.toolEvents = newToolEventQueue()
-		m.toolEvents.begin()
-		now := time.Unix(100, 0)
-		m.toolEvents.observationCallback()(chat.Observation{OwnerKnown: true, HasText: true, Received: now, Order: 1})
-		before := m.toolEvents.rootObservation()
-		first := m.viewStateAt(now.Add(time.Second))
-		a, ah := m.renderFooter(first, 120)
-		next, cmd := m.Update(hudTickMsg{})
-		m = next.(Model)
-		if cmd == nil {
-			t.Fatal("existing idle tick stopped")
-		}
-		second := m.viewStateAt(now.Add(3 * time.Second))
-		b, bh := m.renderFooter(second, 120)
-		if a == b || ah != bh || first.Summary.Primary != second.Summary.Primary || !strings.Contains(b, "3s ago") {
-			t.Fatalf("%q -> %q", a, b)
-		}
-		if before != m.toolEvents.rootObservation() {
-			t.Fatal("tick fabricated an observation")
-		}
-		c, ch := m.renderFooter(second, 120)
-		if c != b || ch != bh {
-			t.Fatal("unchanged cache differs")
-		}
+	for _, state := range []struct {
+		name   string
+		parked bool
+	}{{name: "working"}, {name: "parked", parked: true}} {
+		t.Run(state.name, func(t *testing.T) {
+			m := frameModel()
+			m.footerCache = &footerCache{}
+			m.loading = !state.parked
+			m.parked = state.parked
+			m.toolEvents = newToolEventQueue()
+			m.toolEvents.begin()
+			now := time.Unix(100, 0)
+			m.syncActivityPhase(now)
+			m.toolEvents.observationCallback()(chat.Observation{OwnerKnown: true, HasText: true, Received: now, Order: 1})
+			before := m.toolEvents.rootObservation()
+			first := m.viewStateAt(now.Add(time.Second))
+			a, ah := m.renderFooter(first, 120)
+			next, cmd := m.Update(hudTickMsg{})
+			m = next.(Model)
+			if cmd == nil {
+				t.Fatal("existing idle tick stopped")
+			}
+			second := m.viewStateAt(now.Add(3 * time.Second))
+			b, bh := m.renderFooter(second, 120)
+			if a == b || ah != bh || first.Summary.Primary != second.Summary.Primary || !strings.Contains(b, "3s") || strings.Contains(b, "ago") {
+				t.Fatalf("%q -> %q", a, b)
+			}
+			if before != m.toolEvents.rootObservation() {
+				t.Fatal("tick fabricated an observation")
+			}
+			c, ch := m.renderFooter(second, 120)
+			if c != b || ch != bh {
+				t.Fatal("unchanged cache differs")
+			}
+		})
 	}
 }
 func TestSummaryFooterLayoutAndApproval(t *testing.T) {

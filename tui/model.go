@@ -256,6 +256,11 @@ type Model struct {
 	// renderFooter falls back to an uncached render for.
 	footerCache *footerCache
 	loading     bool
+	// activityPhase and phaseStartedAt identify the lifecycle condition shown
+	// in the pinned footer. A zero start is intentional for restored or
+	// otherwise provenance-incomplete state: the footer then omits duration.
+	activityPhase  phaseIdentity
+	phaseStartedAt time.Time
 	// forceFollow makes the next updateViewport scroll to the bottom regardless
 	// of where the user had scrolled to. Set only by user-initiated actions
 	// (sending a message, answering an approval or a question) — passive
@@ -1177,7 +1182,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// the dialog the way Esc does, and never reaches quit.
 		if msg.Type == tea.KeyCtrlC {
 			if !m.dialogOpen() {
-				return m.handleCtrlC()
+				next, cmd := m.handleCtrlC()
+				nm := next.(Model)
+				nm.syncActivityPhase(time.Now())
+				return nm, cmd
 			}
 			m.disarmExit()
 			msg = tea.KeyMsg{Type: tea.KeyEsc}
@@ -1420,7 +1428,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		switch msg.Type {
 		case tea.KeyEsc:
-			return m.handleEsc()
+			next, cmd := m.handleEsc()
+			nm := next.(Model)
+			nm.syncActivityPhase(time.Now())
+			return nm, cmd
 
 		case tea.KeyEnd:
 			// Only jump when the composer is empty — bubbles' textarea binds End
@@ -1668,6 +1679,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.clearComposer()
 				m.completion.sync("")
 				m.interruptArmed = false
+				m.syncActivityPhase(time.Now())
 				if m.parked {
 					m.releaseQueueFront()
 				}
@@ -1812,6 +1824,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.modelPicker.filter()
 			}
 		}
+		m.syncActivityPhase(time.Now())
 		m.updateViewport()
 		return m, nil
 
@@ -1836,6 +1849,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.endThoughtStep()
 		// The turn is over, so a call still marked running will not report.
 		m.clearRunning()
+		m.syncActivityPhase(time.Now())
 		m.reasoningResetPending = false
 		// The turn is over: move the generation now, not only at the next
 		// dispatch. A boundary or delta this turn sent just before it
@@ -1992,6 +2006,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.parked = false
 			m.loading = true
 			m.interruptArmed = false
+			m.syncActivityPhase(time.Now())
 			m.startThinking()
 			// Invalidate any orphan poll wake-up. A poll wake-up only exists to
 			// nudge the run if it stays stuck on background work; once that work
@@ -2002,11 +2017,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Reminders ride wakeupGen and are left intact.
 			m.pollGen++
 		}
+		// Synchronize after releaseQueueFront: a parked notification either
+		// leaves the run Parked or immediately releases a queued follow-up and
+		// returns it to Working. Recording Parked before the release would
+		// overwrite the authoritative post-release phase.
+		m.syncActivityPhase(time.Now())
 		m.updateViewport()
 		cmds = append(cmds, m.listenPark())
 
 	case compactResultMsg:
 		m.loading = false
+		m.syncActivityPhase(time.Now())
 		m.status = ""
 		m.stopThinking()
 		if msg.err != nil {
@@ -2157,12 +2178,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.parked = false
 			m.loading = true
 			m.interruptArmed = false
+			m.syncActivityPhase(time.Now())
 			m.startThinking()
 			m.updateViewport()
 		} else if m.sessionReady && m.session != nil && !m.loading && !m.awaitingApproval && !m.awaitingAsk && !m.awaitingResume {
 			m.appendMessage(ChatMessage{Role: "user", Content: prompt})
 			m.loading = true
 			m.interruptArmed = false
+			m.syncActivityPhase(time.Now())
 			m.startThinking()
 			m.updateViewport()
 			cmds = append(cmds, m.sendMessage(text))
@@ -2276,7 +2299,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.awaitingApproval = true
 		m.approvalEditing = false // every approval starts in key-driven choice mode
 		m.loading = false         // Allow user input for approval
-		m.textarea.Focus()        // Ensure textarea is focused for input
+		m.syncActivityPhase(time.Now())
+		m.textarea.Focus() // Ensure textarea is focused for input
 		m.updateViewport()
 		m.ringBell()
 		// The next request is read only once this one is answered, in
@@ -2300,6 +2324,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.askList.Checked = make([]bool, len(req.Options))
 		}
 		m.loading = false
+		m.syncActivityPhase(time.Now())
 		m.textarea.Focus()
 		m.updateViewport()
 		m.ringBell()
@@ -2364,14 +2389,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case toolEventsReadyMsg:
 		m.applyToolEvents(m.toolEvents.drain())
+		m.syncActivityPhase(time.Now())
 		cmds = append(cmds, m.listenToolEvents())
 	case toolEventsMsg:
 		m.applyToolEvents(msg)
+		m.syncActivityPhase(time.Now())
 	case toolStartMsg:
 		m.startTool(chat.ToolStart(msg))
+		m.syncActivityPhase(time.Now())
 		m.updateViewport()
 	case toolResultMsg:
 		m.applyToolResult(chat.ToolResult(msg))
+		m.syncActivityPhase(time.Now())
 
 	case animTickMsg:
 		m.advanceAnimation()
@@ -2458,6 +2487,7 @@ func (m *Model) dispatchResolved(input string) tea.Cmd {
 	case slash.KindCompact:
 		m.loading = true
 		m.interruptArmed = false
+		m.syncActivityPhase(time.Now())
 		m.status = "Compacting conversation…"
 		return m.compactCmd()
 	case slash.KindModelPick:
@@ -2682,6 +2712,7 @@ func (m *Model) dispatchResolved(input string) tea.Cmd {
 		files, overrides := attachstage.BuildSend(m.pending, action)
 		m.loading = true
 		m.interruptArmed = false
+		m.syncActivityPhase(time.Now())
 		m.status = ""
 		// Attach user-supplied image files to the ChatMessage so the
 		// viewport can render them inline alongside the user's text.
@@ -2785,6 +2816,7 @@ func (m Model) loadModelsCmd(requestID uint64) tea.Cmd {
 func (m *Model) startGoalTurn(kickoff string) tea.Cmd {
 	m.loading = true
 	m.interruptArmed = false
+	m.syncActivityPhase(time.Now())
 	m.status = ""
 	return m.sendMessage(kickoff)
 }
@@ -3101,6 +3133,7 @@ func (m Model) resolveApproval(resp chat.ToolCallResponse) (tea.Model, tea.Cmd) 
 	m.clearReasoning()
 	m.reasoningResetPending = false
 	m.loading = true
+	m.syncActivityPhase(time.Now())
 	m.status = theme.StatusRunning
 	m.updateViewportFollow()
 	return m, m.answerToolCall(resp)
@@ -3128,6 +3161,7 @@ func (m Model) resolveAsk(answer string) (tea.Model, tea.Cmd) {
 	m.pendingAsk = nil
 	m.askList = nil
 	m.loading = true
+	m.syncActivityPhase(time.Now())
 	m.startThinking()
 	m.updateViewportFollow()
 	m.askResponseChan <- answer

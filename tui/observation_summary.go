@@ -9,6 +9,56 @@ import (
 	"time"
 )
 
+type phaseState uint8
+
+const (
+	phaseReady phaseState = iota + 1
+	phaseWorking
+	phaseRunning
+	phaseWaiting
+	phaseApproval
+	phaseParked
+	phaseInterrupting
+)
+
+type phaseIdentity struct {
+	state phaseState
+	tool  string
+	count int
+}
+
+func (m Model) currentActivityPhase() phaseIdentity {
+	switch {
+	case m.interruptArmed:
+		return phaseIdentity{state: phaseInterrupting}
+	case m.awaitingApproval:
+		return phaseIdentity{state: phaseApproval}
+	case m.awaitingAsk:
+		return phaseIdentity{state: phaseWaiting}
+	case len(m.running) > 0:
+		p := phaseIdentity{state: phaseRunning, count: len(m.running)}
+		if len(m.running) == 1 {
+			p.tool = render.TruncateRunes(strings.TrimSpace(strings.Join(strings.Fields(m.running[0].name), " ")), 40)
+		}
+		return p
+	case m.loading:
+		return phaseIdentity{state: phaseWorking}
+	case m.parked:
+		return phaseIdentity{state: phaseParked}
+	default:
+		return phaseIdentity{state: phaseReady}
+	}
+}
+
+func (m *Model) syncActivityPhase(now time.Time) {
+	phase := m.currentActivityPhase()
+	if phase == m.activityPhase {
+		return
+	}
+	m.activityPhase = phase
+	m.phaseStartedAt = now
+}
+
 func textReceiptAge(s receiptState, now time.Time) string {
 	// The accepted callback contract has incomplete text attribution, even
 	// in fresh epochs. Absence cannot establish "not yet received".
@@ -37,29 +87,36 @@ func observationAge(s receiptState, now time.Time) string {
 // activitySummary reads authoritative UI lifecycle state. Status strings and
 // receipt metadata cannot establish a phase or clear an approval/cancellation.
 func (m Model) activitySummary(now time.Time) render.ActivitySummary {
-	s := render.ActivitySummary{Primary: "Ready", Compact: "Ready", Secondary: observationAge(m.toolEvents.rootObservation(), now)}
-	switch {
-	case m.interruptArmed:
-		s.Primary, s.Compact = "Interrupting foreground", "Interrupting"
-	case m.awaitingApproval:
+	phase := m.currentActivityPhase()
+	s := render.ActivitySummary{Primary: "Ready", Compact: "Ready"}
+	switch phase.state {
+	case phaseInterrupting:
+		s.Primary, s.Compact = "Interrupting", "Interrupting"
+	case phaseApproval:
 		s.Primary, s.Compact = "Approval needed", "Approval"
-	case m.awaitingAsk:
+	case phaseWaiting:
 		s.Primary, s.Compact = "Waiting for your answer", "Answer needed"
-	// No current callback supplies scoped operational notice start/end evidence.
-	// Exclude status strings instead of interpreting them as phases.
-	case len(m.running) > 0:
-		s.Primary = fmt.Sprintf("%d tools active", len(m.running))
+	case phaseRunning:
+		s.Primary = fmt.Sprintf("%d tools active", phase.count)
 		s.Compact = "Tools active"
-		if len(m.running) == 1 {
+		if phase.count == 1 {
 			s.Primary = "Running tool"
-			if name := strings.TrimSpace(m.running[0].name); name != "" {
-				s.Primary = "Running " + render.TruncateRunes(strings.Join(strings.Fields(name), " "), 40)
+			s.Compact = "Running"
+			if phase.tool != "" {
+				s.Primary = "Running " + phase.tool
 			}
 		}
-	case m.loading:
+	case phaseWorking:
 		s.Primary, s.Compact = "Working", "Working"
-	case m.parked:
+	case phaseParked:
 		s.Primary, s.Compact = "Parked", "Parked"
+	}
+	if phase.state != phaseReady && phase == m.activityPhase && !m.phaseStartedAt.IsZero() {
+		elapsed := now.Sub(m.phaseStartedAt)
+		if elapsed < 0 {
+			elapsed = 0
+		}
+		s.Secondary = humanAge(elapsed)
 	}
 	s.Counts = backgroundCounts(m.jobs, m.shellJobs.List())
 	return s
