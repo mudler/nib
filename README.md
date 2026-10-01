@@ -309,6 +309,50 @@ ui:
 Both apply live with `/settings`, for example
 `/settings ui.footer_front context,usage`.
 
+### Pasting into the composer
+
+Small pastes stay inline. nib folds a paste into a compact block at six or
+more logical lines, or more than 1,000 Unicode code points. Logical lines count
+LF characters plus one, including a trailing empty line; screen wrapping does
+not count. Each block shows its ID, line count, and UTF-8 byte count.
+
+Bracketed paste inserts newlines without submitting the message. `Ctrl+V` reads
+the raw clipboard text, including tabs and CRLF line endings. Press `Enter`
+outside the paste panel to send, or to queue the message during a running turn.
+
+| Key | Action |
+|-----|--------|
+| `Alt+P` | Preview the block under the cursor, or the first block if none is under it |
+| `e` in preview | Edit the block inside nib |
+| `d` in preview | Remove the block |
+| Left/Right in the panel | Move one code point |
+| Up/Down or Page Up/Page Down in the panel | Move 400 code points |
+| Home/End in the panel | Move to the start/end of the block |
+| `Ctrl+S` while editing | Save the block without sending |
+| `Esc` in the panel | Close the preview or cancel unsaved edits |
+
+The panel shows a bounded portion of the block around its cursor. You cannot
+type inside a compact label; use the panel to edit its payload. Deleting part
+of a label removes the whole block. Typing label-like text does not create a
+reference to another paste.
+
+The draft accepts at most 1 MiB (1,048,576 bytes) of valid UTF-8 across all its
+text and blocks. nib rejects oversized additions or edits with an explicit
+error and retains the previous draft. This limit is not a model context limit.
+
+Compact blocks preserve the full payload, ordering, and whitespace through
+submission, queue editing, and input history recall. Compact transcript labels
+are display-only: folding does not reduce the message's token usage. Model
+context limits still apply. Slash commands and attachment references retain
+their existing interpretation when you submit.
+
+The composer displays inline tabs and other control characters as visible
+control pictures or replacement symbols. It retains their original bytes in
+the draft. nib rejects ambiguous transformations across projected controls or
+paste labels instead of replacing the payload with display text. An aggregate
+guard folds inline runs when the display reaches 9,000 logical lines, before
+the textarea can clip them.
+
 ### Watching tool calls
 
 A tool call shows in the TUI as soon as it starts. Its line has a pulsing `●`,
@@ -327,6 +371,11 @@ Completed calls no longer appear as running, including fast calls and concurrent
 calls to the same tool. Late events from a previous turn do not restart them.
 Press `Ctrl+R` to expand or fold all tool output and model thinking together.
 In full-screen mode, click a block to expand or fold only that block.
+
+Live model thinking uses the same reveal timing, cursor, and arrival fade as
+assistant replies, while keeping its plain-text layout. Folding or interrupting
+thinking preserves all received text, including text not yet revealed by the
+animation.
 
 The ChatGPT/Codex HTTP provider (`openai-codex`) streams public reasoning summaries
 as the server sends them, before the final answer completes. If the server sends
