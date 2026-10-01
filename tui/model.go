@@ -307,6 +307,8 @@ type Model struct {
 	// which times the "thought for 4s" summary.
 	stepThought    int
 	reasoningSince time.Time
+	// reasoningShown is a display-only byte cut, independent of the reply.
+	reasoningShown int
 	// wakeupGen invalidates pending reminder/self-paced wake-up ticks: a fired
 	// tea.Tick is honored only if its captured gen still matches. Bumped by
 	// /loop stop to cancel a self-paced loop. Poll wake-ups ride pollGen instead.
@@ -2199,6 +2201,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					continue
 				}
 				if m.reasoning == "" {
+					m.reasoningShown = 0
 					m.reasoningSince = time.Now()
 				}
 				m.reasoning += ev.text
@@ -3057,7 +3060,7 @@ func (m Model) resolveApproval(resp chat.ToolCallResponse) (tea.Model, tea.Cmd) 
 	m.textarea.Reset()
 	// The trace that led to this call is answered now; leaving it up reads as
 	// the model re-thinking a step the user already decided.
-	m.reasoning = ""
+	m.clearReasoning()
 	m.reasoningResetPending = false
 	m.loading = true
 	m.status = theme.StatusRunning
@@ -3753,7 +3756,9 @@ func (m Model) viewState() render.ViewState {
 		Spinner: m.spinner.View(),
 		Speed:   m.liveSpeed(),
 		Reasoning: render.Reasoning{
-			Text:      m.reasoning,
+			Text:      m.visibleReasoning(),
+			Live:      m.reasoning != "" && !m.reasoningSince.IsZero(),
+			Arriving:  m.reasoningArriving(),
 			Collapsed: m.reasoningCollapsed,
 			MaxLines:  theme.ReasoningMaxLines,
 			Elapsed:   m.reasoningElapsed(),

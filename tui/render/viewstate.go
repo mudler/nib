@@ -92,6 +92,10 @@ type Message struct {
 // theme.ReasoningMaxLines, and read by both presenters' Reasoning to build a
 // render.CollapsibleBox.
 type Reasoning struct {
+	// Live enables the shared streaming cursor even before the first rune.
+	Live bool
+	// Arriving uses the same arrival fade as assistant entries.
+	Arriving  float64
 	Text      string
 	Collapsed bool
 	MaxLines  int

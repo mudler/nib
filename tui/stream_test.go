@@ -74,6 +74,16 @@ func TestReasoningDeltaTailsWhenCollapsed(t *testing.T) {
 		next, _ = next.(Model).Update(delta(line + "\n"))
 	}
 
+	// Provider bursts update the authoritative buffer immediately; render ticks
+	// catch up independently before the collapsed tail is inspected.
+	for i := 0; i < 200 && next.(Model).reasoningBacklog(); i++ {
+		next, _ = next.(Model).Update(animTickMsg{})
+	}
+	cur := next.(Model)
+	if cur.visibleReasoning() != cur.reasoning || cur.reasoningBacklog() {
+		t.Fatal("reveal did not catch up to the complete reasoning buffer")
+	}
+
 	out := next.(Model).viewport.View()
 	if !strings.Contains(out, "trace line t") {
 		t.Error("collapsed box does not show the newest streamed line")

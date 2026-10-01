@@ -8,7 +8,7 @@ import (
 	"unicode/utf8"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/x/ansi"
+	"github.com/mudler/nib/tui/render"
 
 	"github.com/mudler/nib/theme"
 )
@@ -109,13 +109,17 @@ func (m Model) listenAnim() tea.Cmd {
 
 // animating reports whether another frame would change the screen.
 func (m Model) animating() bool {
-	return m.streamBacklog() || m.fading()
+	return m.streamBacklog() || m.reasoningBacklog() || m.reasoningArriving() > 0 || m.fading()
 }
 
 // advanceAnimation moves the reveal one frame forward, and ends a reveal
 // after the turn once all of it is drawn, so the entry goes back to the
 // cached final render.
 func (m *Model) advanceAnimation() {
+	m.reasoningShown = revealCut(m.reasoning, m.reasoningShown)
+	if m.reasoningBacklog() {
+		m.reasoningShown = advanceReveal(m.reasoning, m.reasoningShown)
+	}
 	if m.streamBacklog() {
 		m.advanceStreamReveal()
 	}
@@ -173,13 +177,30 @@ func (m *Model) revealAfterTurn(i int, streamed bool) {
 func (m *Model) advanceStreamReveal() {
 	i, _ := m.revealTarget()
 	text := m.messages[i].Content
-	hidden := text[m.streamShown:]
-	n := utf8.RuneCountInString(hidden)
-	step := (n + streamRevealDrainFrames - 1) / streamRevealDrainFrames
-	for j := 0; j < step && m.streamShown < len(text); j++ {
-		_, size := utf8.DecodeRuneInString(text[m.streamShown:])
-		m.streamShown += size
+	m.streamShown = advanceReveal(text, m.streamShown)
+}
+
+// revealCut clamps replacement text to a valid rune boundary.
+func revealCut(text string, shown int) int {
+	if shown > len(text) {
+		shown = len(text)
 	}
+	for shown > 0 && shown < len(text) && !utf8.RuneStart(text[shown]) {
+		shown--
+	}
+	return shown
+}
+
+// advanceReveal is the shared ease-out for both live text lanes.
+func advanceReveal(text string, shown int) int {
+	shown = revealCut(text, shown)
+	n := utf8.RuneCountInString(text[shown:])
+	step := (n + streamRevealDrainFrames - 1) / streamRevealDrainFrames
+	for j := 0; j < step && shown < len(text); j++ {
+		_, size := utf8.DecodeRuneInString(text[shown:])
+		shown += size
+	}
+	return shown
 }
 
 // fading reports whether an entry near the end of the transcript is still
@@ -211,7 +232,7 @@ func (m Model) visibleStreamContent(content string) string {
 	if m.streamShown >= len(content) {
 		return content
 	}
-	return content[:m.streamShown]
+	return content[:revealCut(content, m.streamShown)]
 }
 
 // renderStreaming renders the visible part of the streaming reply so it looks
@@ -314,18 +335,5 @@ func fenceClose(block string) string {
 // cursor goes on the last line that has text. When that line is already full
 // the cursor starts a new line.
 func appendCursor(out, cursor string, width int) string {
-	lines := strings.Split(out, "\n")
-	i := len(lines) - 1
-	for i > 0 && strings.TrimSpace(ansi.Strip(lines[i])) == "" {
-		i--
-	}
-	visible := strings.TrimRight(ansi.Strip(lines[i]), " ")
-	w := ansi.StringWidth(visible)
-	line := ansi.Truncate(lines[i], w, "")
-	if w+ansi.StringWidth(cursor) > width {
-		lines[i] = line + "\n" + cursor
-	} else {
-		lines[i] = line + cursor
-	}
-	return strings.Join(lines, "\n")
+	return render.AppendCursor(out, cursor, width)
 }

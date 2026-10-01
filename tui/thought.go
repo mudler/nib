@@ -26,15 +26,15 @@ import (
 // that message stays the tail and streamingActive stays true.
 func (m *Model) foldReasoning() {
 	text := m.reasoning
-	m.reasoning = ""
 	if strings.TrimSpace(text) == "" {
+		m.clearReasoning()
 		return
 	}
 	var took time.Duration
 	if !m.reasoningSince.IsZero() {
 		took = time.Since(m.reasoningSince)
 	}
-	m.reasoningSince = time.Time{}
+	m.clearReasoning()
 	entry := ChatMessage{Role: "thought", Content: text, Meta: theme.ThoughtSummary(took), arrived: time.Now()}
 	if m.streamingActive && len(m.messages) > 0 {
 		tail := len(m.messages) - 1
@@ -71,4 +71,29 @@ func (m *Model) stepThoughtEntry() *ChatMessage {
 func (m *Model) endThoughtStep() {
 	m.foldReasoning()
 	m.stepThought = 0
+}
+
+// clearReasoning discards display progress with the authoritative live buffer.
+func (m *Model) clearReasoning() {
+	m.reasoning = ""
+	m.reasoningShown = 0
+	m.reasoningSince = time.Time{}
+}
+
+func (m Model) visibleReasoning() string {
+	if m.reasoningSince.IsZero() {
+		return m.reasoning
+	}
+	return m.reasoning[:revealCut(m.reasoning, m.reasoningShown)]
+}
+
+func (m Model) reasoningBacklog() bool {
+	return m.loading && !m.reasoningSince.IsZero() && m.reasoningShown < len(m.reasoning)
+}
+
+func (m Model) reasoningArriving() float64 {
+	if !m.loading || m.reasoning == "" {
+		return 0
+	}
+	return m.arriving(ChatMessage{arrived: m.reasoningSince})
 }

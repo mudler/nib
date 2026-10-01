@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // TruncateLine caps a single line at w display cells, ending with an ellipsis.
@@ -137,4 +138,22 @@ func ShortID(id string) string {
 		return id[:8]
 	}
 	return id
+}
+
+// AppendCursor places a live cursor after the last visible cell, wrapping when full.
+func AppendCursor(out, cursor string, width int) string {
+	lines := strings.Split(out, "\n")
+	i := len(lines) - 1
+	for i > 0 && strings.TrimSpace(ansi.Strip(lines[i])) == "" {
+		i--
+	}
+	visible := strings.TrimRight(ansi.Strip(lines[i]), " ")
+	w := ansi.StringWidth(visible)
+	line := ansi.Truncate(lines[i], w, "")
+	if w+ansi.StringWidth(cursor) > width {
+		lines[i] = line + "\n" + cursor
+	} else {
+		lines[i] = line + cursor
+	}
+	return strings.Join(lines, "\n")
 }
