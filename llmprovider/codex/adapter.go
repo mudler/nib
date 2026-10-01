@@ -252,6 +252,17 @@ type codexInput struct {
 	Tools     []codexTool `json:"tools,omitempty"`
 }
 
+func (i codexInput) MarshalJSON() ([]byte, error) {
+	type input codexInput
+	if i.Type != "function_call_output" {
+		return json.Marshal(input(i))
+	}
+	return json.Marshal(struct {
+		input
+		Output string `json:"output"`
+	}{input: input(i), Output: i.Output})
+}
+
 type codexTool struct {
 	Type        string `json:"type"`
 	Name        string `json:"name"`

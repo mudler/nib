@@ -504,3 +504,44 @@ func TestFullRequestBodyWithAllFeatures(t *testing.T) {
 		t.Fatalf("first input should be additional_tools, got %s", cr.Input[0].Type)
 	}
 }
+
+func TestTranslateRequestPreservesEmptyToolOutputs(t *testing.T) {
+	l := New(Config{Model: "gpt-5"})
+	messages := []openai.ChatCompletionMessage{
+		{Role: openai.ChatMessageRoleUser, Content: "run tools"},
+		{Role: openai.ChatMessageRoleAssistant, ToolCalls: []openai.ToolCall{
+			{ID: "call_empty", Type: openai.ToolTypeFunction, Function: openai.FunctionCall{Name: "empty", Arguments: `{}`}},
+			{ID: "call_value", Type: openai.ToolTypeFunction, Function: openai.FunctionCall{Name: "value", Arguments: `{}`}},
+		}},
+		{Role: openai.ChatMessageRoleTool, ToolCallID: "call_empty", Content: ""},
+		{Role: openai.ChatMessageRoleTool, ToolCallID: "call_value", Content: "result"},
+	}
+	meta := l.session.prepareTurn(messages)
+	body, err := l.translateRequest(openai.ChatCompletionRequest{Model: "gpt-5", Messages: messages}, meta)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var request struct {
+		Input []json.RawMessage `json:"input"`
+	}
+	if err := json.Unmarshal(body, &request); err != nil {
+		t.Fatal(err)
+	}
+	if len(request.Input) != 5 {
+		t.Fatalf("input count = %d, want 5", len(request.Input))
+	}
+	for i, raw := range request.Input {
+		var item map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &item); err != nil {
+			t.Fatal(err)
+		}
+		_, hasOutput := item["output"]
+		if i < 3 && hasOutput {
+			t.Errorf("input[%d] unexpectedly contains output: %s", i, raw)
+		}
+		if i >= 3 && !hasOutput {
+			t.Errorf("input[%d] is a tool result without output: %s", i, raw)
+		}
+	}
+}

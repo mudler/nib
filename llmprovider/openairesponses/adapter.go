@@ -147,6 +147,17 @@ type responsesInput struct {
 	Output    string `json:"output,omitempty"`
 }
 
+func (i responsesInput) MarshalJSON() ([]byte, error) {
+	type input responsesInput
+	if i.Type != "function_call_output" {
+		return json.Marshal(input(i))
+	}
+	return json.Marshal(struct {
+		input
+		Output string `json:"output"`
+	}{input: input(i), Output: i.Output})
+}
+
 type responsesTool struct {
 	Type        string `json:"type"`
 	Name        string `json:"name"`
