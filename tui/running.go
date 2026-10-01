@@ -106,12 +106,16 @@ type toolEvent struct {
 type toolEventsMsg []toolEvent
 type toolEventsReadyMsg struct{}
 type toolEventQueue struct {
-	mu     sync.Mutex
-	events []toolEvent
-	ready  chan struct{}
-	gen    uint64
-	active bool
-	done   chan struct{} // closed when this lifecycle ends or is superseded
+	mu            sync.Mutex
+	events        []toolEvent
+	ready         chan struct{}
+	gen           uint64
+	active        bool
+	epoch         uint64
+	parked        bool
+	receipt       receiptState
+	childReceipts map[string]childReceipt
+	done          chan struct{} // closed when this lifecycle ends or is superseded
 }
 
 func newToolEventQueue() *toolEventQueue { return &toolEventQueue{ready: make(chan struct{}, 1)} }
@@ -126,6 +130,9 @@ func (q *toolEventQueue) begin() {
 	}
 	q.done = make(chan struct{})
 	q.gen++
+	q.epoch++
+	q.parked = false
+	q.receipt = receiptState{}
 	q.active = true
 }
 func (q *toolEventQueue) end() {

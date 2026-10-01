@@ -1019,6 +1019,10 @@ func (s *Session) StopAgents() {
 // one place. s.callbacks.OnAgentEvent is set once in NewSession and never
 // reassigned, so reading it from cogito's spawn goroutines is safe.
 func (s *Session) emitAgentEvent(a *cogito.AgentState) {
+	s.emitAgentEventTo(a, s.callbacks.OnAgentEvent)
+}
+
+func (s *Session) emitAgentEventTo(a *cogito.AgentState, emit func(AgentEvent)) {
 	ev := AgentEvent{
 		ID:         a.ID,
 		Type:       a.Type,
@@ -1077,8 +1081,8 @@ func (s *Session) emitAgentEvent(a *cogito.AgentState) {
 		}
 		s.agentMu.Unlock()
 	}
-	if s.callbacks.OnAgentEvent != nil {
-		s.callbacks.OnAgentEvent(ev)
+	if emit != nil {
+		emit(ev)
 	}
 	if s.hooks != nil {
 		s.hooks.Fire(s.ctx, hooks.EventAgentEvent, string(a.Status), map[string]any{
@@ -1974,6 +1978,9 @@ func (s *Session) toolOptions(turnCtx context.Context, goal, mainModel string) [
 
 func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error) {
 	toolCallbacks := s.callbacks
+	if toolCallbacks.AgentCallbacks != nil {
+		toolCallbacks.OnAgentEvent = toolCallbacks.AgentCallbacks()
+	}
 	var observe func(Observation)
 	if s.callbacks.ObservationCallbacks != nil {
 		observe = s.callbacks.ObservationCallbacks()
@@ -2263,10 +2270,10 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 		cogito.WithMessagesManipulator(midTurn.manipulate),
 		cogito.WithAgentManager(s.agentManager),
 		cogito.WithAgentSpawnCallback(func(a *cogito.AgentState) {
-			s.emitAgentEvent(a)
+			s.emitAgentEventTo(a, toolCallbacks.OnAgentEvent)
 		}),
 		cogito.WithAgentCompletionCallback(func(a *cogito.AgentState) {
-			s.emitAgentEvent(a)
+			s.emitAgentEventTo(a, toolCallbacks.OnAgentEvent)
 		}),
 	)
 

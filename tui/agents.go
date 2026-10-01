@@ -200,6 +200,10 @@ func (m *Model) backgroundForeground() string {
 
 // applyAgentEvent upserts a job by ID and refreshes status.
 func (m *Model) applyAgentEvent(ev chat.AgentEvent) {
+	defer func() {
+		m.toolEvents.syncChildRetention(m.jobs)
+		m.toolEvents.retainChild(ev)
+	}()
 	for i := range m.jobs {
 		if m.jobs[i].ID == ev.ID {
 			m.jobs[i].Status = ev.Status

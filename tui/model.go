@@ -1096,12 +1096,7 @@ func (m Model) initSession() tea.Cmd {
 			OnResumed: func() {
 				m.toolEvents.push(toolEvent{park: &parkEvent{parked: false}})
 			},
-			OnAgentEvent: func(ev chat.AgentEvent) {
-				select {
-				case m.agentEventChan <- ev:
-				default:
-				}
-			},
+			AgentCallbacks: m.agentCallbacks,
 			OnAgentTitle: func(id, title string) {
 				// A title is a nicety: dropped when the UI is behind.
 				select {
@@ -1133,7 +1128,8 @@ func (m Model) initSession() tea.Cmd {
 				default:
 				}
 			},
-			ToolCallbacks: m.toolCallbacks,
+			ToolCallbacks:        m.toolCallbacks,
+			ObservationCallbacks: m.toolEvents.observationCallback,
 		}
 
 		session, err := chat.NewSession(m.ctx, m.cfg, callbacks, m.transports...)

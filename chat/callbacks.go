@@ -14,10 +14,13 @@ const (
 
 // AgentEvent is emitted on sub-agent lifecycle changes (spawn/complete/fail).
 type AgentEvent struct {
-	ID     string
-	Type   string // agent type name (e.g. "explore"); empty for generic
-	Task   string
-	Status AgentStatus
+	// ObservationScope is optional consumer-owned origin metadata. Chat leaves
+	// it zero; a run-bound AgentCallbacks sink may stamp it before queueing.
+	ObservationScope ObservationScope
+	ID               string
+	Type             string // agent type name (e.g. "explore"); empty for generic
+	Task             string
+	Status           AgentStatus
 	// Background is true for a sub-agent that runs detached from the turn:
 	// spawned in the background. One the user detached stays false here;
 	// the UI records that itself.
@@ -216,6 +219,9 @@ type Callbacks struct {
 	ToolCallbacks func() (func(ToolStart), func(ToolResult))
 	// OnToolResult is called after a tool finishes, with its output. Optional.
 	OnToolResult func(res ToolResult)
+	// AgentCallbacks optionally captures OnAgentEvent once per SendMessage.
+	// Detached children retain that callback across foreground run turnover.
+	AgentCallbacks func() func(AgentEvent)
 	// OnAgentEvent is called on sub-agent lifecycle changes. Optional.
 	OnAgentEvent func(ev AgentEvent)
 	// OnAskUser is called when the agent asks the user a question (ask_user tool).
