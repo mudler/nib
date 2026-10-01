@@ -83,6 +83,36 @@ func TestViewDoesNotMutateViewState(t *testing.T) {
 	}
 }
 
+// TestFrameNeverPairsWorkingWithHistoricalToolAge locks the original UX bug:
+// a completed root-tool receipt must not read like a tool that is still
+// running. The pinned row reports the authoritative current phase, while the
+// receipt remains available only in technical details.
+func TestFrameNeverPairsWorkingWithHistoricalToolAge(t *testing.T) {
+	m := frameModel()
+	m.loading = true
+	m.toolEvents = newToolEventQueue()
+	m.toolEvents.begin()
+	started := time.Unix(100, 0)
+	m.syncActivityPhase(started)
+	m.toolEvents.observationCallback()(chat.Observation{
+		Kind:       "tool started",
+		OwnerKnown: true,
+		Received:   started.Add(-10 * time.Minute),
+		Order:      1,
+	})
+
+	for _, p := range []render.Presenter{full.New(), inline.New()} {
+		m.presenter = p
+		out := m.presenter.Footer(m.viewStateAt(started.Add(12*time.Second)), m.width)
+		if !strings.Contains(out, "Working") || !strings.Contains(out, "12s") {
+			t.Fatalf("footer lost current phase: %q", out)
+		}
+		if strings.Contains(out, "tool started") || strings.Contains(out, "ago") {
+			t.Fatalf("footer exposed historical receipt as current activity: %q", out)
+		}
+	}
+}
+
 // TestNewOutputResolvedInViewState: the scroll-position signal is a projection
 // decision (is the viewport even on screen, and is it parked at the bottom),
 // not something View computes on the side.
