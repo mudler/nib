@@ -111,6 +111,7 @@ type toolEventQueue struct {
 	ready  chan struct{}
 	gen    uint64
 	active bool
+	done   chan struct{} // closed when this lifecycle ends or is superseded
 }
 
 func newToolEventQueue() *toolEventQueue { return &toolEventQueue{ready: make(chan struct{}, 1)} }
@@ -120,6 +121,10 @@ func (q *toolEventQueue) begin() {
 	}
 	q.mu.Lock()
 	defer q.mu.Unlock()
+	if q.active && q.done != nil {
+		close(q.done)
+	}
+	q.done = make(chan struct{})
 	q.gen++
 	q.active = true
 }
@@ -129,6 +134,9 @@ func (q *toolEventQueue) end() {
 	}
 	q.mu.Lock()
 	defer q.mu.Unlock()
+	if q.active && q.done != nil {
+		close(q.done)
+	}
 	q.active = false
 }
 func (q *toolEventQueue) generation() uint64 { q.mu.Lock(); defer q.mu.Unlock(); return q.gen }
@@ -174,7 +182,9 @@ func (m Model) listenToolEvents() tea.Cmd {
 
 // toolCallbacks snapshots the lifecycle generation for one SendMessage.
 func (m Model) toolCallbacks() (func(chat.ToolStart), func(chat.ToolResult)) {
-	gen := m.toolEvents.generation()
+	m.toolEvents.mu.Lock()
+	gen, done := m.toolEvents.gen, m.toolEvents.done
+	m.toolEvents.mu.Unlock()
 	return func(ts chat.ToolStart) {
 			if !m.toolEvents.activeGeneration(gen) {
 				return
@@ -183,7 +193,13 @@ func (m Model) toolCallbacks() (func(chat.ToolStart), func(chat.ToolResult)) {
 			// Order the marker with reasoning, using the current epoch. Update
 			// rechecks both generations in case the run ends during this send.
 			// Never hold the mailbox lock across a blocking channel send.
-			m.reasoningChan <- reasoningEvent{kind: reasoningEventStepEnd, gen: m.currentTurnGen(), toolGen: gen}
+			select {
+			case m.reasoningChan <- reasoningEvent{kind: reasoningEventStepEnd, gen: m.currentTurnGen(), toolGen: gen}:
+			case <-done:
+				return
+			case <-m.ctx.Done():
+				return
+			}
 			m.toolEvents.pushFor(gen, toolEvent{start: &ts})
 		}, func(res chat.ToolResult) {
 			m.toolEvents.pushFor(gen, toolEvent{result: &res})

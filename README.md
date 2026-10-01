@@ -369,6 +369,8 @@ its output as it prints them, and the hint `ctrl+b background`:
 When the call finishes, its block shows the first 12 lines of the output.
 Completed calls no longer appear as running, including fast calls and concurrent
 calls to the same tool. Late events from a previous turn do not restart them.
+Interrupting a turn also releases tool-start callbacks waiting for the thinking
+display to catch up.
 Press `Ctrl+R` to expand or fold all tool output and model thinking together.
 In full-screen mode, click a block to expand or fold only that block.
 
