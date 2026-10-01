@@ -1,10 +1,13 @@
 package tui
 
 import (
+	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/mudler/nib/chat"
 	"github.com/mudler/nib/theme"
@@ -321,6 +324,71 @@ func TestCompactFooterCacheLayoutTransitions(t *testing.T) {
 						}
 					}
 				}
+			}
+		}
+	}
+}
+
+// Exercise the event boundary: manually syncing layout would hide early-return bugs.
+func TestCompactFooterHintUpdateLayout(t *testing.T) {
+	for _, presenter := range []struct {
+		name string
+		p    render.Presenter
+	}{{"inline", inline.New()}, {"full", full.New()}} {
+		for _, tc := range []struct {
+			name      string
+			introduce tea.Msg
+		}{
+			{"clipboard error", composerClipboardMsg{err: errors.New("clipboard unavailable")}},
+			{"oversized paste", tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(strings.Repeat("x", draftMaxBytes+1)), Paste: true}},
+		} {
+			for _, clear := range []tea.KeyType{tea.KeyEsc, tea.KeyEnd, tea.KeyCtrlV} {
+				t.Run(fmt.Sprintf("%s/%s/%s", presenter.name, tc.name, (tea.KeyMsg{Type: clear}).String()), func(t *testing.T) {
+					m := frameModel()
+					m.presenter = presenter.p
+					m.footerCache = &footerCache{}
+					for i := 0; i < 40; i++ {
+						m.appendMessage(ChatMessage{Role: "user", Content: fmt.Sprintf("history line %d", i)})
+					}
+					next, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+					m = next.(Model)
+					baseHeight := m.viewport.Height
+					check := func(wantHeight int) {
+						t.Helper()
+						vs := m.viewState()
+						fh := presenter.p.FooterHeight(vs, m.width)
+						// Inspect the cache before View can refresh it.
+						if m.footerCache.height != fh {
+							t.Errorf("cached footer height %d, actual %d", m.footerCache.height, fh)
+						}
+						if m.viewport.Height != wantHeight {
+							t.Errorf("viewport height %d, want %d", m.viewport.Height, wantHeight)
+						}
+						if h := lipgloss.Height(m.View()); h != 24 {
+							t.Errorf("frame height %d, want 24", h)
+						}
+						if !m.viewport.AtBottom() {
+							t.Error("lost transcript bottom pin")
+						}
+					}
+					check(baseHeight)
+					next, _ = m.Update(tc.introduce)
+					m = next.(Model)
+					if m.hint == "" {
+						t.Fatal("event did not introduce hint")
+					}
+					check(baseHeight - 1)
+					// A second error changes text without changing the row budget.
+					next, _ = m.Update(composerClipboardMsg{err: errors.New("clipboard still unavailable")})
+					m = next.(Model)
+					check(baseHeight - 1)
+					next, _ = m.Update(tea.KeyMsg{Type: clear})
+					m = next.(Model)
+					if m.hint != "" {
+						t.Fatal("key did not clear hint")
+					}
+					check(baseHeight)
+				})
 			}
 		}
 	}

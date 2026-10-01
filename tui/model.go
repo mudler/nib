@@ -1149,7 +1149,17 @@ func (m Model) initSession() tea.Cmd {
 }
 
 // Update handles messages and updates the model
-func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m Model) Update(msg tea.Msg) (nextModel tea.Model, nextCmd tea.Cmd) {
+	// Contextual hints add a footer row. Reflow at the event boundary so
+	// clipboard failures, rejected drafts, and hint-clearing keys cannot
+	// bypass the budget update through an early return or delegated handler.
+	previousHint := m.hint
+	defer func() {
+		if next, ok := nextModel.(Model); ok && next.hint != previousHint {
+			next.reflowLayout()
+			nextModel = next
+		}
+	}()
 	var cmds []tea.Cmd
 	var cmd tea.Cmd
 	m.syncComposer()
