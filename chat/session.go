@@ -1405,6 +1405,8 @@ func (s *Session) SetShellJobs(jobs *wizmcp.ShellJobs) {
 // notices are the ones kept.
 const maxPendingNotices = 16
 
+const agentCompletionMessageName = "cogito_agent_completion"
+
 // deliverNotice injects a background-job notice into the live run, or keeps
 // it for the next turn when no run is live.
 //
@@ -2102,6 +2104,13 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 		for {
 			select {
 			case msg := <-s.inject:
+				if msg.Name == agentCompletionMessageName {
+					s.pendingNotices = append(s.pendingNotices, msg.Content)
+					if n := len(s.pendingNotices); n > maxPendingNotices {
+						s.pendingNotices = slices.Clone(s.pendingNotices[n-maxPendingNotices:])
+					}
+					continue
+				}
 				if i := slices.Index(pendingUser, msg.Content); i >= 0 {
 					pendingUser = slices.Delete(pendingUser, i, i+1)
 					undelivered = append(undelivered, msg.Content)

@@ -10,7 +10,37 @@ import (
 
 	"github.com/mudler/nib/types"
 	"github.com/mudler/xlog"
+	openai "github.com/sashabaranov/go-openai"
 )
+
+func TestUndeliveredAgentCompletionIsQueuedForNextTurn(t *testing.T) {
+	s := &Session{
+		inject:  make(chan openai.ChatCompletionMessage, 1),
+		runLive: true,
+	}
+	s.inject <- openai.ChatCompletionMessage{
+		Role: "user", Name: agentCompletionMessageName,
+		Content: "Background agent completed with result: done",
+	}
+
+	s.turnMu.Lock()
+	s.runLive = false
+	for {
+		select {
+		case msg := <-s.inject:
+			if msg.Name == agentCompletionMessageName {
+				s.pendingNotices = append(s.pendingNotices, msg.Content)
+			}
+		default:
+			s.turnMu.Unlock()
+			got := s.takePendingNotices()
+			if len(got) != 1 || got[0] != "Background agent completed with result: done" {
+				t.Fatalf("pending completion notices = %v", got)
+			}
+			return
+		}
+	}
+}
 
 // TestUndeliveredInjectHandedBack reproduces the end-of-run drain race: a
 // follow-up injected while the run's FINAL LLM call is already in flight is
