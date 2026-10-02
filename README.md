@@ -1382,6 +1382,47 @@ per `SendMessage`. Detached children's completion events retain the sink of the
 turn that spawned them, even after a later turn captures a new sink. Existing
 `OnAgentEvent` callbacks remain the fallback when no factory is supplied.
 
+### Mandatory embedder tool policy
+
+`chat.Callbacks.ToolPolicy` is an optional denial-only gate, separate from the
+`OnToolCall` approval prompt. It runs before PreToolUse hooks, auto approval,
+turn/tool/bash-prefix grants, read-only detection, classifier approvals, and
+ordinary prompts. A nil policy preserves existing behavior. Returning nil
+continues normal approval; it does not grant permission. Any non-nil error
+fails closed and prevents execution, including when a hook would approve.
+
+```go
+callbacks := chat.Callbacks{
+    ToolPolicy: func(call chat.ToolCallRequest) error {
+        if call.Name == "delegate_background" && call.AgentID != "" {
+            return errors.New("helper delegation is unsupported")
+        }
+        return nil
+    },
+    // Keep your existing OnToolCall approval callback here.
+}
+```
+
+The callback receives the actual request with Cogito's execution-stamped
+`AgentID`: empty for root calls, nonempty for spawned or resumed helpers.
+Do not infer identity from tool arguments; an MCP handler does not receive
+this execution identity. Direct calls to `Session.ToolCallDenied` use the
+request supplied by the caller and cannot authenticate its identity.
+
+A policy is session-scoped and retained by detached helpers. Capture immutable
+policy configuration when creating the session; synchronize any mutable state.
+Callbacks may run concurrently. No approval-state lock is held across the
+policy, so approval queries can reenter it (avoid unbounded recursion). This
+is not permission to reenter `SendMessage` or other whole-session operations.
+There is no per-run policy factory or automatic grant. The policy only gates
+calls executed through this session, not direct calls to an MCP server.
+
+Nib does not log or expose policy error contents, which may contain sensitive
+arguments. Denials use the fixed message `tool call denied by embedder policy`.
+Return an error for both policy rejection and evaluation failure; do not
+return nil on evaluation failure. Panics are programming errors, not a policy
+result, and are not recovered by this API. Ordinary tool tracing is unchanged.
+
 ## License
 
 MIT

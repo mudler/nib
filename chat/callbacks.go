@@ -2,6 +2,14 @@ package chat
 
 import "time"
 
+// ToolPolicy is an optional mandatory veto. A non-nil error denies execution;
+// nil continues ordinary approval and never grants permission. Errors are not
+// exposed to the model or logged: nib returns a fixed denial message instead.
+// Calls may be concurrent, including detached children. Implementations must be
+// concurrency-safe. Approval locks are not held while the policy runs.
+// Return an error on evaluation failure to fail closed. Panics are not recovered.
+type ToolPolicy func(ToolCallRequest) error
+
 // AgentStatus mirrors cogito's sub-agent lifecycle states for UI consumption,
 // decoupling the UI from the cogito type.
 type AgentStatus string
@@ -199,6 +207,12 @@ type Callbacks struct {
 	// under-report rather than invent spend.
 	OnStream   func(ev StreamEvent)
 	OnToolCall func(req ToolCallRequest) ToolCallResponse
+	// ToolPolicy runs before hooks, grants, read-only or classifier approvals,
+	// and OnToolCall, for root and child calls. AgentID is execution-stamped,
+	// not inferred from arguments (direct ToolCallDenied callers supply it).
+	// The policy is session-scoped, including detached children; configure it
+	// when creating the session. Nil preserves existing behavior.
+	ToolPolicy ToolPolicy
 	// OnAutoApproved, when set, is told about each call the classifier
 	// approved without asking, so a UI can show what it let through.
 	OnAutoApproved func(req ToolCallRequest, v Verdict)

@@ -768,8 +768,6 @@ func (s *Session) SetAutoApprove(on bool) { s.autoApprove.Store(on) }
 // AutoApprove reports whether every tool call is currently auto-approved.
 func (s *Session) AutoApprove() bool { return s.autoApprove.Load() }
 
-// decideToolCall resolves a tool-call request: PreToolUse hooks first (a hook
-// may block/approve/adjust), then the session allow-list, then the user gate.
 // emitSubAgentToolLine surfaces a sub-agent's tool call as a compact inline
 // thread line via OnToolResult, from the tool-CALL callback where the AgentID is
 // reliable. cogito propagates the tool-call callback into spawned sub-agents
@@ -821,12 +819,20 @@ func (s *Session) newApprovalTurn() *turnApproval {
 	return s.approvalTurn
 }
 
+// decideToolCall applies mandatory policy before ordinary approval decisions.
 func (s *Session) decideToolCall(req ToolCallRequest) cogito.ToolCallDecision {
 	return s.decideToolCallForTurn(req, s.currentApprovalTurn())
 }
 
 func (s *Session) decideToolCallForTurn(req ToolCallRequest, turn *turnApproval) cogito.ToolCallDecision {
 	req.ExternalSources = s.activeExternalSourceIDs()
+	// Mandatory embedder policy precedes every approval path. Never expose
+	// the error: it may contain sensitive call data. No approval lock is held.
+	if policy := s.callbacks.ToolPolicy; policy != nil {
+		if err := policy(req); err != nil {
+			return cogito.ToolCallDecision{Approved: false, Adjustment: "tool call denied by embedder policy"}
+		}
+	}
 	// Once external data has entered the conversation, consequential actions
 	// need a fresh human decision unless session-wide auto-approval is active.
 	// Turn-wide and narrower grants cannot silently widen trust granted by
