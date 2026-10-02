@@ -244,8 +244,48 @@ nib --init fish | source      # ~/.config/fish/config.fish
 ### Sub-agents & background jobs
 
 Ask nib to delegate, and it spawns a typed sub-agent (`explore`, `plan`, or any you
-configure). Background a running job with `Ctrl+B`. Each running sub-agent has
-its own chip in the footer's activity strip (see [The footer](#the-footer)):
+configure). The root agent keeps the overall plan, integration, acceptance checks,
+and final answer. It delegates bounded, self-contained work rather than orchestration.
+Small or tightly coupled tasks stay at the root. When a workflow needs implementation
+and independent review, the root dispatches those agents after collecting planning results.
+
+A child does not inherit the root conversation. Its brief needs the objective,
+relevant context, repository and working-directory or worktree paths, scope,
+constraints, acceptance checks, and expected report. Concurrent tasks need explicit
+file or worktree ownership: spawning does not create isolation. Parallel work should
+use independent tasks, not conflicting edits.
+
+The harness gives children task guidance, including children with custom personas.
+Children must stay within their assigned scope and report blockers or missing context.
+The guidance tells them not to spawn or manage agents, including through nested agent
+CLIs or other workarounds. Normal native child tools do not provide orchestration.
+Persona labels and the `tools` argument are not a sandbox or guaranteed read-only mode.
+These instructions do not establish behavioral or security guarantees.
+
+The root chooses how to wait for a sub-agent:
+
+- `spawn_agent` with `background=false` waits for the result. Use it when that
+  result is the next dependency.
+- `spawn_agent` with `background=true` returns an ID immediately. Use it when
+  useful independent work can continue. Keep the ID; a started job is not completed work.
+- `send_agent_message` uses the existing ID for clarification, correction, or
+  related follow-up. It injects messages into running work and resumes finished
+  work from stored context. A new spawn is for a separate task or an explicitly
+  justified restart, not a delayed reply.
+- `check_agent` reports lifecycle status. When available, `agent_logs` shows recent
+  activity. `get_agent_result` retrieves the final result and supports `wait=true`.
+  Logs and status do not replace the result. Avoid tight polling; continue
+  independent work or wait for the needed result.
+
+Children should return relevant paths or artifacts, checks actually run and their
+results, uncertainty, blockers, and suggested follow-ups. The root reviews that
+evidence against acceptance criteria before integration. Its report distinguishes
+child-reported checks from checks it independently verifies. A successful spawn or
+completed status does not prove correctness. Missing context and tool failures need
+explicit reports, not assumptions of delivery or success.
+
+Background a running job with `Ctrl+B`. Each running sub-agent has its own chip
+in the footer's activity strip (see [The footer](#the-footer)):
 
 <p align="center">
   <img alt="nib delegating to the explore sub-agent, with the jobs footer" src="docs/images/demo-agents.gif" width="800">

@@ -150,6 +150,17 @@ func TestSeededHistoryReachesModel(t *testing.T) {
 	got := last
 	mu.Unlock()
 
+	// Even an empty configured prompt gets root delegation guidance when
+	// spawning is enabled. Account for that one system message explicitly;
+	// every conversation message must still follow verbatim and in order.
+	if len(got) == 0 || got[0].Role != "system" {
+		t.Fatalf("request must start with root guidance, got %+v", got)
+	}
+	if n := strings.Count(got[0].Content, "[Root delegation guidance]"); n != 1 {
+		t.Fatalf("root guidance appears %d times, want exactly 1: %q", n, got[0].Content)
+	}
+	got = got[1:]
+
 	// The first resumed request must carry the prior turns AND the new one, in
 	// order, so the model has full memory of the conversation.
 	want := []capturedMessage{
