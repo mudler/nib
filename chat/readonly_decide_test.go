@@ -92,7 +92,7 @@ func TestExternalProvenanceOverridesTurnGrantForConsequentialCall(t *testing.T) 
 		}
 		return ToolCallResponse{Approved: false}
 	}))
-	s.allowAllTurn = true
+	s.currentApprovalTurn().allowAll = true
 	s.recordExternalResult("web_search", "ordinary external search result")
 
 	if d := s.decideToolCall(ToolCallRequest{Name: "write", Arguments: `{"path":"x","content":"y"}`}); d.Approved {

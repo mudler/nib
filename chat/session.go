@@ -70,7 +70,8 @@ type Session struct {
 	toolAllow            map[string]bool    // if non-empty, the only built-in tools exposed to the model
 	allowedBashPrefixes  map[string]bool    // bash first-word grants ("git" → simple `git …` auto-approved)
 	autoApprove          atomic.Bool        // approval_mode: auto, or the /yolo toggle — approve every tool call
-	allowAllTurn         bool               // user chose "allow all this turn"; reset each top-level turn
+	approvalTurn         *turnApproval      // current turn for direct ToolCallDenied calls; guarded by grantsMu
+	grantsMu             sync.Mutex         // guards approvalTurn, turn grants, and both session grant maps
 	approvalMode         types.ApprovalMode // raw approval_mode, "" meaning prompt; guarded by approvalMu
 	approvalMu           sync.RWMutex       // guards approvalMode: /settings changes it while a turn reads it
 	readOnlyCommands     readOnlyCommands   // bash commands auto-approved in prompt mode
@@ -798,7 +799,33 @@ func (c Callbacks) emitToolStart(approved bool, agentID, name, args string, ids 
 	c.OnToolStart(ToolStart{ID: id, Name: name, Arguments: args})
 }
 
+// turnApproval belongs to one execution, including its detached descendants.
+// Its identity never changes inside an execution callback; grantsMu guards all.
+type turnApproval struct {
+	allowAll bool
+}
+
+func (s *Session) currentApprovalTurn() *turnApproval {
+	s.grantsMu.Lock()
+	defer s.grantsMu.Unlock()
+	if s.approvalTurn == nil {
+		s.approvalTurn = &turnApproval{}
+	}
+	return s.approvalTurn
+}
+
+func (s *Session) newApprovalTurn() *turnApproval {
+	s.grantsMu.Lock()
+	defer s.grantsMu.Unlock()
+	s.approvalTurn = &turnApproval{}
+	return s.approvalTurn
+}
+
 func (s *Session) decideToolCall(req ToolCallRequest) cogito.ToolCallDecision {
+	return s.decideToolCallForTurn(req, s.currentApprovalTurn())
+}
+
+func (s *Session) decideToolCallForTurn(req ToolCallRequest, turn *turnApproval) cogito.ToolCallDecision {
 	req.ExternalSources = s.activeExternalSourceIDs()
 	// Once external data has entered the conversation, consequential actions
 	// need a fresh human decision unless session-wide auto-approval is active.
@@ -837,16 +864,16 @@ func (s *Session) decideToolCall(req ToolCallRequest) cogito.ToolCallDecision {
 		}
 	}
 
-	if s.autoApprove.Load() || s.allowAllTurn {
-		return cogito.ToolCallDecision{Approved: true}
-	}
-	if s.allowedTools[req.Name] {
-		return cogito.ToolCallDecision{Approved: true}
-	}
+	s.grantsMu.Lock()
+	granted := turn.allowAll || s.allowedTools[req.Name]
 	if req.Name == "bash" {
-		if p, ok := BashGrantPrefix(req.Arguments); ok && s.allowedBashPrefixes[p] {
-			return cogito.ToolCallDecision{Approved: true}
+		if p, ok := BashGrantPrefix(req.Arguments); ok {
+			granted = granted || s.allowedBashPrefixes[p]
 		}
+	}
+	s.grantsMu.Unlock()
+	if s.autoApprove.Load() || granted {
+		return cogito.ToolCallDecision{Approved: true}
 	}
 	// In the default prompt mode, auto-approve calls that only observe state.
 	// Not applied in allowlist (explicitly restrictive), strict (prompt for
@@ -873,12 +900,17 @@ func (s *Session) decideToolCall(req ToolCallRequest) cogito.ToolCallDecision {
 		return cogito.ToolCallDecision{Approved: true}
 	}
 	resp := s.callbacks.OnToolCall(req)
+	s.grantsMu.Lock()
+	defer s.grantsMu.Unlock()
 	if resp.Approved && resp.AllowAllTurn {
-		s.allowAllTurn = true
+		turn.allowAll = true
 	}
 	if resp.Approved && resp.AlwaysAllow {
 		switch {
 		case resp.AlwaysPrefix == "":
+			if s.allowedTools == nil {
+				s.allowedTools = make(map[string]bool)
+			}
 			s.allowedTools[req.Name] = true
 		case req.Name == "bash":
 			// Mint a prefix grant only when the approved request itself
@@ -936,7 +968,10 @@ func (s *Session) activeExternalSourceIDs() []string {
 }
 
 // ToolCallDenied reports whether the given tool call would be denied (used to
-// verify PreToolUse hook gating end-to-end).
+// verify PreToolUse hook gating end-to-end). It snapshots the current turn at
+// entry (or a pre-turn scope before the first SendMessage). AgentID is attribution,
+// not a turn selector. Concurrent calls are safe; callbacks may run concurrently.
+// Execution callbacks instead retain their spawning turn, including detached agents.
 func (s *Session) ToolCallDenied(req ToolCallRequest) bool {
 	return !s.decideToolCall(req).Approved
 }
@@ -2010,7 +2045,9 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 	// here, on the first turn that uses it, rather than while the session or
 	// the client was being built.
 	s.ensureModelLimits(turnCtx)
-	s.allowAllTurn = false
+	// Capture this identity in the execution callback. Cogito propagates that
+	// callback to detached descendants, which can outlive the foreground turn.
+	approvalTurn := s.newApprovalTurn()
 	// The overflow retry is capped per TURN, not per session: a later turn that
 	// overflows deserves its own recovery attempt.
 	s.overflowMu.Lock()
@@ -2161,13 +2198,13 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 			// compaction, the post-compaction nudge is no longer needed.
 			s.trackContextFileRead(tool.Name, string(args))
 			change := PreviewFileChange(s.workingDir, tool.Name, string(args))
-			decision := s.decideToolCall(ToolCallRequest{
+			decision := s.decideToolCallForTurn(ToolCallRequest{
 				Name:      tool.Name,
 				Arguments: string(args),
 				Reasoning: tool.Reasoning,
 				AgentID:   state.AgentID,
 				Change:    change,
-			})
+			}, approvalTurn)
 			if decision.Approved && state.AgentID == "" && toolCallbacks.OnToolResult != nil {
 				s.changes.put(changeKey(tool.ID, tool.Name, string(args)), change)
 			}

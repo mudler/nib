@@ -1033,7 +1033,9 @@ In the **TUI**, approval is a single keypress (no Enter):
   trusts everything that command can do with its arguments — grant prefixes
   you'd trust with any flags.
 - `3` — allow **all** tool calls for the rest of this turn (handy after delegating
-  a multi-step task)
+  a multi-step task). Sub-agents, including detached helpers, keep their spawning
+  turn’s grant scope; they never inherit a later turn’s grant. Session-wide
+  tool and command-prefix grants remain shared across turns and sub-agents.
 - `n` / `Esc` — deny
 - `e` — edit the call, then submit
 

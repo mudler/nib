@@ -81,7 +81,7 @@ func TestDecideToolCallAllowAllTurn(t *testing.T) {
 	}
 
 	// Simulate a new turn: flag reset, spy should be consulted again.
-	s.allowAllTurn = false
+	s.newApprovalTurn()
 	if dec := s.decideToolCall(ToolCallRequest{Name: "third", Arguments: "{}"}); !dec.Approved {
 		t.Fatal("expected third call approved")
 	}
