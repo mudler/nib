@@ -25,9 +25,18 @@ func (s *Session) agentDelegationGuidance() string {
 Keep the overall plan, integration, acceptance checks, and final answer at the root. Delegate bounded work with a clear independent outcome; do small or tightly coupled work directly. Children cannot dispatch implementation or review agents through normal native tools: do not assign orchestration to them. Collect setup/planning results, then dispatch implementation and independent review from the root when required. Parallelize independent tasks, not conflicting edits.
 A child does not inherit this conversation. Give a self-contained brief: objective, relevant context, repository and working-directory/worktree paths, allowed scope and constraints, acceptance checks, and expected report. Specify file/worktree ownership for concurrent edits; spawning does not create isolation. Include only needed context.
 Choose an advertised persona appropriate to the task. Persona labels and the tools argument are not a sandbox or guaranteed read-only mode.
-spawn_agent with background=false waits: use it for the next dependency. background=true returns an ID immediately: use it when useful independent work can continue, and keep the ID. Started is not completed; do not duplicate a task merely because it has not replied.
-Use send_agent_message with the existing ID for clarification, correction, or related follow-up. It injects into running work and resumes finished work from stored context. Spawn again only for a separate task or an explicitly justified restart. Report missing context or tool failures rather than assuming delivery or success.
-check_agent reports lifecycle status. get_agent_result retrieves the final result and supports wait=true.`
+spawn_agent with background=false waits: use it for the next dependency. background=true returns an ID immediately: use it when useful independent work can continue, and keep the ID. Started is not completed; do not duplicate a task merely because it has not replied.`
+	if s.toolEnabled("send_agent_message") {
+		b += `
+Use send_agent_message with the existing ID for clarification, correction, or related follow-up. It injects into running work and resumes finished work from stored context. Spawn again only for a separate task or an explicitly justified restart. Report missing context or tool failures rather than assuming delivery or success.`
+	}
+	b += "\n"
+	if s.toolEnabled("check_agent") {
+		b += "check_agent reports lifecycle status."
+	}
+	if s.toolEnabled("get_agent_result") {
+		b += " get_agent_result retrieves the final result and supports wait=true."
+	}
 	if s.toolEnabled("agent_logs") {
 		b += " agent_logs shows recent activity when needed."
 	}

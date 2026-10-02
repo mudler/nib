@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -54,7 +55,7 @@ func guidanceReply(w http.ResponseWriter, name string, args any) {
 
 func TestRootDelegationGuidanceOutbound(t *testing.T) {
 	for _, prompt := range []string{"", "CUSTOM PROMPT: spawn_agent stays verbatim"} {
-		for _, allow := range [][]string{nil, {"spawn_agent"}, {"agent_logs"}, {"read"}} {
+		for _, allow := range [][]string{nil, {"spawn_agent"}, {"check_agent", "spawn_agent", "agent_logs"}, {"spawn_agent", "get_agent_result"}, {"spawn_agent", "send_agent_message"}, {"agent_logs"}, {"read"}} {
 			t.Run(prompt+strings.Join(allow, ","), func(t *testing.T) {
 				var requests []openai.ChatCompletionRequest
 				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -90,7 +91,8 @@ func TestRootDelegationGuidanceOutbound(t *testing.T) {
 				}
 				for _, req := range requests {
 					text := messageText(req.Messages)
-					enabled := len(allow) == 0 || allow[0] == "spawn_agent"
+					available := func(name string) bool { return len(allow) == 0 || slices.Contains(allow, name) }
+					enabled := available("spawn_agent")
 					want := 0
 					if enabled {
 						want = 1
@@ -102,16 +104,16 @@ func TestRootDelegationGuidanceOutbound(t *testing.T) {
 						t.Error("custom prompt lost")
 					}
 					for _, name := range []string{"spawn_agent", "check_agent", "get_agent_result", "send_agent_message"} {
-						if hasSchema(req, name) != enabled {
+						if hasSchema(req, name) != available(name) {
 							t.Errorf("schema %s enabled = %v", name, hasSchema(req, name))
 						}
 					}
-					logs := len(allow) == 0 || allow[0] == "agent_logs"
+					logs := available("agent_logs")
 					if hasSchema(req, "agent_logs") != logs {
 						t.Error("agent_logs schema mismatch")
 					}
 					if enabled {
-						for _, phrase := range []string{"acceptance", "working-directory", "worktree", "existing ID", "independently verified", "Available sub-agent types", "general:"} {
+						for _, phrase := range []string{"acceptance", "working-directory", "worktree", "independently verified", "Available sub-agent types", "general:"} {
 							if !strings.Contains(text, phrase) {
 								t.Errorf("missing %q", phrase)
 							}
@@ -120,8 +122,13 @@ func TestRootDelegationGuidanceOutbound(t *testing.T) {
 						if idx := strings.Index(text, rootGuidanceHeading); idx >= 0 {
 							block = text[idx:]
 						}
-						if strings.Contains(block, "agent_logs") != logs {
-							t.Error("agent_logs guidance mismatch")
+						for _, name := range []string{"check_agent", "get_agent_result", "send_agent_message", "agent_logs"} {
+							if strings.Contains(block, name) != available(name) {
+								t.Errorf("%s guidance availability mismatch", name)
+							}
+						}
+						if strings.Contains(block, "existing ID") != available("send_agent_message") {
+							t.Error("follow-up guidance availability mismatch")
 						}
 					}
 					if strings.Contains(text, childGuidanceHeading) {
