@@ -6,6 +6,7 @@ require (
 	dario.cat/mergo v1.0.1
 	github.com/Masterminds/semver/v3 v3.5.0
 	github.com/Masterminds/sprig/v3 v3.3.0
+	github.com/atotto/clipboard v0.1.4
 	github.com/charmbracelet/bubbles v0.21.0
 	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/charmbracelet/glamour v1.0.0
@@ -37,7 +38,7 @@ require (
 	github.com/msuozzo/bonsai/bonsai-tsx v0.4.0
 	github.com/msuozzo/bonsai/bonsai-typescript v0.4.0
 	github.com/msuozzo/bonsai/bonsai-yaml v0.4.0
-	github.com/mudler/cogito v0.11.1-0.20261002063524-935bd35a9b27
+	github.com/mudler/cogito v0.11.1-0.20261002081801-911a3a7ad464
 	github.com/mudler/xlog v0.0.6
 	github.com/muesli/termenv v0.16.0
 	github.com/sashabaranov/go-openai v1.41.2
@@ -49,7 +50,6 @@ require (
 require (
 	github.com/Masterminds/goutils v1.1.1 // indirect
 	github.com/alecthomas/chroma/v2 v2.20.0 // indirect
-	github.com/atotto/clipboard v0.1.4 // indirect
 	github.com/aymanbagabas/go-osc52/v2 v2.0.1 // indirect
 	github.com/aymerick/douceur v0.2.0 // indirect
 	github.com/charmbracelet/colorprofile v0.2.3-0.20250311203215-f60798e515dc // indirect

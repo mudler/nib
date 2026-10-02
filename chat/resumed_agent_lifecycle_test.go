@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -99,6 +100,9 @@ func TestResumedAgentPreservesToolLifecycleAttribution(t *testing.T) {
 	for _, r := range results {
 		if r.Name == "send_agent_message" {
 			parentResult = true
+			if !strings.Contains(r.Result, "resumed in the background") {
+				t.Errorf("send_agent_message result = %q, want asynchronous acknowledgement", r.Result)
+			}
 			t.Logf("resume result: %s", r.Result)
 		}
 		if r.Name == "probe" && r.AgentID == "finished-child" {
