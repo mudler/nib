@@ -436,7 +436,7 @@ func (s *Session) newAgentLLM(mainModel, requested string, temperature float32, 
 		xlog.Warn("could not create sub-agent LLM; using the current main LLM", "error", err)
 		agentLLM, _ = s.currentLLM()
 	}
-	return retryForAgent(agentLLM, &s.agentBackoff)
+	return guideChildLLM(retryForAgent(agentLLM, &s.agentBackoff))
 }
 
 func (s *Session) resolvedSessionProvider() types.ModelProviderConfig {
@@ -2171,7 +2171,7 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 	// spend is not this conversation's context size. Sub-agents get their own
 	// retrying client instead (WithAgentLLM below; see agentretry.go):
 	// without it cogito would hand them this tracked one.
-	agentLLM := retryForAgent(llm, &s.agentBackoff)
+	agentLLM := guideChildLLM(retryForAgent(llm, &s.agentBackoff))
 	baseLLM := llm
 	llm = trackUsage(llm, &s.live, s.requestLimits)
 
@@ -3007,15 +3007,16 @@ func (s *Session) Reload(cfg types.Config) error {
 	s.agentDefs = toCogitoDefinitions(cfg.Agents)
 	s.agentModels = agentModelSet(s.agentDefs)
 	s.hooks = hooks.New(cfg.Hooks)
-	if cfg.Prompt != "" {
-		prompt := cfg.GetPrompt() + s.loadedSkills + s.agentModelGuidance()
-		// Inject the harness/version identity so the model knows what it is.
-		// Appended after GetPrompt() (which already carries the self-knowledge
-		// suffix) so it lands at the end of the system prompt.
-		prompt += s.harnessIdentity(cfg)
-		// The model it runs on, restamped by applyProvider on a switch.
+	{
+		// Empty prompts historically omit legacy tool and identity suffixes.
+		// Add the applicable delegation contract without enabling those too.
+		prompt := s.agentDelegationGuidance()
 		model := s.Model()
-		prompt += modelIdentity(model)
+		if cfg.Prompt != "" {
+			prompt = cfg.GetPrompt() + s.loadedSkills + s.agentModelGuidance() + prompt
+			prompt += s.harnessIdentity(cfg)
+			prompt += modelIdentity(model)
+		}
 		// Guarded: applyProvider restamps the prompt from the UI goroutine.
 		s.historyMu.Lock()
 		s.systemPrompt = prompt

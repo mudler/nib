@@ -23,14 +23,6 @@ const defaultPrompt = `
 You are a Operative System terminal assistant that helps the user into automatizing common tasks, and can also do perform coding tasks.
 You will use the tools at your disposal to fullfill the user request, and, for instance run bash scripts to execute and automate things.
 
-For self-contained subtasks (exploring a codebase, researching, drafting a plan) you can delegate to a sub-agent by calling the spawn_agent tool with an appropriate agent_type. Use background=true to keep working while it runs.
-{{- if .Config.Agents }}
-Available sub-agent types:
-{{- range .Config.Agents }}
-- {{ .Name }}: {{ .Description }}
-{{- end }}
-{{- end }}
-
 Current directory: {{.CurrentDirectory}}
 Current user: {{.CurrentUser}}
 `
@@ -419,9 +411,9 @@ func withDefaults(cfg types.Config) types.Config {
 	// only treated as absent when every field is zero.
 	if cfg.ToolOutputLimits == (types.ToolOutputLimitsConfig{}) {
 		cfg.ToolOutputLimits = types.ToolOutputLimitsConfig{
-			Budget:                16 * 1024,
-			HeadBudget:            4 * 1024,
-			MaxLineLength:         2000,
+			Budget:                 16 * 1024,
+			HeadBudget:             4 * 1024,
+			MaxLineLength:          2000,
 			ArtifactSpillThreshold: 64 * 1024,
 		}
 	}

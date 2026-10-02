@@ -7,19 +7,20 @@ import (
 	"github.com/mudler/nib/types"
 )
 
-// TestDefaultPromptListsAgentTypesAndDelegation verifies the default system
-// prompt instructs the model to call tools and enumerates the configured
-// sub-agent types so a capable model knows it can delegate.
-func TestDefaultPromptListsAgentTypesAndDelegation(t *testing.T) {
+// Delegation advice and advertised personas belong to the capability-gated
+// chat guidance, not the unconditional default prompt, even with agents configured.
+func TestDefaultPromptHasNoUnconditionalDelegation(t *testing.T) {
 	cfg := types.Config{Prompt: defaultPrompt, Agents: MergeAgentTypes(nil)}
 	p := cfg.GetPrompt()
 
-	if !strings.Contains(p, "spawn_agent") {
-		t.Fatalf("prompt should mention spawn_agent:\n%s", p)
+	for _, advice := range []string{"spawn_agent", "delegate to a sub-agent", "Available sub-agent types:"} {
+		if strings.Contains(p, advice) {
+			t.Fatalf("prompt contains unconditional delegation advice %q:\n%s", advice, p)
+		}
 	}
-	for _, name := range []string{"general", "explore", "plan"} {
-		if !strings.Contains(p, name) {
-			t.Fatalf("prompt missing agent type %q:\n%s", name, p)
+	for _, agent := range cfg.Agents {
+		if strings.Contains(p, "- "+agent.Name+": "+agent.Description) {
+			t.Fatalf("prompt unconditionally advertises agent type %q:\n%s", agent.Name, p)
 		}
 	}
 }
