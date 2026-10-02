@@ -1485,6 +1485,9 @@ func jobTail(s string) string {
 	return s
 }
 
+// agentToolNames are Cogito's built-in agent tools, selected and counted by name.
+var agentToolNames = [...]string{"spawn_agent", "check_agent", "get_agent_result", "send_agent_message"}
+
 // toolEnabled reports whether a built-in tool is exposed to the model. With an
 // empty BuiltinTools allowlist (the default) every tool is exposed; otherwise only the
 // named ones. Approval gating is separate (see allowedTools).
@@ -1796,13 +1799,17 @@ func (s *Session) toolOptions(turnCtx context.Context, goal, mainModel string) [
 		}),
 	}
 
-	// Built-in tools, each gated by the BuiltinTools allowlist (toolEnabled). The
-	// agent-spawning tools (spawn_agent/check_agent/get_agent_result) ride
-	// EnableAgentSpawning; the rest are individual registrations. The agent
-	// manager/factory stay wired regardless — harmless without the tools.
-	if s.toolEnabled("spawn_agent") {
-		opts = append(opts, cogito.EnableAgentSpawning)
+	// Resolve each Cogito agent tool independently through BuiltinTools. Always
+	// pass a non-nil selection: nil means Cogito's legacy unrestricted bundle,
+	// whereas an allowlist containing no agent names must expose none. The
+	// same selection gates execution, inherited tools, and Warm's schemas.
+	agentTools := make([]string, 0, len(agentToolNames))
+	for _, name := range agentToolNames {
+		if s.toolEnabled(name) {
+			agentTools = append(agentTools, name)
+		}
 	}
+	opts = append(opts, cogito.EnableAgentSpawning, cogito.WithAgentTools(agentTools))
 	s.modelMu.RLock()
 	strict := s.mainProvider.StrictToolsEnabled()
 	s.modelMu.RUnlock()
@@ -3206,11 +3213,13 @@ func (s *Session) Model() string {
 // starts at the built-in baseline and grows once tools are enumerated.
 func (s *Session) ToolCount() int {
 	n := 0
-	// Built-in tools the Session registers directly. spawn_agent via
-	// EnableAgentSpawning adds three tools (spawn_agent, check_agent,
-	// get_agent_result), so count two extras when it's enabled.
+	for _, name := range agentToolNames {
+		if s.toolEnabled(name) {
+			n++
+		}
+	}
+	// Built-in tools the Session registers directly.
 	builtins := []string{
-		"spawn_agent",
 		"ask_user", "agent_logs",
 		"schedule_wakeup",
 		"cron", "cron_list", "cron_delete", "cron_pause", "cron_resume", "cron_trigger",
@@ -3220,9 +3229,6 @@ func (s *Session) ToolCount() int {
 	for _, name := range builtins {
 		if s.toolEnabled(name) && !(name == "ask_user" && s.AutoApprove()) {
 			n++
-			if name == "spawn_agent" {
-				n += 2 // check_agent + get_agent_result
-			}
 		}
 	}
 	// Self-config tools (list_plugins, install_plugin, etc.).

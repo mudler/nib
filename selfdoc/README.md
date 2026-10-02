@@ -1356,6 +1356,30 @@ So, for an embedder:
   under `$(...)` that is a pipe, so the TUI refuses a stream it would have used
   anyway.
 
+### Selecting agent tools
+
+`types.Config.BuiltinTools` (`builtin_tools` in YAML) controls tool availability,
+separately from approval settings. An empty list keeps the unrestricted default,
+including all four agent tools. A nonempty list selects each name independently:
+
+- `spawn_agent` creates sub-agents.
+- `check_agent` checks their status.
+- `get_agent_result` retrieves their results.
+- `send_agent_message` sends a message to a running agent or resumes a completed one.
+
+For example, `builtin_tools: [check_agent, get_agent_result]` permits inspection
+without exposing spawn or send. Include any other built-in tools you need in the
+same list. A nonempty list with no agent-tool names exposes none of the four;
+allowing `spawn_agent` no longer implicitly enables the other three. Excluded
+agent tools cannot execute or return through inherited tool definitions. `Warm`
+advertises the same selection as a real turn. This does not enable nested
+spawning or change the default child-tool inheritance rules.
+
+Embedders can use `chat.Callbacks.AgentCallbacks` to capture an event sink once
+per `SendMessage`. Detached children's completion events retain the sink of the
+turn that spawned them, even after a later turn captures a new sink. Existing
+`OnAgentEvent` callbacks remain the fallback when no factory is supplied.
+
 ## License
 
 MIT
