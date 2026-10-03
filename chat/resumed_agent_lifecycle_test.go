@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -27,7 +28,7 @@ func TestResumedAgentPreservesToolLifecycleAttribution(t *testing.T) {
 	var observations []Observation
 	var starts []ToolStart
 	var results []ToolResult
-	calls := 0
+	var calls atomic.Int64
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.NotFound(w, r)
@@ -43,13 +44,13 @@ func TestResumedAgentPreservesToolLifecycleAttribution(t *testing.T) {
 			t.Error(err)
 			return
 		}
-		calls++
+		call := calls.Add(1)
 		msg := map[string]any{"role": "assistant", "content": "done"}
 		tool := func(name, args string) {
 			msg["content"] = ""
 			msg["tool_calls"] = []any{map[string]any{"id": "synthetic-call", "type": "function", "function": map[string]any{"name": name, "arguments": args}}}
 		}
-		switch calls {
+		switch call {
 		case 1:
 			tool("send_agent_message", `{"agent_id":"finished-child","message":"continue"}`)
 		case 2:
@@ -126,7 +127,7 @@ func TestResumedAgentPreservesToolLifecycleAttribution(t *testing.T) {
 	if !childTagged {
 		t.Error("resumed child tool missing agent-tagged thread event")
 	}
-	t.Logf("requests=%d root starts=%d result events=%d", calls, len(starts), len(results))
+	t.Logf("requests=%d root starts=%d result events=%d", calls.Load(), len(starts), len(results))
 	childRequest, childStart := false, false
 	for _, o := range observations {
 		if o.OwnerKnown && o.Owner == "finished-child" {
