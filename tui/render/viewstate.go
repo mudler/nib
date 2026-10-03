@@ -95,8 +95,10 @@ type Reasoning struct {
 	// Live enables the shared streaming cursor even before the first rune.
 	Live bool
 	// Arriving uses the same arrival fade as assistant entries.
-	Arriving  float64
-	Text      string
+	Arriving float64
+	// Rendered is the ANSI terminal body produced by the model's Markdown
+	// renderer. Presenters only add reasoning chrome.
+	Rendered  string
 	Collapsed bool
 	MaxLines  int
 	// Elapsed is the time the live reasoning trace has been running so

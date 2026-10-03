@@ -44,7 +44,7 @@ func TestReasoningCollapsedByDefaultTailsTheTrace(t *testing.T) {
 		viewport:           viewport.New(80, 20),
 		width:              80,
 		loading:            true,
-		reasoning:          "first\nsecond\nthird\nfourth\nfifth\nsixth\nseventh",
+		reasoning:          "first\n\nsecond\n\nthird\n\nfourth\n\nfifth\n\nsixth\n\nseventh",
 		presenter:          testPresenter(),
 		reasoningCollapsed: true,
 	}

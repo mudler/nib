@@ -250,6 +250,13 @@ func (m Model) visibleStreamContent(content string) string {
 // code while it streams rather than as raw text that snaps into a code block
 // at the end. The pulsing cursor goes at the end of the last line.
 func (m *Model) renderStreaming(visible string, width int) string {
+	return m.renderStreamingMarkdown(visible, width, theme.StreamCursorAt(time.Since(m.streamStart)))
+}
+
+// renderStreamingMarkdown is the shared partial-Markdown renderer for live
+// assistant and reasoning text. The caller owns the stream clock and supplies
+// the cursor for this frame.
+func (m *Model) renderStreamingMarkdown(visible string, width int, cursor string) string {
 	settled, open, lastStart, inFence := splitSettled(visible)
 	if inFence {
 		open += "\n" + fenceClose(open)
@@ -263,7 +270,7 @@ func (m *Model) renderStreaming(visible string, width int) string {
 	default:
 		out = m.renderMarkdown(settled, width) + "\n" + m.renderOpenBlock(settled[lastStart:], open, width)
 	}
-	return appendCursor(out, theme.StreamCursorAt(time.Since(m.streamStart)), width)
+	return appendCursor(out, cursor, width)
 }
 
 // renderOpenBlock renders open as it appears after last in one document,

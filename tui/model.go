@@ -3869,7 +3869,6 @@ func (m Model) viewStateAt(now time.Time) render.ViewState {
 		Spinner: spinner,
 		Speed:   m.liveSpeed(),
 		Reasoning: render.Reasoning{
-			Text:      m.visibleReasoning(),
 			Live:      m.reasoning != "" && !m.reasoningSince.IsZero(),
 			Arriving:  m.reasoningArriving(),
 			Collapsed: m.reasoningCollapsed,
@@ -4048,8 +4047,13 @@ func (m *Model) updateViewport() {
 			prevRole = render.RoleError
 		case "thought":
 			// ctrl+r expands the live box and the folded thoughts together:
-			// one switch for "show the thinking in full".
-			sb.WriteString(render.Thought(msg.Content, msg.Meta, !m.reasoningCollapsed, m.arriving(msg), contentWidth))
+			// one switch for "show the thinking in full". Render Markdown in the
+			// model; Thought only adds the summary and box chrome.
+			var rendered string
+			if !m.reasoningCollapsed {
+				rendered = m.renderMarkdown(msg.Content, max(contentWidth-4, 1))
+			}
+			sb.WriteString(render.Thought(rendered, msg.Meta, !m.reasoningCollapsed, m.arriving(msg), contentWidth))
 			// Not a user or assistant entry: the reply after it keeps its
 			// label on inline, as after a tool block.
 			prevRole = render.RoleAgent
@@ -4089,6 +4093,13 @@ func (m *Model) updateViewport() {
 	}
 
 	reasoningStart := strings.Count(sb.String(), "\n")
+	if vs.Reasoning.Live || strings.TrimSpace(m.reasoning) != "" {
+		vs.Reasoning.Rendered = m.renderStreamingMarkdown(
+			m.visibleReasoning(),
+			max(contentWidth-4, 1),
+			theme.StreamCursorAt(vs.Reasoning.Elapsed),
+		)
+	}
 	reasoningOut := presenter.Reasoning(vs, contentWidth)
 	sb.WriteString(reasoningOut)
 	m.reasoningSpanStart = reasoningStart

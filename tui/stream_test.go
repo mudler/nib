@@ -71,7 +71,7 @@ func TestReasoningDeltaTailsWhenCollapsed(t *testing.T) {
 	var next tea.Model = m
 	for i := 0; i < 20; i++ {
 		line := "trace line " + string(rune('a'+i))
-		next, _ = next.(Model).Update(delta(line + "\n"))
+		next, _ = next.(Model).Update(delta(line + "\n\n"))
 	}
 
 	// Provider bursts update the authoritative buffer immediately; render ticks

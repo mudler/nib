@@ -93,7 +93,7 @@ func TestActivitySummaryFooterPositionAndHeight(t *testing.T) {
 }
 func TestSummaryReplacesGenericLoaderNotReasoning(t *testing.T) {
 	b := Base{}
-	v := ViewState{Loading: true, Reasoning: Reasoning{Text: "actual received reasoning"}, Speed: "12 tok/s"}
+	v := ViewState{Loading: true, Reasoning: Reasoning{Rendered: "actual received reasoning"}, Speed: "12 tok/s"}
 	out := ansi.Strip(b.Reasoning(v, 80))
 	if !strings.Contains(out, "actual received reasoning") || !strings.Contains(out, "12 tok/s") {
 		t.Fatal(out)

@@ -137,24 +137,24 @@ func goldenCases() []goldenCase {
 		}},
 
 		{"reasoning idle", func(p render.Presenter) string {
-			return p.Reasoning(render.ViewState{Loading: false, Spinner: "|", Status: "Working", Reasoning: render.Reasoning{Text: "thinking about it"}}, 50)
+			return p.Reasoning(render.ViewState{Loading: false, Spinner: "|", Status: "Working", Reasoning: render.Reasoning{Rendered: "thinking about it"}}, 50)
 		}},
 		{"reasoning indicator only", func(p render.Presenter) string {
 			return p.Reasoning(render.ViewState{Loading: true, Spinner: "|", Status: "Working"}, 50)
 		}},
 		{"reasoning expanded with trace", func(p render.Presenter) string {
-			return p.Reasoning(render.ViewState{Loading: true, Spinner: "|", Status: "Working", Reasoning: render.Reasoning{Text: "thinking about it"}}, 50)
+			return p.Reasoning(render.ViewState{Loading: true, Spinner: "|", Status: "Working", Reasoning: render.Reasoning{Rendered: "thinking about it"}}, 50)
 		}},
 		{"reasoning collapsed with hidden lines", func(p render.Presenter) string {
 			return p.Reasoning(render.ViewState{
 				Loading: true, Spinner: "|", Status: "Working",
-				Reasoning: render.Reasoning{Text: collapsedTrace, Collapsed: true, MaxLines: 3},
+				Reasoning: render.Reasoning{Rendered: collapsedTrace, Collapsed: true, MaxLines: 3},
 			}, 50)
 		}},
 		{"reasoning collapsed with nothing hidden", func(p render.Presenter) string {
 			return p.Reasoning(render.ViewState{
 				Loading: true, Spinner: "|", Status: "Working",
-				Reasoning: render.Reasoning{Text: "short", Collapsed: true, MaxLines: 20},
+				Reasoning: render.Reasoning{Rendered: "short", Collapsed: true, MaxLines: 20},
 			}, 50)
 		}},
 

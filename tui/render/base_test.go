@@ -234,7 +234,7 @@ func TestBaseDialogUnhandledKindRendersNothing(t *testing.T) {
 // share.
 func TestBaseReasoningRendersNothingWhenIdle(t *testing.T) {
 	b := Base{}
-	v := ViewState{Loading: false, Spinner: "|", Status: "Working", Reasoning: Reasoning{Text: "thinking"}}
+	v := ViewState{Loading: false, Spinner: "|", Status: "Working", Reasoning: Reasoning{Rendered: "thinking"}}
 	if out := b.Reasoning(v, 50); out != "" {
 		t.Errorf("Reasoning(idle) = %q, want empty", out)
 	}

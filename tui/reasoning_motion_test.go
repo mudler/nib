@@ -25,7 +25,7 @@ func TestReasoningMotion(t *testing.T) {
 			text := strings.Repeat("日本語é", 16)
 			next, _ := m.Update(delta(text))
 			m = next.(Model)
-			if got := m.viewState().Reasoning.Text; got != "" {
+			if got := m.visibleReasoning(); got != "" {
 				t.Fatalf("reasoning burst visible before tick: %q", got)
 			}
 			if !m.animating() {
@@ -34,21 +34,22 @@ func TestReasoningMotion(t *testing.T) {
 			// Seed an independent assistant tail without folding: both lanes must advance separately.
 			m.appendStreamedContent(strings.Repeat("a", 16))
 			m.advanceAnimation()
-			got := m.viewState().Reasoning.Text
+			got := m.visibleReasoning()
 			if utf8.RuneCountInString(got) != 8 || m.streamShown != 2 {
 				t.Fatalf("independent first frame: reasoning=%q assistant=%d", got, m.streamShown)
 			}
-			out := ansi.Strip(p.Reasoning(m.viewState(), 76))
+			m.updateViewport()
+			out := ansi.Strip(m.viewport.View())
 			if !strings.Contains(out, theme.StreamCursor) {
 				t.Fatalf("missing reasoning cursor: %q", out)
 			}
 			for i := 0; i < 100; i++ {
 				m.advanceAnimation()
-				if !utf8.ValidString(m.viewState().Reasoning.Text) {
+				if !utf8.ValidString(m.visibleReasoning()) {
 					t.Fatal("split rune")
 				}
 			}
-			if m.viewState().Reasoning.Text != text {
+			if m.visibleReasoning() != text {
 				t.Fatal("reasoning never caught up")
 			}
 			m.reasoningSince = time.Now().Add(-time.Second)
@@ -61,16 +62,16 @@ func TestReasoningMotion(t *testing.T) {
 			// A shorter replacement must not reuse an out-of-range byte cut.
 			m.reasoning = "é"
 			m.advanceAnimation()
-			if got := m.viewState().Reasoning.Text; got != "é" || m.reasoningShown != len("é") {
+			if got := m.visibleReasoning(); got != "é" || m.reasoningShown != len("é") {
 				t.Fatalf("short replacement: %q", got)
 			}
 			m.endThoughtStep()
-			if m.viewState().Reasoning.Text != "" {
+			if m.visibleReasoning() != "" {
 				t.Fatal("fold left live text")
 			}
 			next, _ = m.Update(delta(text))
 			m = next.(Model)
-			if m.viewState().Reasoning.Text != "" {
+			if m.visibleReasoning() != "" {
 				t.Fatal("next step inherited reveal progress")
 			}
 			m.foldReasoning()
@@ -78,7 +79,7 @@ func TestReasoningMotion(t *testing.T) {
 				t.Fatal("fold lost hidden suffix")
 			}
 			m.advanceAnimation()
-			if m.viewState().Reasoning.Text != "" {
+			if m.visibleReasoning() != "" {
 				t.Fatal("tick resurrected folded trace")
 			}
 		})

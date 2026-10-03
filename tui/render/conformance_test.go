@@ -616,7 +616,7 @@ func TestHeaderStructuralEquivalence(t *testing.T) {
 // spinner, status verb and trace text in the same order on both surfaces.
 func TestReasoningStructuralEquivalence(t *testing.T) {
 	const w = 50
-	idle := render.ViewState{Loading: false, Spinner: "|", Status: "Working", Reasoning: render.Reasoning{Text: "thinking about it"}}
+	idle := render.ViewState{Loading: false, Spinner: "|", Status: "Working", Reasoning: render.Reasoning{Rendered: "thinking about it"}}
 	for name, p := range presenters() {
 		if out := p.Reasoning(idle, w); out != "" {
 			t.Errorf("%s rendered %q while not loading, want empty", name, out)
@@ -648,7 +648,7 @@ func TestReasoningStructuralEquivalence(t *testing.T) {
 		},
 		{
 			name:   "indicator with a reasoning trace",
-			state:  render.ViewState{Loading: true, Spinner: "|", Status: "Working", Reasoning: render.Reasoning{Text: "thinking about it"}},
+			state:  render.ViewState{Loading: true, Spinner: "|", Status: "Working", Reasoning: render.Reasoning{Rendered: "thinking about it"}},
 			tokens: []string{"|", "Working", "thinking about it"},
 		},
 		{
@@ -662,7 +662,7 @@ func TestReasoningStructuralEquivalence(t *testing.T) {
 			name: "collapsed reasoning trace tails, does not head",
 			state: render.ViewState{
 				Loading: true, Spinner: "|", Status: "Working",
-				Reasoning: render.Reasoning{Text: collapsedTrace, Collapsed: true, MaxLines: 3},
+				Reasoning: render.Reasoning{Rendered: collapsedTrace, Collapsed: true, MaxLines: 3},
 			},
 			tokens: []string{"|", "Working", "line-6", "line-7", "line-8", wantHint},
 			absent: []string{"line-1", "line-2", "line-3", "line-4", "line-5"},
@@ -677,7 +677,7 @@ func TestReasoningStructuralEquivalence(t *testing.T) {
 			name: "collapsed reasoning trace with nothing hidden shows no hint",
 			state: render.ViewState{
 				Loading: true, Spinner: "|", Status: "Working",
-				Reasoning: render.Reasoning{Text: "short", Collapsed: true, MaxLines: 20},
+				Reasoning: render.Reasoning{Rendered: "short", Collapsed: true, MaxLines: 20},
 			},
 			tokens: []string{"|", "Working", "short"},
 			absent: []string{theme.ReasoningExpand, theme.ReasoningCollapse},

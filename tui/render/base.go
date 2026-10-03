@@ -126,12 +126,9 @@ func (Base) Reasoning(v ViewState, w int) string {
 	if v.Tip != "" {
 		b.WriteString(theme.Hint.Render("  Tip: "+v.Tip) + "\n")
 	}
-	if v.Reasoning.Live || strings.TrimSpace(v.Reasoning.Text) != "" {
+	if v.Reasoning.Live || strings.TrimSpace(v.Reasoning.Rendered) != "" {
 		r := v.Reasoning
-		text := strings.TrimRight(Wrap(r.Text, w-4), "\n")
-		if r.Live {
-			text = AppendCursor(text, theme.StreamCursorAt(r.Elapsed), w-4)
-		}
+		text := strings.TrimRight(r.Rendered, "\n")
 		box := CollapsibleBox{
 			Lines:     strings.Split(text, "\n"),
 			MaxLines:  r.MaxLines,
@@ -139,7 +136,7 @@ func (Base) Reasoning(v ViewState, w int) string {
 		}
 		b.WriteString(theme.ReasoningHeader("", r.Elapsed) + "\n")
 		for _, line := range box.Visible() {
-			b.WriteString("  " + theme.Fading(theme.Subtle, r.Arriving).Render(theme.BoxRule) + " " + theme.Reasoning.Render(line) + "\n")
+			b.WriteString("  " + theme.Fading(theme.Subtle, r.Arriving).Render(theme.BoxRule) + " " + line + "\n")
 		}
 		// Default: expanded with nothing hidden — offer to collapse it back.
 		// Collapsed with something hidden — offer to expand and say how much
