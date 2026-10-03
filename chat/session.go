@@ -1478,10 +1478,118 @@ func (s *Session) restorePendingNotices(notices []string) {
 	s.pendingNotices = append(slices.Clone(notices), s.pendingNotices...)
 }
 
-// pendingNoticesMessage renders kept notices as the one message that goes
-// before the user's message in the next turn.
+// pendingNoticesMessage renders kept non-durable notices as the one message
+// that goes before the user's message in the next turn. Background agent and
+// shell completions use backgroundState instead and are never capped here.
 func pendingNoticesMessage(notices []string) string {
 	return "Background jobs finished while no turn was running:\n\n" + strings.Join(notices, "\n\n")
+}
+
+// durableNoticesMessage renders one request-local user message. The source and
+// stable identity are explicit so mixed agent/shell completions remain
+// attributable after they have been combined at a request boundary.
+func durableNoticesMessage(notices []sequencedNotice) string {
+	var b strings.Builder
+	b.WriteString("Background work completed since the previous model request:\n")
+	for _, notice := range notices {
+		source := "unknown"
+		switch notice.source {
+		case backgroundAgent:
+			source = "agent"
+		case backgroundShell:
+			source = "shell"
+		}
+		fmt.Fprintf(&b, "\n- sequence=%d source=%s id=%s\n%s\n", notice.sequence, source, notice.identity, notice.content)
+	}
+	return strings.TrimSpace(b.String())
+}
+
+// filterLegacyAgentCompletions removes Cogito's completion injection from the
+// wire context. It remains useful as a wake-up for a parked loop, but the
+// durable background ledger is the sole source of completion content.
+func filterLegacyAgentCompletions(messages []openai.ChatCompletionMessage) []openai.ChatCompletionMessage {
+	out := make([]openai.ChatCompletionMessage, 0, len(messages))
+	for _, message := range messages {
+		if message.Name != agentCompletionMessageName {
+			out = append(out, message)
+		}
+	}
+	return out
+}
+
+// noticeDeliveryLLM reserves durable notices at the last possible request
+// boundary. This keeps retries and multi-step tool turns from depending on
+// SendMessage recursion: each immutable request receives exactly the notices
+// queued when that request is handed to the provider.
+type noticeDeliveryLLM struct {
+	cogito.LLM
+	background *backgroundState
+}
+
+type noticeDeliveryStreamingLLM struct {
+	*noticeDeliveryLLM
+	stream cogito.StreamingLLM
+}
+
+func withNoticeDelivery(llm cogito.LLM, background *backgroundState) cogito.LLM {
+	base := &noticeDeliveryLLM{LLM: llm, background: background}
+	if stream, ok := llm.(cogito.StreamingLLM); ok {
+		return &noticeDeliveryStreamingLLM{noticeDeliveryLLM: base, stream: stream}
+	}
+	return base
+}
+
+func (l *noticeDeliveryLLM) includeMessages(messages []openai.ChatCompletionMessage) ([]openai.ChatCompletionMessage, uint64) {
+	if l.background == nil {
+		return messages, 0
+	}
+	reservation, notices := l.background.reserveNotices(0)
+	if len(notices) == 0 {
+		return messages, 0
+	}
+	// Clip before append so the request handed down owns an immutable slice and
+	// cannot overwrite Cogito's fragment backing array.
+	messages = append(slices.Clip(messages), openai.ChatCompletionMessage{
+		Role:    openai.ChatMessageRoleUser,
+		Content: durableNoticesMessage(notices),
+	})
+	l.background.markRootObserved(notices[len(notices)-1].sequence)
+	return messages, reservation
+}
+
+func (l *noticeDeliveryLLM) finish(reservation uint64, err error) {
+	if reservation == 0 {
+		return
+	}
+	if err != nil {
+		l.background.rollbackNotices(reservation)
+		return
+	}
+	l.background.consumeNotices(reservation)
+}
+
+func (l *noticeDeliveryLLM) Ask(ctx context.Context, fragment cogito.Fragment) (cogito.Fragment, error) {
+	var reservation uint64
+	fragment.Messages, reservation = l.includeMessages(fragment.Messages)
+	out, err := l.LLM.Ask(ctx, fragment)
+	l.finish(reservation, err)
+	return out, err
+}
+
+func (l *noticeDeliveryLLM) CreateChatCompletion(ctx context.Context, request openai.ChatCompletionRequest) (cogito.LLMReply, cogito.LLMUsage, error) {
+	var reservation uint64
+	request.Messages, reservation = l.includeMessages(request.Messages)
+	reply, usage, err := l.LLM.CreateChatCompletion(ctx, request)
+	l.finish(reservation, err)
+	return reply, usage, err
+}
+
+func (l *noticeDeliveryStreamingLLM) CreateChatCompletionStream(ctx context.Context, request openai.ChatCompletionRequest) (<-chan cogito.StreamEvent, error) {
+	var reservation uint64
+	request.Messages, reservation = l.includeMessages(request.Messages)
+	events, err := l.stream.CreateChatCompletionStream(ctx, request)
+	l.finish(reservation, err)
+	return events, err
 }
 
 // InjectUser delivers a user-typed follow-up into the live run (see Inject),
@@ -2137,11 +2245,10 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 		for {
 			select {
 			case msg := <-s.inject:
+				// Cogito's legacy completion message is wake-only. The durable
+				// ledger owns its content and delivery, so never put it on the
+				// capped pending-notice path or hand it back as user input.
 				if msg.Name == agentCompletionMessageName {
-					s.pendingNotices = append(s.pendingNotices, msg.Content)
-					if n := len(s.pendingNotices); n > maxPendingNotices {
-						s.pendingNotices = slices.Clone(s.pendingNotices[n-maxPendingNotices:])
-					}
 					continue
 				}
 				if i := slices.Index(pendingUser, msg.Content); i >= 0 {
@@ -2207,6 +2314,9 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 	agentLLM := guideChildLLM(retryForAgent(llm, &s.agentBackoff))
 	baseLLM := llm
 	llm = trackUsage(llm, &s.live, s.requestLimits)
+	// Durable completions are attached at the actual root request handoff, not
+	// once per SendMessage: Cogito may issue several requests in a tool turn.
+	llm = withNoticeDelivery(llm, s.background)
 
 	// Build cogito options from config
 	cogitoOpts := []cogito.Option{
@@ -2355,11 +2465,12 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 	midTurn := s.newTurnCompactor(turnCtx)
 
 	cogitoOpts = append(cogitoOpts,
-		// Rewrites what goes on the wire, never s.fragment. Installed here
-		// rather than in toolOptions because toolOptions is shared with Warm,
-		// whose contract is that a priming request advertises exactly the tool
-		// schemas a real turn advertises — a message manipulator is neither.
-		cogito.WithMessagesManipulator(midTurn.manipulate),
+		// Rewrites what goes on the wire, never s.fragment. Legacy Cogito
+		// agent-completion injections are wake-only; durable completion text
+		// is appended later by the root LLM wrapper.
+		cogito.WithMessagesManipulator(func(messages []openai.ChatCompletionMessage) []openai.ChatCompletionMessage {
+			return midTurn.manipulate(filterLegacyAgentCompletions(messages))
+		}),
 		cogito.WithAgentManager(s.agentManager),
 		cogito.WithAgentSpawnCallback(func(a *cogito.AgentState) {
 			if a.Background {
