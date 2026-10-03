@@ -21,6 +21,92 @@ func waitJob(t *testing.T, j *bgJob) {
 	t.Fatalf("job %s did not finish in time", j.id)
 }
 
+func TestShellJobLifecycleStartAndSuccess(t *testing.T) {
+	jobs := NewShellJobs()
+	events := make(chan ShellJobLifecycleEvent, 4)
+	stop := jobs.ObserveLifecycle(func(event ShellJobLifecycleEvent) { events <- event })
+	defer stop()
+	job := jobs.mgr.launch(context.Background(), "echo lifecycle", false)
+	want := []ShellJobLifecycleKind{ShellJobLifecycleStart, ShellJobLifecycleSuccess}
+	for i, kind := range want {
+		select {
+		case event := <-events:
+			if event.Kind != kind || event.Job.ID != job.id {
+				t.Fatalf("event %d = %#v, want kind %q id %q", i, event, kind, job.id)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("timed out waiting for event %q", kind)
+		}
+	}
+}
+
+func TestShellJobLifecycleFailureAndKill(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		run  func(*ShellJobs) *bgJob
+		want ShellJobLifecycleKind
+	}{
+		{name: "failure", run: func(jobs *ShellJobs) *bgJob { return jobs.mgr.launch(context.Background(), "exit 7", false) }, want: ShellJobLifecycleFailure},
+		{name: "kill", run: func(jobs *ShellJobs) *bgJob {
+			job := jobs.mgr.launch(context.Background(), "sleep 30", false)
+			if !jobs.Kill(job.id) {
+				t.Fatal("Kill returned false")
+			}
+			return job
+		}, want: ShellJobLifecycleKilled},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			jobs := NewShellJobs()
+			events := make(chan ShellJobLifecycleEvent, 4)
+			stop := jobs.ObserveLifecycle(func(event ShellJobLifecycleEvent) { events <- event })
+			defer stop()
+			job := tt.run(jobs)
+			for _, want := range []ShellJobLifecycleKind{ShellJobLifecycleStart, tt.want} {
+				select {
+				case event := <-events:
+					if event.Kind != want || event.Job.ID != job.id {
+						t.Fatalf("event = %#v, want %q for %s", event, want, job.id)
+					}
+				case <-time.After(5 * time.Second):
+					t.Fatalf("timed out waiting for %q", want)
+				}
+			}
+		})
+	}
+}
+
+func TestShellJobLifecycleDetachAndUnregister(t *testing.T) {
+	jobs := NewShellJobs()
+	events := make(chan ShellJobLifecycleEvent, 4)
+	stop := jobs.ObserveLifecycle(func(event ShellJobLifecycleEvent) { events <- event })
+	job := jobs.mgr.launch(context.Background(), "sleep 0.1", true)
+	select {
+	case event := <-events:
+		t.Fatalf("foreground job emitted before detach: %#v", event)
+	default:
+	}
+	if id, ok := jobs.DetachForeground(); !ok || id != job.id {
+		t.Fatalf("DetachForeground = %q, %v", id, ok)
+	}
+	for _, want := range []ShellJobLifecycleKind{ShellJobLifecycleStart, ShellJobLifecycleSuccess} {
+		select {
+		case event := <-events:
+			if event.Kind != want {
+				t.Fatalf("event = %#v, want %q", event, want)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("timed out waiting for %q", want)
+		}
+	}
+	stop()
+	jobs.mgr.launch(context.Background(), "echo after-stop", false)
+	select {
+	case event := <-events:
+		t.Fatalf("event after unregister: %#v", event)
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
 func TestBgJobCompletesAndCapturesOutput(t *testing.T) {
 	mgr := newBgJobManager()
 	j := mgr.launch(context.Background(), "echo HELLO_BG", false)

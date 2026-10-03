@@ -120,12 +120,17 @@ type bgJob struct {
 	detach chan struct{} // non-nil while the job is a detachable foreground job
 	doneCh chan struct{} // closed when the process exits
 
-	mu       sync.Mutex
-	done     bool
-	ended    time.Time // when done became true
-	detached bool      // set when backgrounded via Ctrl+B (guarded by manager.mu)
-	exitCode int
-	errMsg   string
+	mu            sync.Mutex
+	done          bool
+	ended         time.Time // when done became true
+	detached      bool      // set when backgrounded via Ctrl+B (guarded by manager.mu)
+	killRequested bool
+	exitCode      int
+	errMsg        string
+
+	// lifecycleMu serializes this job's start and terminal lifecycle callbacks.
+	// It is never held together with the manager mutex while invoking callbacks.
+	lifecycleMu sync.Mutex
 }
 
 func (j *bgJob) status() string {
@@ -161,16 +166,59 @@ func (j *bgJob) toOutput(script string, limits *OutputLimitsPolicy, artifacts *A
 	}
 }
 
+// ShellJobLifecycleKind identifies a background shell job transition.
+type ShellJobLifecycleKind string
+
+const (
+	ShellJobLifecycleStart   ShellJobLifecycleKind = "start"
+	ShellJobLifecycleSuccess ShellJobLifecycleKind = "success"
+	ShellJobLifecycleFailure ShellJobLifecycleKind = "failure"
+	ShellJobLifecycleKilled  ShellJobLifecycleKind = "killed"
+)
+
+// ShellJobLifecycleEvent is emitted once when a job becomes background work and
+// once when that work terminates. Foreground-only jobs are intentionally silent.
+type ShellJobLifecycleEvent struct {
+	Kind ShellJobLifecycleKind
+	Job  ShellJobInfo
+}
+
+type shellJobLifecycleObserver struct {
+	mu       sync.Mutex
+	disabled bool
+	active   sync.WaitGroup
+	fn       func(ShellJobLifecycleEvent)
+}
+
+func (o *shellJobLifecycleObserver) invoke(event ShellJobLifecycleEvent) {
+	o.mu.Lock()
+	if o.disabled {
+		o.mu.Unlock()
+		return
+	}
+	o.active.Add(1)
+	o.mu.Unlock()
+	defer o.active.Done()
+	o.fn(event)
+}
+
+func (o *shellJobLifecycleObserver) disable() {
+	o.mu.Lock()
+	o.disabled = true
+	o.mu.Unlock()
+	o.active.Wait()
+}
+
 // bgJobManager tracks shell jobs for a session.
 type bgJobManager struct {
 	mu   sync.Mutex
 	jobs map[string]*bgJob
 	seq  int
 
-	// onDone, when set, is invoked once for each job that finishes, from the
-	// job's wait goroutine. Used to push a completion notice into the live run's
-	// message-injection channel (cogito has no concept of shell jobs).
-	onDone func(*bgJob)
+	// onDone preserves the legacy completion hook. lifecycle is the newer
+	// background-only start/terminal observer.
+	onDone    func(*bgJob)
+	lifecycle *shellJobLifecycleObserver
 
 	// dir, when non-empty, is the working directory launched commands run in
 	// (cmd.Dir). Empty means the process cwd (legacy behavior).
@@ -199,6 +247,14 @@ func (m *bgJobManager) launch(parent context.Context, script string, foreground 
 		j.detach = make(chan struct{}, 1)
 	}
 
+	// Register the stable ID before publishing start or allowing completion.
+	m.mu.Lock()
+	m.jobs[id] = j
+	m.mu.Unlock()
+	if !foreground {
+		m.notifyLifecycle(j, ShellJobLifecycleStart)
+	}
+
 	shellExec, shellArgs := shellInvocation(script)
 	cmd := exec.CommandContext(ctx, shellExec, shellArgs...)
 	if m.dir != "" {
@@ -220,6 +276,7 @@ func (m *bgJobManager) launch(parent context.Context, script string, foreground 
 		j.mu.Unlock()
 		close(j.doneCh)
 		m.notifyDone(j)
+		m.notifyTerminal(j)
 	} else {
 		go func() {
 			err := cmd.Wait()
@@ -253,12 +310,10 @@ func (m *bgJobManager) launch(parent context.Context, script string, foreground 
 			j.mu.Unlock()
 			close(j.doneCh)
 			m.notifyDone(j)
+			m.notifyTerminal(j)
 		}()
 	}
 
-	m.mu.Lock()
-	m.jobs[id] = j
-	m.mu.Unlock()
 	return j
 }
 
@@ -273,6 +328,47 @@ func (m *bgJobManager) notifyDone(j *bgJob) {
 	}
 }
 
+func (m *bgJobManager) lifecycleObserver() *shellJobLifecycleObserver {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.lifecycle
+}
+
+func (m *bgJobManager) notifyLifecycle(j *bgJob, kind ShellJobLifecycleKind) {
+	o := m.lifecycleObserver()
+	if o == nil {
+		return
+	}
+	j.lifecycleMu.Lock()
+	event := ShellJobLifecycleEvent{Kind: kind, Job: shellJobInfo(j, true)}
+	o.invoke(event)
+	j.lifecycleMu.Unlock()
+}
+
+func (m *bgJobManager) notifyTerminal(j *bgJob) {
+	m.mu.Lock()
+	backgrounded := j.detach == nil || j.detached
+	o := m.lifecycle
+	m.mu.Unlock()
+	if !backgrounded || o == nil {
+		return
+	}
+
+	j.lifecycleMu.Lock()
+	kind := ShellJobLifecycleFailure
+	j.mu.Lock()
+	killed := j.killRequested
+	succeeded := j.exitCode == 0 && j.errMsg == ""
+	j.mu.Unlock()
+	if killed {
+		kind = ShellJobLifecycleKilled
+	} else if succeeded {
+		kind = ShellJobLifecycleSuccess
+	}
+	o.invoke(ShellJobLifecycleEvent{Kind: kind, Job: shellJobInfo(j, true)})
+	j.lifecycleMu.Unlock()
+}
+
 // backgrounded reports whether a job runs detached from a turn: a bash_background
 // job (detach == nil) or a foreground job the user backgrounded with Ctrl+B
 // (detached). Reads detach/detached under m.mu, matching List.
@@ -280,6 +376,17 @@ func (m *bgJobManager) backgrounded(j *bgJob) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return j.detach == nil || j.detached
+}
+
+func shellJobInfo(j *bgJob, backgrounded bool) ShellJobInfo {
+	done, _, _ := j.snapshot()
+	return ShellJobInfo{
+		ID:           j.id,
+		Script:       j.script,
+		Status:       j.status(),
+		Running:      !done,
+		Backgrounded: backgrounded,
+	}
 }
 
 // hasRunning reports whether any tracked shell job is still running.
@@ -319,6 +426,11 @@ func (m *bgJobManager) kill(id string) bool {
 	if !ok {
 		return false
 	}
+	j.mu.Lock()
+	if !j.done {
+		j.killRequested = true
+	}
+	j.mu.Unlock()
 	j.cancel()
 	return true
 }
@@ -373,7 +485,6 @@ func (m *bgJobManager) prune(now time.Time) {
 // id and true when one was detached.
 func (m *bgJobManager) detachForeground() (string, bool) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	var pick *bgJob
 	for _, j := range m.jobs {
 		if j.detach == nil || j.detached {
@@ -387,14 +498,18 @@ func (m *bgJobManager) detachForeground() (string, bool) {
 		}
 	}
 	if pick == nil {
+		m.mu.Unlock()
 		return "", false
 	}
 	pick.detached = true
+	id := pick.id
+	m.mu.Unlock()
+	m.notifyLifecycle(pick, ShellJobLifecycleStart)
 	select {
 	case pick.detach <- struct{}{}:
 	default:
 	}
-	return pick.id, true
+	return id, true
 }
 
 func (m *bgJobManager) hasForeground() bool {
@@ -507,6 +622,31 @@ func (s *ShellJobs) HasForeground() bool {
 // a backgrounded shell command is still in flight.
 func (s *ShellJobs) HasRunning() bool {
 	return s != nil && s.mgr.hasRunning()
+}
+
+// ObserveLifecycle registers a race-safe observer for background shell lifecycle
+// events. The returned function disables the observer and waits for callbacks
+// already in flight, so after it returns no new callback can begin.
+func (s *ShellJobs) ObserveLifecycle(fn func(ShellJobLifecycleEvent)) func() {
+	if s == nil || fn == nil {
+		return func() {}
+	}
+	observer := &shellJobLifecycleObserver{fn: fn}
+	s.mgr.mu.Lock()
+	previous := s.mgr.lifecycle
+	s.mgr.lifecycle = observer
+	s.mgr.mu.Unlock()
+	if previous != nil {
+		previous.disable()
+	}
+	return func() {
+		s.mgr.mu.Lock()
+		if s.mgr.lifecycle == observer {
+			s.mgr.lifecycle = nil
+		}
+		s.mgr.mu.Unlock()
+		observer.disable()
+	}
 }
 
 // SetOnJobDone registers a callback invoked once for each shell job that
