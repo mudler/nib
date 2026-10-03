@@ -305,7 +305,7 @@ func (m *bgJobManager) launch(parent context.Context, script string, foreground 
 				}
 				j.errMsg = err.Error()
 			}
-			j.killed = j.killRequested && err != nil
+			j.killed = j.killRequested && err != nil && errors.Is(ctx.Err(), context.Canceled) && j.exitCode == -1
 			j.mu.Unlock()
 			close(j.doneCh)
 			m.notifyDone(j)
@@ -647,11 +647,8 @@ func (s *ShellJobs) ObserveLifecycle(fn func(ShellJobLifecycleEvent)) func() {
 	s.mgr.lifecycle = observer
 	s.mgr.mu.Unlock()
 	return func() {
-		s.mgr.mu.Lock()
-		if s.mgr.lifecycle == observer {
-			s.mgr.lifecycle = nil
-		}
-		s.mgr.mu.Unlock()
+		// The observer slot intentionally remains occupied for this registry's
+		// lifetime. disable is idempotent and prevents future callback entry.
 		observer.disable()
 	}
 }
