@@ -132,6 +132,7 @@ type Session struct {
 	shellJobs       *wizmcp.ShellJobs
 	background      *backgroundState
 	stopShellEvents func()
+	shellEventsMu   sync.Mutex
 
 	// schemaTools records the tool definitions toolOptions registers, for
 	// SchemaBudget. Guarded by schemaToolsMu. See schema_budget.go.
@@ -1383,6 +1384,11 @@ func (s *Session) UseArtifactStore(st *wizmcp.ArtifactStore) {
 // is still running, and so finished shell jobs inject a completion notice into
 // the live run. Registers the completion hook. Call once at setup.
 func (s *Session) SetShellJobs(jobs *wizmcp.ShellJobs) {
+	s.shellEventsMu.Lock()
+	defer s.shellEventsMu.Unlock()
+	if s.shellJobs == jobs && s.stopShellEvents != nil {
+		return
+	}
 	if s.stopShellEvents != nil {
 		s.stopShellEvents()
 		s.stopShellEvents = nil
@@ -1390,6 +1396,9 @@ func (s *Session) SetShellJobs(jobs *wizmcp.ShellJobs) {
 	s.shellJobs = jobs
 	if jobs == nil {
 		return
+	}
+	if s.background == nil {
+		s.background = newBackgroundState()
 	}
 	s.stopShellEvents = jobs.ObserveLifecycle(func(event wizmcp.ShellJobLifecycleEvent) {
 		if !event.Job.Backgrounded {
@@ -1404,6 +1413,7 @@ func (s *Session) SetShellJobs(jobs *wizmcp.ShellJobs) {
 		if !s.background.beginPublisher(publisher) {
 			return
 		}
+		defer s.background.endPublisher(publisher)
 		notice := "shell job " + id + " " + string(event.Kind)
 		if so, se, ok := jobs.Output(id); ok {
 			if tail := jobTail(so + se); tail != "" {
@@ -1411,7 +1421,6 @@ func (s *Session) SetShellJobs(jobs *wizmcp.ShellJobs) {
 			}
 		}
 		s.background.completeBackground(backgroundShell, id, notice, event.Kind == wizmcp.ShellJobLifecycleSuccess)
-		s.background.endPublisher(publisher)
 		// Wake the live root. Durable model delivery is owned by the ledger.
 		s.Inject(notice)
 	})
@@ -2346,18 +2355,22 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 		cogito.WithMessagesManipulator(midTurn.manipulate),
 		cogito.WithAgentManager(s.agentManager),
 		cogito.WithAgentSpawnCallback(func(a *cogito.AgentState) {
-			s.background.startBackground(backgroundAgent, a.ID)
+			if a.Background {
+				s.background.startBackground(backgroundAgent, a.ID)
+			}
 			s.emitAgentEventTo(a, toolCallbacks.OnAgentEvent)
 		}),
 		cogito.WithAgentCompletionCallback(func(a *cogito.AgentState) {
-			publisher := "agent:" + a.ID
-			if s.background.beginPublisher(publisher) {
-				content := fmt.Sprintf("Agent %s completed", a.ID)
-				if result := strings.TrimSpace(a.Result); result != "" {
-					content += ":\n" + result
+			if a.Background {
+				publisher := "agent:" + a.ID
+				if s.background.beginPublisher(publisher) {
+					content := fmt.Sprintf("Agent %s completed", a.ID)
+					if result := strings.TrimSpace(a.Result); result != "" {
+						content += ":\n" + result
+					}
+					s.background.completeBackground(backgroundAgent, a.ID, content, a.Error == nil)
+					s.background.endPublisher(publisher)
 				}
-				s.background.completeBackground(backgroundAgent, a.ID, content, a.Error == nil)
-				s.background.endPublisher(publisher)
 			}
 			s.emitAgentEventTo(a, toolCallbacks.OnAgentEvent)
 		}),
@@ -3114,10 +3127,12 @@ func (s *Session) applyPendingReload() {
 
 // Close closes the session and cleans up resources
 func (s *Session) Close() error {
+	s.shellEventsMu.Lock()
 	if s.stopShellEvents != nil {
 		s.stopShellEvents()
 		s.stopShellEvents = nil
 	}
+	s.shellEventsMu.Unlock()
 	if s.background != nil {
 		s.background.close()
 	}
