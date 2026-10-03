@@ -1588,8 +1588,38 @@ func (l *noticeDeliveryStreamingLLM) CreateChatCompletionStream(ctx context.Cont
 	var reservation uint64
 	request.Messages, reservation = l.includeMessages(request.Messages)
 	events, err := l.stream.CreateChatCompletionStream(ctx, request)
-	l.finish(reservation, err)
-	return events, err
+	if err != nil {
+		l.finish(reservation, err)
+		return nil, err
+	}
+	if reservation == 0 {
+		return events, nil
+	}
+	out := make(chan cogito.StreamEvent)
+	go func() {
+		defer close(out)
+		succeeded := false
+		for event := range events {
+			if event.Type == cogito.StreamEventDone {
+				succeeded = true
+			}
+			if event.Type == cogito.StreamEventError {
+				succeeded = false
+			}
+			select {
+			case out <- event:
+			case <-ctx.Done():
+				l.background.rollbackNotices(reservation)
+				return
+			}
+		}
+		if succeeded {
+			l.background.consumeNotices(reservation)
+		} else {
+			l.background.rollbackNotices(reservation)
+		}
+	}()
+	return out, nil
 }
 
 // InjectUser delivers a user-typed follow-up into the live run (see Inject),
