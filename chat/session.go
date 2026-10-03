@@ -133,6 +133,7 @@ type Session struct {
 	background      *backgroundState
 	stopShellEvents func()
 	shellEventsMu   sync.Mutex
+	shellEventsDone bool
 
 	// schemaTools records the tool definitions toolOptions registers, for
 	// SchemaBudget. Guarded by schemaToolsMu. See schema_budget.go.
@@ -1386,6 +1387,15 @@ func (s *Session) UseArtifactStore(st *wizmcp.ArtifactStore) {
 func (s *Session) SetShellJobs(jobs *wizmcp.ShellJobs) {
 	s.shellEventsMu.Lock()
 	defer s.shellEventsMu.Unlock()
+	if s.shellEventsDone {
+		return
+	}
+	// A ShellJobs observer is a Session-lifetime binding. Ignore nil after a
+	// registry is attached rather than disabling the registry's one observer
+	// slot, which cannot be re-registered safely.
+	if jobs == nil {
+		return
+	}
 	if s.shellJobs == jobs && s.stopShellEvents != nil {
 		return
 	}
@@ -1394,9 +1404,6 @@ func (s *Session) SetShellJobs(jobs *wizmcp.ShellJobs) {
 		s.stopShellEvents = nil
 	}
 	s.shellJobs = jobs
-	if jobs == nil {
-		return
-	}
 	if s.background == nil {
 		s.background = newBackgroundState()
 	}
@@ -3128,6 +3135,7 @@ func (s *Session) applyPendingReload() {
 // Close closes the session and cleans up resources
 func (s *Session) Close() error {
 	s.shellEventsMu.Lock()
+	s.shellEventsDone = true
 	if s.stopShellEvents != nil {
 		s.stopShellEvents()
 		s.stopShellEvents = nil
