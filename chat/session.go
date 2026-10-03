@@ -16,6 +16,7 @@ import (
 
 	"github.com/mudler/nib/auth"
 	_ "github.com/mudler/nib/classify/systemone" // the SystemOne classifier API
+	configpkg "github.com/mudler/nib/config"
 	"github.com/mudler/nib/endpoint"
 	"github.com/mudler/nib/hooks"
 	"github.com/mudler/nib/internal"
@@ -131,6 +132,8 @@ type Session struct {
 	// sub-agents). May be nil (e.g. headless CLI without a job registry).
 	shellJobs       *wizmcp.ShellJobs
 	background      *backgroundState
+	goalSupervisor  *goalSupervisor
+	goalWake        chan struct{}
 	stopShellEvents func()
 	shellEventsMu   sync.Mutex
 	shellEventsDone bool
@@ -516,6 +519,10 @@ func toCogitoDefinitions(cfgs []types.AgentTypeConfig) []cogito.AgentDefinition 
 // app.Run preflights the directory, so in practice only embedders calling this
 // directly reach the failure.
 func NewSession(ctx context.Context, cfg types.Config, callbacks Callbacks, transports ...mcp.Transport) (*Session, error) {
+	goalDelays, err := configpkg.ParseGoalCheckInDelays(cfg.Goal.CheckInDelays)
+	if err != nil {
+		return nil, err
+	}
 	// LocalAIClient, not OpenAIClient: LocalAI (and vLLM) put reasoning/thinking
 	// text in a "reasoning" response field, which go-openai's SDK — and so
 	// OpenAIClient — doesn't know about (it only binds the older, now-deprecated
@@ -576,6 +583,8 @@ func NewSession(ctx context.Context, cfg types.Config, callbacks Callbacks, tran
 		clients = append(clients, session)
 	}
 
+	background := newBackgroundState()
+	goalWake := make(chan struct{}, 1)
 	s := &Session{
 		ctx:                  ctx,
 		llm:                  llm,
@@ -596,7 +605,9 @@ func NewSession(ctx context.Context, cfg types.Config, callbacks Callbacks, tran
 		allowedBashPrefixes:  make(map[string]bool),
 		agentStart:           make(map[string]time.Time),
 		agentManager:         agentManager,
-		background:           newBackgroundState(),
+		background:           background,
+		goalWake:             goalWake,
+		goalSupervisor:       newGoalSupervisor(background, goalDelays, realGoalTimerFactory{}, goalWake),
 		agentLogs:            newAgentLogStore(),
 		llmModel:             mainProvider.Model,
 		mainProvider:         mainProvider,
