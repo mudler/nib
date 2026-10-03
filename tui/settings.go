@@ -26,7 +26,7 @@ var settingsVerb = "/" + theme.CompSettingsName + " "
 // arm in applyLiveSettings. Everything else is read once at startup (the model
 // and endpoint build the client, log_level configures the logger, browser and
 // agent options wire tools), so it is saved and reported as "next start".
-var liveSettingPrefixes = []string{"ui.", "approval_mode", "compaction.", "tool_output_pruning.", "tool_output_limits.", "classifier.", "auto_approve.", "suggestions."}
+var liveSettingPrefixes = []string{"ui.", "approval_mode", "compaction.", "tool_output_pruning.", "tool_output_limits.", "classifier.", "auto_approve.", "suggestions.", "goal.check_in_delays"}
 
 func isLiveSetting(key string) bool {
 	for _, p := range liveSettingPrefixes {
@@ -343,7 +343,7 @@ func (m *Model) applyLiveSettings(changed []config.Setting) {
 	if m.session == nil {
 		return
 	}
-	var approval, compaction, pruning, outputLimits, classifier bool
+	var approval, compaction, pruning, outputLimits, classifier, goalSchedule bool
 	for _, s := range changed {
 		switch {
 		case strings.HasPrefix(s.Key, "classifier."):
@@ -361,6 +361,8 @@ func (m *Model) applyLiveSettings(changed []config.Setting) {
 			pruning = true
 		case strings.HasPrefix(s.Key, "tool_output_limits."):
 			outputLimits = true
+		case s.Key == "goal.check_in_delays":
+			goalSchedule = true
 		}
 	}
 	if classifier {
@@ -385,6 +387,13 @@ func (m *Model) applyLiveSettings(changed []config.Setting) {
 	}
 	if outputLimits {
 		m.session.SetToolOutputLimits(m.cfg.ToolOutputLimits)
+	}
+	if goalSchedule {
+		if delays, err := config.ParseGoalCheckInDelays(m.cfg.Goal.CheckInDelays); err != nil {
+			m.appendMessage(ChatMessage{Role: "error", Content: err.Error()})
+		} else if err := m.session.SetGoalCheckInDelays(delays); err != nil {
+			m.appendMessage(ChatMessage{Role: "error", Content: err.Error()})
+		}
 	}
 }
 

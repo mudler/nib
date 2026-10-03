@@ -1016,6 +1016,9 @@ func (m Model) initSession() tea.Cmd {
 					m.reasoningChan <- reasoningEvent{kind: reasoningEventContentDelta, text: ev.Content, gen: gen}
 				}
 			},
+			OnStepContent: func(content string) {
+				m.reasoningChan <- reasoningEvent{kind: reasoningEventContentDelta, text: content, gen: m.currentTurnGen()}
+			},
 			OnToolCall: func(req chat.ToolCallRequest) chat.ToolCallResponse {
 				// Send tool request and wait for user response
 				m.toolRequestChan <- req

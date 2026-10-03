@@ -13,7 +13,7 @@ import (
 	openai "github.com/sashabaranov/go-openai"
 )
 
-func TestUndeliveredAgentCompletionIsQueuedForNextTurn(t *testing.T) {
+func TestLegacyAgentCompletionIsWakeOnly(t *testing.T) {
 	s := &Session{
 		inject:  make(chan openai.ChatCompletionMessage, 1),
 		runLive: true,
@@ -28,14 +28,13 @@ func TestUndeliveredAgentCompletionIsQueuedForNextTurn(t *testing.T) {
 	for {
 		select {
 		case msg := <-s.inject:
-			if msg.Name == agentCompletionMessageName {
+			if msg.Name != agentCompletionMessageName {
 				s.pendingNotices = append(s.pendingNotices, msg.Content)
 			}
 		default:
 			s.turnMu.Unlock()
-			got := s.takePendingNotices()
-			if len(got) != 1 || got[0] != "Background agent completed with result: done" {
-				t.Fatalf("pending completion notices = %v", got)
+			if got := s.takePendingNotices(); len(got) != 0 {
+				t.Fatalf("legacy completion entered pending notices: %v", got)
 			}
 			return
 		}

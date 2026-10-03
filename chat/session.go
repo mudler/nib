@@ -16,6 +16,7 @@ import (
 
 	"github.com/mudler/nib/auth"
 	_ "github.com/mudler/nib/classify/systemone" // the SystemOne classifier API
+	configpkg "github.com/mudler/nib/config"
 	"github.com/mudler/nib/endpoint"
 	"github.com/mudler/nib/hooks"
 	"github.com/mudler/nib/internal"
@@ -120,6 +121,7 @@ type Session struct {
 	goal       string
 	goalDone   bool
 	goalPaused bool
+	goalSerial uint64
 
 	// todoList is the ephemeral in-memory todo list (todo_write tool). It is
 	// not persisted — it lives for the session and is cleared when the session
@@ -129,7 +131,13 @@ type Session struct {
 	// shellJobs lets the pending-work predicate keep the run parked while a
 	// backgrounded shell command is still running (cogito only knows about
 	// sub-agents). May be nil (e.g. headless CLI without a job registry).
-	shellJobs *wizmcp.ShellJobs
+	shellJobs       *wizmcp.ShellJobs
+	background      *backgroundState
+	goalSupervisor  *goalSupervisor
+	goalWake        chan struct{}
+	stopShellEvents func()
+	shellEventsMu   sync.Mutex
+	shellEventsDone bool
 
 	// schemaTools records the tool definitions toolOptions registers, for
 	// SchemaBudget. Guarded by schemaToolsMu. See schema_budget.go.
@@ -512,6 +520,10 @@ func toCogitoDefinitions(cfgs []types.AgentTypeConfig) []cogito.AgentDefinition 
 // app.Run preflights the directory, so in practice only embedders calling this
 // directly reach the failure.
 func NewSession(ctx context.Context, cfg types.Config, callbacks Callbacks, transports ...mcp.Transport) (*Session, error) {
+	goalDelays, err := configpkg.ParseGoalCheckInDelays(cfg.Goal.CheckInDelays)
+	if err != nil {
+		return nil, err
+	}
 	// LocalAIClient, not OpenAIClient: LocalAI (and vLLM) put reasoning/thinking
 	// text in a "reasoning" response field, which go-openai's SDK — and so
 	// OpenAIClient — doesn't know about (it only binds the older, now-deprecated
@@ -572,6 +584,8 @@ func NewSession(ctx context.Context, cfg types.Config, callbacks Callbacks, tran
 		clients = append(clients, session)
 	}
 
+	background := newBackgroundState()
+	goalWake := make(chan struct{}, 1)
 	s := &Session{
 		ctx:                  ctx,
 		llm:                  llm,
@@ -592,6 +606,9 @@ func NewSession(ctx context.Context, cfg types.Config, callbacks Callbacks, tran
 		allowedBashPrefixes:  make(map[string]bool),
 		agentStart:           make(map[string]time.Time),
 		agentManager:         agentManager,
+		background:           background,
+		goalWake:             goalWake,
+		goalSupervisor:       newGoalSupervisor(background, goalDelays, realGoalTimerFactory{}, goalWake),
 		agentLogs:            newAgentLogStore(),
 		llmModel:             mainProvider.Model,
 		mainProvider:         mainProvider,
@@ -1008,6 +1025,11 @@ func (s *Session) KillAgent(id string) bool {
 // longer running. The main agent can still resume it (send_agent_message).
 var ErrAgentFinished = errors.New("the sub-agent has finished")
 
+var (
+	errSessionInterrupted = errors.New("session turn interrupted")
+	errSessionClosed      = errors.New("session closed")
+)
+
 // SendToAgent sends the user's message to a running sub-agent, which reads it
 // at its next step, and records it in the agent's log. It never blocks: it
 // fails for an unknown or finished agent (ErrAgentFinished) and for one that
@@ -1258,7 +1280,12 @@ func (s *Session) SetGoal(goal string) {
 	s.runMu.Lock()
 	s.goal = goal
 	s.goalPaused = false
+	s.goalSerial++
+	serial := s.goalSerial
 	s.runMu.Unlock()
+	if s.goalSupervisor != nil {
+		s.goalSupervisor.goalSet(serial)
+	}
 }
 
 // Goal returns the session goal, or "" if none. A paused goal is still
@@ -1275,6 +1302,9 @@ func (s *Session) ClearGoal() {
 	s.goal = ""
 	s.goalPaused = false
 	s.runMu.Unlock()
+	if s.goalSupervisor != nil {
+		s.goalSupervisor.goalClear()
+	}
 }
 
 // PauseGoal stops pursuing the goal but keeps its text. Turns run as if no
@@ -1282,18 +1312,27 @@ func (s *Session) ClearGoal() {
 func (s *Session) PauseGoal() {
 	s.runMu.Lock()
 	s.goalPaused = s.goal != ""
+	paused := s.goalPaused
 	s.runMu.Unlock()
+	if paused && s.goalSupervisor != nil {
+		s.goalSupervisor.goalPause()
+	}
 }
 
 // ResumeGoal pursues a paused goal again from the next turn. It reports
 // whether there was a paused goal to resume.
 func (s *Session) ResumeGoal() bool {
 	s.runMu.Lock()
-	defer s.runMu.Unlock()
 	if s.goal == "" || !s.goalPaused {
+		s.runMu.Unlock()
 		return false
 	}
 	s.goalPaused = false
+	serial := s.goalSerial
+	s.runMu.Unlock()
+	if s.goalSupervisor != nil {
+		s.goalSupervisor.goalSet(serial)
+	}
 	return true
 }
 
@@ -1352,6 +1391,9 @@ func (s *Session) Interrupt() {
 	s.turnMu.Lock()
 	defer s.turnMu.Unlock()
 	if s.turnCancel != nil {
+		if s.background != nil {
+			s.background.interrupt()
+		}
 		s.turnCancel()
 	}
 }
@@ -1380,23 +1422,56 @@ func (s *Session) UseArtifactStore(st *wizmcp.ArtifactStore) {
 // is still running, and so finished shell jobs inject a completion notice into
 // the live run. Registers the completion hook. Call once at setup.
 func (s *Session) SetShellJobs(jobs *wizmcp.ShellJobs) {
-	s.shellJobs = jobs
+	s.shellEventsMu.Lock()
+	defer s.shellEventsMu.Unlock()
+	if s.shellEventsDone {
+		return
+	}
+	// A ShellJobs observer is a Session-lifetime binding. Ignore nil after a
+	// registry is attached rather than disabling the registry's one observer
+	// slot, which cannot be re-registered safely.
 	if jobs == nil {
 		return
 	}
-	jobs.SetOnJobDone(func(info wizmcp.ShellJobInfo) {
-		// Only backgrounded jobs interest the live run: a plain foreground
-		// command is consumed inline by the tool call that started it.
-		if !info.Backgrounded {
+	if s.shellJobs == jobs && s.stopShellEvents != nil {
+		return
+	}
+	if s.stopShellEvents != nil {
+		s.stopShellEvents()
+		s.stopShellEvents = nil
+	}
+	s.shellJobs = jobs
+	if s.background == nil {
+		s.background = newBackgroundState()
+	}
+	s.stopShellEvents = jobs.ObserveLifecycle(func(event wizmcp.ShellJobLifecycleEvent) {
+		if !event.Job.Backgrounded {
 			return
 		}
-		notice := "shell job " + info.ID + " " + info.Status
-		if so, se, ok := jobs.Output(info.ID); ok {
+		id := event.Job.ID
+		if event.Kind == wizmcp.ShellJobLifecycleStart {
+			if s.background.startBackground(backgroundShell, id) && s.goalSupervisor != nil {
+				s.goalSupervisor.backgroundEvent()
+			}
+			return
+		}
+		publisher := "shell:" + id
+		if !s.background.beginPublisher(publisher) {
+			return
+		}
+		defer s.background.endPublisher(publisher)
+		notice := "shell job " + id + " " + string(event.Kind)
+		if so, se, ok := jobs.Output(id); ok {
 			if tail := jobTail(so + se); tail != "" {
 				notice += ":\n" + tail
 			}
 		}
-		s.deliverNotice(notice)
+		s.background.completeBackground(backgroundShell, id, notice, event.Kind == wizmcp.ShellJobLifecycleSuccess)
+		if s.goalSupervisor != nil {
+			s.goalSupervisor.backgroundEvent()
+		}
+		// Wake the live root. Durable model delivery is owned by the ledger.
+		s.Inject(notice)
 	})
 }
 
@@ -1445,10 +1520,155 @@ func (s *Session) restorePendingNotices(notices []string) {
 	s.pendingNotices = append(slices.Clone(notices), s.pendingNotices...)
 }
 
-// pendingNoticesMessage renders kept notices as the one message that goes
-// before the user's message in the next turn.
+// pendingNoticesMessage renders kept non-durable notices as the one message
+// that goes before the user's message in the next turn. Background agent and
+// shell completions use backgroundState instead and are never capped here.
 func pendingNoticesMessage(notices []string) string {
 	return "Background jobs finished while no turn was running:\n\n" + strings.Join(notices, "\n\n")
+}
+
+// durableNoticesMessage renders one request-local user message. The source and
+// stable identity are explicit so mixed agent/shell completions remain
+// attributable after they have been combined at a request boundary.
+func durableNoticesMessage(notices []sequencedNotice) string {
+	var b strings.Builder
+	b.WriteString("Background work completed since the previous model request:\n")
+	for _, notice := range notices {
+		source := "unknown"
+		switch notice.source {
+		case backgroundAgent:
+			source = "agent"
+		case backgroundShell:
+			source = "shell"
+		}
+		fmt.Fprintf(&b, "\n- sequence=%d source=%s id=%s\n%s\n", notice.sequence, source, notice.identity, notice.content)
+	}
+	return strings.TrimSpace(b.String())
+}
+
+// filterLegacyAgentCompletions removes Cogito's completion injection from the
+// wire context. It remains useful as a wake-up for a parked loop, but the
+// durable background ledger is the sole source of completion content.
+func filterLegacyAgentCompletions(messages []openai.ChatCompletionMessage) []openai.ChatCompletionMessage {
+	out := make([]openai.ChatCompletionMessage, 0, len(messages))
+	for _, message := range messages {
+		if message.Name != agentCompletionMessageName {
+			out = append(out, message)
+		}
+	}
+	return out
+}
+
+// noticeDeliveryLLM reserves durable notices at the last possible request
+// boundary. This keeps retries and multi-step tool turns from depending on
+// SendMessage recursion: each immutable request receives exactly the notices
+// queued when that request is handed to the provider.
+type noticeDeliveryLLM struct {
+	cogito.LLM
+	background *backgroundState
+}
+
+type noticeDeliveryStreamingLLM struct {
+	*noticeDeliveryLLM
+	stream cogito.StreamingLLM
+}
+
+func withNoticeDelivery(llm cogito.LLM, background *backgroundState) cogito.LLM {
+	base := &noticeDeliveryLLM{LLM: llm, background: background}
+	if stream, ok := llm.(cogito.StreamingLLM); ok {
+		return &noticeDeliveryStreamingLLM{noticeDeliveryLLM: base, stream: stream}
+	}
+	return base
+}
+
+func (l *noticeDeliveryLLM) includeMessages(messages []openai.ChatCompletionMessage) ([]openai.ChatCompletionMessage, uint64) {
+	if l.background == nil {
+		return messages, 0
+	}
+	reservation, notices, observed := l.background.reserveNoticesForRoot(0)
+	if len(notices) == 0 {
+		l.background.markRootObserved(observed)
+		return slices.Clip(messages), 0
+	}
+	// Clip before append so the request handed down owns an immutable slice and
+	// cannot overwrite Cogito's fragment backing array.
+	messages = append(slices.Clip(messages), openai.ChatCompletionMessage{
+		Role:    openai.ChatMessageRoleUser,
+		Content: durableNoticesMessage(notices),
+	})
+	l.background.markRootObserved(observed)
+	return messages, reservation
+}
+
+func (l *noticeDeliveryLLM) finish(reservation uint64, err error) {
+	if reservation == 0 {
+		return
+	}
+	if err != nil {
+		l.background.rollbackNotices(reservation)
+		return
+	}
+	l.background.consumeNotices(reservation)
+}
+
+func (l *noticeDeliveryLLM) Ask(ctx context.Context, fragment cogito.Fragment) (cogito.Fragment, error) {
+	var reservation uint64
+	fragment.Messages, reservation = l.includeMessages(fragment.Messages)
+	out, err := l.LLM.Ask(ctx, fragment)
+	l.finish(reservation, err)
+	return out, err
+}
+
+func (l *noticeDeliveryLLM) CreateChatCompletion(ctx context.Context, request openai.ChatCompletionRequest) (cogito.LLMReply, cogito.LLMUsage, error) {
+	var reservation uint64
+	request.Messages, reservation = l.includeMessages(request.Messages)
+	reply, usage, err := l.LLM.CreateChatCompletion(ctx, request)
+	l.finish(reservation, err)
+	return reply, usage, err
+}
+
+func (l *noticeDeliveryStreamingLLM) CreateChatCompletionStream(ctx context.Context, request openai.ChatCompletionRequest) (<-chan cogito.StreamEvent, error) {
+	var reservation uint64
+	request.Messages, reservation = l.includeMessages(request.Messages)
+	events, err := l.stream.CreateChatCompletionStream(ctx, request)
+	if err != nil {
+		l.finish(reservation, err)
+		return nil, err
+	}
+	if reservation == 0 {
+		return events, nil
+	}
+	out := make(chan cogito.StreamEvent)
+	go func() {
+		defer close(out)
+		for {
+			select {
+			case <-ctx.Done():
+				l.background.rollbackNotices(reservation)
+				return
+			case event, ok := <-events:
+				if !ok {
+					l.background.rollbackNotices(reservation)
+					return
+				}
+				select {
+				case out <- event:
+				case <-ctx.Done():
+					l.background.rollbackNotices(reservation)
+					return
+				}
+				switch event.Type {
+				case cogito.StreamEventDone:
+					l.background.consumeNotices(reservation)
+					return
+				case cogito.StreamEventError:
+					l.background.rollbackNotices(reservation)
+					return
+				}
+			}
+		}
+	}()
+	return out, nil
 }
 
 // InjectUser delivers a user-typed follow-up into the live run (see Inject),
@@ -1966,6 +2186,9 @@ func (s *Session) toolOptions(turnCtx context.Context, goal, mainModel string) [
 			s.goal = ""
 			s.goalPaused = false
 			s.runMu.Unlock()
+			if s.goalSupervisor != nil {
+				s.goalSupervisor.goalDone()
+			}
 			return "Goal marked complete: " + justification
 		})))
 	}
@@ -2043,6 +2266,9 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 		s.hooks.Fire(s.ctx, hooks.EventUserPromptSubmit, "", map[string]any{"event": "UserPromptSubmit", "prompt": text})
 	}
 	turnCtx := s.beginTurn()
+	if s.background != nil {
+		s.background.setRoot(true, true, false)
+	}
 	// Report stalled sub-agents while this turn runs; notices can only reach
 	// a live run. See stale.go.
 	staleCtx, stopStale := context.WithCancel(turnCtx)
@@ -2104,11 +2330,10 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 		for {
 			select {
 			case msg := <-s.inject:
+				// Cogito's legacy completion message is wake-only. The durable
+				// ledger owns its content and delivery, so never put it on the
+				// capped pending-notice path or hand it back as user input.
 				if msg.Name == agentCompletionMessageName {
-					s.pendingNotices = append(s.pendingNotices, msg.Content)
-					if n := len(s.pendingNotices); n > maxPendingNotices {
-						s.pendingNotices = slices.Clone(s.pendingNotices[n-maxPendingNotices:])
-					}
 					continue
 				}
 				if i := slices.Index(pendingUser, msg.Content); i >= 0 {
@@ -2174,8 +2399,12 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 	agentLLM := guideChildLLM(retryForAgent(llm, &s.agentBackoff))
 	baseLLM := llm
 	llm = trackUsage(llm, &s.live, s.requestLimits)
+	// Durable completions are attached at the actual root request handoff, not
+	// once per SendMessage: Cogito may issue several requests in a tool turn.
+	llm = withNoticeDelivery(llm, s.background)
 
 	// Build cogito options from config
+	var supervisorPass uint64
 	cogitoOpts := []cogito.Option{
 		cogito.WithAgentLLM(agentLLM),
 		cogito.WithContext(turnCtx),
@@ -2273,9 +2502,15 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 		// completion results; shell-job completions and wake-ups inject via s.inject.
 		cogito.WithMessageInjectionChan(s.inject),
 		cogito.WithPendingWork(func() bool {
-			return s.agentManager.HasRunning() || s.shellJobs.HasRunning()
+			return s.background.hasPendingWork()
 		}),
 		cogito.WithOnPark(func(reply string) {
+			if s.background != nil {
+				s.background.setRoot(true, false, true)
+			}
+			if s.goalSupervisor != nil {
+				s.goalSupervisor.parked()
+			}
 			observations.record("", true, "parked", "", false)
 			// cogito hands us the no-tool reply text recorded in the fragment
 			// right before the loop blocked — the parked reply the UI surfaces.
@@ -2305,6 +2540,9 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 	// is identical to before. The step-boundary callbacks still fire either way.
 	if s.callbacks.OnStream != nil {
 		cogitoOpts = append(cogitoOpts, cogito.WithStreamCallback(func(ev cogito.StreamEvent) {
+			if supervisorPass != 0 {
+				return
+			}
 			evUI := StreamEvent{
 				Kind:     string(ev.Type),
 				Content:  ev.Content,
@@ -2322,16 +2560,36 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 	midTurn := s.newTurnCompactor(turnCtx)
 
 	cogitoOpts = append(cogitoOpts,
-		// Rewrites what goes on the wire, never s.fragment. Installed here
-		// rather than in toolOptions because toolOptions is shared with Warm,
-		// whose contract is that a priming request advertises exactly the tool
-		// schemas a real turn advertises — a message manipulator is neither.
-		cogito.WithMessagesManipulator(midTurn.manipulate),
+		// Rewrites what goes on the wire, never s.fragment. Legacy Cogito
+		// agent-completion injections are wake-only; durable completion text
+		// is appended later by the root LLM wrapper.
+		cogito.WithMessagesManipulator(func(messages []openai.ChatCompletionMessage) []openai.ChatCompletionMessage {
+			return midTurn.manipulate(filterLegacyAgentCompletions(messages))
+		}),
 		cogito.WithAgentManager(s.agentManager),
 		cogito.WithAgentSpawnCallback(func(a *cogito.AgentState) {
+			if a.Background {
+				if s.background.startBackground(backgroundAgent, a.ID) && s.goalSupervisor != nil {
+					s.goalSupervisor.backgroundEvent()
+				}
+			}
 			s.emitAgentEventTo(a, toolCallbacks.OnAgentEvent)
 		}),
 		cogito.WithAgentCompletionCallback(func(a *cogito.AgentState) {
+			if a.Background {
+				publisher := "agent:" + a.ID
+				if s.background.beginPublisher(publisher) {
+					content := fmt.Sprintf("Agent %s completed", a.ID)
+					if result := strings.TrimSpace(a.Result); result != "" {
+						content += ":\n" + result
+					}
+					s.background.completeBackground(backgroundAgent, a.ID, content, a.Error == nil)
+					if s.goalSupervisor != nil {
+						s.goalSupervisor.backgroundEvent()
+					}
+					s.background.endPublisher(publisher)
+				}
+			}
 			s.emitAgentEventTo(a, toolCallbacks.OnAgentEvent)
 		}),
 	)
@@ -2354,6 +2612,7 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 	// inject path; Ctrl+C cancels turnCtx and pauses the goal.
 	var err error
 	var response string
+	var barrierContinuation *cogito.Fragment
 	for {
 		s.runMu.Lock()
 		s.goalDone = false
@@ -2371,6 +2630,10 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 		// whole call — holding it across the call would block ExportHistory for
 		// the entire turn.
 		runFragment := s.fragment
+		if barrierContinuation != nil {
+			runFragment = *barrierContinuation
+			barrierContinuation = nil
+		}
 		if runFragment.Status != nil {
 			statusCopy := *runFragment.Status
 			runFragment.Status = &statusCopy
@@ -2699,6 +2962,10 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 				s.historyMu.Unlock()
 				// The rollback dropped the notices too; keep them for the next turn.
 				s.restorePendingNotices(notices)
+				if supervisorPass != 0 && s.goalSupervisor != nil {
+					s.goalSupervisor.reviewAborted(supervisorPass)
+					supervisorPass = 0
+				}
 				return "", err
 			}
 			// An interrupt or any other error keeps the turn. The transcript
@@ -2711,6 +2978,10 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 				note = failedTurnNote(err)
 			}
 			s.commitRun(midTurn, keepFailedTurn(s.fragment, newFragment, note))
+			if supervisorPass != 0 && s.goalSupervisor != nil {
+				s.goalSupervisor.reviewAborted(supervisorPass)
+				supervisorPass = 0
+			}
 			return "", err
 		}
 
@@ -2730,6 +3001,16 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 		}
 
 		response = newFragment.LastMessage().Content
+		if supervisorPass != 0 {
+			if s.goalSupervisor == nil || !s.goalSupervisor.reviewCurrent(supervisorPass) {
+				supervisorPass = 0
+				continue
+			}
+			response = normalizeGoalCheckIn(response)
+			if s.callbacks.OnStepContent != nil {
+				s.callbacks.OnStepContent(response)
+			}
+		}
 
 		// Each ExecuteTools run reports its own cumulative usage, so the whole
 		// tool loop is counted rather than just the final call. The goal
@@ -2751,6 +3032,38 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 		done := s.goalDone
 		goal := s.activeGoalLocked()
 		s.runMu.Unlock()
+
+		if supervisorPass != 0 && s.goalSupervisor != nil {
+			s.goalSupervisor.reviewFinishedAndParked()
+			supervisorPass = 0
+		}
+
+		if s.background != nil {
+			snapshot := s.background.terminalSnapshot()
+			if s.goalSupervisor != nil {
+				if review, ok := s.goalSupervisor.takeReview(); ok {
+					supervisorPass = review.goalIdentity
+					continuation := newFragment.AddMessage("user", review.prompt)
+					barrierContinuation = &continuation
+					continue
+				}
+			}
+			if snapshot.interrupted {
+				s.PauseGoal()
+				return "", errSessionInterrupted
+			}
+			if snapshot.closed {
+				return "", errSessionClosed
+			}
+			if snapshot.internalError != nil {
+				return "", snapshot.internalError
+			}
+			if !snapshot.eligible {
+				continuation := newFragment.AddMessage("user", "Background work changed while you were replying. Review every delivered completion notice and current background status, then provide an updated response. Do not finish until all background work and notices are accounted for.")
+				barrierContinuation = &continuation
+				continue
+			}
+		}
 
 		// Stop when there is no goal, the model declared it done, or the turn
 		// was interrupted. Interrupt also pauses the goal (user stopped it).
@@ -3087,6 +3400,28 @@ func (s *Session) applyPendingReload() {
 
 // Close closes the session and cleans up resources
 func (s *Session) Close() error {
+	if s.background != nil {
+		s.background.close()
+	}
+	if s.goalSupervisor != nil {
+		s.goalSupervisor.close()
+	}
+	s.turnMu.Lock()
+	if s.turnCancel != nil {
+		s.turnCancel()
+	}
+	s.turnMu.Unlock()
+	select {
+	case s.inject <- openai.ChatCompletionMessage{Role: openai.ChatMessageRoleSystem, Content: "session closed"}:
+	default:
+	}
+	s.shellEventsMu.Lock()
+	s.shellEventsDone = true
+	if s.stopShellEvents != nil {
+		s.stopShellEvents()
+		s.stopShellEvents = nil
+	}
+	s.shellEventsMu.Unlock()
 	var firstErr error
 	for _, client := range s.clients {
 		if err := client.Close(); err != nil && firstErr == nil {

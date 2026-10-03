@@ -464,16 +464,29 @@ persists across restarts to `.nib/loops.json`.
 
 ### `/goal` — keep going until a goal is met
 
-- `/goal <text>` — set a goal. nib keeps working and re-checks it every time
-  the model would stop, only finishing when the model decides the goal is met
-  (it calls a `goal_done` tool) or you stop it.
+- `/goal <text>` — set a goal. nib keeps working until the model calls
+  `goal_done` or you stop it.
 - `/goal` — show the current goal.
-- `/goal clear` — clear it. Pressing `Ctrl+C` during pursuit also clears it.
+- `/goal resume` — resume a goal paused by `Ctrl+C`.
+- `/goal clear` — clear it.
 
-Unlike `/loop`, `/goal` is not scheduling — there are no timers. It's an
-in-turn "keep going" gate: the model self-judges progress and continues until
-done. You can still chat and steer while a goal is being pursued. Goals are
-session-only and single (setting a new one replaces the old).
+When a goal is parked on background agents or shell jobs, nib supervises the
+same turn. Job starts, completions, and failures trigger a visible
+`Goal check-in:` review. Idle reviews use adaptive delays:
+
+```yaml
+goal:
+  check_in_delays: [2m, 5m, 10m]
+```
+
+The final delay repeats. `/settings goal.check_in_delays 1m,3m,10m` changes
+the schedule live. `Ctrl+C` pauses the goal rather than clearing it. There is
+no forced timeout.
+
+Successful CLI, JSON, MCP, and embedded Session calls wait until background
+work stops, completion notices reach the root model, and the root replies
+after observing them. Cancellation or shutdown can return an interrupted
+error before that normal terminal state.
 
 ### `todo_write` — ephemeral task tracking
 

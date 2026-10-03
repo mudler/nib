@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"strings"
 	"sync"
 	"time"
 
@@ -26,6 +27,31 @@ You will use the tools at your disposal to fullfill the user request, and, for i
 Current directory: {{.CurrentDirectory}}
 Current user: {{.CurrentUser}}
 `
+
+var defaultGoalCheckInDelays = []string{"2m", "5m", "10m"}
+
+// ParseGoalCheckInDelays parses and validates an ordered goal check-in schedule.
+// A nil or empty schedule uses the defaults. Each call returns a newly allocated
+// duration slice so callers can safely retain and modify it.
+func ParseGoalCheckInDelays(values []string) ([]time.Duration, error) {
+	if len(values) == 0 {
+		values = defaultGoalCheckInDelays
+	}
+
+	delays := make([]time.Duration, len(values))
+	for i, value := range values {
+		normalized := strings.TrimSpace(value)
+		if normalized == "" {
+			return nil, fmt.Errorf("goal.check_in_delays[%d]: invalid duration %q", i, value)
+		}
+		delay, err := time.ParseDuration(normalized)
+		if err != nil || delay <= 0 {
+			return nil, fmt.Errorf("goal.check_in_delays[%d]: invalid duration %q", i, value)
+		}
+		delays[i] = delay
+	}
+	return delays, nil
+}
 
 // ConfigPaths returns the list of config file paths to try, in order of priority.
 // Exported for /about.
@@ -183,6 +209,12 @@ func Load() types.Config { return LoadWith(LoadOptions{}) }
 func LoadWith(o LoadOptions) types.Config {
 	cfg := loadLayers(o)
 	cfg = withDefaults(cfg)
+	if _, err := ParseGoalCheckInDelays(cfg.Goal.CheckInDelays); err != nil {
+		// Load has historically returned a Config rather than an error. Report at
+		// its existing normalization/validation boundary while retaining the raw
+		// strings, so callers can diagnose or reject the same bad input.
+		fmt.Fprintf(os.Stderr, "nib: config: %v\n", err)
+	}
 	cfg.Compaction.OverflowPatterns = validOverflowPatterns(cfg.Compaction.OverflowPatterns)
 
 	// Carry the override (not the resolved root) so consumers keep resolving it
