@@ -1013,6 +1013,11 @@ func (s *Session) KillAgent(id string) bool {
 // longer running. The main agent can still resume it (send_agent_message).
 var ErrAgentFinished = errors.New("the sub-agent has finished")
 
+var (
+	errSessionInterrupted = errors.New("session turn interrupted")
+	errSessionClosed      = errors.New("session closed")
+)
+
 // SendToAgent sends the user's message to a running sub-agent, which reads it
 // at its next step, and records it in the agent's log. It never blocks: it
 // fails for an unknown or finished agent (ErrAgentFinished) and for one that
@@ -1357,6 +1362,9 @@ func (s *Session) Interrupt() {
 	s.turnMu.Lock()
 	defer s.turnMu.Unlock()
 	if s.turnCancel != nil {
+		if s.background != nil {
+			s.background.interrupt()
+		}
 		s.turnCancel()
 	}
 }
@@ -2220,6 +2228,9 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 		s.hooks.Fire(s.ctx, hooks.EventUserPromptSubmit, "", map[string]any{"event": "UserPromptSubmit", "prompt": text})
 	}
 	turnCtx := s.beginTurn()
+	if s.background != nil {
+		s.background.setRoot(true, true, false)
+	}
 	// Report stalled sub-agents while this turn runs; notices can only reach
 	// a live run. See stale.go.
 	staleCtx, stopStale := context.WithCancel(turnCtx)
@@ -2452,9 +2463,12 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 		// completion results; shell-job completions and wake-ups inject via s.inject.
 		cogito.WithMessageInjectionChan(s.inject),
 		cogito.WithPendingWork(func() bool {
-			return s.agentManager.HasRunning() || s.shellJobs.HasRunning()
+			return s.background.hasPendingWork()
 		}),
 		cogito.WithOnPark(func(reply string) {
+			if s.background != nil {
+				s.background.setRoot(true, false, true)
+			}
 			observations.record("", true, "parked", "", false)
 			// cogito hands us the no-tool reply text recorded in the fragment
 			// right before the loop blocked — the parked reply the UI surfaces.
@@ -2945,6 +2959,24 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 		done := s.goalDone
 		goal := s.activeGoalLocked()
 		s.runMu.Unlock()
+
+		if s.background != nil {
+			snapshot := s.background.terminalSnapshot()
+			if snapshot.interrupted {
+				s.PauseGoal()
+				return "", errSessionInterrupted
+			}
+			if snapshot.closed {
+				return "", errSessionClosed
+			}
+			if snapshot.internalError != nil {
+				return "", snapshot.internalError
+			}
+			if !snapshot.eligible {
+				runFragment = newFragment.AddMessage("user", "Background work changed while you were replying. Review every delivered completion notice and current background status, then provide an updated response. Do not finish until all background work and notices are accounted for.")
+				continue
+			}
+		}
 
 		// Stop when there is no goal, the model declared it done, or the turn
 		// was interrupted. Interrupt also pauses the goal (user stopped it).

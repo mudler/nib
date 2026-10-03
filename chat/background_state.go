@@ -197,8 +197,17 @@ func (s *backgroundState) endPublisher(key string) bool {
 // most limit notices otherwise. The returned values are copies and may safely be
 // used after the lock is released.
 func (s *backgroundState) reserveNotices(limit int) (uint64, []sequencedNotice) {
+	reservation, notices, _ := s.reserveNoticesForRoot(limit)
+	return reservation, notices
+}
+
+// reserveNoticesForRoot atomically reserves notices and captures the event
+// watermark represented by this request. Events published after this lock is
+// released necessarily require a later root request.
+func (s *backgroundState) reserveNoticesForRoot(limit int) (uint64, []sequencedNotice, uint64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	observed := s.eventSequence
 	count := 0
 	for _, notice := range s.notices {
 		if notice.state == noticeQueued && (limit <= 0 || count < limit) {
@@ -206,12 +215,12 @@ func (s *backgroundState) reserveNotices(limit int) (uint64, []sequencedNotice) 
 		}
 	}
 	if count == 0 || s.internalErr != nil || s.closed {
-		return 0, nil
+		return 0, nil, observed
 	}
 	if s.nextReservation == math.MaxUint64 {
 		s.internalErr = errBackgroundSequenceOverflow
 		s.stopTimerLocked()
-		return 0, nil
+		return 0, nil, observed
 	}
 	s.nextReservation++
 	reservation := s.nextReservation
@@ -224,7 +233,7 @@ func (s *backgroundState) reserveNotices(limit int) (uint64, []sequencedNotice) 
 		notice.reserve = reservation
 		result = append(result, *notice)
 	}
-	return reservation, result
+	return reservation, result, observed
 }
 
 // rollbackNotices restores a whole reservation and globally re-establishes
@@ -273,6 +282,11 @@ func (s *backgroundState) setRoot(active, requesting, parked bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	wasParked := s.rootParked
+	// Interruption is a turn-local abnormal condition. Entering a requesting
+	// phase starts (or resumes) a turn and clears a previous interrupt.
+	if active && requesting && !s.closed {
+		s.interrupted = false
+	}
 	s.rootActive, s.rootRequesting, s.rootParked = active, requesting, parked
 	if wasParked && !parked {
 		s.invalidateTimerLocked()
@@ -313,6 +327,15 @@ func (s *backgroundState) close() {
 	}
 	s.closed = true
 	s.invalidateSupervisorLocked()
+}
+
+func (s *backgroundState) hasPendingWork() bool {
+	if s == nil {
+		return false
+	}
+	snapshot := s.terminalSnapshot()
+	return snapshot.runningAgents > 0 || snapshot.runningShells > 0 || snapshot.activePublishers > 0 ||
+		snapshot.queuedNotices > 0 || snapshot.reservedNotices > 0 || snapshot.supervisorQueued || snapshot.supervisorReviewing
 }
 
 func (s *backgroundState) terminalSnapshot() terminalSnapshot {
