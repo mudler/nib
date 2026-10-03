@@ -59,11 +59,8 @@ func (g *goalSupervisor) setDelays(delays []time.Duration) error {
 	g.delays = append([]time.Duration(nil), delays...)
 	g.state.scheduleIndex = 0
 	g.state.invalidateTimerLocked()
-	eligible := g.eligibleLocked()
+	g.armCurrentLocked()
 	g.state.mu.Unlock()
-	if eligible {
-		g.armCurrent()
-	}
 	return nil
 }
 
@@ -87,11 +84,8 @@ func (g *goalSupervisor) close()         { g.state.close() }
 func (g *goalSupervisor) parked() {
 	g.state.mu.Lock()
 	g.state.rootActive, g.state.rootRequesting, g.state.rootParked = true, false, true
-	eligible := g.eligibleLocked()
+	g.armCurrentLocked()
 	g.state.mu.Unlock()
-	if eligible {
-		g.armCurrent()
-	}
 }
 
 // backgroundEvent applies supervisor policy after a lifecycle transition has
@@ -131,11 +125,8 @@ func (g *goalSupervisor) reviewFinishedAndParked() {
 	if !g.state.reviewQueued && g.state.scheduleIndex < len(g.delays)-1 {
 		g.state.scheduleIndex++
 	}
-	eligible := g.eligibleLocked()
+	g.armCurrentLocked()
 	g.state.mu.Unlock()
-	if eligible {
-		g.armCurrent()
-	}
 }
 
 func (g *goalSupervisor) eligibleBaseLocked() bool {
@@ -158,6 +149,11 @@ func (g *goalSupervisor) armCurrentLocked() {
 		return
 	}
 	delay := g.delays[g.state.scheduleIndex]
+	if g.state.supervisorGeneration == ^uint64(0) {
+		g.state.internalErr = errBackgroundSequenceOverflow
+		g.state.stopTimerLocked()
+		return
+	}
 	g.state.supervisorGeneration++
 	generation := g.state.supervisorGeneration
 	goal := g.state.goalIdentity

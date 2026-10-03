@@ -121,6 +121,7 @@ type Session struct {
 	goal       string
 	goalDone   bool
 	goalPaused bool
+	goalSerial uint64
 
 	// todoList is the ephemeral in-memory todo list (todo_write tool). It is
 	// not persisted — it lives for the session and is cleared when the session
@@ -1279,7 +1280,12 @@ func (s *Session) SetGoal(goal string) {
 	s.runMu.Lock()
 	s.goal = goal
 	s.goalPaused = false
+	s.goalSerial++
+	serial := s.goalSerial
 	s.runMu.Unlock()
+	if s.goalSupervisor != nil {
+		s.goalSupervisor.goalSet(serial)
+	}
 }
 
 // Goal returns the session goal, or "" if none. A paused goal is still
@@ -1296,6 +1302,9 @@ func (s *Session) ClearGoal() {
 	s.goal = ""
 	s.goalPaused = false
 	s.runMu.Unlock()
+	if s.goalSupervisor != nil {
+		s.goalSupervisor.goalClear()
+	}
 }
 
 // PauseGoal stops pursuing the goal but keeps its text. Turns run as if no
@@ -1303,7 +1312,11 @@ func (s *Session) ClearGoal() {
 func (s *Session) PauseGoal() {
 	s.runMu.Lock()
 	s.goalPaused = s.goal != ""
+	paused := s.goalPaused
 	s.runMu.Unlock()
+	if paused && s.goalSupervisor != nil {
+		s.goalSupervisor.goalPause()
+	}
 }
 
 // ResumeGoal pursues a paused goal again from the next turn. It reports
@@ -1447,6 +1460,9 @@ func (s *Session) SetShellJobs(jobs *wizmcp.ShellJobs) {
 			}
 		}
 		s.background.completeBackground(backgroundShell, id, notice, event.Kind == wizmcp.ShellJobLifecycleSuccess)
+		if s.goalSupervisor != nil {
+			s.goalSupervisor.backgroundEvent()
+		}
 		// Wake the live root. Durable model delivery is owned by the ledger.
 		s.Inject(notice)
 	})
@@ -2163,6 +2179,9 @@ func (s *Session) toolOptions(turnCtx context.Context, goal, mainModel string) [
 			s.goal = ""
 			s.goalPaused = false
 			s.runMu.Unlock()
+			if s.goalSupervisor != nil {
+				s.goalSupervisor.goalDone()
+			}
 			return "Goal marked complete: " + justification
 		})))
 	}
@@ -2481,6 +2500,9 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 			if s.background != nil {
 				s.background.setRoot(true, false, true)
 			}
+			if s.goalSupervisor != nil {
+				s.goalSupervisor.parked()
+			}
 			observations.record("", true, "parked", "", false)
 			// cogito hands us the no-tool reply text recorded in the fragment
 			// right before the loop blocked — the parked reply the UI surfaces.
@@ -2549,6 +2571,9 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 						content += ":\n" + result
 					}
 					s.background.completeBackground(backgroundAgent, a.ID, content, a.Error == nil)
+					if s.goalSupervisor != nil {
+						s.goalSupervisor.backgroundEvent()
+					}
 					s.background.endPublisher(publisher)
 				}
 			}
@@ -2979,6 +3004,13 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 
 		if s.background != nil {
 			snapshot := s.background.terminalSnapshot()
+			if s.goalSupervisor != nil {
+				if review, ok := s.goalSupervisor.takeReview(); ok {
+					continuation := newFragment.AddMessage("user", review.prompt)
+					barrierContinuation = &continuation
+					continue
+				}
+			}
 			if snapshot.interrupted {
 				s.PauseGoal()
 				return "", errSessionInterrupted
@@ -3333,6 +3365,9 @@ func (s *Session) applyPendingReload() {
 func (s *Session) Close() error {
 	if s.background != nil {
 		s.background.close()
+	}
+	if s.goalSupervisor != nil {
+		s.goalSupervisor.close()
 	}
 	s.turnMu.Lock()
 	if s.turnCancel != nil {
