@@ -1598,30 +1598,31 @@ func (l *noticeDeliveryStreamingLLM) CreateChatCompletionStream(ctx context.Cont
 	out := make(chan cogito.StreamEvent)
 	go func() {
 		defer close(out)
-		succeeded := false
-		for event := range events {
-			if event.Type == cogito.StreamEventError {
-				select {
-				case out <- event:
-				case <-ctx.Done():
-				}
-				l.background.rollbackNotices(reservation)
-				return
-			}
-			if event.Type == cogito.StreamEventDone {
-				succeeded = true
-			}
+		for {
 			select {
-			case out <- event:
 			case <-ctx.Done():
 				l.background.rollbackNotices(reservation)
 				return
+			case event, ok := <-events:
+				if !ok {
+					l.background.rollbackNotices(reservation)
+					return
+				}
+				select {
+				case out <- event:
+				case <-ctx.Done():
+					l.background.rollbackNotices(reservation)
+					return
+				}
+				switch event.Type {
+				case cogito.StreamEventDone:
+					l.background.consumeNotices(reservation)
+					return
+				case cogito.StreamEventError:
+					l.background.rollbackNotices(reservation)
+					return
+				}
 			}
-		}
-		if succeeded {
-			l.background.consumeNotices(reservation)
-		} else {
-			l.background.rollbackNotices(reservation)
 		}
 	}()
 	return out, nil

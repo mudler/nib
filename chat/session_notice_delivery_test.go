@@ -63,6 +63,55 @@ func (l *noticeStreamingLLM) CreateChatCompletionStream(_ context.Context, reque
 	return l.events, nil
 }
 
+func TestNoticeDeliveryStreamingCancellationRollsBackIdleStream(t *testing.T) {
+	state := newBackgroundState()
+	publishNotice(t, state, backgroundAgent, "worker", "cancelled stream")
+	upstream := make(chan cogito.StreamEvent)
+	llm := &noticeStreamingLLM{events: upstream}
+	wrapped := withNoticeDelivery(llm, state).(cogito.StreamingLLM)
+	ctx, cancel := context.WithCancel(context.Background())
+	events, err := wrapped.CreateChatCompletionStream(ctx, openai.ChatCompletionRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cancel()
+	select {
+	case _, ok := <-events:
+		if ok {
+			t.Fatal("relay remained open after cancellation")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("idle stream ignored cancellation")
+	}
+	_, notices := state.reserveNotices(0)
+	if len(notices) != 1 {
+		t.Fatalf("rolled back notices = %d", len(notices))
+	}
+}
+
+func TestNoticeDeliveryStreamingDoneConsumesImmediately(t *testing.T) {
+	state := newBackgroundState()
+	publishNotice(t, state, backgroundAgent, "worker", "successful stream")
+	upstream := make(chan cogito.StreamEvent, 1)
+	llm := &noticeStreamingLLM{events: upstream}
+	wrapped := withNoticeDelivery(llm, state).(cogito.StreamingLLM)
+	events, err := wrapped.CreateChatCompletionStream(context.Background(), openai.ChatCompletionRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	upstream <- cogito.StreamEvent{Type: cogito.StreamEventDone}
+	if event := <-events; event.Type != cogito.StreamEventDone {
+		t.Fatalf("event = %#v", event)
+	}
+	if _, ok := <-events; ok {
+		t.Fatal("relay remained open after done")
+	}
+	_, notices := state.reserveNotices(0)
+	if len(notices) != 0 {
+		t.Fatalf("consumed notices still queued: %d", len(notices))
+	}
+}
+
 func TestNoticeDeliveryStreamingErrorRollsBackWithoutWaitingForClose(t *testing.T) {
 	state := newBackgroundState()
 	publishNotice(t, state, backgroundAgent, "worker", "failed stream")
