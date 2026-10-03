@@ -272,7 +272,11 @@ func (s *backgroundState) markRootObserved(sequence uint64) bool {
 func (s *backgroundState) setRoot(active, requesting, parked bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	wasParked := s.rootParked
 	s.rootActive, s.rootRequesting, s.rootParked = active, requesting, parked
+	if wasParked && !parked {
+		s.invalidateTimerLocked()
+	}
 }
 
 func (s *backgroundState) setGoal(identity uint64, lifecycle goalLifecycle) {
@@ -362,10 +366,19 @@ func (s *backgroundState) runningLocked() bool {
 
 func (s *backgroundState) backgroundChangedLocked() {
 	s.scheduleIndex = 0
-	s.stopTimerLocked()
+	s.invalidateTimerLocked()
 	if s.goalLifecycle == goalActive && s.rootParked && s.runningLocked() {
 		s.reviewQueued = true
 	}
+}
+
+func (s *backgroundState) invalidateTimerLocked() {
+	if s.supervisorGeneration != math.MaxUint64 {
+		s.supervisorGeneration++
+	} else {
+		s.internalErr = errBackgroundSequenceOverflow
+	}
+	s.stopTimerLocked()
 }
 
 func (s *backgroundState) invalidateSupervisorLocked() {

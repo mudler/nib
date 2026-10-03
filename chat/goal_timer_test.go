@@ -65,6 +65,28 @@ func timerReadyState() *backgroundState {
 	return s
 }
 
+func TestGoalTimerStoppedCallbacksAreStale(t *testing.T) {
+	s := timerReadyState()
+	factory := &fakeGoalTimerFactory{}
+	wake := make(chan struct{}, 1)
+	generation := s.armGoalTimer(factory, time.Minute, wake)
+	factory.mu.Lock()
+	timer := factory.timers[len(factory.timers)-1]
+	factory.mu.Unlock()
+
+	s.setRoot(true, true, false)
+	s.setRoot(true, false, true)
+	// Simulate the documented Stop race by invoking the captured callback.
+	timer.fn()
+	s.mu.Lock()
+	queued := s.reviewQueued
+	current := s.supervisorGeneration
+	s.mu.Unlock()
+	if queued || current == generation {
+		t.Fatalf("stopped callback queued=%v generation=%d old=%d", queued, current, generation)
+	}
+}
+
 func TestGoalTimerStaleGenerationAndAtMostOne(t *testing.T) {
 	s := timerReadyState()
 	factory := &fakeGoalTimerFactory{}
