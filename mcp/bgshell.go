@@ -120,14 +120,13 @@ type bgJob struct {
 	detach chan struct{} // non-nil while the job is a detachable foreground job
 	doneCh chan struct{} // closed when the process exits
 
-	mu            sync.Mutex
-	done          bool
-	ended         time.Time // when done became true
-	detached      bool      // set when backgrounded via Ctrl+B (guarded by manager.mu)
-	killRequested bool
-	killed        bool // terminal result was process cancellation, not a natural exit
-	exitCode      int
-	errMsg        string
+	mu       sync.Mutex
+	done     bool
+	ended    time.Time // when done became true
+	detached bool      // set when backgrounded via Ctrl+B (guarded by manager.mu)
+	killed   bool      // terminal result was process cancellation, not a natural exit
+	exitCode int
+	errMsg   string
 
 	// lifecycleMu serializes this job's start and terminal lifecycle callbacks.
 	// lifecycleObserver is captured when the job first becomes background work,
@@ -187,26 +186,90 @@ type ShellJobLifecycleEvent struct {
 }
 
 type shellJobLifecycleObserver struct {
-	mu       sync.Mutex
-	disabled bool
-	fn       func(ShellJobLifecycleEvent)
+	fn func(ShellJobLifecycleEvent)
+
+	events   chan lifecycleInvocation
+	stop     chan chan struct{}
+	stopped  chan struct{}
+	stopOnce sync.Once
+	stopping chan struct{}
+}
+
+type lifecycleInvocation struct {
+	event ShellJobLifecycleEvent
+	done  chan struct{}
+}
+
+func newShellJobLifecycleObserver(fn func(ShellJobLifecycleEvent)) *shellJobLifecycleObserver {
+	o := &shellJobLifecycleObserver{
+		fn:       fn,
+		events:   make(chan lifecycleInvocation),
+		stop:     make(chan chan struct{}),
+		stopped:  make(chan struct{}),
+		stopping: make(chan struct{}),
+	}
+	go o.dispatch()
+	return o
+}
+
+func (o *shellJobLifecycleObserver) dispatch() {
+	for {
+		select {
+		case ack := <-o.stop:
+			close(o.stopping)
+			close(o.stopped)
+			close(ack)
+			return
+		case invocation := <-o.events:
+			// Run callbacks outside the dispatcher. Besides avoiding a mutex
+			// reentrancy deadlock, this lets a callback synchronously stop its
+			// own observer. The dispatcher still admits only one invocation at
+			// a time, preserving event order.
+			finished := make(chan struct{})
+			go func() {
+				o.fn(invocation.event)
+				close(finished)
+			}()
+
+			select {
+			case <-finished:
+				close(invocation.done)
+			case ack := <-o.stop:
+				// Acknowledge stop while the callback is allowed to finish. No
+				// further invocation can be admitted after this boundary.
+				close(o.stopping)
+				close(o.stopped)
+				close(ack)
+				<-finished
+				close(invocation.done)
+				return
+			}
+		}
+	}
 }
 
 func (o *shellJobLifecycleObserver) invoke(event ShellJobLifecycleEvent) {
-	o.mu.Lock()
-	if o.disabled {
-		o.mu.Unlock()
+	invocation := lifecycleInvocation{event: event, done: make(chan struct{})}
+	select {
+	case o.events <- invocation:
+	case <-o.stopping:
 		return
 	}
-	fn := o.fn
-	o.mu.Unlock()
-	fn(event)
+	select {
+	case <-invocation.done:
+	case <-o.stopping:
+	}
 }
 
 func (o *shellJobLifecycleObserver) disable() {
-	o.mu.Lock()
-	o.disabled = true
-	o.mu.Unlock()
+	o.stopOnce.Do(func() {
+		ack := make(chan struct{})
+		select {
+		case o.stop <- ack:
+			<-ack
+		case <-o.stopped:
+		}
+	})
 }
 
 // bgJobManager tracks shell jobs for a session.
@@ -272,6 +335,7 @@ func (m *bgJobManager) launch(parent context.Context, script string, foreground 
 		cancel()
 		j.mu.Lock()
 		j.done, j.exitCode, j.errMsg = true, -1, err.Error()
+		j.killed = ctx.Err() != nil
 		j.ended = time.Now()
 		j.mu.Unlock()
 		close(j.doneCh)
@@ -307,7 +371,7 @@ func (m *bgJobManager) launch(parent context.Context, script string, foreground 
 				}
 				j.errMsg = err.Error()
 			}
-			j.killed = j.killRequested && err != nil
+			j.killed = ctx.Err() != nil && err != nil && j.exitCode == -1
 			j.mu.Unlock()
 			close(j.doneCh)
 			m.notifyDone(j)
@@ -433,11 +497,6 @@ func (m *bgJobManager) kill(id string) bool {
 	if !ok {
 		return false
 	}
-	j.mu.Lock()
-	if !j.done {
-		j.killRequested = true
-	}
-	j.mu.Unlock()
 	j.cancel()
 	return true
 }
@@ -638,7 +697,7 @@ func (s *ShellJobs) ObserveLifecycle(fn func(ShellJobLifecycleEvent)) func() {
 	if s == nil || fn == nil {
 		return func() {}
 	}
-	observer := &shellJobLifecycleObserver{fn: fn}
+	observer := newShellJobLifecycleObserver(fn)
 	s.mgr.mu.Lock()
 	previous := s.mgr.lifecycle
 	s.mgr.lifecycle = observer
