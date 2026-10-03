@@ -1600,11 +1600,16 @@ func (l *noticeDeliveryStreamingLLM) CreateChatCompletionStream(ctx context.Cont
 		defer close(out)
 		succeeded := false
 		for event := range events {
+			if event.Type == cogito.StreamEventError {
+				select {
+				case out <- event:
+				case <-ctx.Done():
+				}
+				l.background.rollbackNotices(reservation)
+				return
+			}
 			if event.Type == cogito.StreamEventDone {
 				succeeded = true
-			}
-			if event.Type == cogito.StreamEventError {
-				succeeded = false
 			}
 			select {
 			case out <- event:

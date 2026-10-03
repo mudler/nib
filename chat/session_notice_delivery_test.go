@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mudler/cogito"
 	openai "github.com/sashabaranov/go-openai"
@@ -50,6 +51,51 @@ func requestNoticeMessage(t *testing.T, request openai.ChatCompletionRequest) st
 		}
 	}
 	return ""
+}
+
+type noticeStreamingLLM struct {
+	noticeCaptureLLM
+	events chan cogito.StreamEvent
+}
+
+func (l *noticeStreamingLLM) CreateChatCompletionStream(_ context.Context, request openai.ChatCompletionRequest) (<-chan cogito.StreamEvent, error) {
+	l.requests = append(l.requests, request)
+	return l.events, nil
+}
+
+func TestNoticeDeliveryStreamingErrorRollsBackWithoutWaitingForClose(t *testing.T) {
+	state := newBackgroundState()
+	publishNotice(t, state, backgroundAgent, "worker", "failed stream")
+	upstream := make(chan cogito.StreamEvent, 1)
+	llm := &noticeStreamingLLM{events: upstream}
+	wrapped := withNoticeDelivery(llm, state).(cogito.StreamingLLM)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	events, err := wrapped.CreateChatCompletionStream(ctx, openai.ChatCompletionRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	upstream <- cogito.StreamEvent{Type: cogito.StreamEventError, Error: errors.New("boom")}
+	select {
+	case event := <-events:
+		if event.Type != cogito.StreamEventError {
+			t.Fatalf("event = %#v", event)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("relay waited for upstream close after error")
+	}
+	select {
+	case _, ok := <-events:
+		if ok {
+			t.Fatal("relay remained open")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("relay did not close")
+	}
+	_, notices := state.reserveNotices(0)
+	if len(notices) != 1 {
+		t.Fatalf("rolled back notices = %d", len(notices))
+	}
 }
 
 func TestNoticeDeliveryIncludesEveryNoticeBeyondLegacyCap(t *testing.T) {
