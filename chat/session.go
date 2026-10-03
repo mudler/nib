@@ -1323,11 +1323,16 @@ func (s *Session) PauseGoal() {
 // whether there was a paused goal to resume.
 func (s *Session) ResumeGoal() bool {
 	s.runMu.Lock()
-	defer s.runMu.Unlock()
 	if s.goal == "" || !s.goalPaused {
+		s.runMu.Unlock()
 		return false
 	}
 	s.goalPaused = false
+	serial := s.goalSerial
+	s.runMu.Unlock()
+	if s.goalSupervisor != nil {
+		s.goalSupervisor.goalSet(serial)
+	}
 	return true
 }
 
@@ -2399,6 +2404,7 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 	llm = withNoticeDelivery(llm, s.background)
 
 	// Build cogito options from config
+	var supervisorPass uint64
 	cogitoOpts := []cogito.Option{
 		cogito.WithAgentLLM(agentLLM),
 		cogito.WithContext(turnCtx),
@@ -2534,6 +2540,9 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 	// is identical to before. The step-boundary callbacks still fire either way.
 	if s.callbacks.OnStream != nil {
 		cogitoOpts = append(cogitoOpts, cogito.WithStreamCallback(func(ev cogito.StreamEvent) {
+			if supervisorPass != 0 {
+				return
+			}
 			evUI := StreamEvent{
 				Kind:     string(ev.Type),
 				Content:  ev.Content,
@@ -2604,7 +2613,6 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 	var err error
 	var response string
 	var barrierContinuation *cogito.Fragment
-	var supervisorPass uint64
 	for {
 		s.runMu.Lock()
 		s.goalDone = false
@@ -2970,6 +2978,10 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 				note = failedTurnNote(err)
 			}
 			s.commitRun(midTurn, keepFailedTurn(s.fragment, newFragment, note))
+			if supervisorPass != 0 && s.goalSupervisor != nil {
+				s.goalSupervisor.reviewAborted(supervisorPass)
+				supervisorPass = 0
+			}
 			return "", err
 		}
 
@@ -2995,6 +3007,9 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 				continue
 			}
 			response = normalizeGoalCheckIn(response)
+			if s.callbacks.OnStepContent != nil {
+				s.callbacks.OnStepContent(response)
+			}
 		}
 
 		// Each ExecuteTools run reports its own cumulative usage, so the whole
