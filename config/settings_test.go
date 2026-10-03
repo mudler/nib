@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -268,5 +269,133 @@ func TestWriteSettingRefusesUnparseableFile(t *testing.T) {
 	}
 	if data, _ := os.ReadFile(path); string(data) != broken {
 		t.Fatalf("the broken file was rewritten:\n%s", data)
+	}
+}
+
+func TestSettingsGoalCheckInLookupListAndDefaultFormat(t *testing.T) {
+	s, err := LookupSetting("goal.check_in_delays")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Type != SettingDurationList {
+		t.Fatalf("type = %q, want %q", s.Type, SettingDurationList)
+	}
+	if got := s.Format(types.Config{}); got != "2m0s, 5m0s, 10m0s" {
+		t.Fatalf("default format = %q", got)
+	}
+	if _, ok := settingKeys()[s.Key]; !ok {
+		t.Fatalf("%s absent from Settings", s.Key)
+	}
+}
+
+func TestSettingsGoalCheckInParseAndApplyNormalized(t *testing.T) {
+	s, err := LookupSetting("goal.check_in_delays")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tt := range []struct {
+		raw  string
+		want string
+	}{
+		{raw: "90s", want: "1m30s"},
+		{raw: " 1m, 90s , 2h ", want: "1m0s, 1m30s, 2h0m0s"},
+	} {
+		v, err := s.Parse(tt.raw)
+		if err != nil {
+			t.Fatalf("Parse(%q): %v", tt.raw, err)
+		}
+		var cfg types.Config
+		s.Apply(&cfg, v)
+		if got := s.Format(cfg); got != tt.want {
+			t.Errorf("Parse/Format(%q) = %q, want %q", tt.raw, got, tt.want)
+		}
+	}
+	for _, tt := range []struct {
+		raw   string
+		index int
+	}{
+		{raw: "", index: 0},
+		{raw: "1m,", index: 1},
+		{raw: ",1m", index: 0},
+		{raw: "1m,,2m", index: 1},
+		{raw: "1m,later", index: 1},
+		{raw: "1m,0s", index: 1},
+	} {
+		if _, err := s.Parse(tt.raw); err == nil || !strings.Contains(err.Error(), "goal.check_in_delays["+strconv.Itoa(tt.index)+"]") {
+			t.Errorf("Parse(%q) error = %v, want indexed error %d", tt.raw, err, tt.index)
+		}
+	}
+}
+
+func TestSettingsGoalCheckInWritesSequencePreservingConfig(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	original := "# config heading\nmodel: qwen # keep model\ngoal:\n  other: future # keep future\n  check_in_delays: [2m] # schedule note\nunknown: yes\n"
+	if err := os.WriteFile(path, []byte(original), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s, _ := LookupSetting("goal.check_in_delays")
+	v, err := s.Parse(" 90s, 5m ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteSetting(path, s.Key, v); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := string(data)
+	for _, want := range []string{"# config heading", "qwen # keep model", "other: future # keep future", "# schedule note", "unknown: yes", "check_in_delays:\n    - 1m30s\n    - 5m0s"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("written file lost %q:\n%s", want, out)
+		}
+	}
+	eff, present, err := FileSettings(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := s.Format(eff); got != "1m30s, 5m0s" || !present[s.Key] {
+		t.Fatalf("round trip format = %q, present = %v", got, present[s.Key])
+	}
+}
+
+func TestSettingsGoalCheckInInvalidWriteIsAtomic(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	before := []byte("# untouched\nmodel: qwen\ngoal:\n  check_in_delays: [2m]\n")
+	if err := os.WriteFile(path, before, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, invalid := range []any{[]string{"1m", ""}, []string{"1m", "later"}, "1m,later"} {
+		if err := WriteSetting(path, "goal.check_in_delays", invalid); err == nil || !strings.Contains(err.Error(), "goal.check_in_delays[1]") {
+			t.Errorf("WriteSetting(%#v) error = %v", invalid, err)
+		}
+		got, _ := os.ReadFile(path)
+		if string(got) != string(before) {
+			t.Fatalf("invalid write changed bytes:\n%s", got)
+		}
+	}
+}
+
+func TestSettingsGoalCheckInResetRestoresDefaultAndRemovesEmptyGoal(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte("model: qwen\ngoal:\n  check_in_delays:\n    - 30s\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	removed, err := UnsetSetting(path, "goal.check_in_delays")
+	if err != nil || !removed {
+		t.Fatalf("UnsetSetting = %v, %v", removed, err)
+	}
+	data, _ := os.ReadFile(path)
+	if strings.Contains(string(data), "goal:") || !strings.Contains(string(data), "model: qwen") {
+		t.Fatalf("reset output:\n%s", data)
+	}
+	eff, present, err := FileSettings(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, _ := LookupSetting("goal.check_in_delays")
+	if got := s.Format(eff); got != "2m0s, 5m0s, 10m0s" || present[s.Key] {
+		t.Fatalf("after reset format = %q, present = %v", got, present[s.Key])
 	}
 }

@@ -21,10 +21,11 @@ import (
 type SettingType string
 
 const (
-	SettingBool   SettingType = "bool"
-	SettingInt    SettingType = "int"
-	SettingFloat  SettingType = "float"
-	SettingString SettingType = "string"
+	SettingBool         SettingType = "bool"
+	SettingInt          SettingType = "int"
+	SettingFloat        SettingType = "float"
+	SettingString       SettingType = "string"
+	SettingDurationList SettingType = "duration_list"
 )
 
 // Setting is one scalar key of the config file that /settings can read and
@@ -56,50 +57,51 @@ type Setting struct {
 // settingDocs describes the keys a user is most likely to reach for. Anything
 // absent still lists, with its type standing in for the description.
 var settingDocs = map[string]string{
-	"ui.hide_hud":                             "hide the footer clock, cpu and memory badges",
-	"agent_options.no_titles":                 "do not ask the model for a short title for each sub-agent",
-	"ui.no_bell":                              "do not ring the terminal bell when nib needs you",
-	"ui.no_funny":                             "turn off funny thinking lines and tips while the agent works",
-	"ui.footer_front":                         "footer telemetry at the right of the help line: context, speed, usage, age, clock, cpu, mem (comma-separated; none for nothing)",
-	"ui.footer_expanded":                      "footer telemetry shown with ctrl+g: same items as ui.footer_front",
-	"approval_mode":                           "tool-call gating: prompt, strict, allowlist, classify or auto",
-	"classifier.endpoint":                     "named endpoint that serves the classifier",
-	"classifier.model":                        "classifier model (e.g. a GLiNER SystemOne model)",
-	"auto_approve.threshold":                  "min classifier confidence to auto-approve (0 = 0.85)",
-	"suggestions.disabled":                    "turn off reply suggestions",
-	"suggestions.threshold":                   "min confidence to show a suggestion (0 = 0.5)",
-	"model":                                   "the model new sessions start on",
-	"provider":                                "the main LLM transport (openai, codex, ...)",
-	"base_url":                                "the OpenAI-compatible endpoint",
-	"log_level":                               "log verbosity (debug, info, warn, error)",
-	"reasoning_effort":                        "reasoning_effort sent on every request",
-	"strict_tools":                            "send tools in strict mode, so the backend constrains their arguments",
-	"transcribe_model":                        "model for audio attachments (empty = auto)",
-	"vision_model":                            "model for image attachments (empty = auto)",
-	"video_model":                             "model for video attachments (empty = auto)",
-	"session_retention":                       "recorded sessions kept for /resume (0 = 200)",
-	"agent_options.iterations":                "tool-loop iterations per turn",
-	"agent_options.max_attempts":              "attempts per tool call",
-	"agent_options.max_retries":               "retries on a failed LLM call",
-	"agent_options.force_reasoning":           "force a reasoning step before tool selection",
-	"compaction.disabled":                     "turn off automatic compaction",
-	"compaction.max_context_tokens":           "context window override (0 = auto-detect)",
-	"compaction.threshold":                    "fraction of the budget at which compaction fires",
-	"compaction.keep_recent":                  "messages kept verbatim when compacting",
-	"compaction.reserve_tokens":               "tokens held back for the reply",
-	"tool_output_pruning.disabled":            "turn off tool-output pruning",
-	"tool_output_pruning.disable_stale_reads": "keep reads of files that were edited later",
-	"tool_output_pruning.high_water_tokens":   "tool-output size at which pruning starts",
-	"tool_output_pruning.low_water_tokens":    "tool-output size pruning shrinks to",
-	"tool_output_pruning.min_result_tokens":   "results smaller than this are never pruned",
-	"tool_output_limits.disabled":                "turn off tool output truncation and artifact spill",
-	"tool_output_limits.budget":                  "max bytes of tool output returned inline (0 = 16 KB)",
-	"tool_output_limits.head_budget":             "bytes of head kept when truncating (0 = 4 KB)",
+	"ui.hide_hud":                                 "hide the footer clock, cpu and memory badges",
+	"agent_options.no_titles":                     "do not ask the model for a short title for each sub-agent",
+	"ui.no_bell":                                  "do not ring the terminal bell when nib needs you",
+	"ui.no_funny":                                 "turn off funny thinking lines and tips while the agent works",
+	"ui.footer_front":                             "footer telemetry at the right of the help line: context, speed, usage, age, clock, cpu, mem (comma-separated; none for nothing)",
+	"ui.footer_expanded":                          "footer telemetry shown with ctrl+g: same items as ui.footer_front",
+	"approval_mode":                               "tool-call gating: prompt, strict, allowlist, classify or auto",
+	"classifier.endpoint":                         "named endpoint that serves the classifier",
+	"classifier.model":                            "classifier model (e.g. a GLiNER SystemOne model)",
+	"auto_approve.threshold":                      "min classifier confidence to auto-approve (0 = 0.85)",
+	"suggestions.disabled":                        "turn off reply suggestions",
+	"suggestions.threshold":                       "min confidence to show a suggestion (0 = 0.5)",
+	"model":                                       "the model new sessions start on",
+	"provider":                                    "the main LLM transport (openai, codex, ...)",
+	"base_url":                                    "the OpenAI-compatible endpoint",
+	"log_level":                                   "log verbosity (debug, info, warn, error)",
+	"reasoning_effort":                            "reasoning_effort sent on every request",
+	"strict_tools":                                "send tools in strict mode, so the backend constrains their arguments",
+	"transcribe_model":                            "model for audio attachments (empty = auto)",
+	"vision_model":                                "model for image attachments (empty = auto)",
+	"video_model":                                 "model for video attachments (empty = auto)",
+	"session_retention":                           "recorded sessions kept for /resume (0 = 200)",
+	"agent_options.iterations":                    "tool-loop iterations per turn",
+	"agent_options.max_attempts":                  "attempts per tool call",
+	"agent_options.max_retries":                   "retries on a failed LLM call",
+	"agent_options.force_reasoning":               "force a reasoning step before tool selection",
+	"compaction.disabled":                         "turn off automatic compaction",
+	"compaction.max_context_tokens":               "context window override (0 = auto-detect)",
+	"compaction.threshold":                        "fraction of the budget at which compaction fires",
+	"compaction.keep_recent":                      "messages kept verbatim when compacting",
+	"compaction.reserve_tokens":                   "tokens held back for the reply",
+	"tool_output_pruning.disabled":                "turn off tool-output pruning",
+	"tool_output_pruning.disable_stale_reads":     "keep reads of files that were edited later",
+	"tool_output_pruning.high_water_tokens":       "tool-output size at which pruning starts",
+	"tool_output_pruning.low_water_tokens":        "tool-output size pruning shrinks to",
+	"tool_output_pruning.min_result_tokens":       "results smaller than this are never pruned",
+	"tool_output_limits.disabled":                 "turn off tool output truncation and artifact spill",
+	"tool_output_limits.budget":                   "max bytes of tool output returned inline (0 = 16 KB)",
+	"tool_output_limits.head_budget":              "bytes of head kept when truncating (0 = 4 KB)",
 	"tool_output_limits.max_line_length":          "truncate lines longer than this (0 = 2000 chars)",
 	"tool_output_limits.artifact_spill_threshold": "save full output as artifact above this (0 = 64 KB, -1 = off)",
-	"prompt_injection_protection.enabled":     "track and screen untrusted external data",
-	"browser.enabled":                         "enable the browser automation tools",
-	"browser.allow_private_urls":              "let the browser reach localhost and private networks",
+	"prompt_injection_protection.enabled":         "track and screen untrusted external data",
+	"browser.enabled":                             "enable the browser automation tools",
+	"browser.allow_private_urls":                  "let the browser reach localhost and private networks",
+	"goal.check_in_delays":                        "goal supervision check-in schedule (comma-separated durations)",
 }
 
 // settingValues are the value hints for enum-like strings. The approval modes
@@ -199,6 +201,12 @@ func reflectSettings(t reflect.Type, prefix string, index []int, out *[]Setting)
 			typ = SettingFloat
 		case reflect.String:
 			typ = SettingString
+		case reflect.Slice:
+			if key == "goal.check_in_delays" && f.Type.Elem().Kind() == reflect.String {
+				typ = SettingDurationList
+			} else {
+				continue
+			}
 		default:
 			continue
 		}
@@ -307,6 +315,20 @@ func (s Setting) Parse(raw string) (any, error) {
 			return nil, fmt.Errorf("%s must be above 0 and at most %g", s.Key, r.hi)
 		}
 		return f, nil
+	case SettingDurationList:
+		values := strings.Split(raw, ",")
+		for i := range values {
+			values[i] = strings.TrimSpace(values[i])
+		}
+		delays, err := ParseGoalCheckInDelays(values)
+		if err != nil {
+			return nil, err
+		}
+		normalized := make([]string, len(delays))
+		for i, delay := range delays {
+			normalized[i] = delay.String()
+		}
+		return normalized, nil
 	default:
 		if s.strict && !containsString(s.Values, raw) {
 			return nil, fmt.Errorf("%s must be one of %s", s.Key, strings.Join(s.Values, ", "))
@@ -339,6 +361,12 @@ func (s Setting) Value(cfg types.Config) any {
 		return int(f.Int())
 	case SettingFloat:
 		return f.Float()
+	case SettingDurationList:
+		values := make([]string, f.Len())
+		for i := range f.Len() {
+			values[i] = f.Index(i).String()
+		}
+		return values
 	default:
 		return f.String()
 	}
@@ -356,6 +384,8 @@ func (s Setting) Apply(cfg *types.Config, v any) {
 		f.SetFloat(x)
 	case string:
 		f.SetString(x)
+	case []string:
+		f.Set(reflect.ValueOf(append([]string(nil), x...)))
 	}
 }
 
@@ -363,6 +393,18 @@ func (s Setting) Apply(cfg *types.Config, v any) {
 // quotes around an empty string so "" reads as a value rather than a gap.
 // Multi-line values (a custom prompt) are cut to their first line.
 func (s Setting) Format(cfg types.Config) string {
+	if s.Type == SettingDurationList {
+		values, _ := s.Value(cfg).([]string)
+		delays, err := ParseGoalCheckInDelays(values)
+		if err != nil {
+			return strings.Join(values, ", ")
+		}
+		normalized := make([]string, len(delays))
+		for i, delay := range delays {
+			normalized[i] = delay.String()
+		}
+		return strings.Join(normalized, ", ")
+	}
 	return FormatSettingValue(s.Value(cfg))
 }
 
@@ -429,6 +471,32 @@ func FileSettings(path string) (types.Config, map[string]bool, error) {
 // file that does not parse is refused rather than replaced: it is the user's,
 // and whatever is wrong with it is theirs to see.
 func WriteSetting(path, key string, v any) error {
+	// Duration lists are the only non-scalar setting. Validate before reading or
+	// mutating the document so a rejected write leaves the file byte-for-byte
+	// unchanged, then persist the normalized values as a YAML sequence.
+	var valueNode *yaml.Node
+	if key == "goal.check_in_delays" {
+		var values []string
+		switch typed := v.(type) {
+		case []string:
+			values = typed
+		case string:
+			values = strings.Split(typed, ",")
+		default:
+			return fmt.Errorf("%s expects a duration list", key)
+		}
+		delays, err := ParseGoalCheckInDelays(values)
+		if err != nil {
+			return err
+		}
+		valueNode = &yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq"}
+		for _, delay := range delays {
+			valueNode.Content = append(valueNode.Content, scalarNode(delay.String()))
+		}
+	} else {
+		valueNode = scalarNode(v)
+	}
+
 	doc, err := readDoc(path)
 	if err != nil {
 		return err
@@ -448,7 +516,7 @@ func WriteSetting(path, key string, v any) error {
 	for _, seg := range segs[:len(segs)-1] {
 		parent = childMapping(parent, seg)
 	}
-	setScalar(parent, segs[len(segs)-1], scalarNode(v))
+	setScalar(parent, segs[len(segs)-1], valueNode)
 	return writeDoc(path, doc)
 }
 
