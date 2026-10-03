@@ -129,7 +129,9 @@ type Session struct {
 	// shellJobs lets the pending-work predicate keep the run parked while a
 	// backgrounded shell command is still running (cogito only knows about
 	// sub-agents). May be nil (e.g. headless CLI without a job registry).
-	shellJobs *wizmcp.ShellJobs
+	shellJobs       *wizmcp.ShellJobs
+	background      *backgroundState
+	stopShellEvents func()
 
 	// schemaTools records the tool definitions toolOptions registers, for
 	// SchemaBudget. Guarded by schemaToolsMu. See schema_budget.go.
@@ -592,6 +594,7 @@ func NewSession(ctx context.Context, cfg types.Config, callbacks Callbacks, tran
 		allowedBashPrefixes:  make(map[string]bool),
 		agentStart:           make(map[string]time.Time),
 		agentManager:         agentManager,
+		background:           newBackgroundState(),
 		agentLogs:            newAgentLogStore(),
 		llmModel:             mainProvider.Model,
 		mainProvider:         mainProvider,
@@ -1380,23 +1383,37 @@ func (s *Session) UseArtifactStore(st *wizmcp.ArtifactStore) {
 // is still running, and so finished shell jobs inject a completion notice into
 // the live run. Registers the completion hook. Call once at setup.
 func (s *Session) SetShellJobs(jobs *wizmcp.ShellJobs) {
+	if s.stopShellEvents != nil {
+		s.stopShellEvents()
+		s.stopShellEvents = nil
+	}
 	s.shellJobs = jobs
 	if jobs == nil {
 		return
 	}
-	jobs.SetOnJobDone(func(info wizmcp.ShellJobInfo) {
-		// Only backgrounded jobs interest the live run: a plain foreground
-		// command is consumed inline by the tool call that started it.
-		if !info.Backgrounded {
+	s.stopShellEvents = jobs.ObserveLifecycle(func(event wizmcp.ShellJobLifecycleEvent) {
+		if !event.Job.Backgrounded {
 			return
 		}
-		notice := "shell job " + info.ID + " " + info.Status
-		if so, se, ok := jobs.Output(info.ID); ok {
+		id := event.Job.ID
+		if event.Kind == wizmcp.ShellJobLifecycleStart {
+			s.background.startBackground(backgroundShell, id)
+			return
+		}
+		publisher := "shell:" + id
+		if !s.background.beginPublisher(publisher) {
+			return
+		}
+		notice := "shell job " + id + " " + string(event.Kind)
+		if so, se, ok := jobs.Output(id); ok {
 			if tail := jobTail(so + se); tail != "" {
 				notice += ":\n" + tail
 			}
 		}
-		s.deliverNotice(notice)
+		s.background.completeBackground(backgroundShell, id, notice, event.Kind == wizmcp.ShellJobLifecycleSuccess)
+		s.background.endPublisher(publisher)
+		// Wake the live root. Durable model delivery is owned by the ledger.
+		s.Inject(notice)
 	})
 }
 
@@ -3087,6 +3104,13 @@ func (s *Session) applyPendingReload() {
 
 // Close closes the session and cleans up resources
 func (s *Session) Close() error {
+	if s.stopShellEvents != nil {
+		s.stopShellEvents()
+		s.stopShellEvents = nil
+	}
+	if s.background != nil {
+		s.background.close()
+	}
 	var firstErr error
 	for _, client := range s.clients {
 		if err := client.Close(); err != nil && firstErr == nil {
