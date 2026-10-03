@@ -1551,9 +1551,10 @@ func (l *noticeDeliveryLLM) includeMessages(messages []openai.ChatCompletionMess
 	if l.background == nil {
 		return messages, 0
 	}
-	reservation, notices := l.background.reserveNotices(0)
+	reservation, notices, observed := l.background.reserveNoticesForRoot(0)
 	if len(notices) == 0 {
-		return messages, 0
+		l.background.markRootObserved(observed)
+		return slices.Clip(messages), 0
 	}
 	// Clip before append so the request handed down owns an immutable slice and
 	// cannot overwrite Cogito's fragment backing array.
@@ -1561,7 +1562,7 @@ func (l *noticeDeliveryLLM) includeMessages(messages []openai.ChatCompletionMess
 		Role:    openai.ChatMessageRoleUser,
 		Content: durableNoticesMessage(notices),
 	})
-	l.background.markRootObserved(notices[len(notices)-1].sequence)
+	l.background.markRootObserved(observed)
 	return messages, reservation
 }
 
@@ -2562,6 +2563,7 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 	// inject path; Ctrl+C cancels turnCtx and pauses the goal.
 	var err error
 	var response string
+	var barrierContinuation *cogito.Fragment
 	for {
 		s.runMu.Lock()
 		s.goalDone = false
@@ -2579,6 +2581,10 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 		// whole call — holding it across the call would block ExportHistory for
 		// the entire turn.
 		runFragment := s.fragment
+		if barrierContinuation != nil {
+			runFragment = *barrierContinuation
+			barrierContinuation = nil
+		}
 		if runFragment.Status != nil {
 			statusCopy := *runFragment.Status
 			runFragment.Status = &statusCopy
@@ -2973,7 +2979,8 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 				return "", snapshot.internalError
 			}
 			if !snapshot.eligible {
-				runFragment = newFragment.AddMessage("user", "Background work changed while you were replying. Review every delivered completion notice and current background status, then provide an updated response. Do not finish until all background work and notices are accounted for.")
+				continuation := newFragment.AddMessage("user", "Background work changed while you were replying. Review every delivered completion notice and current background status, then provide an updated response. Do not finish until all background work and notices are accounted for.")
+				barrierContinuation = &continuation
 				continue
 			}
 		}
@@ -3313,6 +3320,18 @@ func (s *Session) applyPendingReload() {
 
 // Close closes the session and cleans up resources
 func (s *Session) Close() error {
+	if s.background != nil {
+		s.background.close()
+	}
+	s.turnMu.Lock()
+	if s.turnCancel != nil {
+		s.turnCancel()
+	}
+	s.turnMu.Unlock()
+	select {
+	case s.inject <- openai.ChatCompletionMessage{Role: openai.ChatMessageRoleSystem, Content: "session closed"}:
+	default:
+	}
 	s.shellEventsMu.Lock()
 	s.shellEventsDone = true
 	if s.stopShellEvents != nil {
@@ -3320,9 +3339,6 @@ func (s *Session) Close() error {
 		s.stopShellEvents = nil
 	}
 	s.shellEventsMu.Unlock()
-	if s.background != nil {
-		s.background.close()
-	}
 	var firstErr error
 	for _, client := range s.clients {
 		if err := client.Close(); err != nil && firstErr == nil {

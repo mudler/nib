@@ -334,8 +334,7 @@ func (s *backgroundState) hasPendingWork() bool {
 		return false
 	}
 	snapshot := s.terminalSnapshot()
-	return snapshot.runningAgents > 0 || snapshot.runningShells > 0 || snapshot.activePublishers > 0 ||
-		snapshot.queuedNotices > 0 || snapshot.reservedNotices > 0 || snapshot.supervisorQueued || snapshot.supervisorReviewing
+	return !snapshot.eligible
 }
 
 func (s *backgroundState) terminalSnapshot() terminalSnapshot {
