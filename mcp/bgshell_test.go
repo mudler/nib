@@ -21,19 +21,60 @@ func waitJob(t *testing.T, j *bgJob) {
 	t.Fatalf("job %s did not finish in time", j.id)
 }
 
-func TestShellJobLifecycleObserverCanStopItself(t *testing.T) {
+func TestShellJobLifecycleExternalStopWaitsAndPreventsCallbacks(t *testing.T) {
 	jobs := NewShellJobs()
-	done := make(chan struct{})
-	var stop func()
-	stop = jobs.ObserveLifecycle(func(event ShellJobLifecycleEvent) {
-		stop()
-		close(done)
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	stop := jobs.ObserveLifecycle(func(event ShellJobLifecycleEvent) {
+		close(entered)
+		<-release
 	})
-	jobs.mgr.launch(context.Background(), "echo self-stop", false)
+	launched := make(chan struct{})
+	go func() {
+		jobs.mgr.launch(context.Background(), "echo stopped", false)
+		close(launched)
+	}()
+	<-entered
+	stopped := make(chan struct{})
+	go func() { stop(); close(stopped) }()
 	select {
-	case <-done:
+	case <-stopped:
+		t.Fatal("stop returned before active callback exited")
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(release)
+	select {
+	case <-stopped:
 	case <-time.After(5 * time.Second):
-		t.Fatal("observer self-stop deadlocked")
+		t.Fatal("stop did not return")
+	}
+	<-launched
+}
+
+func TestShellJobLifecycleReplacementDoesNotSplitJob(t *testing.T) {
+	jobs := NewShellJobs()
+	first := make(chan ShellJobLifecycleEvent, 4)
+	second := make(chan ShellJobLifecycleEvent, 1)
+	stop := jobs.ObserveLifecycle(func(event ShellJobLifecycleEvent) { first <- event })
+	defer stop()
+	job := jobs.mgr.launch(context.Background(), "sleep 0.1", false)
+	if event := <-first; event.Kind != ShellJobLifecycleStart {
+		t.Fatalf("first event = %#v", event)
+	}
+	ignoredStop := jobs.ObserveLifecycle(func(event ShellJobLifecycleEvent) { second <- event })
+	defer ignoredStop()
+	select {
+	case event := <-first:
+		if event.Kind != ShellJobLifecycleSuccess || event.Job.ID != job.id {
+			t.Fatalf("terminal event = %#v", event)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("missing terminal event on original observer")
+	}
+	select {
+	case event := <-second:
+		t.Fatalf("replacement observer received %#v", event)
+	default:
 	}
 }
 
