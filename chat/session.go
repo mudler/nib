@@ -2346,9 +2346,19 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 		cogito.WithMessagesManipulator(midTurn.manipulate),
 		cogito.WithAgentManager(s.agentManager),
 		cogito.WithAgentSpawnCallback(func(a *cogito.AgentState) {
+			s.background.startBackground(backgroundAgent, a.ID)
 			s.emitAgentEventTo(a, toolCallbacks.OnAgentEvent)
 		}),
 		cogito.WithAgentCompletionCallback(func(a *cogito.AgentState) {
+			publisher := "agent:" + a.ID
+			if s.background.beginPublisher(publisher) {
+				content := fmt.Sprintf("Agent %s completed", a.ID)
+				if result := strings.TrimSpace(a.Result); result != "" {
+					content += ":\n" + result
+				}
+				s.background.completeBackground(backgroundAgent, a.ID, content, a.Error == nil)
+				s.background.endPublisher(publisher)
+			}
 			s.emitAgentEventTo(a, toolCallbacks.OnAgentEvent)
 		}),
 	)
