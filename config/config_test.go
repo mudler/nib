@@ -1,14 +1,86 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/mudler/nib/types"
 )
+
+func TestGoalCheckInDelaysDefaultsAndFreshCopies(t *testing.T) {
+	first, err := ParseGoalCheckInDelays(nil)
+	if err != nil {
+		t.Fatalf("ParseGoalCheckInDelays(nil): %v", err)
+	}
+	second, err := ParseGoalCheckInDelays([]string{})
+	if err != nil {
+		t.Fatalf("ParseGoalCheckInDelays(empty): %v", err)
+	}
+	want := []time.Duration{2 * time.Minute, 5 * time.Minute, 10 * time.Minute}
+	if !reflect.DeepEqual(first, want) || !reflect.DeepEqual(second, want) {
+		t.Fatalf("defaults = %v and %v, want %v", first, second, want)
+	}
+	first[0] = time.Second
+	if second[0] != 2*time.Minute {
+		t.Fatalf("default slices alias: second = %v", second)
+	}
+}
+
+func TestGoalCheckInDelaysParsesOrderedPositiveDurations(t *testing.T) {
+	got, err := ParseGoalCheckInDelays([]string{" 1m ", "3m30s", "10m"})
+	if err != nil {
+		t.Fatalf("ParseGoalCheckInDelays: %v", err)
+	}
+	want := []time.Duration{time.Minute, 3*time.Minute + 30*time.Second, 10 * time.Minute}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("delays = %v, want %v", got, want)
+	}
+}
+
+func TestGoalCheckInDelaysRejectsInvalidEntries(t *testing.T) {
+	tests := []struct {
+		name  string
+		value string
+	}{
+		{name: "blank", value: "  "},
+		{name: "malformed", value: "later"},
+		{name: "zero", value: "0s"},
+		{name: "negative", value: "-1s"},
+		{name: "overflow", value: "999999999999999999999h"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := ParseGoalCheckInDelays([]string{"1m", tt.value})
+			if err == nil {
+				t.Fatal("expected error")
+			}
+			if !strings.Contains(err.Error(), "goal.check_in_delays[1]") || !strings.Contains(err.Error(), fmt.Sprintf("%q", tt.value)) {
+				t.Fatalf("error = %q, want indexed key and rejected value", err)
+			}
+		})
+	}
+}
+
+func TestGoalCheckInDelaysLoadPreservesInvalidValue(t *testing.T) {
+	clearBareEnv(t)
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte("goal:\n  check_in_delays: [2m, later]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg := LoadWith(LoadOptions{BaseDir: dir})
+	want := []string{"2m", "later"}
+	if !reflect.DeepEqual(cfg.Goal.CheckInDelays, want) {
+		t.Fatalf("raw delays = %#v, want %#v", cfg.Goal.CheckInDelays, want)
+	}
+	if _, err := ParseGoalCheckInDelays(cfg.Goal.CheckInDelays); err == nil {
+		t.Fatal("expected preserved invalid value to fail validation")
+	}
+}
 
 func TestWithDefaultsCompaction(t *testing.T) {
 	cfg := withDefaults(types.Config{})

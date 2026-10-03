@@ -5,7 +5,26 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
+
+func TestGoalCheckInDelaysYAMLPreservesStrings(t *testing.T) {
+	var cfg Config
+	input := "goal:\n  check_in_delays: [2m, ' bad ', definitely-not-a-duration]\n"
+	if err := yaml.Unmarshal([]byte(input), &cfg); err != nil {
+		t.Fatalf("yaml.Unmarshal: %v", err)
+	}
+	want := []string{"2m", " bad ", "definitely-not-a-duration"}
+	if len(cfg.Goal.CheckInDelays) != len(want) {
+		t.Fatalf("CheckInDelays = %#v, want %#v", cfg.Goal.CheckInDelays, want)
+	}
+	for i := range want {
+		if cfg.Goal.CheckInDelays[i] != want[i] {
+			t.Fatalf("CheckInDelays = %#v, want %#v", cfg.Goal.CheckInDelays, want)
+		}
+	}
+}
 
 func TestGetPromptAppendsSkillsAndFragments(t *testing.T) {
 	c := &Config{

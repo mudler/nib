@@ -201,6 +201,13 @@ type HookConfig struct {
 	Dir     string `yaml:"-"` // plugin root; set during merge, not parsed
 }
 
+// GoalConfig controls supervision of active goals. Duration strings remain raw
+// through YAML decoding so shared config validation can report an exact indexed
+// key and the user's rejected value.
+type GoalConfig struct {
+	CheckInDelays []string `yaml:"check_in_delays"`
+}
+
 // Config holds configuration for creating a new session
 type Config struct {
 	// Provider selects the main LLM transport. Empty defaults to "openai",
@@ -275,6 +282,7 @@ type Config struct {
 	ReasoningOverrides map[string]string    `yaml:"reasoning_overrides,omitempty"`
 	MCPServers         map[string]MCPServer `yaml:"mcp_servers"`
 	AgentOptions       AgentOptions         `yaml:"agent_options"`
+	Goal               GoalConfig           `yaml:"goal"`
 	Compaction         CompactionConfig     `yaml:"compaction"`
 	// ToolOutputPruning shrinks what old tool results cost in the request
 	// without touching the stored conversation.
