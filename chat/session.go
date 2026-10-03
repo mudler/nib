@@ -1445,7 +1445,9 @@ func (s *Session) SetShellJobs(jobs *wizmcp.ShellJobs) {
 		}
 		id := event.Job.ID
 		if event.Kind == wizmcp.ShellJobLifecycleStart {
-			s.background.startBackground(backgroundShell, id)
+			if s.background.startBackground(backgroundShell, id) && s.goalSupervisor != nil {
+				s.goalSupervisor.backgroundEvent()
+			}
 			return
 		}
 		publisher := "shell:" + id
@@ -2558,7 +2560,9 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 		cogito.WithAgentManager(s.agentManager),
 		cogito.WithAgentSpawnCallback(func(a *cogito.AgentState) {
 			if a.Background {
-				s.background.startBackground(backgroundAgent, a.ID)
+				if s.background.startBackground(backgroundAgent, a.ID) && s.goalSupervisor != nil {
+					s.goalSupervisor.backgroundEvent()
+				}
 			}
 			s.emitAgentEventTo(a, toolCallbacks.OnAgentEvent)
 		}),
@@ -2600,6 +2604,7 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 	var err error
 	var response string
 	var barrierContinuation *cogito.Fragment
+	var supervisorPass uint64
 	for {
 		s.runMu.Lock()
 		s.goalDone = false
@@ -2949,6 +2954,10 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 				s.historyMu.Unlock()
 				// The rollback dropped the notices too; keep them for the next turn.
 				s.restorePendingNotices(notices)
+				if supervisorPass != 0 && s.goalSupervisor != nil {
+					s.goalSupervisor.reviewAborted(supervisorPass)
+					supervisorPass = 0
+				}
 				return "", err
 			}
 			// An interrupt or any other error keeps the turn. The transcript
@@ -2980,6 +2989,13 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 		}
 
 		response = newFragment.LastMessage().Content
+		if supervisorPass != 0 {
+			if s.goalSupervisor == nil || !s.goalSupervisor.reviewCurrent(supervisorPass) {
+				supervisorPass = 0
+				continue
+			}
+			response = normalizeGoalCheckIn(response)
+		}
 
 		// Each ExecuteTools run reports its own cumulative usage, so the whole
 		// tool loop is counted rather than just the final call. The goal
@@ -3002,10 +3018,16 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 		goal := s.activeGoalLocked()
 		s.runMu.Unlock()
 
+		if supervisorPass != 0 && s.goalSupervisor != nil {
+			s.goalSupervisor.reviewFinishedAndParked()
+			supervisorPass = 0
+		}
+
 		if s.background != nil {
 			snapshot := s.background.terminalSnapshot()
 			if s.goalSupervisor != nil {
 				if review, ok := s.goalSupervisor.takeReview(); ok {
+					supervisorPass = review.goalIdentity
 					continuation := newFragment.AddMessage("user", review.prompt)
 					barrierContinuation = &continuation
 					continue

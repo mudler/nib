@@ -2,6 +2,7 @@ package chat
 
 import (
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -170,6 +171,35 @@ func (g *goalSupervisor) wakeNonblocking() {
 	select {
 	case g.wake <- struct{}{}:
 	default:
+	}
+}
+
+func normalizeGoalCheckIn(reply string) string {
+	reply = strings.TrimSpace(reply)
+	for strings.HasPrefix(reply, "Goal check-in:") {
+		reply = strings.TrimSpace(strings.TrimPrefix(reply, "Goal check-in:"))
+	}
+	if reply == "" {
+		return "Goal check-in: no new status."
+	}
+	return "Goal check-in: " + reply
+}
+
+func (g *goalSupervisor) reviewCurrent(identity uint64) bool {
+	g.state.mu.Lock()
+	defer g.state.mu.Unlock()
+	return g.state.reviewing && g.state.goalIdentity == identity && g.state.goalLifecycle == goalActive
+}
+
+func (g *goalSupervisor) reviewAborted(identity uint64) {
+	g.state.mu.Lock()
+	defer g.state.mu.Unlock()
+	if g.state.goalIdentity != identity {
+		return
+	}
+	g.state.reviewing = false
+	if g.eligibleBaseLocked() && g.state.runningLocked() {
+		g.state.reviewQueued = true
 	}
 }
 
