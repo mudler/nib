@@ -125,12 +125,15 @@ type bgJob struct {
 	ended         time.Time // when done became true
 	detached      bool      // set when backgrounded via Ctrl+B (guarded by manager.mu)
 	killRequested bool
+	killed        bool // terminal result was process cancellation, not a natural exit
 	exitCode      int
 	errMsg        string
 
 	// lifecycleMu serializes this job's start and terminal lifecycle callbacks.
-	// It is never held together with the manager mutex while invoking callbacks.
-	lifecycleMu sync.Mutex
+	// lifecycleObserver is captured when the job first becomes background work,
+	// so replacing an observer cannot split one job's event stream.
+	lifecycleMu       sync.Mutex
+	lifecycleObserver *shellJobLifecycleObserver
 }
 
 func (j *bgJob) status() string {
@@ -186,7 +189,6 @@ type ShellJobLifecycleEvent struct {
 type shellJobLifecycleObserver struct {
 	mu       sync.Mutex
 	disabled bool
-	active   sync.WaitGroup
 	fn       func(ShellJobLifecycleEvent)
 }
 
@@ -196,17 +198,15 @@ func (o *shellJobLifecycleObserver) invoke(event ShellJobLifecycleEvent) {
 		o.mu.Unlock()
 		return
 	}
-	o.active.Add(1)
+	fn := o.fn
 	o.mu.Unlock()
-	defer o.active.Done()
-	o.fn(event)
+	fn(event)
 }
 
 func (o *shellJobLifecycleObserver) disable() {
 	o.mu.Lock()
 	o.disabled = true
 	o.mu.Unlock()
-	o.active.Wait()
 }
 
 // bgJobManager tracks shell jobs for a session.
@@ -307,6 +307,7 @@ func (m *bgJobManager) launch(parent context.Context, script string, foreground 
 				}
 				j.errMsg = err.Error()
 			}
+			j.killed = j.killRequested && err != nil
 			j.mu.Unlock()
 			close(j.doneCh)
 			m.notifyDone(j)
@@ -335,29 +336,35 @@ func (m *bgJobManager) lifecycleObserver() *shellJobLifecycleObserver {
 }
 
 func (m *bgJobManager) notifyLifecycle(j *bgJob, kind ShellJobLifecycleKind) {
-	o := m.lifecycleObserver()
-	if o == nil {
-		return
-	}
 	j.lifecycleMu.Lock()
-	event := ShellJobLifecycleEvent{Kind: kind, Job: shellJobInfo(j, true)}
-	o.invoke(event)
+	if j.lifecycleObserver == nil {
+		j.lifecycleObserver = m.lifecycleObserver()
+	}
+	o := j.lifecycleObserver
+	if o != nil {
+		event := ShellJobLifecycleEvent{Kind: kind, Job: shellJobInfo(j, true)}
+		o.invoke(event)
+	}
 	j.lifecycleMu.Unlock()
 }
 
 func (m *bgJobManager) notifyTerminal(j *bgJob) {
 	m.mu.Lock()
 	backgrounded := j.detach == nil || j.detached
-	o := m.lifecycle
 	m.mu.Unlock()
-	if !backgrounded || o == nil {
+	if !backgrounded {
 		return
 	}
 
 	j.lifecycleMu.Lock()
+	o := j.lifecycleObserver
+	if o == nil {
+		j.lifecycleMu.Unlock()
+		return
+	}
 	kind := ShellJobLifecycleFailure
 	j.mu.Lock()
-	killed := j.killRequested
+	killed := j.killed
 	succeeded := j.exitCode == 0 && j.errMsg == ""
 	j.mu.Unlock()
 	if killed {
@@ -625,8 +632,8 @@ func (s *ShellJobs) HasRunning() bool {
 }
 
 // ObserveLifecycle registers a race-safe observer for background shell lifecycle
-// events. The returned function disables the observer and waits for callbacks
-// already in flight, so after it returns no new callback can begin.
+// events. The returned function disables the observer; after it returns no new
+// callback can begin. It is safe to call from inside the callback itself.
 func (s *ShellJobs) ObserveLifecycle(fn func(ShellJobLifecycleEvent)) func() {
 	if s == nil || fn == nil {
 		return func() {}

@@ -21,6 +21,22 @@ func waitJob(t *testing.T, j *bgJob) {
 	t.Fatalf("job %s did not finish in time", j.id)
 }
 
+func TestShellJobLifecycleObserverCanStopItself(t *testing.T) {
+	jobs := NewShellJobs()
+	done := make(chan struct{})
+	var stop func()
+	stop = jobs.ObserveLifecycle(func(event ShellJobLifecycleEvent) {
+		stop()
+		close(done)
+	})
+	jobs.mgr.launch(context.Background(), "echo self-stop", false)
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("observer self-stop deadlocked")
+	}
+}
+
 func TestShellJobLifecycleStartAndSuccess(t *testing.T) {
 	jobs := NewShellJobs()
 	events := make(chan ShellJobLifecycleEvent, 4)
