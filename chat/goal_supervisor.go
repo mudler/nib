@@ -149,13 +149,22 @@ func (g *goalSupervisor) eligibleLocked() bool {
 
 func (g *goalSupervisor) armCurrent() {
 	g.state.mu.Lock()
+	defer g.state.mu.Unlock()
+	g.armCurrentLocked()
+}
+
+func (g *goalSupervisor) armCurrentLocked() {
 	if !g.eligibleLocked() {
-		g.state.mu.Unlock()
 		return
 	}
 	delay := g.delays[g.state.scheduleIndex]
-	g.state.mu.Unlock()
-	g.state.armGoalTimer(g.factory, delay, g.wake)
+	g.state.supervisorGeneration++
+	generation := g.state.supervisorGeneration
+	goal := g.state.goalIdentity
+	g.state.stopTimerLocked()
+	g.state.timer = g.factory.AfterFunc(delay, func() {
+		g.state.goalTimerFired(generation, goal, g.wake)
+	})
 }
 
 func (g *goalSupervisor) wakeNonblocking() {

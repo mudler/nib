@@ -389,7 +389,12 @@ func (s *backgroundState) runningLocked() bool {
 func (s *backgroundState) backgroundChangedLocked() {
 	s.scheduleIndex = 0
 	s.invalidateTimerLocked()
-	if s.goalLifecycle == goalActive && s.rootParked && s.runningLocked() {
+	if !s.runningLocked() {
+		s.reviewQueued = false
+		s.reviewing = false
+		return
+	}
+	if s.goalLifecycle == goalActive && s.rootParked {
 		s.reviewQueued = true
 	}
 }
