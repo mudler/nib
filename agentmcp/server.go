@@ -14,6 +14,7 @@ import (
 // satisfies it.
 type session interface {
 	SendMessage(text string, parts ...chat.ContentPart) (string, error)
+	SendMessageWithDelivery(text string, delivery chat.InputDelivery, parts ...chat.ContentPart) (string, error)
 	InjectUser(msg string) bool
 	RunLive() bool
 	Interrupt()
@@ -33,11 +34,14 @@ type interruptOut struct{}
 
 // replyPayload is the JSON Data of a nib/reply (or nib/error) logging notification.
 type replyPayload struct {
-	Kind    string `json:"kind"` // "reply" | "error"
-	Text    string `json:"text,omitempty"`
-	Message string `json:"message,omitempty"`
-	Pending bool   `json:"pending,omitempty"`
-	Turn    int    `json:"turn"`
+	MaxReprompts int    `json:"max_reprompts,omitempty"`
+	Window       string `json:"window,omitempty"`
+	Paused       bool   `json:"paused,omitempty"`
+	Kind         string `json:"kind"` // "reply" | "error" | "goal_paused"
+	Text         string `json:"text,omitempty"`
+	Message      string `json:"message,omitempty"`
+	Pending      bool   `json:"pending,omitempty"`
+	Turn         int    `json:"turn"`
 }
 
 // Options selects the transport for the MCP server.
@@ -75,7 +79,7 @@ func newServer(runCtx context.Context, sess session, r *router) *mcp.Server {
 			go func() {
 				_, _ = sess.SendMessage(in.Utterance)
 				for _, u := range sess.TakeUndelivered() {
-					_, _ = sess.SendMessage(u)
+					_, _ = sess.SendMessageWithDelivery(u, chat.InputAccepted)
 				}
 			}()
 		}
@@ -114,7 +118,10 @@ func notifier(ctx context.Context, ss *mcp.ServerSession) notifyFunc {
 	return func(ev replyEvent, turn int) {
 		level := mcp.LoggingLevel("info")
 		var p replyPayload
-		if ev.Err != nil {
+		if ev.GoalPaused != nil {
+			n := ev.GoalPaused
+			p = replyPayload{Kind: "goal_paused", MaxReprompts: n.MaxReprompts, Window: n.Window.String(), Paused: n.Paused, Turn: turn, Message: "The goal remains paused until explicit resume or replacement through a supported host."}
+		} else if ev.Err != nil {
 			p = replyPayload{Kind: "error", Message: ev.Err.Error(), Turn: turn}
 			level = "error"
 		} else {

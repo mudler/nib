@@ -36,6 +36,20 @@ func composeAttachments(userText string, res attachments.Result) (string, []Cont
 func (s *Session) SendWithAttachments(ctx context.Context, text string, files []string,
 	overrides map[string]attachments.Override) (string, []attachments.Blocked, error) {
 
+	return s.SendWithAttachmentsDelivery(ctx, text, files, overrides, InputHuman)
+}
+
+// SendWithAttachmentsDelivery accepts the original human text before attachment
+// processing (even if conversion later fails). Retrying such input should use
+// InputAccepted. Generated descriptions and attachment-only input never reset
+// the guard, and the core send does not accept the same input a second time.
+func (s *Session) SendWithAttachmentsDelivery(ctx context.Context, text string, files []string,
+	overrides map[string]attachments.Override, delivery InputDelivery) (string, []attachments.Blocked, error) {
+	if delivery == InputHuman {
+		s.AcceptHumanMessage(text)
+		delivery = InputAccepted
+	}
+
 	caps := attachments.FetchCapabilities(ctx, s.baseURL, s.apiKey, s.Model())
 	sp := specialist.New(s.baseURL, s.apiKey)
 
@@ -62,6 +76,6 @@ func (s *Session) SendWithAttachments(ctx context.Context, text string, files []
 	if finalText == "" && len(parts) == 0 {
 		return "", res.Blocked, nil // nothing sendable (all blocked, no text)
 	}
-	reply, err := s.SendMessage(finalText, parts...)
+	reply, err := s.SendMessageWithDelivery(finalText, delivery, parts...)
 	return reply, res.Blocked, err
 }

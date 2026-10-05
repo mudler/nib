@@ -169,8 +169,18 @@ type CronRequest struct {
 	MonitorURL    string
 }
 
+// GoalPausedNotice reports a guard-triggered pause without replacing the final
+// response. The goal and conversation remain available for explicit resume.
+type GoalPausedNotice struct {
+	MaxReprompts int
+	Window       time.Duration
+	Paused       bool
+}
+
 // Callbacks defines the interface for UI interactions.
 type Callbacks struct {
+	// OnGoalPaused fires once per guard-triggered pause, outside session locks.
+	OnGoalPaused func(GoalPausedNotice)
 	// ObservationCallbacks is optional and captured once per SendMessage.
 	// It must return a nonblocking metadata sink bound to the originating run.
 	// It does not enable streaming or replace existing content/lifecycle paths.

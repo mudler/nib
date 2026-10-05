@@ -184,11 +184,20 @@ echo "what is 17*23?" | nib --json --yolo | jq -c 'select(.type != "reasoning_de
 | `tool_call` | A call that needs approval; `approved` is `false` since nothing can answer (use `--yolo`) |
 | `tool_start`, `tool_result` | A call running, and its output |
 | `agent` | Sub-agent lifecycle change |
+| `goal_paused` | Goal reminder guard pause (`kind`, `max_reprompts`, duration string `window`, and `paused`); the normal response still follows |
 | `response` | The turn's final reply |
 | `error` | A failure (`message`) |
 | `usage` | Token totals, once, when the session ends |
 
 Logs stay on stderr. The exit codes match `--cli`.
+
+For sessions with an active goal, CLI prints a persistent guard-pause notice;
+JSON emits `goal_paused`, and MCP sends a logging notification with
+`kind: "goal_paused"` and the same threshold, window, and paused fields. MCP
+clients must subscribe to info-level logging to receive it. These notices do
+not replace the final reply. CLI, JSON, and MCP have no goal-resume command:
+the goal stays paused until explicit resume or replacement through a supported
+host. Embedders can handle `OnGoalPaused` and use `ResumeGoal` or `SetGoal`.
 
 #### What a piped run may and may not do
 
@@ -465,9 +474,9 @@ persists across restarts to `.nib/loops.json`.
 ### `/goal` — keep going until a goal is met
 
 - `/goal <text>` — set a goal. nib keeps working until the model calls
-  `goal_done` or you stop it.
+  `goal_done`, you stop it, or the reminder guard pauses it.
 - `/goal` — show the current goal.
-- `/goal resume` — resume a goal paused by `Ctrl+C`.
+- `/goal resume` — resume a goal paused by `Ctrl+C` or the reminder guard.
 - `/goal clear` — clear it.
 
 When a goal is parked on background agents or shell jobs, nib supervises the
@@ -487,6 +496,38 @@ Successful CLI, JSON, MCP, and embedded Session calls wait until background
 work stops, completion notices reach the root model, and the root replies
 after observing them. Cancellation or shutdown can return an interrupted
 error before that normal terminal state.
+
+### Goal reminder guard
+
+The guard permits ten automatic stop-gate reminders within a rolling two-minute
+window. It refuses reminder eleven when all ten timestamps remain inside that
+window. An age exactly equal to the window still counts. Only appended goal
+reminders count, not model requests, tool iterations, retries, or kickoff messages.
+
+A trip pauses the goal without clearing its text, conversation, or final response.
+The host delivers a persistent pause notice. Explicit resume or goal replacement
+starts a fresh budget. Elapsed time never resumes a paused goal; there is no
+cooldown restart. Ordinary human conversation does not unpause it.
+
+Accepted nonempty human conversation text resets counting immediately, including
+text accepted into a queue. Draining that queue or retrying delivery does not
+reset it again. Setting, replacing, clearing, completing, or explicitly resuming
+a goal also resets counting. These actions do not reset it:
+
+- Empty or whitespace-only input, attachment-only input, and generated attachment descriptions.
+- Informational commands, approval responses, and `ask_user` answers.
+- Cron prompts, wakeups, shell notices, agent notices, and other automatic input.
+
+Human conversation with attachments resets counting using the original text.
+Supervision check-ins and terminal-barrier continuations neither count nor reset
+the budget. Pausing disarms goal supervision without canceling independent background work.
+
+TUI autosave preserves the goal and its paused state through the existing session
+storage. Restoring a paused goal keeps it paused, even with unlimited configuration.
+Rolling timestamps are session-only; restoring an active goal starts an empty budget.
+This guard adds no disk persistence to CLI, JSON, MCP, or embedded sessions.
+CLI, JSON, and MCP have no goal-resume command. A supported host must explicitly
+resume or replace the goal; embedders can use `ResumeGoal` or `SetGoal`.
 
 ### `todo_write` — ephemeral task tracking
 
@@ -732,6 +773,33 @@ set that in your `system_prompt` (or ship it as a plugin `prompt_fragment`); the
 server stays consumer-agnostic.
 
 ## Configuration
+
+### Goal reminder settings
+
+```yaml
+goal:
+  max_reprompts: 10
+  reprompt_window: 2m
+  check_in_delays: [2m, 5m, 10m]
+```
+
+- `goal.max_reprompts`: a positive integer sets the reminder threshold. Omitted or
+  `0` selects `10`; `-1` disables the guard without accumulating timestamps.
+- `goal.reprompt_window`: a positive Go duration sets the inclusive rolling window,
+  such as `500ms`, `30s`, or `2m`. Omitted, `0`, or `0s` selects `2m`.
+
+Thresholds below `-1`, fractional thresholds, and overflowing thresholds are invalid.
+Negative, malformed, overflowing, or nonzero unitless durations are invalid.
+The window must be valid even with `max_reprompts: -1`.
+These defaults also apply to direct `chat.NewSession` construction.
+Unlimited mode does not resume an already paused goal.
+
+Both guard settings are startup-only. For example, `/settings goal.max_reprompts 5`
+saves a threshold for the next start. It does not alter the running budget,
+clear timestamps, or resume the goal. In contrast, `goal.check_in_delays` continues
+to update supervision live. These settings add no flags or environment variables.
+
+### Configuration files
 
 nib looks for config (in order) in `./.nib.yaml`, `$XDG_CONFIG_HOME/nib/config.yaml`,
 `~/.config/nib/config.yaml`, `~/.nib.yaml`, then `/etc/nib/config.yaml`.

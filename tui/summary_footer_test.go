@@ -255,7 +255,7 @@ func TestCompactFooterContextsAndPrecedence(t *testing.T) {
 		{"login wait", theme.LoginWaitHint, func(m *Model) { m.loginWait.active = true }},
 		{"foreground", theme.HelpForegroundWork, func(m *Model) { m.loading = true; m.jobs = []agentJob{{ID: "a", Status: chat.AgentStatusRunning}} }},
 		{"parked", "enter add a follow-up · ctrl+c interrupt · ctrl+o logs", func(m *Model) { m.parked = true }},
-		{"queue", "↑↓ pick · ^e edit · ^x delete", func(m *Model) { m.queue = []string{"queued"} }},
+		{"queue", "↑↓ pick · ^e edit · ^x delete", func(m *Model) { m.queue = queuedTexts("queued") }},
 	}
 	for i, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

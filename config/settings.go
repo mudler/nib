@@ -101,6 +101,8 @@ var settingDocs = map[string]string{
 	"prompt_injection_protection.enabled":         "track and screen untrusted external data",
 	"browser.enabled":                             "enable the browser automation tools",
 	"browser.allow_private_urls":                  "let the browser reach localhost and private networks",
+	"goal.max_reprompts":                          "automatic goal reminder limit (0 = 10, -1 = unlimited; next start)",
+	"goal.reprompt_window":                        "goal reminder rolling window (zero = 2m; next start)",
 	"goal.check_in_delays":                        "goal supervision check-in schedule (comma-separated durations)",
 }
 
@@ -285,6 +287,21 @@ func editDistance(a, b string) int {
 // bool, int, float64 or string. Bools take on/off, true/false and yes/no.
 func (s Setting) Parse(raw string) (any, error) {
 	raw = strings.TrimSpace(raw)
+	if s.Key == "goal.max_reprompts" {
+		n, err := strconv.Atoi(raw)
+		if err != nil {
+			return nil, fmt.Errorf("goal.max_reprompts must be -1, 0, or a positive integer within the platform int range")
+		}
+		_, _, err = ParseGoalRepromptGuard(types.GoalConfig{MaxReprompts: n})
+		return n, err
+	}
+	if s.Key == "goal.reprompt_window" {
+		_, window, err := ParseGoalRepromptGuard(types.GoalConfig{RepromptWindow: raw})
+		if err != nil {
+			return nil, err
+		}
+		return window.String(), nil
+	}
 	switch s.Type {
 	case SettingBool:
 		switch strings.ToLower(raw) {
@@ -393,6 +410,15 @@ func (s Setting) Apply(cfg *types.Config, v any) {
 // quotes around an empty string so "" reads as a value rather than a gap.
 // Multi-line values (a custom prompt) are cut to their first line.
 func (s Setting) Format(cfg types.Config) string {
+	if s.Key == "goal.max_reprompts" || s.Key == "goal.reprompt_window" {
+		max, window, err := ParseGoalRepromptGuard(cfg.Goal)
+		if err == nil {
+			if s.Key == "goal.max_reprompts" {
+				return strconv.Itoa(max)
+			}
+			return window.String()
+		}
+	}
 	if s.Type == SettingDurationList {
 		values, _ := s.Value(cfg).([]string)
 		delays, err := ParseGoalCheckInDelays(values)
@@ -471,6 +497,16 @@ func FileSettings(path string) (types.Config, map[string]bool, error) {
 // file that does not parse is refused rather than replaced: it is the user's,
 // and whatever is wrong with it is theirs to see.
 func WriteSetting(path, key string, v any) error {
+	if key == "goal.max_reprompts" || key == "goal.reprompt_window" {
+		s, err := LookupSetting(key)
+		if err != nil {
+			return err
+		}
+		v, err = s.Parse(fmt.Sprint(v))
+		if err != nil {
+			return err
+		}
+	}
 	// Duration lists are the only non-scalar setting. Validate before reading or
 	// mutating the document so a rejected write leaves the file byte-for-byte
 	// unchanged, then persist the normalized values as a YAML sequence.

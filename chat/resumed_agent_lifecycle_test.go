@@ -29,6 +29,9 @@ func TestResumedAgentPreservesToolLifecycleAttribution(t *testing.T) {
 	var starts []ToolStart
 	var results []ToolResult
 	var calls atomic.Int64
+	var rootCalls, childCalls atomic.Int64
+	parentContinued := make(chan struct{})
+	childContinued := make(chan struct{})
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.NotFound(w, r)
@@ -44,20 +47,53 @@ func TestResumedAgentPreservesToolLifecycleAttribution(t *testing.T) {
 			t.Error(err)
 			return
 		}
-		call := calls.Add(1)
+		isChild := false
+		for _, message := range req.Messages {
+			if message.Role == "user" && message.Content == "synthetic child task" {
+				isChild = true
+			}
+		}
+		var localCall int64
+		if isChild {
+			// Force the parent continuation to arrive first: response routing
+			// must not depend on scheduling of the resumed background child.
+			select {
+			case <-parentContinued:
+			case <-ctx.Done():
+				return
+			}
+			localCall = childCalls.Add(1)
+		} else {
+			localCall = rootCalls.Add(1)
+		}
+		calls.Add(1)
+		if !isChild && localCall == 2 {
+			close(parentContinued)
+		}
 		msg := map[string]any{"role": "assistant", "content": "done"}
 		tool := func(name, args string) {
 			msg["content"] = ""
 			msg["tool_calls"] = []any{map[string]any{"id": "synthetic-call", "type": "function", "function": map[string]any{"name": name, "arguments": args}}}
 		}
-		switch call {
-		case 1:
+		switch {
+		case !isChild && localCall == 1:
 			tool("send_agent_message", `{"agent_id":"finished-child","message":"continue"}`)
-		case 2:
-			// Resumed agents retain MCP sessions. A synthetic probe executes fast.
+		case isChild && localCall == 1:
+			// Only the resumed child's retained context receives the probe.
 			tool("probe", `{}`)
-		case 3:
+		case isChild:
 			msg["content"] = "child done"
+			if localCall == 2 {
+				close(childContinued)
+			}
+		default:
+			// The child's next model request proves its probe result callbacks
+			// have run before the parent finishes and assertions inspect them.
+			select {
+			case <-childContinued:
+			case <-ctx.Done():
+				return
+			}
 		}
 		json.NewEncoder(w).Encode(map[string]any{"id": "synthetic", "object": "chat.completion", "choices": []any{map[string]any{"index": 0, "message": msg, "finish_reason": "stop"}}})
 	}))

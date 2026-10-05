@@ -456,6 +456,7 @@ type Model struct {
 	askList         *render.SelectList
 	askRequestChan  chan chat.AskRequest
 	askResponseChan chan string
+	goalPausedChan  chan chat.GoalPausedNotice
 	wakeupChan      chan chat.WakeupRequest
 	cronFireChan    chan string    // prompts of cron jobs run now via cron_trigger
 	parkChan        chan parkEvent // park/resume signals from the live run
@@ -566,7 +567,7 @@ type Model struct {
 	// Pending message queue: text typed while a run is in flight. Entries are
 	// editable until they fire (FIFO) into the live run at step boundaries.
 	// queueSel is the entry highlighted for ^e/^x when the composer is empty.
-	queue    []string
+	queue    []queuedInput
 	queueSel int
 
 	// Input history for ↑/↓ recall (shell-style). histPos == len(history) is
@@ -883,6 +884,7 @@ func NewModel(ctx context.Context, cfg types.Config, height int, shellJobs *wizm
 		autoApprovedChan:   make(chan autoApprovedMsg, 64),
 		askRequestChan:     make(chan chat.AskRequest),
 		askResponseChan:    make(chan string),
+		goalPausedChan:     make(chan chat.GoalPausedNotice, 1),
 		wakeupChan:         make(chan chat.WakeupRequest, 8),
 		cronFireChan:       make(chan string, 8),
 		parkChan:           make(chan parkEvent, 16),
@@ -947,6 +949,12 @@ func (m Model) Init() tea.Cmd {
 func (m Model) initSession() tea.Cmd {
 	return func() tea.Msg {
 		callbacks := chat.Callbacks{
+			OnGoalPaused: func(notice chat.GoalPausedNotice) {
+				select {
+				case m.goalPausedChan <- notice:
+				case <-m.ctx.Done():
+				}
+			},
 			OnStatus: func(status string) {
 				select {
 				case m.statusChan <- status:
@@ -1688,7 +1696,7 @@ func (m Model) Update(msg tea.Msg) (nextModel tea.Model, nextCmd tea.Cmd) {
 			// until they fire (FIFO) at the next step boundary. A parked run is idle
 			// and waiting, so release the front entry immediately to resume it.
 			if m.loading || m.parked {
-				m.queue = append(m.queue, input)
+				m.queue = append(m.queue, m.acceptInput(input))
 				m.clearComposer()
 				m.completion.sync("")
 				m.interruptArmed = false
@@ -1927,6 +1935,7 @@ func (m Model) Update(msg tea.Msg) (nextModel tea.Model, nextCmd tea.Cmd) {
 			m.dropTransientErrors()
 		}
 		m.lastParkedReply = ""
+		m.drainGoalPaused()
 		if m.session != nil {
 			m.contextTokens = m.session.ContextTokens()
 			m.sessionUsage = m.session.Usage()
@@ -2201,7 +2210,7 @@ func (m Model) Update(msg tea.Msg) (nextModel tea.Model, nextCmd tea.Cmd) {
 			m.syncActivityPhase(time.Now())
 			m.startThinking()
 			m.updateViewport()
-			cmds = append(cmds, m.sendMessage(text))
+			cmds = append(cmds, m.sendMessageDelivery(text, chat.InputAutomatic))
 		}
 		// If a wake-up fires mid-run (loading and not parked) it is dropped: the model drives self-pacing at turn end, so this is rare; cron loops queue instead (see releaseQueueFront).
 
@@ -2477,13 +2486,17 @@ func (m *Model) dispatchInput(input string) tea.Cmd {
 		m.boot.collapsed = true
 	}
 	m.appendMessage(ChatMessage{Role: "user", Content: input})
-	return m.dispatchResolved(input)
+	return m.dispatchResolvedDelivery(input, m.acceptInput(input).delivery)
 }
 
 // dispatchResolved resolves and starts input WITHOUT echoing it to the
 // transcript — for re-dispatched undelivered follow-ups, whose transcript
 // line was already written when they were released into the previous run.
 func (m *Model) dispatchResolved(input string) tea.Cmd {
+	return m.dispatchResolvedDelivery(input, chat.InputAccepted)
+}
+
+func (m *Model) dispatchResolvedDelivery(input string, delivery chat.InputDelivery) tea.Cmd {
 	action := m.resolveComposer(input)
 	switch action.Kind {
 	case slash.KindError:
@@ -2733,9 +2746,9 @@ func (m *Model) dispatchResolved(input string) tea.Cmd {
 			m.messages[len(m.messages)-1].Images = imgs
 		}
 		if len(files) == 0 {
-			return m.sendMessage(action.Text)
+			return m.sendMessageDelivery(action.Text, delivery)
 		}
-		return m.sendWithAttachmentsCmd(action.Text, files, overrides)
+		return m.sendWithAttachmentsDeliveryCmd(action.Text, files, overrides, delivery)
 	}
 }
 
@@ -2831,7 +2844,7 @@ func (m *Model) startGoalTurn(kickoff string) tea.Cmd {
 	m.interruptArmed = false
 	m.syncActivityPhase(time.Now())
 	m.status = ""
-	return m.sendMessage(kickoff)
+	return m.sendMessageDelivery(kickoff, chat.InputAutomatic)
 }
 
 // sendMessage sends a message to the AI. bumpTurnGen runs synchronously here
@@ -2839,10 +2852,17 @@ func (m *Model) startGoalTurn(kickoff string) tea.Cmd {
 // genuinely NEW turn (see turnGen's doc) so any reasoningChan event a LATER
 // turn's OnStream stamps is distinguishable from a straggler out of this one.
 func (m Model) sendMessage(text string) tea.Cmd {
+	if m.session != nil {
+		m.session.AcceptHumanMessage(text)
+	}
+	return m.sendMessageDelivery(text, chat.InputAccepted)
+}
+
+func (m Model) sendMessageDelivery(text string, delivery chat.InputDelivery) tea.Cmd {
 	m.bumpTurnGen()
 	m.toolEvents.begin()
 	return func() tea.Msg {
-		response, err := m.session.SendMessage(text)
+		response, err := m.session.SendMessageWithDelivery(text, delivery)
 		return responseMsg{content: response, err: err}
 	}
 }
@@ -2851,10 +2871,17 @@ func (m Model) sendMessage(text string) tea.Cmd {
 // Blocked entries and clear-on-success are handled in the responseMsg handler.
 // bumpTurnGen: see sendMessage's doc.
 func (m Model) sendWithAttachmentsCmd(text string, files []string, overrides map[string]attachments.Override) tea.Cmd {
+	if m.session != nil {
+		m.session.AcceptHumanMessage(text)
+	}
+	return m.sendWithAttachmentsDeliveryCmd(text, files, overrides, chat.InputAccepted)
+}
+
+func (m Model) sendWithAttachmentsDeliveryCmd(text string, files []string, overrides map[string]attachments.Override, delivery chat.InputDelivery) tea.Cmd {
 	m.bumpTurnGen()
 	m.toolEvents.begin()
 	return func() tea.Msg {
-		reply, blocked, err := m.session.SendWithAttachments(m.ctx, text, files, overrides)
+		reply, blocked, err := m.session.SendWithAttachmentsDelivery(m.ctx, text, files, overrides, delivery)
 		return responseMsg{content: reply, err: err, blocked: blocked, images: attachmentImages(files)}
 	}
 }

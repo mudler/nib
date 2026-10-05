@@ -2,6 +2,7 @@ package agentmcp
 
 import (
 	"errors"
+	"github.com/mudler/nib/chat"
 	"sync"
 )
 
@@ -12,9 +13,10 @@ var errSuperseded = errors.New("converse superseded by a new utterance")
 // replyEvent is one assistant utterance to be spoken. A non-nil Err is a
 // terminal error for the turn (Text is then empty).
 type replyEvent struct {
-	Text    string
-	Pending bool // produced at a park: background work continues
-	Err     error
+	GoalPaused *chat.GoalPausedNotice
+	Text       string
+	Pending    bool // produced at a park: background work continues
+	Err        error
 }
 
 // notifyFunc pushes a reply the client should speak proactively (no converse
@@ -66,6 +68,16 @@ func (r *router) await() (chan replyEvent, int) {
 // the one already handed to the waiter this turn is dropped (not notified).
 func (r *router) emit(ev replyEvent) {
 	r.mu.Lock()
+	// Pause events are notifications, never replies: preserve the waiter and
+	// duplicate-response state even when the notice arrives after the reply.
+	if ev.GoalPaused != nil {
+		notify, turn := r.notify, r.turn
+		r.mu.Unlock()
+		if notify != nil {
+			notify(ev, turn)
+		}
+		return
+	}
 	w := r.waiter
 	r.waiter = nil
 	turn := r.turn

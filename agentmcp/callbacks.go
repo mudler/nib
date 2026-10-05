@@ -7,6 +7,7 @@ import "github.com/mudler/nib/chat"
 // final reply; OnError -> terminal error event.
 func buildCallbacks(r *router, pol policy) chat.Callbacks {
 	return chat.Callbacks{
+		OnGoalPaused: func(n chat.GoalPausedNotice) { r.emit(replyEvent{GoalPaused: &n}) },
 		OnParked: func(reply string) {
 			r.emit(replyEvent{Text: reply, Pending: true})
 		},

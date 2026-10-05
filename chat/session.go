@@ -100,12 +100,13 @@ type Session struct {
 	// and return), so Inject can tell whether there is a live run to inject into.
 	runMu   sync.Mutex
 	runLive bool
-	// userInjected tracks texts delivered via InjectUser during the current
+	// userInjected tracks payload identities delivered via InjectUser during the current
 	// run; undelivered collects the ones still sitting in the injection
 	// channel when the run returned — the model never saw them, so the
 	// end-of-run drain hands them back via TakeUndelivered instead of
 	// discarding them. Both guarded by runMu.
-	userInjected []string
+	userInjected map[string]struct{}
+	injectionID  uint64 // guarded by runMu; identifies deliveries, not text
 	undelivered  []string
 
 	// pendingNotices holds background-job notices that arrived while no run was
@@ -118,10 +119,11 @@ type Session struct {
 	// the pursuit: an interrupt pauses the goal instead of clearing it, so
 	// Ctrl+C does not silently throw away what the user asked for. All guarded
 	// by runMu.
-	goal       string
-	goalDone   bool
-	goalPaused bool
-	goalSerial uint64
+	goal          string
+	goalDone      bool
+	goalPaused    bool
+	goalReprompts goalRepromptGuard
+	goalSerial    uint64
 
 	// todoList is the ephemeral in-memory todo list (todo_write tool). It is
 	// not persisted — it lives for the session and is cleared when the session
@@ -520,6 +522,10 @@ func toCogitoDefinitions(cfgs []types.AgentTypeConfig) []cogito.AgentDefinition 
 // app.Run preflights the directory, so in practice only embedders calling this
 // directly reach the failure.
 func NewSession(ctx context.Context, cfg types.Config, callbacks Callbacks, transports ...mcp.Transport) (*Session, error) {
+	goalMax, goalWindow, err := configpkg.ParseGoalRepromptGuard(cfg.Goal)
+	if err != nil {
+		return nil, err
+	}
 	goalDelays, err := configpkg.ParseGoalCheckInDelays(cfg.Goal.CheckInDelays)
 	if err != nil {
 		return nil, err
@@ -711,6 +717,7 @@ func NewSession(ctx context.Context, cfg types.Config, callbacks Callbacks, tran
 	s.resumed = len(cfg.InitialHistory) > 0 || len(cfg.InitialContext) > 0
 	// A resumed session carries on with its goal, paused or not. Paused
 	// means nothing without a goal, as in PauseGoal.
+	s.goalReprompts = goalRepromptGuard{max: goalMax, window: goalWindow}
 	s.goal = cfg.InitialGoal
 	s.goalPaused = cfg.InitialGoalPaused && cfg.InitialGoal != ""
 	for _, name := range cfg.AllowedTools {
@@ -1272,6 +1279,12 @@ func fromTypesArtifacts(items []types.Artifact) []wizmcp.Artifact {
 	return out
 }
 
+// Session goal mutations and their supervisor transitions share runMu so an
+// older transition cannot overwrite a newer lifecycle. Lock order is historyMu
+// (when needed), runMu, then backgroundState.mu. Supervisor lifecycle methods
+// never acquire session locks or invoke host callbacks; timer Stop does not wait
+// for a timer callback. Host callbacks must run after releasing these locks.
+//
 // SetGoal sets (or replaces) the active session goal. While a goal is set, a
 // turn re-runs until the model calls goal_done or the user interrupts. Call
 // between turns, not during a live run: the goal_done tool is wired at the
@@ -1280,12 +1293,13 @@ func (s *Session) SetGoal(goal string) {
 	s.runMu.Lock()
 	s.goal = goal
 	s.goalPaused = false
+	s.goalReprompts.timestamps = nil
 	s.goalSerial++
 	serial := s.goalSerial
-	s.runMu.Unlock()
 	if s.goalSupervisor != nil {
 		s.goalSupervisor.goalSet(serial)
 	}
+	s.runMu.Unlock()
 }
 
 // Goal returns the session goal, or "" if none. A paused goal is still
@@ -1301,10 +1315,11 @@ func (s *Session) ClearGoal() {
 	s.runMu.Lock()
 	s.goal = ""
 	s.goalPaused = false
-	s.runMu.Unlock()
+	s.goalReprompts.timestamps = nil
 	if s.goalSupervisor != nil {
 		s.goalSupervisor.goalClear()
 	}
+	s.runMu.Unlock()
 }
 
 // PauseGoal stops pursuing the goal but keeps its text. Turns run as if no
@@ -1313,10 +1328,10 @@ func (s *Session) PauseGoal() {
 	s.runMu.Lock()
 	s.goalPaused = s.goal != ""
 	paused := s.goalPaused
-	s.runMu.Unlock()
 	if paused && s.goalSupervisor != nil {
 		s.goalSupervisor.goalPause()
 	}
+	s.runMu.Unlock()
 }
 
 // ResumeGoal pursues a paused goal again from the next turn. It reports
@@ -1328,11 +1343,12 @@ func (s *Session) ResumeGoal() bool {
 		return false
 	}
 	s.goalPaused = false
+	s.goalReprompts.timestamps = nil
 	serial := s.goalSerial
-	s.runMu.Unlock()
 	if s.goalSupervisor != nil {
 		s.goalSupervisor.goalSet(serial)
 	}
+	s.runMu.Unlock()
 	return true
 }
 
@@ -1678,24 +1694,12 @@ func (l *noticeDeliveryStreamingLLM) CreateChatCompletionStream(ctx context.Cont
 // drain. System notices (shell-job completions, wake-ups) keep using Inject —
 // re-running a stale notice as a fresh turn would re-trigger finished work.
 func (s *Session) InjectUser(msg string) bool {
-	s.runMu.Lock()
-	s.userInjected = append(s.userInjected, msg)
-	s.runMu.Unlock()
-	if s.Inject(msg) {
-		return true
-	}
-	// Nothing was sent: untrack so the drain can't misreport it later.
-	s.runMu.Lock()
-	if i := slices.Index(s.userInjected, msg); i >= 0 {
-		s.userInjected = slices.Delete(s.userInjected, i, i+1)
-	}
-	s.runMu.Unlock()
-	return false
+	return s.InjectWithDelivery(msg, InputHuman)
 }
 
 // TakeUndelivered returns (and clears) user-typed follow-ups that were
 // injected into a run that ended before consuming them. Call after a run
-// returns to re-dispatch them as fresh turns.
+// returns to re-dispatch them with InputAccepted, without accepting them again.
 func (s *Session) TakeUndelivered() []string {
 	s.runMu.Lock()
 	defer s.runMu.Unlock()
@@ -1709,17 +1713,46 @@ func (s *Session) TakeUndelivered() []string {
 // false when there is no live run, the channel is full, or msg is empty. Used
 // for mid-run user follow-ups, shell-job completions, and scheduled wake-ups.
 func (s *Session) Inject(msg string) bool {
+	return s.InjectWithDelivery(msg, InputAutomatic)
+}
+
+// InjectWithDelivery atomically accepts and tracks a successful injection under
+// runMu, the same boundary used by the stop gate and end-of-run drain. Failed
+// injections never accept input. InputAccepted retains human undelivered
+// ownership without resetting again; InputAutomatic has neither effect.
+func (s *Session) InjectWithDelivery(msg string, delivery InputDelivery) bool {
 	if strings.TrimSpace(msg) == "" {
 		return false
 	}
 	s.runMu.Lock()
-	live := s.runLive
-	s.runMu.Unlock()
-	if !live {
+	defer s.runMu.Unlock()
+	if !s.runLive {
 		return false
 	}
+	tracked := delivery == InputHuman || delivery == InputAccepted
+	message := openai.ChatCompletionMessage{Role: "user", Content: msg}
+	if tracked {
+		// Cogito copies only Role and Content into the model fragment at each
+		// injection receive site. Name carries a private delivery identity, as
+		// it already does for agent-completion wakeups, without changing the
+		// model-visible message. Channel value copies preserve it even when a
+		// consumer removes an identical payload before this send returns.
+		s.injectionID++
+		message.Name = fmt.Sprintf("nib_human_injection_%d", s.injectionID)
+	}
 	select {
-	case s.inject <- openai.ChatCompletionMessage{Role: "user", Content: msg}:
+	case s.inject <- message:
+		if tracked {
+			if s.userInjected == nil {
+				s.userInjected = make(map[string]struct{})
+			}
+			s.userInjected[message.Name] = struct{}{}
+		}
+		if delivery == InputHuman {
+			// Already holding runMu: this is AcceptHumanMessage's reset,
+			// committed with delivery so a concurrent stop gate cannot lose it.
+			s.goalReprompts.timestamps = nil
+		}
 		return true
 	default:
 		return false
@@ -2185,10 +2218,11 @@ func (s *Session) toolOptions(turnCtx context.Context, goal, mainModel string) [
 			s.goalDone = true
 			s.goal = ""
 			s.goalPaused = false
-			s.runMu.Unlock()
+			s.goalReprompts.timestamps = nil
 			if s.goalSupervisor != nil {
 				s.goalSupervisor.goalDone()
 			}
+			s.runMu.Unlock()
 			return "Goal marked complete: " + justification
 		})))
 	}
@@ -2249,7 +2283,19 @@ func (s *Session) toolOptions(turnCtx context.Context, goal, mainModel string) [
 	return opts
 }
 
+// SendMessage accepts fresh human conversation text. For automatic prompts or
+// retries of previously accepted input, use SendMessageWithDelivery.
 func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error) {
+	return s.SendMessageWithDelivery(text, InputHuman, parts...)
+}
+
+// SendMessageWithDelivery accepts human text before turn setup, once per call,
+// not per provider attempt. Hosts must serialize sends as for SendMessage;
+// concurrent acceptance/injection is synchronized with the stop gate by runMu.
+func (s *Session) SendMessageWithDelivery(text string, delivery InputDelivery, parts ...ContentPart) (string, error) {
+	if delivery == InputHuman {
+		s.AcceptHumanMessage(text)
+	}
 	toolCallbacks := s.callbacks
 	if toolCallbacks.AgentCallbacks != nil {
 		toolCallbacks.OnAgentEvent = toolCallbacks.AgentCallbacks()
@@ -2336,8 +2382,8 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 				if msg.Name == agentCompletionMessageName {
 					continue
 				}
-				if i := slices.Index(pendingUser, msg.Content); i >= 0 {
-					pendingUser = slices.Delete(pendingUser, i, i+1)
+				if _, ok := pendingUser[msg.Name]; ok {
+					delete(pendingUser, msg.Name)
 					undelivered = append(undelivered, msg.Content)
 				}
 			default:
@@ -3076,14 +3122,9 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 		}
 
 		// Goal still active and unconfirmed: re-feed it and run again.
-		reminder := goalReminder(goal)
-		s.historyMu.Lock()
-		s.fragment = s.fragment.AddMessage("user", reminder)
-		s.messages = append(s.messages, openai.ChatCompletionMessage{
-			Role:    "user",
-			Content: reminder,
-		})
-		s.historyMu.Unlock()
+		if !s.appendGoalReminder(time.Now()) {
+			break
+		}
 		if s.callbacks.OnStatus != nil {
 			s.callbacks.OnStatus("Goal not yet met — continuing…")
 		}

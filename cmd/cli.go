@@ -326,6 +326,10 @@ func RunCLI(ctx context.Context, cfg types.Config, streams Streams, shellJobs *w
 	var stdinClosed, deniedNoInput atomic.Bool
 
 	callbacks := chat.Callbacks{
+		OnGoalPaused: func(n chat.GoalPausedNotice) {
+			spin.stop()
+			fmt.Fprintf(out, "Goal paused after %d automatic reminders within %s without human conversation input. The goal remains paused until explicit resume or replacement through a supported host.\n", n.MaxReprompts, n.Window)
+		},
 		OnStatus: func(status string) {
 			spin.update(status)
 		},

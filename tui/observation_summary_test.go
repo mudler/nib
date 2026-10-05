@@ -107,7 +107,7 @@ func TestPhaseSynchronizationAtLoopAndQueuedTurnBoundaries(t *testing.T) {
 	defer s.Close()
 	queued := newQueueTestModel()
 	queued.session = s
-	queued.queue = []string{"follow up"}
+	queued.queue = queuedTexts("follow up")
 	if cmd := queued.flushQueueAsTurn(); cmd == nil {
 		t.Fatal("flush did not start")
 	}
