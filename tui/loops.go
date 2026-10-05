@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"github.com/mudler/nib/chat"
 	"strings"
 	"time"
 
@@ -58,11 +59,14 @@ func (m *Model) dispatchLoop(payload string) tea.Cmd {
 			m.syncActivityPhase(time.Now())
 			m.startThinking()
 			m.updateViewport()
+		} else {
+			m.queue = append(m.queue, queuedInput{text: payload, delivery: chat.InputAutomatic})
+			m.updateViewport()
 		}
 		return nil
 	case live:
 		// Run live or starting: queue; drains at the next boundary.
-		m.queue = append(m.queue, payload)
+		m.queue = append(m.queue, queuedInput{text: payload, delivery: chat.InputAutomatic})
 		m.updateViewport()
 		return nil
 	case m.sessionReady && m.session != nil && !m.awaitingApproval && !m.awaitingAsk:
@@ -72,7 +76,7 @@ func (m *Model) dispatchLoop(payload string) tea.Cmd {
 		m.syncActivityPhase(time.Now())
 		m.startThinking()
 		m.updateViewport()
-		return m.sendMessage(text)
+		return m.sendMessageDelivery(text, chat.InputAutomatic)
 	}
 	return nil
 }
@@ -101,7 +105,7 @@ func (m *Model) startLoop(a slash.Action) tea.Cmd {
 		m.syncActivityPhase(time.Now())
 		m.startThinking()
 		m.updateViewport()
-		return m.sendMessage(selfPacedPreamble(a.Payload) + first)
+		return m.sendMessageDelivery(selfPacedPreamble(a.Payload)+first, chat.InputAutomatic)
 	}
 
 	// Fixed interval: register a (non-durable) cron job + run the first now.
@@ -119,7 +123,7 @@ func (m *Model) startLoop(a slash.Action) tea.Cmd {
 	m.syncActivityPhase(time.Now())
 	m.startThinking()
 	m.updateViewport()
-	return m.sendMessage(first)
+	return m.sendMessageDelivery(first, chat.InputAutomatic)
 }
 
 // stopLoop cancels one cron loop (by id) or all loops + self-paced.

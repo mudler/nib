@@ -60,7 +60,7 @@ func TestBellStaysQuietWhileStillWorking(t *testing.T) {
 		defer s.Close()
 		m, bell := newBellTestModel()
 		m.session = s
-		m.queue = []string{"next turn please"}
+		m.queue = queuedTexts("next turn please")
 		next, _ := m.Update(responseMsg{content: "done"})
 		if !next.(Model).loading {
 			t.Fatal("the queued follow-up did not start a turn")

@@ -441,3 +441,6 @@ const (
 	NoticeQueueSending     = "sending %d queued message(s) next"
 	NoticeStillRunningHelp = " · ctrl+o logs · /loop stop"
 )
+
+// GoalRepromptPaused is a durable transcript notice, not a transient status.
+const GoalRepromptPaused = "Goal paused after %d automatic reminders within %s without human conversation input. Use /goal resume to continue or /goal clear to remove it."

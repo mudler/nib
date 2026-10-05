@@ -32,7 +32,7 @@ func TestEnterQueuesWhileWorking(t *testing.T) {
 	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	nm := next.(Model)
 
-	if len(nm.queue) != 1 || nm.queue[0] != "follow up please" {
+	if len(nm.queue) != 1 || nm.queue[0].text != "follow up please" {
 		t.Fatalf("queue = %v, want one entry", nm.queue)
 	}
 	if strings.TrimSpace(nm.textarea.Value()) != "" {
@@ -55,7 +55,7 @@ func TestTypingAllowedWhileWorking(t *testing.T) {
 }
 
 func TestQueueMutators(t *testing.T) {
-	m := newTestModel(Model{queue: []string{"a", "b", "c"}, queueSel: 0})
+	m := newTestModel(Model{queue: queuedTexts("a", "b", "c"), queueSel: 0})
 
 	m.queueMoveSel(1)
 	if m.queueSel != 1 {
@@ -73,7 +73,7 @@ func TestQueueMutators(t *testing.T) {
 
 	m.queueSel = 1
 	removed := m.queueDeleteSel()
-	if removed != "b" || strings.Join(m.queue, ",") != "a,c" {
+	if removed != "b" || strings.Join(queueTexts(m.queue), ",") != "a,c" {
 		t.Fatalf("queueDeleteSel: removed=%q queue=%v", removed, m.queue)
 	}
 	if m.queueSel != 1 { // c shifted into index 1
@@ -82,7 +82,7 @@ func TestQueueMutators(t *testing.T) {
 
 	m.queueSel = 1 // now points at "c"
 	m.queueDeleteSel()
-	if m.queueSel != 0 || strings.Join(m.queue, ",") != "a" {
+	if m.queueSel != 0 || strings.Join(queueTexts(m.queue), ",") != "a" {
 		t.Fatalf("queueDeleteSel last: sel=%d queue=%v", m.queueSel, m.queue)
 	}
 }
@@ -97,7 +97,7 @@ func TestResponseMsgFlushesQueueAsNewTurn(t *testing.T) {
 	m := newQueueTestModel()
 	m.session = s
 	m.loading = true
-	m.queue = []string{"next turn please", "and another"}
+	m.queue = queuedTexts("next turn please", "and another")
 
 	next, cmd := m.Update(responseMsg{content: "done"})
 	nm := next.(Model)
@@ -133,7 +133,7 @@ func TestFlushQueueSkipsNonTurnEntries(t *testing.T) {
 	defer s.Close()
 	m := newQueueTestModel()
 	m.session = s
-	m.queue = []string{"/totally-unknown-cmd", "plain follow up"}
+	m.queue = queuedTexts("/totally-unknown-cmd", "plain follow up")
 	cmd := m.flushQueueAsTurn()
 	if cmd == nil {
 		t.Fatal("expected a turn to start for the plain message")
@@ -146,7 +146,7 @@ func TestFlushQueueSkipsNonTurnEntries(t *testing.T) {
 func TestQueueNavAndEditKeys(t *testing.T) {
 	// Empty composer: Down moves selection through the queue.
 	m := newQueueTestModel()
-	m.queue = []string{"a", "b", "c"}
+	m.queue = queuedTexts("a", "b", "c")
 	m.queueSel = 0
 	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown})
 	nm := next.(Model)
@@ -157,7 +157,7 @@ func TestQueueNavAndEditKeys(t *testing.T) {
 	// ^x deletes the selected entry.
 	next, _ = nm.Update(tea.KeyMsg{Type: tea.KeyCtrlX})
 	nm = next.(Model)
-	if strings.Join(nm.queue, ",") != "a,c" {
+	if strings.Join(queueTexts(nm.queue), ",") != "a,c" {
 		t.Fatalf("^x: queue = %v, want [a c]", nm.queue)
 	}
 
@@ -168,13 +168,13 @@ func TestQueueNavAndEditKeys(t *testing.T) {
 	if nm.textarea.Value() != "a" {
 		t.Fatalf("^e: composer = %q, want a", nm.textarea.Value())
 	}
-	if strings.Join(nm.queue, ",") != "c" {
+	if strings.Join(queueTexts(nm.queue), ",") != "c" {
 		t.Fatalf("^e: queue = %v, want [c]", nm.queue)
 	}
 
 	// With text in the composer, Down is NOT a queue nav (cursor/history instead).
 	m2 := newQueueTestModel()
-	m2.queue = []string{"a", "b"}
+	m2.queue = queuedTexts("a", "b")
 	m2.queueSel = 0
 	m2.textarea.SetValue("typed")
 	next, _ = m2.Update(tea.KeyMsg{Type: tea.KeyDown})
@@ -188,7 +188,7 @@ func TestRenderQueueContent(t *testing.T) {
 	if renderQueue(nil, 0, 80) != "" {
 		t.Fatal("empty queue should render nothing")
 	}
-	out := renderQueue([]string{"first item", "second item"}, 1, 80)
+	out := renderQueue(queuedTexts("first item", "second item"), 1, 80)
 	if !strings.Contains(out, "first item") || !strings.Contains(out, "second item") {
 		t.Fatalf("renderQueue missing entries: %q", out)
 	}
@@ -201,7 +201,7 @@ func TestViewShowsQueue(t *testing.T) {
 	m := newQueueTestModel()
 	m.width = 80
 	m.height = 24
-	m.queue = []string{"queued follow-up"}
+	m.queue = queuedTexts("queued follow-up")
 	out := m.View()
 	if !strings.Contains(out, "queued follow-up") {
 		t.Fatalf("View should render the queue, got:\n%s", out)
@@ -222,7 +222,7 @@ func TestRedispatchGoesFirstWithoutEcho(t *testing.T) {
 	// normally queued entry: the follow-up must re-dispatch first, without a
 	// second transcript echo.
 	m.redispatch = []string{"whats 2+2?"}
-	m.queue = []string{"and another"}
+	m.queue = queuedTexts("and another")
 	m = withMessages(m, ChatMessage{Role: "user", Content: "whats 2+2?"})
 
 	next, cmd := m.Update(responseMsg{content: "done"})
@@ -265,7 +265,7 @@ func TestReleaseQueueFrontTracksUndelivered(t *testing.T) {
 
 	m := newQueueTestModel()
 	m.session = s
-	m.queue = []string{"hello"}
+	m.queue = queuedTexts("hello")
 	if m.releaseQueueFront() {
 		t.Fatal("releaseQueueFront should fail with no live run")
 	}
@@ -315,9 +315,18 @@ func TestEnterQueuesTurnAndSessionCommandsMidRun(t *testing.T) {
 			next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 			nm := next.(Model)
 
-			if len(nm.queue) != 1 || nm.queue[0] != input {
+			if len(nm.queue) != 1 || nm.queue[0].text != input {
 				t.Fatalf("queue = %v, want %q queued", nm.queue, input)
 			}
 		})
 	}
+}
+
+// queuedTexts represents already-accepted human input in queue fixtures.
+func queuedTexts(texts ...string) []queuedInput {
+	entries := make([]queuedInput, len(texts))
+	for i, text := range texts {
+		entries[i] = queuedInput{text: text, delivery: chat.InputAccepted}
+	}
+	return entries
 }

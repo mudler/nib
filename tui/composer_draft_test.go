@@ -19,7 +19,7 @@ func TestComposerPasteLifecycle(t *testing.T) {
 	m = update(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(" after")})
 	m = update(m, tea.KeyMsg{Type: tea.KeyEnter})
 	want := "before " + payload + " after"
-	if len(m.queue) != 1 || m.queue[0] != want {
+	if len(m.queue) != 1 || m.queue[0].text != want {
 		t.Fatal("queue lost source")
 	}
 	if m.history[0] != want {
@@ -27,7 +27,7 @@ func TestComposerPasteLifecycle(t *testing.T) {
 	}
 	m = update(m, tea.KeyMsg{Type: tea.KeyCtrlE})
 	m = update(m, tea.KeyMsg{Type: tea.KeyEnter})
-	if m.queue[0] != want {
+	if m.queue[0].text != want {
 		t.Fatal("queue edit lost source")
 	}
 }
@@ -43,13 +43,13 @@ func TestComposerExactInlinePayload(t *testing.T) {
 				t.Fatalf("unrelated key corrupted payload: %q != %q", got, payload)
 			}
 			m = update(m, tea.KeyMsg{Type: tea.KeyEnter})
-			if len(m.queue) != 1 || m.queue[0] != payload {
+			if len(m.queue) != 1 || m.queue[0].text != payload {
 				t.Fatalf("queue lost exact source: %q", m.queue)
 			}
 			if m.history[0] != payload {
 				t.Fatal("history lost source")
 			}
-			if got := m.resolveComposer(m.queue[0]).Text; got != payload {
+			if got := m.resolveComposer(m.queue[0].text).Text; got != payload {
 				t.Fatalf("dispatch payload %q", got)
 			}
 			m = update(m, tea.KeyMsg{Type: tea.KeyCtrlE})
@@ -105,7 +105,7 @@ func TestComposerMiddleEditsAndLiteralLabel(t *testing.T) {
 	label := m.textarea.Value()
 	m = composerKey(m, label)
 	m = update(m, tea.KeyMsg{Type: tea.KeyEnter})
-	if m.queue[0] != second+label {
+	if m.queue[0].text != second+label {
 		t.Fatal("literal label interpreted")
 	}
 	m.historyUp()
@@ -164,7 +164,7 @@ func TestComposerRejectRetainsDraft(t *testing.T) {
 		t.Fatal("paste rejection lost draft or error")
 	}
 	m = update(m, tea.KeyMsg{Type: tea.KeyEnter})
-	if m.queue[0] != original {
+	if m.queue[0].text != original {
 		t.Fatal("rejected payload submitted")
 	}
 	m = update(m, tea.KeyMsg{Type: tea.KeyCtrlE})
@@ -214,7 +214,7 @@ func TestComposerOpaqueCaseKeys(t *testing.T) {
 				t.Fatal("case transformation replaced opaque payload")
 			}
 			m = update(m, tea.KeyMsg{Type: tea.KeyEnter})
-			if len(m.queue) != 1 || m.queue[0] != payload {
+			if len(m.queue) != 1 || m.queue[0].text != payload {
 				t.Fatal("submitted label instead of payload")
 			}
 		})
@@ -242,7 +242,7 @@ func TestComposerClipboardBinding(t *testing.T) {
 			t.Fatal("clipboard payload lost")
 		}
 		m = update(m, tea.KeyMsg{Type: tea.KeyEnter})
-		if len(m.queue) != 1 || m.queue[0] != payload {
+		if len(m.queue) != 1 || m.queue[0].text != payload {
 			t.Fatal("clipboard send lost payload")
 		}
 	}
@@ -304,7 +304,7 @@ func TestComposerAggregateSmallPastes(t *testing.T) {
 		t.Fatal("aggregate update lost payload")
 	}
 	m = update(m, tea.KeyMsg{Type: tea.KeyEnter})
-	if len(m.queue) != 1 || m.queue[0] != want {
+	if len(m.queue) != 1 || m.queue[0].text != want {
 		t.Fatal("aggregate send lost payload")
 	}
 	m = update(m, tea.KeyMsg{Type: tea.KeyCtrlE})
@@ -338,7 +338,7 @@ func TestComposerInlineCaseKeysPreserveSource(t *testing.T) {
 					t.Fatalf("case key corrupted source: got %q, want %q", got, want)
 				}
 				m = update(m, tea.KeyMsg{Type: tea.KeyEnter})
-				if len(m.queue) != 1 || m.queue[0] != want {
+				if len(m.queue) != 1 || m.queue[0].text != want {
 					t.Fatalf("queue source: %q, want %q", m.queue, want)
 				}
 			})

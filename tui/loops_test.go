@@ -103,7 +103,7 @@ func TestDispatchLoopNoConcurrentTurns(t *testing.T) {
 	if cmd2 != nil {
 		t.Fatal("second dispatch must NOT start a concurrent turn")
 	}
-	if len(m.queue) != 1 || m.queue[0] != "/bar" {
+	if len(m.queue) != 1 || m.queue[0].text != "/bar" {
 		t.Fatalf("second dispatch should queue, got queue=%v", m.queue)
 	}
 }
@@ -150,7 +150,7 @@ func TestCronFireQueuesDuringTurn(t *testing.T) {
 	m.loading = true
 	got, _ := m.Update(cronFireMsg("/report"))
 	m = got.(Model)
-	if len(m.queue) != 1 || m.queue[0] != "/report" {
+	if len(m.queue) != 1 || m.queue[0].text != "/report" {
 		t.Fatalf("queue = %v, want the triggered prompt queued", m.queue)
 	}
 }

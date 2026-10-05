@@ -183,7 +183,7 @@ func TestModelPickerKeysTakePriorityAndEditRuneSafely(t *testing.T) {
 	m.modelPicker.open(1)
 	m.modelPicker.setModels([]string{"café", "cafeteria", "tea"}, "café")
 	m.awaitingApproval = true
-	m.queue = []string{"queued-a", "queued-b"}
+	m.queue = queuedTexts("queued-a", "queued-b")
 	m.queueSel = 1
 	m.textarea.SetValue("composer draft")
 

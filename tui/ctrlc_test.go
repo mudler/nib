@@ -249,7 +249,7 @@ func TestEscClosesTheCompletionPopup(t *testing.T) {
 func TestInterruptSendsTheQueue(t *testing.T) {
 	m := newCtrlCModel()
 	m.loading = true
-	m.queue = []string{"next task"}
+	m.queue = queuedTexts("next task")
 	m = pressKeys(t, m, ctrlC)
 
 	next, cmd := m.Update(responseMsg{err: context.Canceled})

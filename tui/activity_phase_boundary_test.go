@@ -43,7 +43,7 @@ func TestPhaseSynchronizationAtParkBoundaryWithQueuedFollowUp(t *testing.T) {
 	m := frameModel()
 	m.session = s
 	m.loading = true
-	m.queue = []string{"follow up"}
+	m.queue = queuedTexts("follow up")
 	m.syncActivityPhase(time.Now().Add(-time.Minute))
 
 	next, _ := m.Update(parkMsg{parked: true, reply: "done"})

@@ -7,9 +7,33 @@ import (
 	"unicode/utf8"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/mudler/nib/chat"
 	"github.com/mudler/nib/slash"
 	"github.com/mudler/nib/theme"
 )
+
+// queuedInput keeps acceptance separate from delivery. Only the composer may
+// accept human input; draining, combining and automatic dispatch never do.
+type queuedInput struct {
+	text     string
+	delivery chat.InputDelivery
+}
+
+func (m *Model) acceptInput(text string) queuedInput {
+	action := m.resolveComposer(text)
+	if action.Kind == slash.KindSend && m.session != nil {
+		m.session.AcceptHumanMessage(action.Text)
+	}
+	return queuedInput{text: text, delivery: chat.InputAccepted}
+}
+
+func queueTexts(queue []queuedInput) []string {
+	texts := make([]string, len(queue))
+	for i, entry := range queue {
+		texts[i] = entry.text
+	}
+	return texts
+}
 
 // queueMoveSel moves the queue selection by delta, clamped to the queue bounds.
 func (m *Model) queueMoveSel(delta int) {
@@ -40,7 +64,7 @@ func (m *Model) queueDeleteSel() string {
 	if m.queueSel < 0 {
 		m.queueSel = 0
 	}
-	return removed
+	return removed.text
 }
 
 // runsAtOnce reports whether a resolved input runs as soon as it is entered,
@@ -77,7 +101,7 @@ func (m *Model) releaseQueueFront() bool {
 	// Only plain messages inject into a live run. Slash commands / skills can't
 	// run mid-turn, so leave them queued; flushQueueAsTurn resolves them when the
 	// run ends.
-	action := m.resolveComposer(front)
+	action := m.resolveComposer(front.text)
 	if action.Kind != slash.KindSend {
 		return false
 	}
@@ -89,7 +113,7 @@ func (m *Model) releaseQueueFront() bool {
 	}
 	// InjectUser (not Inject) so a follow-up the run never consumes is handed
 	// back at run end (TakeUndelivered) and re-dispatched instead of lost.
-	if !m.session.InjectUser(action.Text) {
+	if !m.session.InjectWithDelivery(action.Text, front.delivery) {
 		return false
 	}
 	m.queue = m.queue[1:]
@@ -99,7 +123,7 @@ func (m *Model) releaseQueueFront() bool {
 	if m.queueSel < 0 {
 		m.queueSel = 0
 	}
-	m.appendMessage(ChatMessage{Role: "user", Content: front})
+	m.appendMessage(ChatMessage{Role: "user", Content: front.text})
 	m.parked = false
 	m.loading = true
 	m.interruptArmed = false
@@ -120,6 +144,7 @@ func (m *Model) releaseQueueFront() bool {
 // so they re-dispatch without a second transcript echo.
 func (m *Model) flushQueueAsTurn() tea.Cmd {
 	var texts []string
+	delivery := chat.InputAutomatic
 
 	// dispatchAccumulated sends all collected plain-message texts as a single
 	// combined turn (texts joined with a blank line). Returns nil when nothing
@@ -135,7 +160,7 @@ func (m *Model) flushQueueAsTurn() tea.Cmd {
 		m.interruptArmed = false
 		m.status = ""
 		m.syncActivityPhase(time.Now())
-		return m.sendMessage(combined)
+		return m.sendMessageDelivery(combined, delivery)
 	}
 
 	// Undelivered follow-ups: already echoed, so collect without re-echoing.
@@ -145,6 +170,7 @@ func (m *Model) flushQueueAsTurn() tea.Cmd {
 		if action.Kind == slash.KindSend && len(action.Files) == 0 && len(m.pending) == 0 {
 			m.redispatch = m.redispatch[1:]
 			texts = append(texts, action.Text)
+			delivery = chat.InputAccepted
 			continue
 		}
 		// Non-send or attachment-bearing: flush accumulated sends first.
@@ -160,7 +186,7 @@ func (m *Model) flushQueueAsTurn() tea.Cmd {
 	// Queued entries: echo each, then collect plain sends to combine.
 	for len(m.queue) > 0 {
 		input := m.queue[0]
-		action := m.resolveComposer(input)
+		action := m.resolveComposer(input.text)
 		if action.Kind == slash.KindSend && len(action.Files) == 0 && len(m.pending) == 0 {
 			if m.boot != nil && !m.boot.collapsed {
 				m.boot.collapsed = true
@@ -172,8 +198,11 @@ func (m *Model) flushQueueAsTurn() tea.Cmd {
 			if m.queueSel < 0 {
 				m.queueSel = 0
 			}
-			m.appendMessage(ChatMessage{Role: "user", Content: input})
+			m.appendMessage(ChatMessage{Role: "user", Content: input.text})
 			texts = append(texts, action.Text)
+			if input.delivery == chat.InputAccepted {
+				delivery = chat.InputAccepted
+			}
 			continue
 		}
 		// Non-send or attachment-bearing: flush accumulated sends first.
@@ -187,7 +216,8 @@ func (m *Model) flushQueueAsTurn() tea.Cmd {
 		if m.queueSel < 0 {
 			m.queueSel = 0
 		}
-		if cmd := m.dispatchInput(input); cmd != nil {
+		m.appendMessage(ChatMessage{Role: "user", Content: input.text})
+		if cmd := m.dispatchResolvedDelivery(input.text, input.delivery); cmd != nil {
 			return cmd
 		}
 	}
@@ -198,14 +228,15 @@ func (m *Model) flushQueueAsTurn() tea.Cmd {
 // renderQueue renders the pending-message queue shown above the composer.
 // Returns "" when the queue is empty. The selected entry (sel) is marked for
 // edit/delete; selection only matters while the composer is empty.
-func renderQueue(queue []string, sel, width int) string {
+func renderQueue(queue []queuedInput, sel, width int) string {
 	if len(queue) == 0 {
 		return ""
 	}
 	var b strings.Builder
 	b.WriteString(theme.Meta.Render("queued (edit until sent)"))
 	b.WriteString("\n")
-	for i, entry := range queue {
+	for i, input := range queue {
+		entry := input.text
 		marker := "  "
 		if i == sel {
 			marker = "> "
@@ -224,4 +255,19 @@ func renderQueue(queue []string, sel, width int) string {
 		}
 	}
 	return b.String()
+}
+
+// The callback runs before SendMessage returns. Drain at the response boundary,
+// after stream reconciliation and before autosave/queue dispatch, so a notice
+// cannot displace the streamed reply or arrive in a later turn. At most one
+// guard pause is emitted per turn; the single-slot channel never drops it.
+func (m *Model) drainGoalPaused() {
+	for {
+		select {
+		case notice := <-m.goalPausedChan:
+			m.appendMessage(ChatMessage{Role: "agent", Content: fmt.Sprintf(theme.GoalRepromptPaused, notice.MaxReprompts, notice.Window)})
+		default:
+			return
+		}
+	}
 }

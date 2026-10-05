@@ -98,7 +98,7 @@ func TestHistoryDoesNotInterfereWithQueueNav(t *testing.T) {
 	m := newQueueTestModel()
 	m.history = []string{"old prompt"}
 	m.histPos = len(m.history)
-	m.queue = []string{"a", "b"}
+	m.queue = queuedTexts("a", "b")
 	m.queueSel = 0
 
 	m = updateKey(m, tea.KeyMsg{Type: tea.KeyDown})
