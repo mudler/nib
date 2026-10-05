@@ -118,10 +118,11 @@ type Session struct {
 	// the pursuit: an interrupt pauses the goal instead of clearing it, so
 	// Ctrl+C does not silently throw away what the user asked for. All guarded
 	// by runMu.
-	goal       string
-	goalDone   bool
-	goalPaused bool
-	goalSerial uint64
+	goal          string
+	goalDone      bool
+	goalPaused    bool
+	goalReprompts goalRepromptGuard
+	goalSerial    uint64
 
 	// todoList is the ephemeral in-memory todo list (todo_write tool). It is
 	// not persisted — it lives for the session and is cleared when the session
@@ -520,7 +521,8 @@ func toCogitoDefinitions(cfgs []types.AgentTypeConfig) []cogito.AgentDefinition 
 // app.Run preflights the directory, so in practice only embedders calling this
 // directly reach the failure.
 func NewSession(ctx context.Context, cfg types.Config, callbacks Callbacks, transports ...mcp.Transport) (*Session, error) {
-	if _, _, err := configpkg.ParseGoalRepromptGuard(cfg.Goal); err != nil {
+	goalMax, goalWindow, err := configpkg.ParseGoalRepromptGuard(cfg.Goal)
+	if err != nil {
 		return nil, err
 	}
 	goalDelays, err := configpkg.ParseGoalCheckInDelays(cfg.Goal.CheckInDelays)
@@ -714,6 +716,7 @@ func NewSession(ctx context.Context, cfg types.Config, callbacks Callbacks, tran
 	s.resumed = len(cfg.InitialHistory) > 0 || len(cfg.InitialContext) > 0
 	// A resumed session carries on with its goal, paused or not. Paused
 	// means nothing without a goal, as in PauseGoal.
+	s.goalReprompts = goalRepromptGuard{max: goalMax, window: goalWindow}
 	s.goal = cfg.InitialGoal
 	s.goalPaused = cfg.InitialGoalPaused && cfg.InitialGoal != ""
 	for _, name := range cfg.AllowedTools {
@@ -1283,6 +1286,7 @@ func (s *Session) SetGoal(goal string) {
 	s.runMu.Lock()
 	s.goal = goal
 	s.goalPaused = false
+	s.goalReprompts.timestamps = nil
 	s.goalSerial++
 	serial := s.goalSerial
 	s.runMu.Unlock()
@@ -1304,6 +1308,7 @@ func (s *Session) ClearGoal() {
 	s.runMu.Lock()
 	s.goal = ""
 	s.goalPaused = false
+	s.goalReprompts.timestamps = nil
 	s.runMu.Unlock()
 	if s.goalSupervisor != nil {
 		s.goalSupervisor.goalClear()
@@ -1331,6 +1336,7 @@ func (s *Session) ResumeGoal() bool {
 		return false
 	}
 	s.goalPaused = false
+	s.goalReprompts.timestamps = nil
 	serial := s.goalSerial
 	s.runMu.Unlock()
 	if s.goalSupervisor != nil {
@@ -2188,6 +2194,7 @@ func (s *Session) toolOptions(turnCtx context.Context, goal, mainModel string) [
 			s.goalDone = true
 			s.goal = ""
 			s.goalPaused = false
+			s.goalReprompts.timestamps = nil
 			s.runMu.Unlock()
 			if s.goalSupervisor != nil {
 				s.goalSupervisor.goalDone()
@@ -3079,14 +3086,9 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 		}
 
 		// Goal still active and unconfirmed: re-feed it and run again.
-		reminder := goalReminder(goal)
-		s.historyMu.Lock()
-		s.fragment = s.fragment.AddMessage("user", reminder)
-		s.messages = append(s.messages, openai.ChatCompletionMessage{
-			Role:    "user",
-			Content: reminder,
-		})
-		s.historyMu.Unlock()
+		if !s.appendGoalReminder(time.Now()) {
+			break
+		}
 		if s.callbacks.OnStatus != nil {
 			s.callbacks.OnStatus("Goal not yet met — continuing…")
 		}
