@@ -12,6 +12,7 @@ import (
 
 	"github.com/Masterminds/sprig/v3"
 	openai "github.com/sashabaranov/go-openai"
+	"gopkg.in/yaml.v3"
 )
 
 // AgentOptions holds configuration for the cogito ExecuteTools function
@@ -205,7 +206,37 @@ type HookConfig struct {
 // through YAML decoding so shared config validation can report an exact indexed
 // key and the user's rejected value.
 type GoalConfig struct {
-	CheckInDelays []string `yaml:"check_in_delays"`
+	CheckInDelays  []string `yaml:"check_in_delays"`
+	MaxReprompts   int      `yaml:"max_reprompts"`
+	RepromptWindow string   `yaml:"reprompt_window"`
+	// RepromptGuardError retains only guard decode failures for startup validation.
+	RepromptGuardError string `yaml:"-"`
+}
+
+// UnmarshalYAML retains invalid guard scalars without discarding the rest of
+// the file. Other YAML errors retain their existing decoding behavior.
+func (g *GoalConfig) UnmarshalYAML(node *yaml.Node) error {
+	var raw struct {
+		CheckInDelays  []string  `yaml:"check_in_delays"`
+		MaxReprompts   yaml.Node `yaml:"max_reprompts"`
+		RepromptWindow yaml.Node `yaml:"reprompt_window"`
+	}
+	if err := node.Decode(&raw); err != nil {
+		return err
+	}
+	*g = GoalConfig{CheckInDelays: raw.CheckInDelays}
+	if n := &raw.MaxReprompts; n.Kind != 0 && n.Tag != "!!null" {
+		// yaml.v3 otherwise truncates floating-point scalars when decoding int.
+		if (n.Tag != "!!int" && n.Tag != "!!str") || n.Decode(&g.MaxReprompts) != nil {
+			g.RepromptGuardError = "goal.max_reprompts must be -1, 0, or a positive integer within the platform int range"
+		}
+	}
+	if n := &raw.RepromptWindow; n.Kind != 0 && n.Tag != "!!null" {
+		if n.Kind != yaml.ScalarNode || n.Decode(&g.RepromptWindow) != nil {
+			g.RepromptGuardError = "goal.reprompt_window must be zero or a positive Go duration such as 2m"
+		}
+	}
+	return nil
 }
 
 // Config holds configuration for creating a new session

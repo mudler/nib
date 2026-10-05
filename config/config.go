@@ -28,6 +28,32 @@ Current directory: {{.CurrentDirectory}}
 Current user: {{.CurrentUser}}
 `
 
+// ParseGoalRepromptGuard validates startup settings and resolves zero defaults.
+// A maximum of -1 disables counting, but still requires a valid window.
+func ParseGoalRepromptGuard(g types.GoalConfig) (max int, window time.Duration, err error) {
+	if g.RepromptGuardError != "" {
+		return 0, 0, fmt.Errorf("%s", g.RepromptGuardError)
+	}
+	max = g.MaxReprompts
+	if max < -1 {
+		return 0, 0, fmt.Errorf("goal.max_reprompts must be -1, 0, or a positive integer")
+	}
+	if max == 0 {
+		max = 10
+	}
+	raw := strings.TrimSpace(g.RepromptWindow)
+	if raw != "" {
+		window, err = time.ParseDuration(raw)
+		if err != nil || window < 0 {
+			return 0, 0, fmt.Errorf("goal.reprompt_window must be zero or a positive Go duration such as 2m")
+		}
+	}
+	if window == 0 {
+		window = 2 * time.Minute
+	}
+	return max, window, nil
+}
+
 var defaultGoalCheckInDelays = []string{"2m", "5m", "10m"}
 
 // ParseGoalCheckInDelays parses and validates an ordered goal check-in schedule.

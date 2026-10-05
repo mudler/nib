@@ -520,6 +520,9 @@ func toCogitoDefinitions(cfgs []types.AgentTypeConfig) []cogito.AgentDefinition 
 // app.Run preflights the directory, so in practice only embedders calling this
 // directly reach the failure.
 func NewSession(ctx context.Context, cfg types.Config, callbacks Callbacks, transports ...mcp.Transport) (*Session, error) {
+	if _, _, err := configpkg.ParseGoalRepromptGuard(cfg.Goal); err != nil {
+		return nil, err
+	}
 	goalDelays, err := configpkg.ParseGoalCheckInDelays(cfg.Goal.CheckInDelays)
 	if err != nil {
 		return nil, err
