@@ -1693,24 +1693,12 @@ func (l *noticeDeliveryStreamingLLM) CreateChatCompletionStream(ctx context.Cont
 // drain. System notices (shell-job completions, wake-ups) keep using Inject —
 // re-running a stale notice as a fresh turn would re-trigger finished work.
 func (s *Session) InjectUser(msg string) bool {
-	s.runMu.Lock()
-	s.userInjected = append(s.userInjected, msg)
-	s.runMu.Unlock()
-	if s.Inject(msg) {
-		return true
-	}
-	// Nothing was sent: untrack so the drain can't misreport it later.
-	s.runMu.Lock()
-	if i := slices.Index(s.userInjected, msg); i >= 0 {
-		s.userInjected = slices.Delete(s.userInjected, i, i+1)
-	}
-	s.runMu.Unlock()
-	return false
+	return s.InjectWithDelivery(msg, InputHuman)
 }
 
 // TakeUndelivered returns (and clears) user-typed follow-ups that were
 // injected into a run that ended before consuming them. Call after a run
-// returns to re-dispatch them as fresh turns.
+// returns to re-dispatch them with InputAccepted, without accepting them again.
 func (s *Session) TakeUndelivered() []string {
 	s.runMu.Lock()
 	defer s.runMu.Unlock()
@@ -1724,17 +1712,32 @@ func (s *Session) TakeUndelivered() []string {
 // false when there is no live run, the channel is full, or msg is empty. Used
 // for mid-run user follow-ups, shell-job completions, and scheduled wake-ups.
 func (s *Session) Inject(msg string) bool {
+	return s.InjectWithDelivery(msg, InputAutomatic)
+}
+
+// InjectWithDelivery atomically accepts and tracks a successful injection under
+// runMu, the same boundary used by the stop gate and end-of-run drain. Failed
+// injections never accept input. InputAccepted retains human undelivered
+// ownership without resetting again; InputAutomatic has neither effect.
+func (s *Session) InjectWithDelivery(msg string, delivery InputDelivery) bool {
 	if strings.TrimSpace(msg) == "" {
 		return false
 	}
 	s.runMu.Lock()
-	live := s.runLive
-	s.runMu.Unlock()
-	if !live {
+	defer s.runMu.Unlock()
+	if !s.runLive {
 		return false
 	}
 	select {
 	case s.inject <- openai.ChatCompletionMessage{Role: "user", Content: msg}:
+		if delivery == InputHuman || delivery == InputAccepted {
+			s.userInjected = append(s.userInjected, msg)
+		}
+		if delivery == InputHuman {
+			// Already holding runMu: this is AcceptHumanMessage's reset,
+			// committed with delivery so a concurrent stop gate cannot lose it.
+			s.goalReprompts.timestamps = nil
+		}
 		return true
 	default:
 		return false
@@ -2265,7 +2268,19 @@ func (s *Session) toolOptions(turnCtx context.Context, goal, mainModel string) [
 	return opts
 }
 
+// SendMessage accepts fresh human conversation text. For automatic prompts or
+// retries of previously accepted input, use SendMessageWithDelivery.
 func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error) {
+	return s.SendMessageWithDelivery(text, InputHuman, parts...)
+}
+
+// SendMessageWithDelivery accepts human text before turn setup, once per call,
+// not per provider attempt. Hosts must serialize sends as for SendMessage;
+// concurrent acceptance/injection is synchronized with the stop gate by runMu.
+func (s *Session) SendMessageWithDelivery(text string, delivery InputDelivery, parts ...ContentPart) (string, error) {
+	if delivery == InputHuman {
+		s.AcceptHumanMessage(text)
+	}
 	toolCallbacks := s.callbacks
 	if toolCallbacks.AgentCallbacks != nil {
 		toolCallbacks.OnAgentEvent = toolCallbacks.AgentCallbacks()
