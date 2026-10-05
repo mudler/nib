@@ -49,7 +49,7 @@ func (s *Session) AcceptHumanMessage(text string) {
 
 // appendGoalReminder commits the timestamp and history together against human
 // acceptance. The caller has already checked cancellation and the terminal
-// barrier. Lifecycle methods and callbacks run outside runMu.
+// barrier. Supervisor transitions commit under runMu; callbacks run outside locks.
 func (s *Session) appendGoalReminder(now time.Time) bool {
 	// Match turn setup: historyMu precedes runMu. Keep both until the
 	// reminder and timestamp are committed, then release before callbacks.
@@ -64,11 +64,11 @@ func (s *Session) appendGoalReminder(now time.Time) bool {
 	if !s.goalReprompts.allow(now) {
 		s.goalPaused = true
 		notice := GoalPausedNotice{MaxReprompts: s.goalReprompts.max, Window: s.goalReprompts.window, Paused: true}
-		s.runMu.Unlock()
-		s.historyMu.Unlock()
 		if s.goalSupervisor != nil {
 			s.goalSupervisor.goalPause()
 		}
+		s.runMu.Unlock()
+		s.historyMu.Unlock()
 		if s.callbacks.OnGoalPaused != nil {
 			s.callbacks.OnGoalPaused(notice)
 		}

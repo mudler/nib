@@ -282,3 +282,72 @@ func TestGoalRepromptBackendRetryCompletionAndFailure(t *testing.T) {
 		})
 	}
 }
+
+// A blocked timer stop exposes the boundary between the session pause and its
+// supervisor transition without sleeps or scheduler-dependent lock races.
+type repromptBlockingTimer struct {
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (t *repromptBlockingTimer) Stop() bool {
+	close(t.entered)
+	<-t.release
+	return true
+}
+
+func TestGoalRepromptResumeOrdersSupervisorPause(t *testing.T) {
+	now := time.Unix(1000, 0)
+	state := newBackgroundState()
+	s := &Session{
+		goal: "work", goalSerial: 1,
+		goalReprompts:  goalRepromptGuard{max: 1, window: time.Minute, timestamps: []time.Time{now}},
+		goalSupervisor: newGoalSupervisor(state, nil, nil, nil),
+	}
+	s.goalSupervisor.goalSet(1)
+	timer := &repromptBlockingTimer{entered: make(chan struct{}), release: make(chan struct{})}
+	state.timer = timer
+	noticed := make(chan struct{})
+	s.callbacks.OnGoalPaused = func(GoalPausedNotice) {
+		// Callback reentry must remain safe, including both history and goal locks.
+		s.ExportHistory()
+		s.AcceptHumanMessage("human")
+		close(noticed)
+	}
+	paused := make(chan struct{})
+	go func() { s.appendGoalReminder(now); close(paused) }()
+	<-timer.entered
+
+	// Resume must not be able to publish an active session while the earlier
+	// supervisor pause is still in flight. This invariant also prevents a
+	// delayed pause from overwriting a completed supervisor resume.
+	if s.runMu.TryLock() {
+		t.Error("guard exposed paused state to ResumeGoal before supervisor pause completed")
+		s.runMu.Unlock()
+	}
+	resumed := make(chan bool, 1)
+	go func() { resumed <- s.ResumeGoal() }()
+	close(timer.release)
+	select {
+	case ok := <-resumed:
+		if !ok {
+			t.Error("explicit resume did not resume the guarded goal")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("resume deadlocked with supervisor pause")
+	}
+	select {
+	case <-paused:
+	case <-time.After(5 * time.Second):
+		t.Fatal("pause callback deadlocked")
+	}
+	<-noticed
+	if s.GoalPaused() {
+		t.Error("session remained paused after explicit resume")
+	}
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if state.goalLifecycle != goalActive || state.timer != nil || state.reviewQueued || state.reviewing {
+		t.Fatalf("stale supervisor state after resume: lifecycle=%v timer=%v queued=%v reviewing=%v", state.goalLifecycle, state.timer, state.reviewQueued, state.reviewing)
+	}
+}

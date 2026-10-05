@@ -1278,6 +1278,12 @@ func fromTypesArtifacts(items []types.Artifact) []wizmcp.Artifact {
 	return out
 }
 
+// Session goal mutations and their supervisor transitions share runMu so an
+// older transition cannot overwrite a newer lifecycle. Lock order is historyMu
+// (when needed), runMu, then backgroundState.mu. Supervisor lifecycle methods
+// never acquire session locks or invoke host callbacks; timer Stop does not wait
+// for a timer callback. Host callbacks must run after releasing these locks.
+//
 // SetGoal sets (or replaces) the active session goal. While a goal is set, a
 // turn re-runs until the model calls goal_done or the user interrupts. Call
 // between turns, not during a live run: the goal_done tool is wired at the
@@ -1289,10 +1295,10 @@ func (s *Session) SetGoal(goal string) {
 	s.goalReprompts.timestamps = nil
 	s.goalSerial++
 	serial := s.goalSerial
-	s.runMu.Unlock()
 	if s.goalSupervisor != nil {
 		s.goalSupervisor.goalSet(serial)
 	}
+	s.runMu.Unlock()
 }
 
 // Goal returns the session goal, or "" if none. A paused goal is still
@@ -1309,10 +1315,10 @@ func (s *Session) ClearGoal() {
 	s.goal = ""
 	s.goalPaused = false
 	s.goalReprompts.timestamps = nil
-	s.runMu.Unlock()
 	if s.goalSupervisor != nil {
 		s.goalSupervisor.goalClear()
 	}
+	s.runMu.Unlock()
 }
 
 // PauseGoal stops pursuing the goal but keeps its text. Turns run as if no
@@ -1321,10 +1327,10 @@ func (s *Session) PauseGoal() {
 	s.runMu.Lock()
 	s.goalPaused = s.goal != ""
 	paused := s.goalPaused
-	s.runMu.Unlock()
 	if paused && s.goalSupervisor != nil {
 		s.goalSupervisor.goalPause()
 	}
+	s.runMu.Unlock()
 }
 
 // ResumeGoal pursues a paused goal again from the next turn. It reports
@@ -1338,10 +1344,10 @@ func (s *Session) ResumeGoal() bool {
 	s.goalPaused = false
 	s.goalReprompts.timestamps = nil
 	serial := s.goalSerial
-	s.runMu.Unlock()
 	if s.goalSupervisor != nil {
 		s.goalSupervisor.goalSet(serial)
 	}
+	s.runMu.Unlock()
 	return true
 }
 
@@ -2195,10 +2201,10 @@ func (s *Session) toolOptions(turnCtx context.Context, goal, mainModel string) [
 			s.goal = ""
 			s.goalPaused = false
 			s.goalReprompts.timestamps = nil
-			s.runMu.Unlock()
 			if s.goalSupervisor != nil {
 				s.goalSupervisor.goalDone()
 			}
+			s.runMu.Unlock()
 			return "Goal marked complete: " + justification
 		})))
 	}
