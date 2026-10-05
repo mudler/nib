@@ -151,3 +151,134 @@ func TestGoalRepromptPausePreservesIndependentBackground(t *testing.T) {
 		t.Fatal("completion resumed goal or lost notice")
 	}
 }
+
+// Force the one-shot schema observation after ExecuteTools has returned. This
+// existing callback is a deterministic boundary before the outer terminal gate;
+// publishing from the HTTP handler instead would exercise Cogito's park path.
+func TestGoalRepromptOuterContinuations(t *testing.T) {
+	for _, review := range []bool{false, true} {
+		name := "Terminal"
+		if review {
+			name = "Supervision"
+		}
+		t.Run(name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			var s *Session
+			var requests atomic.Int32
+			seed := time.Now()
+			checkBudget := func() {
+				s.runMu.Lock()
+				defer s.runMu.Unlock()
+				if len(s.goalReprompts.timestamps) != 1 || !s.goalReprompts.timestamps[0].Equal(seed) {
+					t.Errorf("continuation changed seeded budget: %v", s.goalReprompts.timestamps)
+				}
+			}
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if isModelProbe(r) {
+					serveEmptyModels(w)
+					return
+				}
+				n := requests.Add(1)
+				if n > 4 {
+					http.Error(w, "unexpected continuation", http.StatusBadRequest)
+					cancel()
+					return
+				}
+				checkBudget()
+				var req struct {
+					Stream   bool `json:"stream"`
+					Messages []struct {
+						Content string `json:"content"`
+					} `json:"messages"`
+				}
+				if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+					t.Error(err)
+				}
+				if req.Stream {
+					t.Error("fixture expects the non-streaming session path")
+				}
+				if n == 2 {
+					want := "Background work changed while you were replying."
+					if review {
+						want = goalCheckInPrompt
+					}
+					found := false
+					for _, m := range req.Messages {
+						found = found || strings.Contains(m.Content, want)
+					}
+					if !found {
+						t.Errorf("actual backend request missing outer continuation %q", want)
+					}
+				}
+				w.Header().Set("Content-Type", "application/json")
+				json.NewEncoder(w).Encode(map[string]any{"choices": []any{map[string]any{"message": map[string]any{"role": "assistant", "content": "working"}, "finish_reason": "stop"}}})
+			}))
+			defer srv.Close()
+			factory := &fakeGoalTimerFactory{}
+			published, reviewed := false, false
+			var err error
+			s, err = NewSession(ctx, types.Config{
+				AgentOptions: types.AgentOptions{Iterations: 1, MaxAttempts: 1, MaxRetries: 1},
+				Model:        "fake", APIKey: "fake", BaseURL: srv.URL + "/v1",
+				Goal: types.GoalConfig{MaxReprompts: 1},
+			}, Callbacks{
+				OnStatus: func(status string) {
+					if published || !strings.HasPrefix(status, "tool schemas use ") {
+						return
+					}
+					published = true
+					s.background.startBackground(backgroundShell, "outer-worker")
+					if review {
+						s.goalSupervisor.parked()
+						latestGoalTimer(t, factory).fire()
+					} else {
+						s.background.completeBackground(backgroundShell, "outer-worker", "outer completion", true)
+					}
+				},
+				OnParked: func(string) {
+					// A review still has pending work. Let the one-iteration run
+					// finish its final Ask, then settle work in the review callback.
+					if !review || !s.Inject("automatic review wake") {
+						t.Error("unexpected park")
+						cancel()
+					}
+				},
+				OnStepContent: func(text string) {
+					if strings.HasPrefix(text, "Goal check-in:") {
+						reviewed = true
+						checkBudget()
+						if !s.background.completeBackground(backgroundShell, "outer-worker", "review completion", true) {
+							t.Error("completion refused")
+						}
+					}
+				},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer s.Close()
+			s.goalSupervisor.factory = factory
+			s.schemaNoticeLevel = -1 // Observe even a healthy schema budget, once.
+			s.SetGoal("work")
+			s.goalReprompts.timestamps = []time.Time{seed}
+			if _, err := s.SendMessageWithDelivery("already accepted", InputAccepted); err != nil {
+				t.Fatal(err)
+			}
+			checkBudget()
+			wantRequests := int32(2)
+			if review {
+				wantRequests = 4
+			}
+			if requests.Load() != wantRequests {
+				t.Errorf("requests=%d want=%d", requests.Load(), wantRequests)
+			}
+			if !published || review != reviewed || !s.GoalPaused() {
+				t.Fatalf("published=%v reviewed=%v paused=%v", published, reviewed, s.GoalPaused())
+			}
+			if snapshot := s.background.terminalSnapshot(); !snapshot.eligible {
+				t.Fatalf("unfinished background lifecycle: %+v", snapshot)
+			}
+		})
+	}
+}
