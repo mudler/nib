@@ -176,3 +176,7 @@ func TestInterruptCallsSession(t *testing.T) {
 		t.Fatal("interrupt tool did not reach the session")
 	}
 }
+
+func (f *fakeSession) SendMessageWithDelivery(text string, delivery chat.InputDelivery, parts ...chat.ContentPart) (string, error) {
+	return f.SendMessage(text, parts...)
+}

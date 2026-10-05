@@ -184,11 +184,20 @@ echo "what is 17*23?" | nib --json --yolo | jq -c 'select(.type != "reasoning_de
 | `tool_call` | A call that needs approval; `approved` is `false` since nothing can answer (use `--yolo`) |
 | `tool_start`, `tool_result` | A call running, and its output |
 | `agent` | Sub-agent lifecycle change |
+| `goal_paused` | Goal reminder guard pause (`kind`, `max_reprompts`, duration string `window`, and `paused`); the normal response still follows |
 | `response` | The turn's final reply |
 | `error` | A failure (`message`) |
 | `usage` | Token totals, once, when the session ends |
 
 Logs stay on stderr. The exit codes match `--cli`.
+
+For sessions with an active goal, CLI prints a persistent guard-pause notice;
+JSON emits `goal_paused`, and MCP sends a logging notification with
+`kind: "goal_paused"` and the same threshold, window, and paused fields. MCP
+clients must subscribe to info-level logging to receive it. These notices do
+not replace the final reply. CLI, JSON, and MCP have no goal-resume command:
+the goal stays paused until explicit resume or replacement through a supported
+host. Embedders can handle `OnGoalPaused` and use `ResumeGoal` or `SetGoal`.
 
 #### What a piped run may and may not do
 

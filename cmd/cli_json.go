@@ -64,6 +64,9 @@ func RunJSON(ctx context.Context, cfg types.Config, streams Streams, shellJobs *
 	var denied atomic.Bool
 
 	callbacks := chat.Callbacks{
+		OnGoalPaused: func(n chat.GoalPausedNotice) {
+			jw.emit("goal_paused", map[string]any{"kind": "goal_paused", "max_reprompts": n.MaxReprompts, "window": n.Window.String(), "paused": n.Paused, "message": "The goal remains paused until explicit resume or replacement through a supported host."})
+		},
 		OnStream: func(ev chat.StreamEvent) {
 			var typ string
 			switch ev.Kind {
