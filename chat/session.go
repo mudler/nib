@@ -100,12 +100,13 @@ type Session struct {
 	// and return), so Inject can tell whether there is a live run to inject into.
 	runMu   sync.Mutex
 	runLive bool
-	// userInjected tracks texts delivered via InjectUser during the current
+	// userInjected tracks payload identities delivered via InjectUser during the current
 	// run; undelivered collects the ones still sitting in the injection
 	// channel when the run returned — the model never saw them, so the
 	// end-of-run drain hands them back via TakeUndelivered instead of
 	// discarding them. Both guarded by runMu.
-	userInjected []string
+	userInjected map[string]struct{}
+	injectionID  uint64 // guarded by runMu; identifies deliveries, not text
 	undelivered  []string
 
 	// pendingNotices holds background-job notices that arrived while no run was
@@ -1728,10 +1729,24 @@ func (s *Session) InjectWithDelivery(msg string, delivery InputDelivery) bool {
 	if !s.runLive {
 		return false
 	}
+	tracked := delivery == InputHuman || delivery == InputAccepted
+	message := openai.ChatCompletionMessage{Role: "user", Content: msg}
+	if tracked {
+		// Cogito copies only Role and Content into the model fragment at each
+		// injection receive site. Name carries a private delivery identity, as
+		// it already does for agent-completion wakeups, without changing the
+		// model-visible message. Channel value copies preserve it even when a
+		// consumer removes an identical payload before this send returns.
+		s.injectionID++
+		message.Name = fmt.Sprintf("nib_human_injection_%d", s.injectionID)
+	}
 	select {
-	case s.inject <- openai.ChatCompletionMessage{Role: "user", Content: msg}:
-		if delivery == InputHuman || delivery == InputAccepted {
-			s.userInjected = append(s.userInjected, msg)
+	case s.inject <- message:
+		if tracked {
+			if s.userInjected == nil {
+				s.userInjected = make(map[string]struct{})
+			}
+			s.userInjected[message.Name] = struct{}{}
 		}
 		if delivery == InputHuman {
 			// Already holding runMu: this is AcceptHumanMessage's reset,
@@ -2367,8 +2382,8 @@ func (s *Session) SendMessageWithDelivery(text string, delivery InputDelivery, p
 				if msg.Name == agentCompletionMessageName {
 					continue
 				}
-				if i := slices.Index(pendingUser, msg.Content); i >= 0 {
-					pendingUser = slices.Delete(pendingUser, i, i+1)
+				if _, ok := pendingUser[msg.Name]; ok {
+					delete(pendingUser, msg.Name)
 					undelivered = append(undelivered, msg.Content)
 				}
 			default:

@@ -2,10 +2,12 @@ package chat
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 )
@@ -185,5 +187,54 @@ func TestRepromptUndeliveredAcceptedRedispatch(t *testing.T) {
 	}
 	if len(s.TakeUndelivered()) != 0 {
 		t.Fatal("undelivered ownership not transferred")
+	}
+}
+
+// Consume the first injection directly at the channel boundary, then leave an
+// identical automatic delivery for the real end-of-run drain. No timing or
+// model decision is involved in which delivery was consumed.
+func TestRepromptUndeliveredSameTextOwnership(t *testing.T) {
+	for _, delivery := range []InputDelivery{InputHuman, InputAccepted} {
+		for _, duplicates := range []bool{false, true} {
+			t.Run(fmt.Sprintf("delivery=%d/duplicates=%t", delivery, duplicates), func(t *testing.T) {
+				s := newWarmTestSession(t)
+				s.callbacks.OnResponse = func(string) {
+					consumed := make(chan string)
+					go func() {
+						consumed <- (<-s.inject).Content
+					}()
+					if !s.InjectWithDelivery("same text", delivery) {
+						t.Error("human injection failed")
+					}
+					consumedText := <-consumed
+					if !s.Inject(consumedText) {
+						t.Error("automatic injection failed")
+					}
+					if duplicates {
+						for _, text := range []string{"same text", "between", "same text"} {
+							if !s.InjectWithDelivery(text, delivery) {
+								t.Error("pending human injection failed")
+							}
+						}
+						if !s.Inject("same text") {
+							t.Error("trailing automatic injection failed")
+						}
+					}
+				}
+				if _, err := s.SendMessageWithDelivery("wake", InputAutomatic); err != nil {
+					t.Fatal(err)
+				}
+				var want []string
+				if duplicates {
+					want = []string{"same text", "between", "same text"}
+				}
+				if got := s.TakeUndelivered(); !slices.Equal(got, want) {
+					t.Fatalf("undelivered = %q, want %q", got, want)
+				}
+				if got := s.TakeUndelivered(); len(got) != 0 {
+					t.Fatalf("ownership returned twice: %q", got)
+				}
+			})
+		}
 	}
 }
