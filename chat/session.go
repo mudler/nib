@@ -2625,6 +2625,8 @@ func (s *Session) SendMessageWithDelivery(text string, delivery InputDelivery, p
 			if a.Background {
 				publisher := "agent:" + a.ID
 				if s.background.beginPublisher(publisher) {
+					// A resumed agent has no start event; see reopenBackground.
+					s.background.reopenBackground(backgroundAgent, a.ID)
 					content := fmt.Sprintf("Agent %s completed", a.ID)
 					if result := strings.TrimSpace(a.Result); result != "" {
 						content += ":\n" + result

@@ -144,6 +144,25 @@ func (s *backgroundState) startBackground(source backgroundSource, identity stri
 	return true
 }
 
+// reopenBackground puts a finished identity back in the running set, and is a
+// no-op for one that is running already. A resumed agent runs again under its
+// old identity without a start event (cogito reports a spawn only once), so its
+// next completion would otherwise find a terminal state and be dropped.
+func (s *backgroundState) reopenBackground(source backgroundSource, identity string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	states := s.lifecycleMap(source)
+	if states[identity] == backgroundRunning {
+		return false
+	}
+	if _, ok := s.advanceLocked(); !ok {
+		return false
+	}
+	states[identity] = backgroundRunning
+	s.backgroundChangedLocked()
+	return true
+}
+
 // completeBackground atomically advances the event sequence, leaves the running
 // set, and durably queues a completion notice. Only a matching running identity
 // can transition, making repeated terminal callbacks harmless.
