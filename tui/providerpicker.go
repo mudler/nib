@@ -317,7 +317,8 @@ func (m *Model) startLogin(e chat.ProviderEntry) tea.Cmd {
 	if flow.URL != "" {
 		// Keep the URL in the transcript: the browser may not open (SSH,
 		// headless), and the user must be able to copy it.
-		m.appendMessage(ChatMessage{Role: "agent", Content: flow.Prompt})
+		m.appendMessage(ChatMessage{Role: "login", Content: loginPrompt(flow.Prompt, flow.URL)})
+		copyToClipboard(flow.URL)
 		if !flow.IsSSH {
 			openBrowser(flow.URL)
 		}

@@ -4048,6 +4048,11 @@ func (m *Model) updateViewport() {
 				HugNext: m.sameAgentMsg(i+1, msg.AgentID),
 			}, prevRole, contentWidth))
 			prevRole = render.RoleAgent
+		case "login":
+			// Not Markdown: wrapping would break the login URL (see loginPrompt).
+			mdWidth := presenter.ContentWidth(render.RoleAgent, contentWidth)
+			sb.WriteString(presenter.Message(render.Message{Role: render.RoleAgent, Content: renderLogin(msg.Content, mdWidth), Arriving: m.arriving(msg)}, prevRole, contentWidth))
+			prevRole = render.RoleAgent
 		case "tool":
 			toolStart := strings.Count(sb.String(), "\n")
 			sb.WriteString(presenter.Message(render.Message{
