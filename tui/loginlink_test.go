@@ -13,7 +13,17 @@ const testLoginURL = "https://auth.openai.com/oauth/authorize?client_id=app_EMoa
 // at the terminal width, never clipped. Clipping drops redirect_uri and the
 // provider rejects the request.
 func TestLoginPromptKeepsURLIntact(t *testing.T) {
-	prompt := "Open this URL to log in:\n" + testLoginURL + "\n\nIf the browser cannot connect, paste the URL here."
+	// The SSH prompt indents the URL; the plain one does not.
+	for _, prompt := range []string{
+		"Open this URL to log in:\n" + testLoginURL + "\n\nIf the browser cannot connect, paste the URL here.",
+		"Then open this URL in your LOCAL browser:\n  " + testLoginURL + "\n\nIf you cannot set up port forwarding, paste it here.",
+	} {
+		checkLoginPrompt(t, prompt)
+	}
+}
+
+func checkLoginPrompt(t *testing.T, prompt string) {
+	t.Helper()
 	for _, width := range []int{40, 80, 200} {
 		out := renderLogin(loginPrompt(prompt, testLoginURL), width)
 		for _, line := range strings.Split(out, "\n") {
@@ -23,7 +33,7 @@ func TestLoginPromptKeepsURLIntact(t *testing.T) {
 		}
 		// Hyperlink targets are not visible text; strip them to see what the
 		// terminal shows, then undo the hard wrap.
-		visible := strings.ReplaceAll(ansi.Strip(out), "\n", "")
+		visible := strings.ReplaceAll(strings.ReplaceAll(ansi.Strip(out), "\n", ""), " ", "")
 		if !strings.Contains(visible, testLoginURL) {
 			t.Fatalf("width %d: visible URL is incomplete:\n%q", width, visible)
 		}

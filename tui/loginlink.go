@@ -38,17 +38,25 @@ func loginPrompt(prompt, url string) string {
 }
 
 // renderLogin lays out a login prompt without Markdown. A URL is wider than
-// most terminals, and word-wrapping or clipping it drops characters, so lines
-// without spaces are hard-wrapped at exactly width columns. Browsers drop the
-// newlines when such a URL is pasted.
+// most terminals, and word-wrapping or clipping it drops characters, so a line
+// that is one long word (a URL, possibly indented) is hard-wrapped at exactly
+// width columns, each row keeping the indent. Browsers drop the newlines when
+// such a URL is pasted.
 func renderLogin(content string, width int) string {
 	if width < 1 {
 		return content
 	}
 	lines := strings.Split(content, "\n")
 	for i, line := range lines {
-		if !strings.ContainsAny(line, " \t") && ansi.StringWidth(line) > width {
-			lines[i] = ansi.Hardwrap(line, width, true)
+		word := strings.TrimLeft(line, " \t")
+		indent := line[:len(line)-len(word)]
+		room := width - ansi.StringWidth(indent)
+		if room >= 1 && !strings.ContainsAny(word, " \t") && ansi.StringWidth(word) > room {
+			rows := strings.Split(ansi.Hardwrap(word, room, true), "\n")
+			for j := range rows {
+				rows[j] = indent + rows[j]
+			}
+			lines[i] = strings.Join(rows, "\n")
 			continue
 		}
 		lines[i] = strings.TrimRight(render.Wrap(line, width), "\n")
