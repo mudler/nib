@@ -22,24 +22,36 @@ func copyToClipboard(s string) {
 	_ = clipboard.WriteAll(s)
 }
 
-// loginPrompt returns the transcript text for a login flow. A login URL is far
-// wider than most terminals, so printing it as text lets Markdown word-wrap
-// break it and the terminal clip it, and a copied URL then loses characters. The
-// URL is instead shown as an OSC 8 hyperlink with a short label.
+// loginPrompt returns the transcript text for a login flow: the prompt with
+// its URL, plus a clickable OSC 8 link for terminals that support it. The raw
+// URL stays visible because over SSH or in a terminal without hyperlinks it is
+// the only way to reach the login page.
 func loginPrompt(prompt, url string) string {
 	if url == "" {
 		return prompt
 	}
 	link := ansi.SetHyperlink(url) + loginLinkLabel + ansi.ResetHyperlink()
 	if !strings.Contains(prompt, url) {
-		return prompt + "\n" + link
+		prompt += "\n" + url
 	}
-	return strings.ReplaceAll(prompt, url, link+" (URL sent to your clipboard)")
+	return prompt + "\n\n" + link
 }
 
-// renderLogin lays out a login prompt without Markdown. Each source line is
-// wrapped on word boundaries, and the hyperlink is a single short word, so the
-// URL never wraps.
+// renderLogin lays out a login prompt without Markdown. A URL is wider than
+// most terminals, and word-wrapping or clipping it drops characters, so lines
+// without spaces are hard-wrapped at exactly width columns. Browsers drop the
+// newlines when such a URL is pasted.
 func renderLogin(content string, width int) string {
-	return render.Wrap(content, width)
+	if width < 1 {
+		return content
+	}
+	lines := strings.Split(content, "\n")
+	for i, line := range lines {
+		if !strings.ContainsAny(line, " \t") && ansi.StringWidth(line) > width {
+			lines[i] = ansi.Hardwrap(line, width, true)
+			continue
+		}
+		lines[i] = strings.TrimRight(render.Wrap(line, width), "\n")
+	}
+	return strings.Join(lines, "\n")
 }
