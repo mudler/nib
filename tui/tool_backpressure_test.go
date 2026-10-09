@@ -1,53 +1,29 @@
 package tui
 
 import (
-	"context"
 	"testing"
 	"time"
 
 	"github.com/mudler/nib/chat"
 )
 
-func TestToolStartBackpressureCancellation(t *testing.T) {
-	for _, mode := range []string{"turn-end", "session-cancel"} {
-		t.Run(mode, func(t *testing.T) {
-			m := runningTestModel()
-			ctx, cancel := context.WithCancel(context.Background())
-			defer cancel()
-			m.ctx = ctx
-			m.reasoningChan = make(chan reasoningEvent, 1)
-			m.reasoningChan <- reasoningEvent{kind: reasoningEventDelta, text: "queued"}
-			m.toolEvents = newToolEventQueue()
-			m.toolEvents.begin()
-			start, _ := m.toolCallbacks()
-			entered := make(chan struct{})
-			done := make(chan struct{})
-			go func() { close(entered); start(chat.ToolStart{ID: "blocked", Name: "probe"}); close(done) }()
-			<-entered
-			// With no receiver and a full channel, the active callback cannot finish.
-			select {
-			case <-done:
-				t.Fatal("active callback bypassed reasoning boundary")
-			case <-time.After(20 * time.Millisecond):
-			}
-			if mode == "turn-end" {
-				m.toolEvents.end()
-			} else {
-				cancel()
-			}
-			select {
-			case <-done:
-			case <-time.After(200 * time.Millisecond):
-				// Always release the blocked producer before failing: no leaked goroutine.
-				<-m.reasoningChan
-				select {
-				case <-done:
-				case <-time.After(time.Second):
-					t.Fatal("cleanup failed")
-				}
-				t.Fatal("tool-start callback did not unblock on cancellation")
-			}
-		})
+func TestToolStartDoesNotBlockOnReasoningChannel(t *testing.T) {
+	m := runningTestModel()
+	m.reasoningChan = make(chan reasoningEvent, 1)
+	m.reasoningChan <- reasoningEvent{kind: reasoningEventDelta, text: "queued"}
+	m.toolEvents = newToolEventQueue()
+	m.toolEvents.begin()
+	start, _ := m.toolCallbacks()
+	done := make(chan struct{})
+	go func() { start(chat.ToolStart{ID: "a", Name: "probe"}); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("mailbox producer blocked")
+	}
+	events := m.toolEvents.drain()
+	if len(events) != 1 || events[0].reasoning == nil || events[0].reasoning.kind != reasoningEventStepEnd || events[0].start == nil {
+		t.Fatalf("missing ordered marker/start: %+v", events)
 	}
 }
 
@@ -68,8 +44,8 @@ func TestToolStartBackpressurePreservesBoundaryAndResult(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("start did not finish after drain")
 	}
-	if ev := <-m.reasoningChan; ev.kind != reasoningEventStepEnd {
-		t.Fatal("missing step boundary")
+	if len(m.reasoningChan) != 0 {
+		t.Fatal("marker must share the tool mailbox")
 	}
 	m = update(m, toolEventsReadyMsg{})
 	if len(m.running) != 1 {

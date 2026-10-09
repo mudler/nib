@@ -757,48 +757,21 @@ func TestBoundaryAfterTurnEndDoesNotReappearNextTurn(t *testing.T) {
 	}
 }
 
-// Tool wakeups and reasoning listener commands can reach Update in either
-// order. Only the reasoning stream may close a thought step.
+// Text and tools share a mailbox; a delayed wakeup cannot reorder them.
 func TestToolMailboxReasoningOrder(t *testing.T) {
-	for _, mailboxFirst := range []bool{true, false} {
-		name := "delayed tool mailbox"
-		if mailboxFirst {
-			name = "delayed authoritative boundary"
-		}
-		t.Run(name, func(t *testing.T) {
-			m := runningTestModel()
-			m.reasoningChan = make(chan reasoningEvent, 16)
-			m.toolEvents = newToolEventQueue()
-			m.toolEvents.begin()
-			start, _ := m.toolCallbacks()
-			m = update(m, delta("partial thought"))
-			m = update(m, content("checking now"))
-			// The content folded this thought, but the authoritative text
-			// remains queued when the tool starts.
-			m.reasoningChan <- reasoningEvent{kind: reasoningEventBoundary, text: "complete thought"}
-			start(chat.ToolStart{ID: "read-1", Name: "read"})
-			if mailboxFirst {
-				m = update(m, toolEventsReadyMsg{})
-			}
-			m = update(m, m.listenReasoningEvents()())
-			got := thoughts(m)
-			if len(got) != 1 || got[0] != "complete thought" {
-				t.Fatalf("thoughts = %q, want one authoritative thought", got)
-			}
-			if !m.reasoningResetPending {
-				t.Fatal("step end did not arm reasoning reset")
-			}
-			m = update(m, delta("next thought"))
-			if !mailboxFirst {
-				m = update(m, toolEventsReadyMsg{})
-			}
-			if m.reasoning != "next thought" || len(thoughts(m)) != 1 {
-				t.Fatalf("tool mailbox folded next step: live=%q thoughts=%q", m.reasoning, thoughts(m))
-			}
-			if len(m.running) != 1 {
-				t.Fatalf("running tools = %d, want 1", len(m.running))
-			}
-		})
+	m := runningTestModel()
+	m.toolEvents = newToolEventQueue()
+	m.toolEvents.begin()
+	start, _ := m.toolCallbacks()
+	m = update(m, delta("partial thought"))
+	m = update(m, content("checking now"))
+	m.enqueueReasoning(reasoningEvent{kind: reasoningEventBoundary, text: "complete thought"})
+	start(chat.ToolStart{ID: "read-1", Name: "read"})
+	m.enqueueReasoning(reasoningEvent{kind: reasoningEventDelta, text: "next thought"})
+	m = update(m, toolEventsReadyMsg{})
+	got := thoughts(m)
+	if len(got) != 1 || got[0] != "complete thought" || m.reasoning != "next thought" || len(m.running) != 1 {
+		t.Fatalf("thoughts=%q live=%q running=%d", got, m.reasoning, len(m.running))
 	}
 }
 
@@ -810,10 +783,10 @@ func TestToolStartEmitsGenerationSafeReasoningMarker(t *testing.T) {
 	m.toolEvents.begin()
 	start, _ := m.toolCallbacks()
 	start(chat.ToolStart{ID: "old", Name: "read"})
-	if len(m.reasoningChan) != 1 {
+	if len(m.toolEvents.events) != 1 {
 		t.Fatal("tool start must enqueue a step-end marker on the reasoning stream")
 	}
-	marker := <-m.reasoningChan
+	marker := *m.toolEvents.drain()[0].reasoning
 	if marker.kind != reasoningEventStepEnd || marker.gen != m.currentTurnGen() {
 		t.Fatalf("unexpected step-end marker: %+v", marker)
 	}
@@ -829,16 +802,12 @@ func TestToolStartEmitsGenerationSafeReasoningMarker(t *testing.T) {
 	resumedGen := m.currentTurnGen()
 	m = update(m, reasoningEventsMsg{{kind: reasoningEventDelta, text: "resumed thought", gen: resumedGen}})
 	start(chat.ToolStart{ID: "resumed", Name: "read"})
-	resumedMarker := <-m.reasoningChan
+	resumedMarker := *m.toolEvents.drain()[0].reasoning
 	if resumedMarker.gen != resumedGen || resumedMarker.toolGen != marker.toolGen {
 		t.Fatalf("resumed marker must keep its run and use the current epoch: %+v", resumedMarker)
 	}
-	m.reasoningChan <- resumedMarker
+	m.toolEvents.push(toolEvent{reasoning: &resumedMarker})
 	m = update(m, toolEventsReadyMsg{})
-	if m.reasoning != "resumed thought" {
-		t.Fatal("tool mailbox must not fold the resumed thought")
-	}
-	m = update(m, m.listenReasoningEvents()())
 	if m.reasoning != "" || !m.reasoningResetPending {
 		t.Fatalf("resumed tool start did not close thought: live=%q reset=%v", m.reasoning, m.reasoningResetPending)
 	}

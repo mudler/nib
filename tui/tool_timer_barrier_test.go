@@ -134,7 +134,7 @@ func timerScenario(t *testing.T, provider string, sibling bool) {
 	start, result := m.toolCallbacks()
 	results := make(chan string, 4)
 	starts := make(chan string, 4)
-	reasoningChan := m.reasoningChan
+	enqueueReasoning := m.enqueueReasoning
 	tools := []cogito.ToolDefinitionInterface{timerTool{"fast", func() { close(fast) }}}
 	if sibling {
 		tools = append(tools, timerTool{"slow", func() {
@@ -162,7 +162,7 @@ func timerScenario(t *testing.T, provider string, sibling bool) {
 			}),
 			cogito.WithStreamCallback(func(ev cogito.StreamEvent) {
 				if ev.Type == cogito.StreamEventReasoning {
-					reasoningChan <- reasoningEvent{kind: reasoningEventDelta, text: ev.Content}
+					enqueueReasoning(reasoningEvent{kind: reasoningEventDelta, text: ev.Content})
 					reasoning <- struct{}{}
 				}
 			}),
@@ -211,7 +211,6 @@ func timerScenario(t *testing.T, provider string, sibling bool) {
 		}
 	}
 	m = update(m, toolEventsReadyMsg{})
-	m = update(m, m.listenReasoningEvents()())
 	if len(m.running) != 0 || !m.loading {
 		t.Fatalf("while next request held: running=%d loading=%v", len(m.running), m.loading)
 	}

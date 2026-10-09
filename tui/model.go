@@ -610,38 +610,10 @@ type Model struct {
 	// over config.yaml's classifier block across session rebuilds. Nil
 	// means none was made.
 	classifierOverride *types.ClassifierConfig
-	// reasoningChan carries BOTH step-boundary reasoning (Callbacks.OnReasoning,
-	// the COMPLETE block for a step) and live streamed reasoning deltas
-	// (Callbacks.OnStream's "reasoning" kind), as a single ordered stream of
-	// reasoningEvent values distinguished by their kind field.
-	//
-	// This is deliberately ONE channel rather than two. cogito emits every
-	// delta for a step and only then fires the step-boundary callback, all on
-	// one goroutine — so the producer's own order is already correct. But
-	// bubbletea relays each tea.Cmd's result through its own independently
-	// scheduled goroutine (see tea.go's per-Cmd `go func(){ p.Send(cmd()) }`),
-	// so splitting boundary and delta onto separate channels/listeners lets
-	// Update observe them out of producer order: a buffered delta channel can
-	// have a send return (and its listener relay it) without a rendezvous,
-	// while a separate listener parked on the boundary channel since session
-	// start can relay near-instantly — so the boundary for a step can reach
-	// Update before that same step's final delta does, clobbering the
-	// authoritative text with a stale trailing fragment. A single channel
-	// with a single listener removes the second goroutine entirely: FIFO
-	// ordering on one channel preserves the producer's order by construction,
-	// with no sequence number or generation counter to keep in sync.
-	//
-	// Sends are blocking (never select+default): unlike statusChan (a plain
-	// status string where dropping a stale one is harmless — only the latest
-	// matters), losing either kind of reasoning event here is a real
-	// correctness bug: a dropped delta leaves a gap in the accumulated trace,
-	// and a dropped boundary means reasoningResetPending never gets armed, so
-	// the next step's deltas silently keep appending onto stale text forever.
-	// (Update does drop a boundary stamped with an ENDED turn's generation —
-	// that one belongs to no live trace and arming anything for it would be
-	// arming it for the wrong turn.)
-	// The buffer just gives a fast token burst some slack before backpressure
-	// kicks in.
+	// reasoningChan supports direct channel consumers. Session callbacks use
+	// the shared toolEvents mailbox through enqueueReasoning: only Update
+	// drains that mailbox, so pending content cannot be stranded in a listener
+	// when a tool result or terminal reply reaches Update first.
 	reasoningChan chan reasoningEvent
 
 	// carryAutoApprove holds the /yolo state across a session rebuild
@@ -701,12 +673,112 @@ type pruneNoticeMsg [2]int
 // the run parked (assistant replied, run still alive); parked=false means an
 // injected message resumed it.
 type parkEvent struct {
-	parked bool
-	reply  string
+	parked         bool
+	reply          string
+	mailboxOrdered bool // already ordered by applyToolEvents
 }
 
 // parkMsg delivers a parkEvent to the update loop.
 type parkMsg parkEvent
+
+// applyReasoningEvents mutates transcript state without scheduling listeners.
+// Mailbox batches and channel deliveries share this reducer.
+func (m *Model) applyReasoningEvents(events reasoningEventsMsg) {
+	for _, ev := range events {
+		switch ev.kind {
+		case reasoningEventBoundary:
+			// Same staleness check as the two delta kinds below. This one
+			// was omitted on the argument that a stale boundary only
+			// repaints a complete (if outdated) block, which responseMsg
+			// clears at every turn end anyway — but the boundary does not
+			// have to arrive BEFORE that reset. reasoningChan is buffered
+			// and bubbletea relays each listen Cmd on its own goroutine,
+			// so turn N's last boundary can land after responseMsg cleared
+			// the box AND after turn N+1 dispatched. It then repaints turn
+			// N's trace into an empty box, where it stays until N+1's
+			// first delta disarms reasoningResetPending and starts over:
+			// one frame of the previous answer's thinking, every time the
+			// user writes.
+			if ev.gen != m.currentTurnGen() {
+				continue
+			}
+			// This step just ended: its complete text is authoritative,
+			// so it replaces what streamed, and the step folds into the
+			// transcript (see thought.go). The NEXT step's streamed
+			// deltas are a fresh trace, not a continuation of this one.
+			// Mark the next delta to start over rather than append (see
+			// reasoningResetPending's doc).
+			if th := m.stepThoughtEntry(); th != nil {
+				th.Content = ev.text
+				m.reasoning = ""
+			} else {
+				m.reasoning = ev.text
+			}
+			m.endThoughtStep()
+			m.reasoningResetPending = true
+		case reasoningEventStepEnd:
+			if ev.gen != m.currentTurnGen() || (m.toolEvents != nil && !m.toolEvents.activeGeneration(ev.toolGen)) {
+				continue
+			}
+			m.endThoughtStep()
+			m.closeContentStep()
+			m.reasoningResetPending = true
+		case reasoningEventDelta:
+			// A delta stamped with an older generation than the one
+			// currently in flight belongs to a turn that has already
+			// ended — a new one is running now. Drop it rather than
+			// resuming/appending onto a trace that isn't this turn's.
+			// See turnGen's doc.
+			if ev.gen != m.currentTurnGen() {
+				continue
+			}
+			if m.reasoningResetPending {
+				m.reasoning = ""
+				m.reasoningResetPending = false
+			}
+			// More thinking after this step's answer already started:
+			// it belongs to the entry the step folded into.
+			if th := m.stepThoughtEntry(); th != nil {
+				th.Content += ev.text
+				continue
+			}
+			if m.reasoning == "" {
+				m.reasoningShown = 0
+				m.reasoningSince = time.Now()
+			}
+			m.reasoning += ev.text
+		case reasoningEventContentSnapshot:
+			if ev.gen != m.currentTurnGen() || !m.loading || ev.text == "" {
+				continue
+			}
+			m.foldReasoning()
+			if m.streamingActive && len(m.messages) > 0 {
+				// The snapshot is authoritative, including when the stream
+				// delivered only part of this step. Do not compare text:
+				// different steps can legitimately say the same thing.
+				m.messages[len(m.messages)-1].Content = ev.text
+			} else {
+				m.appendStreamedContent(ev.text)
+			}
+			m.closeContentStep()
+		case reasoningEventContentDelta:
+			// Same staleness check as reasoningEventDelta above, and for
+			// the same reason — but here a stale delta wouldn't just show
+			// wrong text in a box that resets next turn, it would
+			// fabricate a whole new transcript entry (see
+			// appendStreamedContent's doc and the orphan-bubble test).
+			if ev.gen != m.currentTurnGen() {
+				continue
+			}
+			// The answer starts: the thinking that led to it folds
+			// into the transcript, above the reply.
+			if m.loading && ev.text != "" {
+				m.foldReasoning()
+			}
+			m.appendStreamedContent(ev.text)
+		}
+	}
+}
 
 // closeContentStep keeps the completed reply visible while ensuring the next
 // step cannot append to it, even when no tool-result entry separates the steps.
@@ -717,9 +789,21 @@ func (m *Model) closeContentStep() {
 	m.streamingActive = false
 }
 
+// enqueueReasoning shares the tool mailbox so a listener can only take a
+// wakeup, never ownership of text. Terminal replies can flush pending text
+// and tools together before they reconcile the final answer.
+func (m Model) enqueueReasoning(ev reasoningEvent) {
+	if m.toolEvents != nil {
+		m.toolEvents.push(toolEvent{reasoning: &ev})
+		return
+	}
+	// Bare models used by channel tests have no session mailbox.
+	m.reasoningChan <- ev
+}
+
 // enqueueStepContent keeps step commentary ordered with the live stream.
 func (m Model) enqueueStepContent(content string) {
-	m.reasoningChan <- reasoningEvent{kind: reasoningEventContentSnapshot, text: content, gen: m.currentTurnGen()}
+	m.enqueueReasoning(reasoningEvent{kind: reasoningEventContentSnapshot, text: content, gen: m.currentTurnGen()})
 }
 
 // statusMsg is sent for status updates
@@ -978,9 +1062,7 @@ func (m Model) initSession() tea.Cmd {
 				default:
 				}
 			},
-			// Blocking send (no select+default): see reasoningChan's doc for
-			// why dropping a boundary event is a real correctness bug here,
-			// not a harmless "only the latest matters" case.
+			// Keep boundaries in the same mailbox as deltas and tool events.
 			OnReasoning: func(reasoning string) {
 				// gen is checked in Update, like the two delta kinds. It used
 				// to be carried "for consistency" only, on the argument that a
@@ -990,7 +1072,7 @@ func (m Model) initSession() tea.Cmd {
 				// dispatched, which is the thinking-box flicker the user sees
 				// on every message they send. See the reasoningEventBoundary
 				// case in Update.
-				m.reasoningChan <- reasoningEvent{kind: reasoningEventBoundary, text: reasoning, gen: m.currentTurnGen()}
+				m.enqueueReasoning(reasoningEvent{kind: reasoningEventBoundary, text: reasoning, gen: m.currentTurnGen()})
 			},
 			// OnStream opts the session into cogito's streaming path so the
 			// thinking box AND the assistant's reply both fill progressively
@@ -1007,11 +1089,8 @@ func (m Model) initSession() tea.Cmd {
 			// final reply, respectively. The rest (tool_call/tool_result/
 			// status/done/error/sub_agent) have no handler yet.
 			//
-			// Both are sent onto the SAME reasoningChan (not separate
-			// channels per kind) — see reasoningChan's doc for why: cogito
-			// emits every delta for a step and only then fires the boundary,
-			// all from one goroutine, so one channel is what makes Update
-			// observe them in that same order.
+			// Text and tool events share one mailbox. Only Update drains it,
+			// so independently scheduled listeners cannot reorder them.
 			OnStream: func(ev chat.StreamEvent) {
 				// Stamped with whatever generation is CURRENT right now, at
 				// enqueue time — not read later by Update, which would be
@@ -1036,9 +1115,9 @@ func (m Model) initSession() tea.Cmd {
 				m.agentSpeed.step(ev.AgentID, ev)
 				switch ev.Kind {
 				case "reasoning":
-					m.reasoningChan <- reasoningEvent{kind: reasoningEventDelta, text: ev.Content, gen: gen}
+					m.enqueueReasoning(reasoningEvent{kind: reasoningEventDelta, text: ev.Content, gen: gen})
 				case "content":
-					m.reasoningChan <- reasoningEvent{kind: reasoningEventContentDelta, text: ev.Content, gen: gen}
+					m.enqueueReasoning(reasoningEvent{kind: reasoningEventContentDelta, text: ev.Content, gen: gen})
 				}
 			},
 			OnStepContent: m.enqueueStepContent,
@@ -1873,8 +1952,8 @@ func (m Model) Update(msg tea.Msg) (nextModel tea.Model, nextCmd tea.Cmd) {
 
 	case responseMsg:
 		if m.toolEvents != nil {
-			m.toolEvents.end()
 			m.applyToolEvents(m.toolEvents.drain())
+			m.toolEvents.end()
 		}
 		// The run returned: it is no longer parked (all background work drained).
 		m.loading = false
@@ -1984,6 +2063,9 @@ func (m Model) Update(msg tea.Msg) (nextModel tea.Model, nextCmd tea.Cmd) {
 		}
 
 	case parkMsg:
+		if m.toolEvents != nil && !msg.mailboxOrdered {
+			m.applyToolEvents(m.toolEvents.drain())
+		}
 		if msg.parked {
 			// The run parked: the assistant has replied but stays alive (background
 			// work pending, or ready for a follow-up). Surface the reply as a
@@ -2015,9 +2097,12 @@ func (m Model) Update(msg tea.Msg) (nextModel tea.Model, nextCmd tea.Cmd) {
 			m.interruptArmed = false
 			m.endThoughtStep()
 			m.reasoningResetPending = false
-			// Same as responseMsg: events this step sent before it parked
-			// must not land in the box after this reset.
-			m.bumpTurnGen()
+			// Mailbox events already preserve park/resume order. Advancing
+			// here would invalidate resumed text queued before this repaint.
+			// Direct deliveries still need protection from in-flight channels.
+			if !msg.mailboxOrdered {
+				m.bumpTurnGen()
+			}
 			m.stopThinking()
 			m.clearRunning()
 			if m.isWorking() {
@@ -2241,105 +2326,15 @@ func (m Model) Update(msg tea.Msg) (nextModel tea.Model, nextCmd tea.Cmd) {
 		// reasoningChan's doc). One updateViewport for the whole batch, not
 		// one per event: that's the render-cost coalescing: see
 		// listenReasoningEvents.
-		for _, ev := range msg {
-			switch ev.kind {
-			case reasoningEventBoundary:
-				// Same staleness check as the two delta kinds below. This one
-				// was omitted on the argument that a stale boundary only
-				// repaints a complete (if outdated) block, which responseMsg
-				// clears at every turn end anyway — but the boundary does not
-				// have to arrive BEFORE that reset. reasoningChan is buffered
-				// and bubbletea relays each listen Cmd on its own goroutine,
-				// so turn N's last boundary can land after responseMsg cleared
-				// the box AND after turn N+1 dispatched. It then repaints turn
-				// N's trace into an empty box, where it stays until N+1's
-				// first delta disarms reasoningResetPending and starts over:
-				// one frame of the previous answer's thinking, every time the
-				// user writes.
-				if ev.gen != m.currentTurnGen() {
-					continue
-				}
-				// This step just ended: its complete text is authoritative,
-				// so it replaces what streamed, and the step folds into the
-				// transcript (see thought.go). The NEXT step's streamed
-				// deltas are a fresh trace, not a continuation of this one.
-				// Mark the next delta to start over rather than append (see
-				// reasoningResetPending's doc).
-				if th := m.stepThoughtEntry(); th != nil {
-					th.Content = ev.text
-					m.reasoning = ""
-				} else {
-					m.reasoning = ev.text
-				}
-				m.endThoughtStep()
-				m.reasoningResetPending = true
-			case reasoningEventStepEnd:
-				if ev.gen != m.currentTurnGen() || (m.toolEvents != nil && !m.toolEvents.activeGeneration(ev.toolGen)) {
-					continue
-				}
-				m.endThoughtStep()
-				m.closeContentStep()
-				m.reasoningResetPending = true
-			case reasoningEventDelta:
-				// A delta stamped with an older generation than the one
-				// currently in flight belongs to a turn that has already
-				// ended — a new one is running now. Drop it rather than
-				// resuming/appending onto a trace that isn't this turn's.
-				// See turnGen's doc.
-				if ev.gen != m.currentTurnGen() {
-					continue
-				}
-				if m.reasoningResetPending {
-					m.reasoning = ""
-					m.reasoningResetPending = false
-				}
-				// More thinking after this step's answer already started:
-				// it belongs to the entry the step folded into.
-				if th := m.stepThoughtEntry(); th != nil {
-					th.Content += ev.text
-					continue
-				}
-				if m.reasoning == "" {
-					m.reasoningShown = 0
-					m.reasoningSince = time.Now()
-				}
-				m.reasoning += ev.text
-			case reasoningEventContentSnapshot:
-				if ev.gen != m.currentTurnGen() || !m.loading || ev.text == "" {
-					continue
-				}
-				m.foldReasoning()
-				if m.streamingActive && len(m.messages) > 0 {
-					// The snapshot is authoritative, including when the stream
-					// delivered only part of this step. Do not compare text:
-					// different steps can legitimately say the same thing.
-					m.messages[len(m.messages)-1].Content = ev.text
-				} else {
-					m.appendStreamedContent(ev.text)
-				}
-				m.closeContentStep()
-			case reasoningEventContentDelta:
-				// Same staleness check as reasoningEventDelta above, and for
-				// the same reason — but here a stale delta wouldn't just show
-				// wrong text in a box that resets next turn, it would
-				// fabricate a whole new transcript entry (see
-				// appendStreamedContent's doc and the orphan-bubble test).
-				if ev.gen != m.currentTurnGen() {
-					continue
-				}
-				// The answer starts: the thinking that led to it folds
-				// into the transcript, above the reply.
-				if m.loading && ev.text != "" {
-					m.foldReasoning()
-				}
-				m.appendStreamedContent(ev.text)
-			}
-		}
+		m.applyReasoningEvents(msg)
 		m.updateViewport()
 		// Continue listening for more reasoning events
 		cmds = append(cmds, m.listenReasoningEvents())
 
 	case toolCallMsg:
+		if m.toolEvents != nil {
+			m.applyToolEvents(m.toolEvents.drain())
+		}
 		// A request can have been waiting since before yolo was turned on (a
 		// parallel call, a sub-agent's). Answer it the way the session would
 		// now, instead of raising a prompt yolo would not have raised.
@@ -2364,6 +2359,9 @@ func (m Model) Update(msg tea.Msg) (nextModel tea.Model, nextCmd tea.Cmd) {
 		cmds = append(cmds, m.listenToolRequest())
 
 	case askMsg:
+		if m.toolEvents != nil {
+			m.applyToolEvents(m.toolEvents.drain())
+		}
 		req := chat.AskRequest(msg)
 		m.pendingAsk = &req
 		m.awaitingAsk = true

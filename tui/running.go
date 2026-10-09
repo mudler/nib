@@ -94,14 +94,16 @@ func (m *Model) clearRunning() {
 	m.finishedTools = nil
 }
 
-// One unbounded mailbox orders starts and results without blocking producers
+// One unbounded mailbox orders text, starts and results without blocking producers
 // or dropping bursts. Only Update drains it; a wakeup never owns events, so
 // response completion can flush results even if its wakeup is still in flight.
 type toolEvent struct {
-	gen    uint64
-	start  *chat.ToolStart
-	result *chat.ToolResult
-	park   *parkEvent
+	gen       uint64
+	reasoning *reasoningEvent
+	text      *strings.Builder
+	start     *chat.ToolStart
+	result    *chat.ToolResult
+	park      *parkEvent
 }
 type toolEventsMsg []toolEvent
 type toolEventsReadyMsg struct{}
@@ -129,6 +131,7 @@ func (q *toolEventQueue) begin() {
 		close(q.done)
 	}
 	q.done = make(chan struct{})
+	q.events = nil // a superseded lifecycle cannot retain pending text or tools
 	q.gen++
 	q.epoch++
 	q.parked = false
@@ -156,10 +159,23 @@ func (q *toolEventQueue) push(e toolEvent) { q.pushFor(q.generation(), e) }
 func (q *toolEventQueue) pushFor(gen uint64, e toolEvent) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	if gen != q.gen || (!q.active && (e.start != nil || e.park != nil)) {
+	if gen != q.gen || (!q.active && (e.start != nil || e.park != nil || e.reasoning != nil)) {
 		return
 	}
 	e.gen = gen
+	// Coalesce adjacent token chunks without crossing any semantic boundary.
+	// A builder avoids quadratic copying when the UI is slower than the stream.
+	if e.reasoning != nil && (e.reasoning.kind == reasoningEventDelta || e.reasoning.kind == reasoningEventContentDelta) && len(q.events) > 0 {
+		last := &q.events[len(q.events)-1]
+		if last.reasoning != nil && last.start == nil && last.reasoning.kind == e.reasoning.kind && last.reasoning.gen == e.reasoning.gen && last.gen == gen {
+			if last.text == nil {
+				last.text = new(strings.Builder)
+				last.text.WriteString(last.reasoning.text)
+			}
+			last.text.WriteString(e.reasoning.text)
+			return
+		}
+	}
 	q.events = append(q.events, e)
 	select {
 	case q.ready <- struct{}{}:
@@ -170,6 +186,12 @@ func (q *toolEventQueue) drain() []toolEvent {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	events := q.events
+	for i := range events {
+		if events[i].text != nil {
+			events[i].reasoning.text = events[i].text.String()
+			events[i].text = nil
+		}
+	}
 	q.events = nil
 	return events
 }
@@ -189,25 +211,13 @@ func (m Model) listenToolEvents() tea.Cmd {
 
 // toolCallbacks snapshots the lifecycle generation for one SendMessage.
 func (m Model) toolCallbacks() (func(chat.ToolStart), func(chat.ToolResult)) {
-	m.toolEvents.mu.Lock()
-	gen, done := m.toolEvents.gen, m.toolEvents.done
-	m.toolEvents.mu.Unlock()
+	gen := m.toolEvents.generation()
 	return func(ts chat.ToolStart) {
 			if !m.toolEvents.activeGeneration(gen) {
 				return
 			}
-			// Park/resume keeps this run but advances its reasoning epoch.
-			// Order the marker with reasoning, using the current epoch. Update
-			// rechecks both generations in case the run ends during this send.
-			// Never hold the mailbox lock across a blocking channel send.
-			select {
-			case m.reasoningChan <- reasoningEvent{kind: reasoningEventStepEnd, gen: m.currentTurnGen(), toolGen: gen}:
-			case <-done:
-				return
-			case <-m.ctx.Done():
-				return
-			}
-			m.toolEvents.pushFor(gen, toolEvent{start: &ts})
+			marker := reasoningEvent{kind: reasoningEventStepEnd, gen: m.currentTurnGen(), toolGen: gen}
+			m.toolEvents.pushFor(gen, toolEvent{reasoning: &marker, start: &ts})
 		}, func(res chat.ToolResult) {
 			m.toolEvents.pushFor(gen, toolEvent{result: &res})
 		}
@@ -218,8 +228,13 @@ func (m *Model) applyToolEvents(events []toolEvent) {
 		if m.toolEvents != nil && e.gen != m.toolEvents.generation() {
 			continue
 		}
+		if e.reasoning != nil {
+			m.applyReasoningEvents(reasoningEventsMsg{*e.reasoning})
+		}
 		if e.park != nil && !m.interruptArmed {
-			next, _ := m.Update(parkMsg(*e.park))
+			park := parkMsg(*e.park)
+			park.mailboxOrdered = true
+			next, _ := m.Update(park)
 			*m = next.(Model)
 		}
 		if e.start != nil {
