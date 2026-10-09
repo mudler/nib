@@ -229,8 +229,10 @@ type Callbacks struct {
 	// OnStepContent is called with the assistant text that accompanied a tool
 	// selection ("I'll search for X now…") at the step boundary, before the
 	// selected tools run — so a UI can commit the commentary in chronological
-	// order relative to OnToolResult. Never fires with empty content and never
-	// for the turn's final reply (that arrives via OnResponse). Optional.
+	// order relative to OnToolResult. This is a complete snapshot, not a delta;
+	// it can repeat content already delivered through OnStream. Goal supervisor
+	// check-ins also arrive here without streamed deltas. Never fires with
+	// empty content. The turn's final reply arrives via OnResponse. Optional.
 	OnStepContent func(content string)
 	OnResponse    func(response string)
 	OnError       func(err error)

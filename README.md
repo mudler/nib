@@ -62,6 +62,7 @@ Think of it as the **`fzf` for LLMs**: portable, keyboard-driven, composable, an
 
 - **`Ctrl+Space` anywhere** — summon nib straight from your shell prompt; inline like `fzf`, or a tmux split when you're in tmux.
 - **Two modes** — a polished TUI, or a plain `--cli` mode for pipes and scripts.
+- **Step commentary** — the TUI shows assistant commentary once per step, whether it arrives as streamed chunks or a complete message.
 - **Tool execution with approval** — the AI proposes commands; you approve, deny, edit, or trust for the session.
 - **Classifier approval & reply suggestions** — a small local classifier (e.g. GLiNER on LocalAI) can approve safe calls for you, and suggests your next reply as grey text that `Tab` accepts.
 - **Sub-agents & background jobs** — delegate to typed sub-agents; background them (`Ctrl+B`) and follow each one from the footer's activity strip (`Ctrl+G`).

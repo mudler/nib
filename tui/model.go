@@ -708,6 +708,20 @@ type parkEvent struct {
 // parkMsg delivers a parkEvent to the update loop.
 type parkMsg parkEvent
 
+// closeContentStep keeps the completed reply visible while ensuring the next
+// step cannot append to it, even when no tool-result entry separates the steps.
+func (m *Model) closeContentStep() {
+	if m.streamingActive && len(m.messages) > 0 {
+		m.revealAfterTurn(len(m.messages)-1, true)
+	}
+	m.streamingActive = false
+}
+
+// enqueueStepContent keeps step commentary ordered with the live stream.
+func (m Model) enqueueStepContent(content string) {
+	m.reasoningChan <- reasoningEvent{kind: reasoningEventContentSnapshot, text: content, gen: m.currentTurnGen()}
+}
+
 // statusMsg is sent for status updates
 type statusMsg string
 
@@ -733,6 +747,9 @@ const (
 	// Applied in Update by appendStreamedContent, not by the reasoning-box
 	// logic below.
 	reasoningEventContentDelta
+	// reasoningEventContentSnapshot is the complete commentary for one step,
+	// not another token chunk. It reconciles and closes that step's reply.
+	reasoningEventContentSnapshot
 	// reasoningEventStepEnd marks a tool starting to run: the step that chose
 	// it is over. cogito fires the step boundary only for a step that had
 	// reasoning, and never for a sub-agent's steps, so without this a step
@@ -1024,9 +1041,7 @@ func (m Model) initSession() tea.Cmd {
 					m.reasoningChan <- reasoningEvent{kind: reasoningEventContentDelta, text: ev.Content, gen: gen}
 				}
 			},
-			OnStepContent: func(content string) {
-				m.reasoningChan <- reasoningEvent{kind: reasoningEventContentDelta, text: content, gen: m.currentTurnGen()}
-			},
+			OnStepContent: m.enqueueStepContent,
 			OnToolCall: func(req chat.ToolCallRequest) chat.ToolCallResponse {
 				// Send tool request and wait for user response
 				m.toolRequestChan <- req
@@ -2263,6 +2278,7 @@ func (m Model) Update(msg tea.Msg) (nextModel tea.Model, nextCmd tea.Cmd) {
 					continue
 				}
 				m.endThoughtStep()
+				m.closeContentStep()
 				m.reasoningResetPending = true
 			case reasoningEventDelta:
 				// A delta stamped with an older generation than the one
@@ -2288,6 +2304,20 @@ func (m Model) Update(msg tea.Msg) (nextModel tea.Model, nextCmd tea.Cmd) {
 					m.reasoningSince = time.Now()
 				}
 				m.reasoning += ev.text
+			case reasoningEventContentSnapshot:
+				if ev.gen != m.currentTurnGen() || !m.loading || ev.text == "" {
+					continue
+				}
+				m.foldReasoning()
+				if m.streamingActive && len(m.messages) > 0 {
+					// The snapshot is authoritative, including when the stream
+					// delivered only part of this step. Do not compare text:
+					// different steps can legitimately say the same thing.
+					m.messages[len(m.messages)-1].Content = ev.text
+				} else {
+					m.appendStreamedContent(ev.text)
+				}
+				m.closeContentStep()
 			case reasoningEventContentDelta:
 				// Same staleness check as reasoningEventDelta above, and for
 				// the same reason — but here a stale delta wouldn't just show
