@@ -1093,6 +1093,7 @@ func (s *Session) emitAgentEvent(a *cogito.AgentState) {
 }
 
 func (s *Session) emitAgentEventTo(a *cogito.AgentState, emit func(AgentEvent)) {
+	s.background.childActivity(a.ID, a.Status == cogito.AgentStatusRunning, a.Background)
 	ev := AgentEvent{
 		ID:         a.ID,
 		Type:       a.Type,
@@ -1393,6 +1394,9 @@ func (s *Session) beginTurn() context.Context {
 
 // endTurn releases the current turn context.
 func (s *Session) endTurn() {
+	if s.background != nil {
+		s.background.setRoot(false, false, false)
+	}
 	s.turnMu.Lock()
 	defer s.turnMu.Unlock()
 	if s.turnCancel != nil {
@@ -2293,6 +2297,9 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 // not per provider attempt. Hosts must serialize sends as for SendMessage;
 // concurrent acceptance/injection is synchronized with the stop gate by runMu.
 func (s *Session) SendMessageWithDelivery(text string, delivery InputDelivery, parts ...ContentPart) (string, error) {
+	if s.background != nil {
+		s.background.setRoot(true, true, false)
+	}
 	if delivery == InputHuman {
 		s.AcceptHumanMessage(text)
 	}
@@ -2579,6 +2586,9 @@ func (s *Session) SendMessageWithDelivery(text string, delivery InputDelivery, p
 			}
 		}),
 		cogito.WithOnResume(func() {
+			if s.background != nil {
+				s.background.setRoot(true, true, false)
+			}
 			observations.record("", true, "resumed", "", false)
 			if s.callbacks.OnResumed != nil {
 				s.callbacks.OnResumed()
@@ -2627,6 +2637,12 @@ func (s *Session) SendMessageWithDelivery(text string, delivery InputDelivery, p
 			return midTurn.manipulate(filterLegacyAgentCompletions(messages))
 		}),
 		cogito.WithAgentManager(s.agentManager),
+		cogito.WithAgentResumeCallback(func(event cogito.AgentResumeEvent) {
+			s.background.childActivity(event.ID, true, event.Background)
+			if event.Background && s.background.reopenBackground(backgroundAgent, event.ID) && s.goalSupervisor != nil {
+				s.goalSupervisor.backgroundEvent()
+			}
+		}),
 		cogito.WithAgentSpawnCallback(func(a *cogito.AgentState) {
 			if a.Background {
 				if s.background.startBackground(backgroundAgent, a.ID) && s.goalSupervisor != nil {
@@ -2639,8 +2655,6 @@ func (s *Session) SendMessageWithDelivery(text string, delivery InputDelivery, p
 			if a.Background {
 				publisher := "agent:" + a.ID
 				if s.background.beginPublisher(publisher) {
-					// A resumed agent has no start event; see reopenBackground.
-					s.background.reopenBackground(backgroundAgent, a.ID)
 					content := fmt.Sprintf("Agent %s completed", a.ID)
 					if result := strings.TrimSpace(a.Result); result != "" {
 						content += ":\n" + result

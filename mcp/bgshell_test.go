@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -505,5 +506,26 @@ func TestWaitStopsOnCancel(t *testing.T) {
 	}
 	if time.Since(start) > 5*time.Second {
 		t.Fatal("wait ignored the cancelled context; Ctrl+C could not stop it")
+	}
+}
+
+func TestShellLifecyclePublishedBeforeNotification(t *testing.T) {
+	jobs := NewShellJobs()
+	var terminal atomic.Bool
+	jobs.ObserveLifecycle(func(e ShellJobLifecycleEvent) {
+		if e.Kind != ShellJobLifecycleStart {
+			terminal.Store(true)
+		}
+	})
+	notified := make(chan bool, 1)
+	jobs.SetOnJobDone(func(ShellJobInfo) { notified <- terminal.Load() })
+	jobs.mgr.launch(context.Background(), "exit 0", false)
+	select {
+	case published := <-notified:
+		if !published {
+			t.Fatal("UI notification preceded terminal lifecycle publication")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("no completion")
 	}
 }

@@ -72,7 +72,9 @@ type terminalSnapshot struct {
 }
 
 type backgroundState struct {
-	mu sync.Mutex
+	mu                   sync.Mutex
+	generation, revision uint64
+	children             map[string]ActivityJob
 
 	eventSequence        uint64
 	rootObservedSequence uint64
@@ -102,6 +104,9 @@ type backgroundState struct {
 
 func newBackgroundState() *backgroundState {
 	return &backgroundState{
+		generation: activityGeneration.Add(1),
+		revision:   1,
+		children:   make(map[string]ActivityJob),
 		agents:     make(map[string]backgroundLifecycle),
 		shells:     make(map[string]backgroundLifecycle),
 		publishers: make(map[string]struct{}),
@@ -131,7 +136,7 @@ func (s *backgroundState) lifecycleMap(source backgroundSource) map[string]backg
 // startBackground records an identity once. Duplicate and stale starts are no-ops.
 func (s *backgroundState) startBackground(source backgroundSource, identity string) bool {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	defer s.publishUnlock()
 	states := s.lifecycleMap(source)
 	if _, exists := states[identity]; exists {
 		return false
@@ -146,11 +151,11 @@ func (s *backgroundState) startBackground(source backgroundSource, identity stri
 
 // reopenBackground puts a finished identity back in the running set, and is a
 // no-op for one that is running already. A resumed agent runs again under its
-// old identity without a start event (cogito reports a spawn only once), so its
-// next completion would otherwise find a terminal state and be dropped.
+// old identity through the resume callback (spawn is reported only once).
+// Publication happens before the resumed child starts executing.
 func (s *backgroundState) reopenBackground(source backgroundSource, identity string) bool {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	defer s.publishUnlock()
 	states := s.lifecycleMap(source)
 	if states[identity] == backgroundRunning {
 		return false
@@ -168,7 +173,7 @@ func (s *backgroundState) reopenBackground(source backgroundSource, identity str
 // can transition, making repeated terminal callbacks harmless.
 func (s *backgroundState) completeBackground(source backgroundSource, identity, content string, success bool) bool {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	defer s.publishUnlock()
 	states := s.lifecycleMap(source)
 	if states[identity] != backgroundRunning {
 		return false
@@ -191,7 +196,7 @@ func (s *backgroundState) completeBackground(source backgroundSource, identity, 
 
 func (s *backgroundState) beginPublisher(key string) bool {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	defer s.publishUnlock()
 	if s.closed || s.internalErr != nil {
 		return false
 	}
@@ -204,7 +209,7 @@ func (s *backgroundState) beginPublisher(key string) bool {
 
 func (s *backgroundState) endPublisher(key string) bool {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	defer s.publishUnlock()
 	if _, exists := s.publishers[key]; !exists {
 		return false
 	}
@@ -225,7 +230,7 @@ func (s *backgroundState) reserveNotices(limit int) (uint64, []sequencedNotice) 
 // released necessarily require a later root request.
 func (s *backgroundState) reserveNoticesForRoot(limit int) (uint64, []sequencedNotice, uint64) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	defer s.publishUnlock()
 	observed := s.eventSequence
 	count := 0
 	for _, notice := range s.notices {
@@ -259,7 +264,7 @@ func (s *backgroundState) reserveNoticesForRoot(limit int) (uint64, []sequencedN
 // sequence order, including notices published while the request was assembled.
 func (s *backgroundState) rollbackNotices(reservation uint64) bool {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	defer s.publishUnlock()
 	changed := false
 	for _, notice := range s.notices {
 		if notice.state == noticeReserved && notice.reserve == reservation {
@@ -273,7 +278,7 @@ func (s *backgroundState) rollbackNotices(reservation uint64) bool {
 // consumeNotices marks notices delivered only at the model-request handoff.
 func (s *backgroundState) consumeNotices(reservation uint64) bool {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	defer s.publishUnlock()
 	changed := false
 	for _, notice := range s.notices {
 		if notice.state == noticeReserved && notice.reserve == reservation {
@@ -285,7 +290,7 @@ func (s *backgroundState) consumeNotices(reservation uint64) bool {
 
 func (s *backgroundState) markRootObserved(sequence uint64) bool {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	defer s.publishUnlock()
 	if sequence > s.eventSequence {
 		s.internalErr = errors.New("root observed future background sequence")
 		s.stopTimerLocked()
@@ -299,7 +304,7 @@ func (s *backgroundState) markRootObserved(sequence uint64) bool {
 
 func (s *backgroundState) setRoot(active, requesting, parked bool) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	defer s.publishUnlock()
 	wasParked := s.rootParked
 	// Interruption is a turn-local abnormal condition. Entering a requesting
 	// phase starts (or resumes) a turn and clears a previous interrupt.
@@ -314,7 +319,7 @@ func (s *backgroundState) setRoot(active, requesting, parked bool) {
 
 func (s *backgroundState) setGoal(identity uint64, lifecycle goalLifecycle) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	defer s.publishUnlock()
 	if s.goalIdentity == identity && s.goalLifecycle == lifecycle {
 		return
 	}
@@ -324,7 +329,7 @@ func (s *backgroundState) setGoal(identity uint64, lifecycle goalLifecycle) {
 
 func (s *backgroundState) setReviewing(reviewing bool) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	defer s.publishUnlock()
 	s.reviewing = reviewing
 	if reviewing {
 		s.reviewQueued = false
@@ -333,14 +338,14 @@ func (s *backgroundState) setReviewing(reviewing bool) {
 
 func (s *backgroundState) interrupt() {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	defer s.publishUnlock()
 	s.interrupted = true
 	s.invalidateSupervisorLocked()
 }
 
 func (s *backgroundState) close() {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	defer s.publishUnlock()
 	if s.closed {
 		return
 	}
@@ -451,7 +456,7 @@ func (s *backgroundState) stopTimerLocked() {
 // hint without blocking.
 func (s *backgroundState) armGoalTimer(factory goalTimerFactory, delay time.Duration, wake chan<- struct{}) uint64 {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	defer s.publishUnlock()
 	s.stopTimerLocked()
 	if s.closed || s.interrupted || s.internalErr != nil || s.goalLifecycle != goalActive || !s.rootParked || !s.runningLocked() || s.reviewQueued || s.reviewing {
 		return s.supervisorGeneration
@@ -472,12 +477,12 @@ func (s *backgroundState) armGoalTimer(factory goalTimerFactory, delay time.Dura
 func (s *backgroundState) goalTimerFired(generation, goal uint64, wake chan<- struct{}) {
 	s.mu.Lock()
 	if s.closed || s.interrupted || s.internalErr != nil || generation != s.supervisorGeneration || goal != s.goalIdentity || s.goalLifecycle != goalActive || !s.rootParked || !s.runningLocked() || s.reviewQueued || s.reviewing {
-		s.mu.Unlock()
+		s.publishUnlock()
 		return
 	}
 	s.timer = nil
 	s.reviewQueued = true
-	s.mu.Unlock()
+	s.publishUnlock()
 	select {
 	case wake <- struct{}{}:
 	default:

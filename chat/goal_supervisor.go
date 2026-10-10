@@ -61,7 +61,7 @@ func (g *goalSupervisor) setDelays(delays []time.Duration) error {
 	g.state.scheduleIndex = 0
 	g.state.invalidateTimerLocked()
 	g.armCurrentLocked()
-	g.state.mu.Unlock()
+	g.state.publishUnlock()
 	return nil
 }
 
@@ -71,7 +71,7 @@ func (g *goalSupervisor) stopGoal(lifecycle goalLifecycle) {
 	g.state.mu.Lock()
 	g.state.goalLifecycle = lifecycle
 	g.state.invalidateSupervisorLocked()
-	g.state.mu.Unlock()
+	g.state.publishUnlock()
 }
 
 func (g *goalSupervisor) goalPause()     { g.stopGoal(goalPaused) }
@@ -86,7 +86,7 @@ func (g *goalSupervisor) parked() {
 	g.state.mu.Lock()
 	g.state.rootActive, g.state.rootRequesting, g.state.rootParked = true, false, true
 	g.armCurrentLocked()
-	g.state.mu.Unlock()
+	g.state.publishUnlock()
 }
 
 // backgroundEvent applies supervisor policy after a lifecycle transition has
@@ -101,7 +101,7 @@ func (g *goalSupervisor) backgroundEvent() {
 		g.state.reviewQueued = true
 		queued = true
 	}
-	g.state.mu.Unlock()
+	g.state.publishUnlock()
 	if queued {
 		g.wakeNonblocking()
 	}
@@ -109,7 +109,7 @@ func (g *goalSupervisor) backgroundEvent() {
 
 func (g *goalSupervisor) takeReview() (goalReview, bool) {
 	g.state.mu.Lock()
-	defer g.state.mu.Unlock()
+	defer g.state.publishUnlock()
 	if !g.state.reviewQueued || !g.eligibleBaseLocked() {
 		return goalReview{}, false
 	}
@@ -127,7 +127,7 @@ func (g *goalSupervisor) reviewFinishedAndParked() {
 		g.state.scheduleIndex++
 	}
 	g.armCurrentLocked()
-	g.state.mu.Unlock()
+	g.state.publishUnlock()
 }
 
 func (g *goalSupervisor) eligibleBaseLocked() bool {
@@ -141,7 +141,7 @@ func (g *goalSupervisor) eligibleLocked() bool {
 
 func (g *goalSupervisor) armCurrent() {
 	g.state.mu.Lock()
-	defer g.state.mu.Unlock()
+	defer g.state.publishUnlock()
 	g.armCurrentLocked()
 }
 
@@ -193,7 +193,7 @@ func (g *goalSupervisor) reviewCurrent(identity uint64) bool {
 
 func (g *goalSupervisor) reviewAborted(identity uint64) {
 	g.state.mu.Lock()
-	defer g.state.mu.Unlock()
+	defer g.state.publishUnlock()
 	if g.state.goalIdentity != identity {
 		return
 	}

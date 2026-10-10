@@ -273,8 +273,9 @@ func (m *bgJobManager) launch(parent context.Context, script string, foreground 
 		j.ended = time.Now()
 		j.mu.Unlock()
 		close(j.doneCh)
-		m.notifyDone(j)
+		// Publish lifecycle truth before the legacy UI notification.
 		m.notifyTerminal(j)
+		m.notifyDone(j)
 	} else {
 		go func() {
 			err := cmd.Wait()
@@ -308,8 +309,8 @@ func (m *bgJobManager) launch(parent context.Context, script string, foreground 
 			j.killed = j.killRequested && err != nil && errors.Is(ctx.Err(), context.Canceled) && j.exitCode == -1
 			j.mu.Unlock()
 			close(j.doneCh)
-			m.notifyDone(j)
 			m.notifyTerminal(j)
+			m.notifyDone(j)
 		}()
 	}
 
