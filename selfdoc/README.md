@@ -318,7 +318,9 @@ Tool calls appear as queued while they await approval or dispatch, without an
 elapsed timer. The timer starts when execution starts. Each result appears as
 soon as its tool finishes, even while sibling tools continue running. Failed,
 denied, skipped, and cancelled calls show their terminal outcome instead of a
-success marker. The model waits for the full batch before its next request.
+success marker. Completed calls whose output reports failure also show an error
+marker and retain their error text. The model waits for the full batch before
+its next request.
 
 ### The footer
 

@@ -58,7 +58,9 @@ func TestToolLifecycleOutcomeAuthorityAndLegacyFallback(t *testing.T) {
 		name, outcome, result string
 		status                render.ToolStatus
 	}{
-		{"completed overrides output", "completed", `{"success":false,"error":"old output"}`, render.ToolStatusOK},
+		{"completed failure", "completed", `{"success":false,"error":"failed"}`, render.ToolStatusFailed},
+		{"completed success", "completed", `{"success":true}`, render.ToolStatusOK},
+		{"failed overrides output", "failed", `{"success":true}`, render.ToolStatusFailed},
 		{"legacy failure", "", `{"success":false,"error":"failed"}`, render.ToolStatusFailed},
 		{"legacy success", "", `{"success":true}`, render.ToolStatusOK},
 	} {
@@ -66,6 +68,29 @@ func TestToolLifecycleOutcomeAuthorityAndLegacyFallback(t *testing.T) {
 			msg := toolMessage(chat.ToolResult{Name: "write", Outcome: tc.outcome, Result: tc.result}, 0)
 			if msg.Status != tc.status {
 				t.Fatalf("status=%v, want %v", msg.Status, tc.status)
+			}
+		})
+	}
+}
+
+func TestToolLifecycleCompletedSemanticFailure(t *testing.T) {
+	for _, tc := range []struct {
+		name, tool, result, content, meta string
+	}{
+		{"bash exit", "bash", `{"stdout":"","stderr":"boom","exit_code":1,"success":false}`, "boom", "exit 1"},
+		{"bash timeout", "bash", `{"stdout":"","stderr":"command timed out","success":false}`, "command timed out", ""},
+		{"write permission", "write", `{"success":false,"error":"permission denied"}`, "permission denied", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := runningTestModel()
+			m.queueTool(chat.ToolStart{ID: "call", Name: tc.tool})
+			m.applyToolResult(chat.ToolResult{ID: "call", Name: tc.tool, Outcome: "completed", Result: tc.result})
+			if len(m.running) != 0 || len(m.messages) != 1 {
+				t.Fatalf("unresolved completion: running=%+v messages=%+v", m.running, m.messages)
+			}
+			msg := m.messages[0]
+			if msg.Status != render.ToolStatusFailed || msg.Content != tc.content || msg.Meta != tc.meta {
+				t.Fatalf("got status %v content %q meta %q, want failed content %q meta %q", msg.Status, msg.Content, msg.Meta, tc.content, tc.meta)
 			}
 		})
 	}
