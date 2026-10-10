@@ -9,7 +9,6 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"sync"
 	"time"
 )
 
@@ -37,12 +36,13 @@ type workerResponse struct {
 }
 
 // Worker isolates both parsing and extraction in one disposable subprocess.
-// ParseSource calls are serialized. Any request failure permanently closes the
-// worker; callers must not retry indefinitely. Close kills and reaps the child.
+// ParseSource calls are serialized. Any admitted request failure permanently
+// closes the worker; cancellation while queued leaves it untouched. Callers must
+// not retry indefinitely. Close kills and reaps the child.
 // The executable must dispatch InternalWorkerArg to ServeWorker before normal
 // CLI setup. No source files are opened by the worker.
 type Worker struct {
-	mu        sync.Mutex
+	admission chan struct{} // Guards all mutable state; also serializes Close.
 	ctx       context.Context
 	cancel    context.CancelFunc
 	command   func() *exec.Cmd
@@ -54,11 +54,11 @@ type Worker struct {
 }
 
 // NewWorker creates a lazy worker scoped to ctx (the caller's overall budget).
-// Startup, parse, extraction and response transfer share the request deadline,
+// Admission, startup, parse, extraction and response share the request deadline,
 // capped at WorkerParseTimeout. A child is reused until failure or Close.
 func NewWorker(ctx context.Context) *Worker {
 	life, cancel := context.WithCancel(ctx)
-	w := &Worker{ctx: life, cancel: cancel}
+	w := &Worker{ctx: life, cancel: cancel, admission: make(chan struct{}, 1)}
 	w.command = func() *exec.Cmd {
 		exe, err := os.Executable()
 		if err != nil {
@@ -67,9 +67,9 @@ func NewWorker(ctx context.Context) *Worker {
 		return exec.Command(exe, InternalWorkerArg)
 	}
 	// Also reap an idle worker when its overall budget expires.
-	w.mu.Lock()
+	w.admission <- struct{}{}
 	w.stopWatch = context.AfterFunc(ctx, func() { _ = w.Close() })
-	w.mu.Unlock()
+	<-w.admission
 	return w
 }
 
@@ -78,8 +78,24 @@ func NewWorker(ctx context.Context) *Worker {
 // extensionless Dockerfile/Jenkinsfile); it is not opened. The caller owns safe,
 // bounded regular-file reads and must not mutate src during this call.
 func (w *Worker) ParseSource(ctx context.Context, filename string, src []byte) ([]Entry, bool, error) {
-	w.mu.Lock()
-	defer w.mu.Unlock()
+	ctx, cancel := context.WithTimeout(ctx, WorkerParseTimeout)
+	defer cancel()
+	select {
+	case w.admission <- struct{}{}:
+	case <-ctx.Done():
+		return nil, false, ctx.Err()
+	case <-w.ctx.Done():
+		if err := ctx.Err(); err != nil {
+			return nil, false, err
+		}
+		return nil, false, ErrWorkerClosed
+	}
+	defer func() { <-w.admission }()
+	// Cancellation can race with admission. It must not dispose an unrelated
+	// request's worker, even if both select cases were ready.
+	if err := ctx.Err(); err != nil {
+		return nil, false, err
+	}
 	if w.closed {
 		return nil, false, ErrWorkerClosed
 	}
@@ -87,14 +103,9 @@ func (w *Worker) ParseSource(ctx context.Context, filename string, src []byte) (
 	if err := w.ctx.Err(); err != nil {
 		return fail(err)
 	}
-	if err := ctx.Err(); err != nil {
-		return fail(err)
-	}
 	if len(src) > WorkerMaxSourceBytes || len(filename) > maxWorkerFilename {
 		return fail(errors.New("codeindex worker request exceeds input limit"))
 	}
-	ctx, cancel := context.WithTimeout(ctx, WorkerParseTimeout)
-	defer cancel()
 	payload, err := json.Marshal(workerRequest{filename, src})
 	if err != nil {
 		return fail(err)
@@ -184,8 +195,8 @@ func (w *Worker) ParseSource(ctx context.Context, filename string, src []byte) (
 // Close is idempotent and interrupts an active request before waiting for it.
 func (w *Worker) Close() error {
 	w.cancel()
-	w.mu.Lock()
-	defer w.mu.Unlock()
+	w.admission <- struct{}{}
+	defer func() { <-w.admission }()
 	w.closeLocked()
 	return nil
 }

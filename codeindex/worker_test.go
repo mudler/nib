@@ -190,3 +190,77 @@ func TestWorkerCloseActive(t *testing.T) {
 	}
 	assertReaped(t, w)
 }
+
+func TestWorkerQueuedCancellation(t *testing.T) {
+	for _, deadline := range []bool{false, true} {
+		t.Run(map[bool]string{false: "cancel", true: "deadline"}[deadline], func(t *testing.T) {
+			w := testWorker(t, context.Background(), "hang")
+			started := make(chan struct{})
+			command := w.command
+			w.command = func() *exec.Cmd {
+				close(started) // The active request owns serialized admission.
+				return command()
+			}
+			activeCtx, stopActive := context.WithCancel(context.Background())
+			activeDone := make(chan error, 1)
+			go func() {
+				_, _, err := w.ParseSource(activeCtx, "active.go", nil)
+				activeDone <- err
+			}()
+			defer func() {
+				stopActive()
+				select {
+				case <-activeDone:
+				case <-time.After(3 * time.Second):
+					t.Error("active request did not stop")
+				}
+			}()
+			select {
+			case <-started:
+			case <-time.After(3 * time.Second):
+				t.Fatal("active request did not start")
+			}
+
+			ctx, cancel := context.WithCancel(context.Background())
+			want := context.Canceled
+			if deadline {
+				cancel()
+				ctx, cancel = context.WithTimeout(context.Background(), 20*time.Millisecond)
+				want = context.DeadlineExceeded
+			} else {
+				timer := time.AfterFunc(20*time.Millisecond, cancel)
+				defer timer.Stop()
+			}
+			defer cancel()
+			queuedDone := make(chan error, 1)
+			go func() {
+				_, _, err := w.ParseSource(ctx, "queued.go", nil)
+				queuedDone <- err
+			}()
+			select {
+			case err := <-queuedDone:
+				if !errors.Is(err, want) {
+					t.Errorf("queued request got %v, want %v", err, want)
+				}
+			case <-time.After(300 * time.Millisecond):
+				t.Error("queued request ignored cancellation while active request held admission")
+				stopActive()
+				select {
+				case <-queuedDone:
+				case <-time.After(3 * time.Second):
+					t.Fatal("queued request did not stop")
+				}
+				return
+			}
+			select {
+			case err := <-activeDone:
+				activeDone <- err // Leave cleanup to join the active request.
+				t.Fatalf("queued cancellation interrupted active request: %v", err)
+			default:
+			}
+			if err := w.ctx.Err(); err != nil {
+				t.Fatalf("queued cancellation disposed worker: %v", err)
+			}
+		})
+	}
+}
