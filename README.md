@@ -314,6 +314,14 @@ sub-agent finishes, its line reports the same: `sub-agent explore finished · 3 
 usage report. When the backend reports no usage, nib counts the streamed output
 and marks it with `~`.
 
+Tool calls appear as queued while they await approval or dispatch, without an
+elapsed timer. The timer starts when execution starts. Each result appears as
+soon as its tool finishes, even while sibling tools continue running. Failed,
+denied, skipped, and cancelled calls show their terminal outcome instead of a
+success marker. Completed calls whose output reports failure also show an error
+marker and retain their error text. The model waits for the full batch before
+its next request.
+
 ### The footer
 
 The footer keeps lifecycle status and front telemetry on one permanent row,
@@ -1234,6 +1242,45 @@ nib speaks the [Model Context Protocol](https://modelcontextprotocol.io/). A set
 tools is built in — `bash`, the filesystem tools (`read`, `write`, `edit`, `glob`,
 `grep`, `tree`), the code tools (`index`, `repo_map`, `ast_grep`, `lsp`), and the web tools (`web_fetch`, `web_search`); add any external server with
 the `nib mcp` CLI or directly in your config.
+
+### Bounded repository maps
+
+`repo_map` accepts an optional `path` (workspace by default) and `budget`
+(default 3000, maximum 8000 approximate tokens, at four bytes per token).
+The entire response, including the first file and partial-result notice, fits
+that output budget. Definitions are ranked by count, then source size, then
+path. Small complete maps retain the usual file/definition/line format.
+
+Each map has fixed safety limits, not model-overridable arguments: **10 seconds**
+including discovery and worker startup, **1 second per parse/extraction**,
+**1000 source files attempted**, **512 KiB per file**, **16 MiB actually read**
+(including fallback ignore files), and **20,000 discovery entries**. Git entries
+are emitted path records; fallback entries are directory entries examined.
+Fallback directory depth is capped at 128; retained definition data has an
+8 MiB accounting cap. One disposable parser subprocess is reused per map and
+killed/reaped on cancellation or failure; a failed worker is not restarted.
+
+In Git repositories, streamed `git ls-files --cached --others --exclude-standard`
+honors nested `.gitignore`, repository excludes and global Git ignores, while
+tracked ignored files remain eligible. Discovery is scoped to the requested
+subtree. Nested repositories, worktrees and submodules are not descended into
+unless explicitly targeted. With Git unavailable or outside a repository, a
+bounded directory walk uses go-git's maintained ignore matcher for `.gitignore`
+files below the requested root; global Git configuration, ancestor rules and
+tracked-file exceptions are unavailable in this fallback. It also skips common
+dependency/build directories (including `node_modules`, `vendor`, `dist`,
+`build`, and `target`). Neither mode follows symlinks or reads FIFOs/devices.
+Safe descriptor-relative opening currently requires Unix; other platforms fail
+closed rather than weaken this protection.
+
+Limits, unreadable/oversized files and parser failures produce a useful partial
+map with scanned/attempted/read/skipped counts, a reason and advice to narrow
+`path` or use `index`. Skipped counts represent encountered files or whole
+pruned trees, not all descendants; Git-ignored paths are not emitted or counted.
+Very small output budgets shorten the notice. Explicit caller cancellation is
+labelled **user cancelled**, separately from the overall deadline. Regular-file
+filesystem syscalls are checked between operations; a stalled kernel/network
+filesystem can delay cancellation (unlike the killable parser subprocess).
 
 ### `nib mcp` CLI
 

@@ -19,6 +19,13 @@ import (
 func toolMessage(res chat.ToolResult, elapsed time.Duration) ChatMessage {
 	msg := ChatMessage{Role: "tool", Name: res.Name, Arguments: res.Arguments, Status: render.ToolStatusOK, Images: res.Images}
 	failed, detail := chat.ToolOutcome(res.Result)
+	// Non-completed lifecycle outcomes are authoritative failures. Completed
+	// calls can still report semantic failures in their output, as can legacy
+	// callers that supply no lifecycle outcome.
+	if res.Outcome != "" && res.Outcome != "completed" {
+		failed = true
+		detail = res.Outcome
+	}
 	elapsedStr := ""
 	if elapsed > 0 {
 		elapsedStr = theme.Elapsed(elapsed)

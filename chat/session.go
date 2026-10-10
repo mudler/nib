@@ -2305,6 +2305,9 @@ func (s *Session) SendMessageWithDelivery(text string, delivery InputDelivery, p
 		observe = s.callbacks.ObservationCallbacks()
 	}
 	observations := newObservationEmitter(observe, time.Now)
+	if toolCallbacks.QueuedToolCallback != nil {
+		toolCallbacks.OnToolQueued = toolCallbacks.QueuedToolCallback()
+	}
 	if toolCallbacks.ToolCallbacks != nil {
 		toolCallbacks.OnToolStart, toolCallbacks.OnToolResult = toolCallbacks.ToolCallbacks()
 	}
@@ -2498,20 +2501,30 @@ func (s *Session) SendMessageWithDelivery(text string, delivery InputDelivery, p
 			if decision.Approved && state.AgentID == "" && toolCallbacks.OnToolResult != nil {
 				s.changes.put(changeKey(tool.ID, tool.Name, string(args)), change)
 			}
-			toolCallbacks.emitSubAgentToolLine(decision.Approved, state.AgentID, tool.Name, string(args))
-			if decision.Approved {
-				observations.record(state.AgentID, true, "tool started", tool.ID, false)
-			}
-			toolCallbacks.emitToolStart(decision.Approved, state.AgentID, tool.Name, string(args), tool.ID)
 			return decision
 		}),
-		cogito.WithToolCallResultCallback(func(status cogito.ToolStatus) {
+		cogito.WithToolLifecycleCallback(func(event cogito.ToolLifecycleEvent) {
+			args, _ := json.Marshal(event.ToolChoice.Arguments)
+			switch event.Phase {
+			case cogito.ToolLifecycleQueued:
+				if event.AgentID == "" && toolCallbacks.OnToolQueued != nil {
+					toolCallbacks.OnToolQueued(ToolStart{ID: event.CallID, Name: event.ToolChoice.Name, Arguments: string(args)})
+				}
+				return
+			case cogito.ToolLifecycleRunning:
+				observations.record(event.AgentID, true, "tool started", event.CallID, false)
+				toolCallbacks.emitSubAgentToolLine(true, event.AgentID, event.ToolChoice.Name, string(args))
+				toolCallbacks.emitToolStart(true, event.AgentID, event.ToolChoice.Name, string(args), event.CallID)
+				return
+			}
+			status := event.Status
+
 			s.agentLogs.recordResult(status) // no-op for root-agent tool calls
 			// An absent log mapping cannot prove root ownership for a result.
-			owner := s.agentLogs.agentFor(status.ToolArguments.ID)
-			observations.record(owner, owner != "", "tool completed", status.ToolArguments.ID, false)
+			owner := event.AgentID
+			observations.record(owner, true, "tool completed", status.ToolArguments.ID, false)
 			s.recordExternalResult(status.Name, status.Result)
-			if s.hooks != nil {
+			if status.Executed && s.hooks != nil {
 				s.hooks.Fire(s.ctx, hooks.EventPostToolUse, status.Name, map[string]any{
 					"event":  "PostToolUse",
 					"tool":   status.Name,
@@ -2525,7 +2538,7 @@ func (s *Session) SendMessageWithDelivery(text string, delivery InputDelivery, p
 				}
 				change := s.changes.take(changeKey(status.ToolArguments.ID, status.Name, argsJSON))
 				if change != nil {
-					if failed, _ := ToolOutcome(status.Result); failed {
+					if failed, _ := ToolOutcome(status.Result); failed || event.Outcome != cogito.ToolOutcomeCompleted {
 						change = nil
 					} else {
 						change.settle(s.workingDir)
@@ -2536,7 +2549,8 @@ func (s *Session) SendMessageWithDelivery(text string, delivery InputDelivery, p
 					Name:      status.Name,
 					Result:    status.Result,
 					Arguments: argsJSON,
-					AgentID:   s.agentLogs.agentFor(status.ToolArguments.ID),
+					AgentID:   event.AgentID,
+					Outcome:   string(event.Outcome),
 					Change:    change,
 					Images:    extractToolImages(status.ResultData),
 				})

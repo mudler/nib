@@ -104,6 +104,18 @@ func Entries(path string) (entries []Entry, hasError bool, err error) {
 			path, humanBytes(fi.Size()), humanBytes(maxFileSize))
 	}
 
+	lang, err := languageForPath(path)
+	if err != nil {
+		return nil, false, err
+	}
+	src, err := os.ReadFile(path)
+	if err != nil {
+		return nil, false, fmt.Errorf("index %s: %w", path, err)
+	}
+	return extractSource(path, src, lang)
+}
+
+func languageForPath(path string) (*language, error) {
 	ext := strings.ToLower(filepath.Ext(path))
 	mu.RLock()
 	lang := byExt[ext]
@@ -114,15 +126,22 @@ func Entries(path string) (entries []Entry, hasError bool, err error) {
 	}
 	mu.RUnlock()
 	if lang == nil {
-		return nil, false, fmt.Errorf("index: no extractor for %s files (supported: %s)",
+		return nil, fmt.Errorf("index: no extractor for %s files (supported: %s)",
 			ext, strings.Join(SupportedExtensions(), ", "))
 	}
 
-	src, err := os.ReadFile(path)
-	if err != nil {
-		return nil, false, fmt.Errorf("index %s: %w", path, err)
-	}
+	return lang, nil
+}
 
+func entriesSource(path string, src []byte) ([]Entry, bool, error) {
+	lang, err := languageForPath(path)
+	if err != nil {
+		return nil, false, err
+	}
+	return extractSource(path, src, lang)
+}
+
+func extractSource(path string, src []byte, lang *language) ([]Entry, bool, error) {
 	p := lang.pool.Get().(*bonsai.Parser)
 	defer lang.pool.Put(p)
 
@@ -131,7 +150,7 @@ func Entries(path string) (entries []Entry, hasError bool, err error) {
 		return nil, false, fmt.Errorf("index %s: parse: %w", path, err)
 	}
 
-	entries = lang.extractor.Extract(root, src)
+	entries := lang.extractor.Extract(root, src)
 	return entries, root.HasError(), nil
 }
 
