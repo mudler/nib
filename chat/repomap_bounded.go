@@ -283,6 +283,7 @@ func (s *mapScan) walk(rel string, patterns []gitignore.Pattern, depth int) {
 		// Give children independent backing storage so sibling rules cannot leak.
 		patterns = append([]gitignore.Pattern(nil), patterns...)
 		for _, line := range strings.Split(string(data), "\n") {
+			line = strings.TrimSuffix(line, "\r")
 			if line != "" && !strings.HasPrefix(line, "#") {
 				patterns = append(patterns, gitignore.ParsePattern(line, domain))
 			}

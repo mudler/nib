@@ -178,6 +178,31 @@ func TestRepoMapFallbackIgnoreAndRegular(t *testing.T) {
 	}
 }
 
+func TestRepoMapFallbackCRLFIgnore(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("PATH", "")
+	if err := os.WriteFile(filepath.Join(dir, ".gitignore"), []byte("secret.go\r\n visible.go\r\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"secret.go", "visible.go", " visible.go"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("package main\nfunc Definition() {}\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	out, err := renderRepoMapWith(context.Background(), dir, 3000, testMapFactory, repoMapLimitsDefault)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"secret.go", " visible.go"} {
+		if strings.Contains(out, name) {
+			t.Fatalf("ignored file %q appears in output:\n%s", name, out)
+		}
+	}
+	if !strings.Contains(out, "visible.go") {
+		t.Fatalf("visible file missing from output:\n%s", out)
+	}
+}
+
 func TestRepoMapGitScopes(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git unavailable")
