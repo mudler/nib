@@ -410,3 +410,128 @@ func TestActivitySnapshotRevisionAndUnknown(t *testing.T) {
 		t.Fatalf("internal error authorized readiness: %+v", got)
 	}
 }
+
+// Exercise the production spawn and resume adapters: Cogito retains the
+// original foreground flag on AgentState even when the new execution is async.
+func TestActivitySnapshotForegroundChildAsyncResume(t *testing.T) {
+	xlog.SetLogger(xlog.NewLogger(xlog.LogLevel("error"), ""))
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	var session *Session
+	var rootCalls, childCalls atomic.Int64
+	var childID string
+	var mu sync.Mutex
+	var completed []ActivitySnapshot
+	var noticeDelivered atomic.Bool
+	resumedCompleted := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.NotFound(w, r)
+			return
+		}
+		var req struct {
+			Messages []struct {
+				Role    string `json:"role"`
+				Content string `json:"content"`
+			} `json:"messages"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Error(err)
+			return
+		}
+		isChild := false
+		for _, m := range req.Messages {
+			isChild = isChild || m.Role == "user" && m.Content == "foreground resume task"
+		}
+		msg := map[string]any{"role": "assistant", "content": "done"}
+		tool := func(name string, args any) {
+			encoded, _ := json.Marshal(args)
+			msg["content"] = ""
+			msg["tool_calls"] = []any{map[string]any{"id": "resume-test-call", "type": "function", "function": map[string]any{"name": name, "arguments": string(encoded)}}}
+		}
+		if isChild {
+			if childCalls.Add(1) == 2 {
+				snapshot := session.ActivitySnapshot()
+				if !snapshot.Known || !snapshot.Coherent || len(snapshot.Agents) != 1 || !snapshot.Agents[0].Running || !snapshot.Agents[0].Background || snapshot.ReadyAllowed {
+					t.Errorf("async resume not published before first request: %+v", snapshot)
+				}
+				if got := session.background.terminalSnapshot().runningAgents; got != 1 {
+					t.Errorf("running ledger before resumed request = %d, want 1", got)
+				}
+				msg["content"] = "resumed child result"
+			}
+		} else {
+			for _, m := range req.Messages {
+				if strings.Contains(m.Content, "Agent ") && strings.Contains(m.Content, "completed:\nresumed child result") {
+					noticeDelivered.Store(true)
+				}
+			}
+			switch rootCalls.Add(1) {
+			case 1:
+				tool("spawn_agent", map[string]any{"task": "foreground resume task", "background": false})
+			case 3:
+				mu.Lock()
+				id := childID
+				mu.Unlock()
+				tool("send_agent_message", map[string]any{"agent_id": id, "message": "continue"})
+			case 4:
+				select {
+				case <-resumedCompleted:
+				case <-ctx.Done():
+					return
+				}
+			}
+		}
+		json.NewEncoder(w).Encode(map[string]any{"id": "synthetic", "object": "chat.completion", "choices": []any{map[string]any{"index": 0, "message": msg, "finish_reason": "stop"}}})
+	}))
+	defer srv.Close()
+	var err error
+	session, err = NewSession(ctx, types.Config{Model: "synthetic", APIKey: "synthetic", BaseURL: srv.URL + "/v1", ApprovalMode: "auto", WorkingDir: t.TempDir(), AgentOptions: types.AgentOptions{Iterations: 8, MaxAttempts: 1, MaxRetries: 1}}, Callbacks{
+		OnAgentEvent: func(event AgentEvent) {
+			if event.Status != AgentStatusCompleted {
+				return
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			childID = event.ID
+			completed = append(completed, session.ActivitySnapshot())
+			if len(completed) == 2 {
+				// The ledger must be terminal before the UI completion callback.
+				snapshot := completed[1]
+				if len(snapshot.Agents) != 1 || snapshot.Agents[0].Running || snapshot.Barrier.EventSequence < 2 || snapshot.Barrier.Publishers != 0 {
+					t.Errorf("completion callback published phantom running child: %+v", snapshot)
+				}
+				if event.Background {
+					t.Error("fixture no longer exercises original foreground AgentState")
+				}
+				close(resumedCompleted)
+			}
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+	if _, err := session.SendMessage("spawn a foreground child"); err != nil {
+		t.Fatal(err)
+	}
+	initial := session.ActivitySnapshot()
+	if len(initial.Agents) != 1 || initial.Agents[0].Running || initial.Agents[0].Background || !initial.ReadyAllowed {
+		t.Fatalf("foreground child did not finish: %+v", initial)
+	}
+	if _, err := session.SendMessage("resume the finished foreground child"); err != nil {
+		t.Errorf("resumed turn failed to settle: %v", err)
+	}
+	if !noticeDelivered.Load() {
+		t.Error("resumed completion notice never delivered to root")
+	}
+	final := session.ActivitySnapshot()
+	if !final.ReadyAllowed || len(final.Agents) != 1 || final.Agents[0].Running || final.Barrier.Publishers != 0 || final.Barrier.QueuedNotices != 0 || final.Barrier.ReservedNotices != 0 || final.Barrier.EventSequence != final.Barrier.RootObservedSequence || final.Barrier.SupervisorQueued || final.Barrier.SupervisorReviewing {
+		t.Errorf("resumed completion barrier did not clear: %+v", final)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(completed) != 2 || childCalls.Load() != 2 {
+		t.Errorf("want two executions and completions, got requests=%d completions=%d", childCalls.Load(), len(completed))
+	}
+}

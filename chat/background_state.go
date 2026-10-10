@@ -168,6 +168,14 @@ func (s *backgroundState) reopenBackground(source backgroundSource, identity str
 	return true
 }
 
+// runningBackground reports the execution registered by spawn or resume, not
+// the agent's original spawn mode (a foreground child can resume asynchronously).
+func (s *backgroundState) runningBackground(source backgroundSource, identity string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.lifecycleMap(source)[identity] == backgroundRunning
+}
+
 // completeBackground atomically advances the event sequence, leaves the running
 // set, and durably queues a completion notice. Only a matching running identity
 // can transition, making repeated terminal callbacks harmless.

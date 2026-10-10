@@ -2652,7 +2652,7 @@ func (s *Session) SendMessageWithDelivery(text string, delivery InputDelivery, p
 			s.emitAgentEventTo(a, toolCallbacks.OnAgentEvent)
 		}),
 		cogito.WithAgentCompletionCallback(func(a *cogito.AgentState) {
-			if a.Background {
+			if s.background.runningBackground(backgroundAgent, a.ID) {
 				publisher := "agent:" + a.ID
 				if s.background.beginPublisher(publisher) {
 					content := fmt.Sprintf("Agent %s completed", a.ID)
