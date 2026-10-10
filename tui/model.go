@@ -3496,7 +3496,7 @@ func (m Model) dialogsHeight(vs render.ViewState) int {
 	}
 	rows := 0
 	for _, d := range vs.Dialogs {
-		rows += render.BlockRows(m.presenter.Dialog(d, m.width))
+		rows += render.TerminalRows(m.presenter.Dialog(d, m.width), m.width)
 	}
 	return rows
 }
@@ -3517,7 +3517,7 @@ func (m Model) layoutBudget(vs render.ViewState, footerHeight int) int {
 	// shrank the viewport by two and left a two-row gap below the footer every
 	// frame. Measuring the real string instead of guessing is what Task 10a's
 	// single composer call site made cheap.
-	composerHeight := lipgloss.Height(m.renderComposer(m.width))
+	composerHeight := max(1, render.TerminalRows(m.renderComposer(m.width), m.width))
 	return m.presenter.HeaderHeight(vs) + m.dialogsHeight(vs) + composerHeight + footerHeight
 }
 
@@ -4265,7 +4265,7 @@ func (m Model) View() string {
 	// net out to N rows either way).
 	out := presenter.Frame(vs, header, body, composer, footer, m.width, m.effectiveHeight())
 	if presenter.Caps().AltScreen {
-		if deficit := m.effectiveHeight() - lipgloss.Height(out); deficit > 0 {
+		if deficit := m.effectiveHeight() - render.TerminalRows(out, m.width); deficit > 0 {
 			body += strings.Repeat("\n", deficit)
 			out = presenter.Frame(vs, header, body, composer, footer, m.width, m.effectiveHeight())
 		}

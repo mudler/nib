@@ -283,7 +283,7 @@ type HeaderStats struct {
 }
 
 type ViewState struct {
-	// Summary is a pinned, noninteractive factual row above the activity chips.
+	// Summary is the persistent top-left factual status, shared with the footer.
 	Summary     ActivitySummary
 	Width       int
 	Cwd         string

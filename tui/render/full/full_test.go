@@ -129,7 +129,7 @@ func TestChipsStyledByState(t *testing.T) {
 		out := p.Footer(render.ViewState{Footers: []render.FooterRow{row}}, width)
 		// The activity strip precedes the permanent combined status row.
 		lines := strings.Split(out, "\n")
-		if len(lines) != 2 || lines[1] != theme.ReadyMarker+" Ready" {
+		if len(lines) != 2 || lines[1] != theme.ReadyMarker+" Working · status updating" {
 			t.Fatalf("strip/status rows: %q", out)
 		}
 		line := lines[0]

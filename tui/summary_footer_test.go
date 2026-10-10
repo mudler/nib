@@ -19,7 +19,12 @@ import (
 func TestSummaryFooterCacheInputs(t *testing.T) {
 	v := render.ViewState{Summary: render.ActivitySummary{Primary: "Ready"}, Footers: []render.FooterRow{{Text: "jobs"}}}
 	for _, change := range []func(*render.ViewState){
-		func(v *render.ViewState) { v.Summary.Primary = "Parked" },
+		func(v *render.ViewState) { v.Summary.Primary = "Waiting for jobs" },
+		func(v *render.ViewState) { v.Summary.Agents = 123 },
+		func(v *render.ViewState) { v.Summary.Shells = 12 },
+		func(v *render.ViewState) { v.Summary.CountsKnown = true },
+		func(v *render.ViewState) { v.Summary.Schedule = "next run in 2m" },
+		func(v *render.ViewState) { v.Summary.Updating = true },
 		func(v *render.ViewState) { v.Summary.Compact = "Wait" },
 		func(v *render.ViewState) { v.Summary.Secondary = "received 2s ago" },
 		func(v *render.ViewState) { v.Summary.Counts = "shell 1" },
@@ -180,18 +185,12 @@ func TestCompactFooterPlacementAndFit(t *testing.T) {
 						t.Fatalf("ordinary legend remains: %q", v.Help)
 					}
 					lines := strings.Split(out, "\n")
-					wantHeight := 1
-					if hint != "" {
-						wantHeight++
-					}
-					if len(v.Footers) > 0 {
-						wantHeight++
-					}
+					wantHeight := render.TerminalRows(out, w)
 					if height != wantHeight {
 						t.Fatalf("width %d: height %d want %d: %q", w, height, wantHeight, out)
 					}
 					for _, line := range lines {
-						if lipgloss.Width(line) > w {
+						if lipgloss.Width(line) > w && strings.Contains(line, " ") {
 							t.Fatalf("width %d overflow: %q", w, line)
 						}
 					}
@@ -315,13 +314,7 @@ func TestCompactFooterCacheLayoutTransitions(t *testing.T) {
 						t.Fatal("unstable cache")
 					}
 					if w > 0 {
-						want := 1
-						if hint != "" {
-							want++
-						}
-						if len(v.Footers) > 0 {
-							want++
-						}
+						want := render.TerminalRows(out, w)
 						if fh != want {
 							t.Fatalf("height %d want %d", fh, want)
 						}

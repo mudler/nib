@@ -1,6 +1,7 @@
 package render
 
 import (
+	"fmt"
 	"strings"
 	"unicode"
 
@@ -56,43 +57,111 @@ func summaryMarker(mode SummaryMarker, spinner string) string {
 	}
 }
 
-// summaryLine treats labels as plain text, stripping terminal commands before
-// measuring cells. No callback-supplied control may move or wrap the pinned row.
-func summaryLine(s ActivitySummary, spinner string, w int) string {
+// statusLine fits complete fields before reflowing phase words. Unknown counts
+// are absent, not zero. Legacy Counts and Compact are not sources of truth.
+func statusLine(s ActivitySummary, w int) string {
 	if w <= 0 {
 		return ""
 	}
-	primary, compact := cleanSummaryLabel(s.Primary), cleanSummaryLabel(s.Compact)
-	if primary == "" {
-		primary = "Ready"
+	phase := cleanSummaryLabel(s.Primary)
+	if phase == "" {
+		phase = "Working"
+		s.Updating = true
+	}
+	if s.Updating {
+		phase += " · status updating"
+	}
+	schedule := cleanSummaryLabel(s.Schedule)
+	count := func(n int, label string) string {
+		if n != 1 {
+			label += "s"
+		}
+		return fmt.Sprintf("%d %s", n, label)
+	}
+	var counts []string
+	if s.CountsKnown {
+		counts = []string{count(s.Agents, "agent"), count(s.Shells, "shell")}
+	}
+	join := func() string {
+		fields := []string{phase}
+		if schedule != "" {
+			fields = append(fields, schedule)
+		}
+		return strings.Join(append(fields, counts...), " · ")
+	}
+	if ansi.StringWidth(join()) <= w {
+		return join()
+	}
+	if len(counts) > 0 {
+		counts = []string{fmt.Sprintf("%d ag", s.Agents), fmt.Sprintf("%d sh", s.Shells)}
+	}
+	if ansi.StringWidth(join()) <= w {
+		return join()
+	}
+	schedule = ""
+	for {
+		if ansi.StringWidth(join()) <= w {
+			return join()
+		}
+		if len(counts) == 0 {
+			break
+		}
+		counts = counts[:len(counts)-1]
+	}
+	return ReflowWords(phase, w)
+}
+
+// ReflowWords preserves words even below their display width. Such a word
+// wraps physically in the terminal; TerminalRows accounts for those rows.
+func ReflowWords(text string, w int) string {
+	if w <= 0 {
+		return ""
+	}
+	var lines []string
+	line := ""
+	for _, word := range strings.Fields(cleanSummaryLabel(text)) {
+		if line != "" && ansi.StringWidth(line+" "+word) > w {
+			lines = append(lines, line)
+			line = ""
+		}
+		if line != "" {
+			line += " "
+		}
+		line += word
+	}
+	if line != "" {
+		lines = append(lines, line)
+	}
+	return strings.Join(lines, "\n")
+}
+
+// TerminalRows measures physical display rows, including oversized words.
+// A trailing newline terminates the block without adding an empty row.
+func TerminalRows(text string, w int) int {
+	if text == "" || w <= 0 {
+		return 0
+	}
+	text = strings.TrimSuffix(text, "\n")
+	rows := 0
+	for _, line := range strings.Split(text, "\n") {
+		rows += max(1, (ansi.StringWidth(line)+w-1)/w)
+	}
+	return rows
+}
+
+func summaryLine(s ActivitySummary, spinner string, w int) string {
+	line := statusLine(s, w)
+	if line == "" {
+		return ""
 	}
 	marker := cleanSummaryLabel(summaryMarker(s.Marker, spinner))
-	if marker == "" {
-		marker = theme.ReadyMarker
+	if !strings.Contains(line, "\n") && ansi.StringWidth(marker+" "+line) <= w {
+		line = marker + " " + line
 	}
-	prefix := marker + " "
-	full := prefix + primary
-	if secondary := cleanSummaryLabel(s.Secondary); secondary != "" {
-		withDuration := full + " · " + secondary
-		if ansi.StringWidth(withDuration) <= w {
-			return withDuration
-		}
+	if secondary := cleanSummaryLabel(s.Secondary); secondary != "" && !s.Updating && !strings.Contains(line, "\n") && ansi.StringWidth(line+" · "+secondary) <= w {
+		line += " · " + secondary
 	}
-	if ansi.StringWidth(full) <= w {
-		return full
-	}
-	if compact != "" {
-		primary = compact
-	}
-	compactLine := prefix + primary
-	if ansi.StringWidth(compactLine) <= w {
-		return compactLine
-	}
-	if ansi.StringWidth(marker) >= w {
-		return ansi.Truncate(marker, w, "")
-	}
-	line := marker + " " + ansi.Truncate(primary, w-ansi.StringWidth(prefix), "")
-	return strings.TrimRight(line, " ")
+	return line
 }
 
 func cleanSummaryLabel(s string) string {
@@ -105,19 +174,9 @@ func cleanSummaryLabel(s string) string {
 	return strings.Join(strings.Fields(s), " ")
 }
 
-// CompactSummaryWidth reserves the readable compact state before telemetry.
-// It uses the same label sanitization and marker fallback as summaryLine.
+// CompactSummaryWidth reserves the full phase ahead of optional telemetry.
+// Decorative markers may yield; phase words never yield to badges.
 func CompactSummaryWidth(s ActivitySummary, spinner string, w int) int {
-	label := cleanSummaryLabel(s.Compact)
-	if label == "" {
-		label = cleanSummaryLabel(s.Primary)
-	}
-	if label == "" {
-		label = "Ready"
-	}
-	marker := cleanSummaryLabel(summaryMarker(s.Marker, spinner))
-	if marker == "" {
-		marker = theme.ReadyMarker
-	}
-	return min(max(w, 0), ansi.StringWidth(marker+" "+label))
+	s.CountsKnown, s.Schedule = false, ""
+	return min(max(w, 0), ansi.StringWidth(statusLine(s, 1000000)))
 }

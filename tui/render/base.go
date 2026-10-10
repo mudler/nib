@@ -308,12 +308,17 @@ func (Base) Dialog(d Dialog, w int) string {
 	return ""
 }
 
-// Header renders the brand/badge line with responsive stat segments and the
+// Header renders persistent status, then the brand/badge line and the
 // rule beneath it. Stats drop by ascending priority on narrow terminals:
 // cwd(30) < skills(40) < mcp(50) < tools(60) < model(90); the model
 // segment reads "provider · model" and sheds the provider before the model.
 func (Base) Header(v ViewState) string {
+	if v.Width <= 0 {
+		return ""
+	}
 	var b strings.Builder
+	b.WriteString(statusLine(v.Summary, v.Width))
+	b.WriteString("\n")
 
 	// Left side: brand + yolo badge.
 	left := theme.Brand.Render(v.Brand)
@@ -408,21 +413,19 @@ func (Base) Header(v ViewState) string {
 		}
 		line = left + strings.Repeat(" ", gap) + cwd
 	}
-	b.WriteString(line)
-	b.WriteString("\n")
+	if lipgloss.Width(line) <= v.Width {
+		b.WriteString(line)
+		b.WriteString("\n")
+	}
 	b.WriteString(theme.Hairline(v.Width))
 	b.WriteString("\n")
 	return b.String()
 }
 
-// HeaderHeight reports how many terminal rows Header occupies above the body
-// — two today (the brand/cwd line and the hairline beneath it). Measured from
-// the real string rather than stated as a constant, so a header redesign
-// re-budgets the layout instead of silently pushing the frame past the
-// terminal's last row. See BlockRows for why this counts newlines rather than
-// using lipgloss.Height: Frame writes body straight onto the header.
+// HeaderHeight measures the exact rendered header, including physical wrapping
+// of words wider than the terminal. Frame appends the body after its final newline.
 func (b Base) HeaderHeight(v ViewState) int {
-	return BlockRows(b.Header(v))
+	return TerminalRows(b.Header(v), v.Width)
 }
 
 // chipSep separates the activity strip's chips.
@@ -625,7 +628,7 @@ func (Base) Footer(v ViewState, w int) string {
 		lines = append(lines, strip)
 	}
 	if v.Help != "" {
-		lines = append(lines, ansi.Truncate(v.Help, w, "…"))
+		lines = append(lines, ReflowWords(v.Help, w))
 	}
 	badges := v.Badges
 	// ViewState normally contains pre-fitted telemetry. Reject oversized direct
@@ -638,7 +641,7 @@ func (Base) Footer(v ViewState, w int) string {
 		budget -= lipgloss.Width(badges) + 1
 	}
 	status := summaryLine(v.Summary, v.Spinner, budget)
-	if badges != "" {
+	if badges != "" && !strings.Contains(status, "\n") {
 		status = rightAlign(status, badges, w)
 	}
 	lines = append(lines, status)
@@ -665,7 +668,7 @@ func (b Base) FooterHeight(v ViewState, w int) int {
 	if w <= 0 {
 		return 0
 	}
-	return lipgloss.Height(b.Footer(v, w))
+	return TerminalRows(b.Footer(v, w), w)
 }
 
 // truncateLeft shortens s to at most w cells by dropping leading runes and

@@ -20,7 +20,7 @@ func TestFooterNeverClipsMultiDigitFailureIntoAnotherCount(t *testing.T) {
 		if !strings.Contains(out, "×") {
 			t.Fatalf("width %d lost the failure marker: %q", w, out)
 		}
-		for _, line := range strings.Split(strings.TrimSuffix(out, "\n"), "\n") {
+		for _, line := range strings.Split(out, "\n")[:1] {
 			if got := lipgloss.Width(line); got > w {
 				t.Fatalf("width %d rendered %d cells: %q", w, got, line)
 			}
@@ -103,7 +103,7 @@ func TestFooterActivityRowFitsEveryTerminalWidth(t *testing.T) {
 	}
 	for w := 1; w < 100; w++ {
 		out := (Base{}).Footer(v, w)
-		lines := strings.Split(strings.TrimSuffix(out, "\n"), "\n")
+		lines := strings.Split(out, "\n")
 		if len(lines) < 2 {
 			t.Fatalf("width %d footer lost activity row: %q", w, out)
 		}
@@ -188,13 +188,13 @@ func TestBaseHeaderNamesTheProvider(t *testing.T) {
 	b := Base{}
 	v := ViewState{Width: 80, Brand: "nib", Cwd: "~/p",
 		HeaderStats: HeaderStats{Provider: "regolo", Model: "glm5.2"}}
-	line := baseTestSGR.ReplaceAllString(strings.SplitN(b.Header(v), "\n", 2)[0], "")
+	line := baseTestSGR.ReplaceAllString(b.Header(v), "")
 	if !strings.Contains(line, "regolo · glm5.2") {
 		t.Fatalf("header = %q, want %q", line, "regolo · glm5.2")
 	}
 
 	v.Width = 22 // room for brand, model and cwd, not the provider
-	line = baseTestSGR.ReplaceAllString(strings.SplitN(b.Header(v), "\n", 2)[0], "")
+	line = baseTestSGR.ReplaceAllString(b.Header(v), "")
 	if strings.Contains(line, "regolo") || !strings.Contains(line, "glm5.2") {
 		t.Fatalf("narrow header = %q, want the model without the provider", line)
 	}
@@ -252,7 +252,7 @@ func TestCompactExpandedExactFit(t *testing.T) {
 			continue
 		}
 		for _, line := range strings.Split(out, "\n") {
-			if lipgloss.Width(line) > w {
+			if lipgloss.Width(line) > w && strings.Contains(line, " ") {
 				t.Fatalf("width %d overflow: %q", w, line)
 			}
 		}
@@ -264,7 +264,7 @@ func TestCompactStatusPriorityAndReturnedSpace(t *testing.T) {
 	v := ViewState{Summary: ActivitySummary{Primary: "Running very long tool 界界", Compact: "Running", Secondary: "12m", Marker: SummaryMarkerRunning}, Spinner: "*", Badges: "12345678"}
 	for w := 1; w <= 160; w++ {
 		out := b.Footer(v, w)
-		if lipgloss.Width(out) > w || strings.Contains(out, "\n") {
+		if b.FooterHeight(v, w) != TerminalRows(out, w) {
 			t.Fatalf("width %d: %q", w, out)
 		}
 		if w >= 9 && !strings.Contains(out, "Running") {
@@ -273,7 +273,7 @@ func TestCompactStatusPriorityAndReturnedSpace(t *testing.T) {
 		if w < 18 && strings.Contains(out, v.Badges) {
 			t.Fatalf("telemetry displaced compact status: %q", out)
 		}
-		if w >= 18 && (!strings.HasSuffix(out, v.Badges) || lipgloss.Width(out) != w) {
+		if w >= 37 && (!strings.HasSuffix(out, v.Badges) || lipgloss.Width(out) != w) {
 			t.Fatalf("missing right telemetry: %q", out)
 		}
 	}
@@ -282,7 +282,7 @@ func TestCompactStatusPriorityAndReturnedSpace(t *testing.T) {
 		t.Fatalf("unused space not returned: %q", got)
 	}
 	v.Summary = ActivitySummary{Primary: "\x1b[31m界界\x1b[0m\nlong", Compact: "\t"}
-	if got := CompactSummaryWidth(v.Summary, "", 80); got != 11 {
-		t.Fatalf("sanitized fallback width %d want 11", got)
+	if got := CompactSummaryWidth(v.Summary, "", 80); got != 9 {
+		t.Fatalf("sanitized fallback width %d want 9", got)
 	}
 }

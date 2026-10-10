@@ -2,15 +2,17 @@
 {AltScreen:true Mouse:true OverlayDialogs:true}
 
 === header plain ===
+Working · status updating
 nib                                            ~/src/project
 ────────────────────────────────────────────────────────────
 
 === header with yolo badge ===
+Working · status updating
 nib  yolo                                      ~/src/project
 ────────────────────────────────────────────────────────────
 
 === header height ===
-2
+3
 
 === content width user ===
 58
@@ -158,81 +160,83 @@ nib  yolo                                      ~/src/project
 
 === footer help only ===
 tab complete
-• Ready
+• Working · status updating
 
 === footer help and badges ===
 tab complete
-• Ready                                              12k ctx
+• Working · status updating                          12k ctx
 
 === footer new output marker ===
 ↓ new output
 tab complete
-• Ready
+• Working · status updating
 
 === footer error line ===
 tab complete
-• Ready
+• Working · status updating
 × something failed
 
 === footer jobs row ===
 * 2 jobs running
 tab complete
-• Ready
+• Working · status updating
 
 === footer shell row ===
 > 1 shell job
 tab complete
-• Ready
+• Working · status updating
 
 === footer loops row ===
 ~ loop every 5m
 tab complete
-• Ready
+• Working · status updating
 
 === footer goal row ===
 o goal: ship it
 tab complete
-• Ready
+• Working · status updating
 
 === footer unset kind row ===
 unset kind row
 tab complete
-• Ready
+• Working · status updating
 
 === footer todo chip ===
 o todo 2/5 writing tests
 tab complete
-• Ready
+• Working · status updating
 
 === footer focused strip ===
                             session 1k in / 2k out  12:00:00
 o todo -  ▸ shell 3 done x1  > explore 3.1k
 lt/rt move · enter open · esc back
-• Ready                                              12k ctx
+• Working · status updating                          12k ctx
 
 === footer help right hint ===
 tab complete
-• Ready
+• Working · status updating
 
 === footer every row ===
 ↓ new output
 * 2 jobs ru…  > 1 shell job  ~ loop every …  o goal: ship it
 tab complete
-• Ready                                              12k ctx
+• Working · status updating                          12k ctx
 × something failed
 
 === footer height every row ===
 5
 
 === frame without dialogs ===
+Working · status updating
 nib                                            ~/src/project
 ────────────────────────────────────────────────────────────
 BODY-MARKER
 COMPOSER-MARKER
 tab complete
-• Ready
+• Working · status updating
 
 === frame with dialogs ===
+Working · status updating
 nib                                            ~/src/project
 ────────────────────────────────────────────────────────────
 BODY-ONLY-CONTENT
@@ -240,5 +244,5 @@ BODY-ONLY-CONTENT
 ▏ ▸ ◉ OVERLAY-MARKER-OPTION
 COMPOSER-MARKER
 tab complete
-• Ready
+• Working · status updating
 

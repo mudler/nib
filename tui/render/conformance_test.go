@@ -793,6 +793,8 @@ func TestFooterHeightMatchesFooter(t *testing.T) {
 	// below holds at both widths.
 	for _, w := range []int{20, 60} {
 		for _, tc := range footerStates() {
+			// Explicit short phase isolates the optional-row accounting.
+			tc.state.Summary = render.ActivitySummary{Primary: "Working"}
 			want := 1 // permanent combined status row
 			if tc.state.Help != "" {
 				want++
@@ -838,7 +840,7 @@ func TestFooterHeightMatchesFooter(t *testing.T) {
 // the body starts on the third.
 func TestHeaderHeightMatchesHeader(t *testing.T) {
 	v := render.ViewState{Width: 60, Brand: "nib", Cwd: "~/src/project"}
-	const wantRows = 2 // brand/cwd line + hairline
+	const wantRows = 3 // status + brand/cwd line + hairline
 	for name, p := range presenters() {
 		if got := p.HeaderHeight(v); got != wantRows {
 			t.Errorf("%s HeaderHeight = %d, want %d (brand line + hairline)", name, got, wantRows)

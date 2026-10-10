@@ -322,22 +322,50 @@ success marker. Completed calls whose output reports failure also show an error
 marker and retain their error text. The model waits for the full batch before
 its next request.
 
+### Execution status
+
+The top-left status stays visible in the conversation and all panels, in both
+full-screen and inline modes:
+
+```text
+Working · 2 agents · 1 shell
+Ready for input · next run in 2m · 0 agents · 0 shells
+```
+
+- **Working:** The root is generating, executing a tool, or processing the turn, including resumed review.
+- **Waiting for jobs:** The root is parked while child agents or background shells run.
+- **Reviewing results:** Execution has stopped, but result notices, root observation, or supervisor review remain pending.
+- **Ready for input:** Authoritative state confirms that execution, running work, and required completion processing have ended.
+
+Readiness means availability, not task success. Failed and canceled outcomes
+remain in their existing result and error displays. Unknown or inconsistent
+state shows `Working · status updating`; unknown counts do not appear as zeros.
+Approval prompts, questions, and interrupt controls retain priority.
+
+Counts include all running foreground and background child agents once, but
+exclude the root. Shell counts include only running background shell processes.
+A foreground root tool affects the phase, not the shell count. Finished jobs
+leave running counts even when their results still need review.
+
+The schedule field shows the earliest known due time across armed wakeups and
+active cron schedules. Paused, deleted, canceled, expired, and unknown-time
+entries do not contribute. A future schedule does not make the session busy.
+The estimate describes scheduled eligibility, not guaranteed execution.
+Durations round up to minutes; shorter waits show `less than 1m`, and due
+schedules show `due now`.
+
+At narrow widths, count labels become `ag` and `sh`. Then the schedule disappears,
+followed by whole count fields. Zero and nonzero counts receive the same treatment.
+Phase words wrap rather than truncate. Below a single word's width, physical terminal wrapping
+is unavoidable; the layout reserves those extra rows.
+
 ### The footer
 
-The footer keeps lifecycle status and front telemetry on one permanent row,
-with activity chips above it when present:
+The footer repeats the same phase and fitting counts, with activity chips above
+it when present. Optional duration measures time in the current phase, not progress.
+Unknown start times omit that duration. The full phase takes priority over markers
+and telemetry.
 
-```
-◐ todo 2/8 Wire the LoRA  ▷ shell 1 running  History 4 ×1                ctrl+g details
-◐ Working · 12m                         ctx 88.3k/100k  tok/s 12  16:29:49  cpu 27%
-```
-
-- **Session summary.** The left side of the pinned, noninteractive row shows a marker and the
-  current lifecycle phase. Phases include Working, Running, Approval needed,
-  Waiting for your answer, Parked, Interrupting, and Ready. The optional
-  duration measures the current phase. If nib does not know when that phase
-  started, it omits the duration. On narrow terminals, nib removes the duration
-  first. It then uses shorter phase text and truncates it if necessary.
 - **Activity strip.** Live chips show the todo list, background shell jobs,
   each running sub-agent, loops, and the goal. A sub-agent chip includes its
   type, task title, current action, and output size. `History N` combines
@@ -349,14 +377,14 @@ with activity chips above it when present:
 - **Front telemetry** is right-aligned beside the lifecycle summary: the
   context gauge (the tick marks the compaction point), the generation speed,
   the clock, CPU and memory. `ui.footer_front` chooses these items.
-  On narrow terminals, compact lifecycle status takes priority. Telemetry uses
+  On narrow terminals, the full lifecycle phase takes priority. Telemetry uses
   complete fitting forms or disappears; numeric values are never cut short.
 - **Contextual shortcuts** appear on a separate row immediately above status
   while a panel, picker, approval, or other actionable context is active. They
   disappear when that context ends, without leaving a blank row. The ordinary
   shortcut legend is no longer pinned; use `/help` for the full key reference.
-  Key bindings are unchanged. Long contextual hints are clipped to terminal
-  width and return in full when there is room.
+  Key bindings are unchanged. Long contextual hints wrap without truncating
+  key names or actions.
 
 Press `Ctrl+G` to move the keyboard to the activity strip. An unseen History
 failure gets focus first. The key also shows a second telemetry line above the
