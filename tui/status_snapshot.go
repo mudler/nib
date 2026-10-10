@@ -22,6 +22,26 @@ type statusRequest struct {
 	session           *chat.Session
 	epoch, generation uint64
 }
+
+// An attachment dispatch can return before chat starts a root execution (read,
+// extraction, transcription failure, or nothing sendable). Only its own result
+// may settle that transition; unrelated revisions and obsolete results cannot.
+type statusDispatch struct {
+	owner    statusRequest
+	sequence uint64
+}
+
+func (m *Model) settleAttachmentStatus(dispatch statusDispatch) bool {
+	if dispatch != m.statusAttachment || dispatch.owner.session != m.session || dispatch.owner.epoch != m.scheduleEpoch || m.session == nil || dispatch.owner.generation != m.session.ActivitySnapshot().Generation {
+		return false
+	}
+	m.statusAttachment = statusDispatch{}
+	m.statusPending = false
+	// This acknowledges dispatch completion, not readiness. Update still collects
+	// coherent authoritative execution and barrier state before displaying Ready.
+	return true
+}
+
 type statusRefreshMsg struct{ sequence uint64 }
 
 func (m Model) statusTick() tea.Cmd {
@@ -74,6 +94,8 @@ func (m *Model) acceptStatus(request statusRequest, s statusSnapshot) bool {
 	return true
 }
 func (m *Model) invalidateStatus() {
+	m.statusDispatchSequence++
+	m.statusAttachment = statusDispatch{}
 	if !m.statusPending {
 		m.statusPendingExecution = m.statusSnapshot.Execution.RootExecutionSequence
 		if m.session != nil {
@@ -149,10 +171,12 @@ func summarizeStatus(s statusSnapshot, now time.Time) render.ActivitySummary {
 // finish before InjectWithDelivery returns. Failed injection owns no transition.
 func (m *Model) injectStatus(text string, delivery chat.InputDelivery) bool {
 	pending, sequence, snapshot := m.statusPending, m.statusPendingExecution, m.statusSnapshot
+	attachment := m.statusAttachment
 	m.invalidateStatus()
 	if m.session.InjectWithDelivery(text, delivery) {
 		return true
 	}
 	m.statusPending, m.statusPendingExecution, m.statusSnapshot = pending, sequence, snapshot
+	m.statusAttachment = attachment
 	return false
 }

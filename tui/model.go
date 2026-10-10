@@ -232,6 +232,8 @@ type Model struct {
 	statusExecutionRevision, statusScheduleRevision uint64
 	statusPendingExecution                          uint64
 	statusPending                                   bool
+	statusDispatchSequence                          uint64
+	statusAttachment                                statusDispatch
 	statusTickSequence                              uint64
 	compactSequence                                 uint64
 	compactPending                                  bool
@@ -654,10 +656,11 @@ type Model struct {
 
 // responseMsg is sent when the AI responds
 type responseMsg struct {
-	content string
-	err     error
-	blocked []attachments.Blocked
-	images  []chat.ToolImage
+	attachmentDispatch statusDispatch
+	content            string
+	err                error
+	blocked            []attachments.Blocked
+	images             []chat.ToolImage
 }
 
 // modelListMsg is the result of an asynchronous model-picker endpoint lookup.
@@ -1920,6 +1923,11 @@ func (m Model) Update(msg tea.Msg) (nextModel tea.Model, nextCmd tea.Cmd) {
 		return m, nil
 
 	case responseMsg:
+		if msg.attachmentDispatch.sequence != 0 {
+			if !m.settleAttachmentStatus(msg.attachmentDispatch) {
+				return m, nil
+			}
+		}
 		if m.toolEvents != nil {
 			m.applyToolEvents(m.toolEvents.drain())
 			m.toolEvents.end()
@@ -2885,9 +2893,11 @@ func (m *Model) sendWithAttachmentsDeliveryCmd(text string, files []string, over
 	m.toolEvents.begin()
 	session := m.session
 	ctx := m.ctx
+	dispatch := statusDispatch{owner: statusRequest{session, m.scheduleEpoch, session.ActivitySnapshot().Generation}, sequence: m.statusDispatchSequence}
+	m.statusAttachment = dispatch
 	return func() tea.Msg {
 		reply, blocked, err := session.SendWithAttachmentsDelivery(ctx, text, files, overrides, delivery)
-		return responseMsg{content: reply, err: err, blocked: blocked, images: attachmentImages(files)}
+		return responseMsg{attachmentDispatch: dispatch, content: reply, err: err, blocked: blocked, images: attachmentImages(files)}
 	}
 }
 
