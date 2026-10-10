@@ -1239,6 +1239,7 @@ func (m Model) initSession() tea.Cmd {
 				}
 			},
 			ToolCallbacks:        m.toolCallbacks,
+			QueuedToolCallback:   m.queuedToolCallback,
 			ObservationCallbacks: m.toolEvents.observationCallback,
 		}
 

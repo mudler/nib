@@ -95,7 +95,7 @@ func timerScenario(t *testing.T, provider string, sibling bool) {
 		if calls == 1 {
 			items := []map[string]any{{"type": "function_call", "call_id": "fast-id", "name": "fast", "arguments": "{}"}}
 			if sibling {
-				items = append(items, map[string]any{"type": "function_call", "call_id": "slow-id", "name": "slow", "arguments": "{}"})
+				items = append(items, map[string]any{"type": "function_call", "call_id": "slow-id", "name": "slow", "arguments": "{}"}, map[string]any{"type": "function_call", "call_id": "third-id", "name": "third", "arguments": "{}"})
 			}
 			for i, item := range items {
 				b, _ := json.Marshal(map[string]any{"type": "response.output_item.added", "output_index": i, "item": item})
@@ -132,12 +132,13 @@ func timerScenario(t *testing.T, provider string, sibling bool) {
 	m.toolEvents = newToolEventQueue()
 	m.toolEvents.begin()
 	start, result := m.toolCallbacks()
+	queued := m.queuedToolCallback()
 	results := make(chan string, 4)
 	starts := make(chan string, 4)
 	enqueueReasoning := m.enqueueReasoning
 	tools := []cogito.ToolDefinitionInterface{timerTool{"fast", func() { close(fast) }}}
 	if sibling {
-		tools = append(tools, timerTool{"slow", func() {
+		tools = append(tools, timerTool{"third", func() {}}, timerTool{"slow", func() {
 			close(slow)
 			select {
 			case <-slowRelease:
@@ -148,17 +149,22 @@ func timerScenario(t *testing.T, provider string, sibling bool) {
 	done := make(chan error, 1)
 	go func() {
 		_, err := cogito.ExecuteTools(llm, cogito.NewEmptyFragment().AddMessage(cogito.UserMessageRole, "Run the supplied tools."),
-			cogito.WithContext(ctx), cogito.WithTools(tools...), cogito.WithIterations(3), cogito.DisableSinkState, cogito.EnableParallelToolExecution,
-			cogito.WithToolCallBack(func(tc *cogito.ToolChoice, _ *cogito.SessionState) cogito.ToolCallDecision {
-				b, _ := json.Marshal(tc.Arguments)
-				start(chat.ToolStart{ID: tc.ID, Name: tc.Name, Arguments: string(b)})
-				starts <- tc.ID
+			cogito.WithContext(ctx), cogito.WithTools(tools...), cogito.WithIterations(3), cogito.DisableSinkState,
+			cogito.WithToolCallBack(func(*cogito.ToolChoice, *cogito.SessionState) cogito.ToolCallDecision {
 				return cogito.ToolCallDecision{Approved: true}
 			}),
-			cogito.WithToolCallResultCallback(func(st cogito.ToolStatus) {
-				b, _ := json.Marshal(st.ToolArguments.Arguments)
-				result(chat.ToolResult{ID: st.ToolArguments.ID, Name: st.Name, Arguments: string(b), Result: st.Result})
-				results <- st.ToolArguments.ID
+			cogito.WithToolLifecycleCallback(func(ev cogito.ToolLifecycleEvent) {
+				b, _ := json.Marshal(ev.ToolChoice.Arguments)
+				switch ev.Phase {
+				case cogito.ToolLifecycleQueued:
+					queued(chat.ToolStart{ID: ev.CallID, Name: ev.ToolChoice.Name, Arguments: string(b)})
+				case cogito.ToolLifecycleRunning:
+					start(chat.ToolStart{ID: ev.CallID, Name: ev.ToolChoice.Name, Arguments: string(b)})
+					starts <- ev.CallID
+				case cogito.ToolLifecycleTerminal:
+					result(chat.ToolResult{ID: ev.CallID, Name: ev.ToolChoice.Name, Arguments: string(b), Result: ev.Status.Result, Outcome: string(ev.Outcome)})
+					results <- ev.CallID
+				}
 			}),
 			cogito.WithStreamCallback(func(ev cogito.StreamEvent) {
 				if ev.Type == cogito.StreamEventReasoning {
@@ -174,14 +180,21 @@ func timerScenario(t *testing.T, provider string, sibling bool) {
 		timerWait(t, slow)
 		select {
 		case id := <-results:
-			t.Fatalf("unexpected early batch callback %s", id)
-		case <-time.After(100 * time.Millisecond):
+			if id != "fast-id" {
+				t.Fatalf("early result %s", id)
+			}
+			results <- id
+		case <-time.After(time.Second):
+			t.Fatal("fast completion withheld behind slow sibling")
 		}
 		m = update(m, toolEventsReadyMsg{})
-		if len(m.running) != 2 {
-			t.Fatalf("held sibling: running=%d, want 2", len(m.running))
+		if len(m.running) != 2 || m.running[0].id != "slow-id" || m.running[0].queued || m.running[1].id != "third-id" || !m.running[1].queued || !m.running[1].started.IsZero() {
+			t.Fatalf("want slow running and third queued: %+v", m.running)
 		}
-		t.Log("fast execution reached return, but both UI entries remain running while sibling is held")
+		if len(m.messages) != 1 {
+			t.Fatalf("fast completion not rendered: %+v", m.messages)
+		}
+
 		unblockSlow()
 	}
 	timerWait(t, next)
@@ -190,7 +203,7 @@ func timerScenario(t *testing.T, provider string, sibling bool) {
 	}
 	want := 1
 	if sibling {
-		want = 2
+		want = 3
 	}
 	expected := map[string]bool{}
 	for i := 0; i < want; i++ {

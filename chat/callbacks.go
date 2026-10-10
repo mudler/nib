@@ -111,6 +111,7 @@ type ToolImage struct {
 // ToolResult is the outcome of a tool execution, surfaced to the UI after the
 // tool runs.
 type ToolResult struct {
+	Outcome   string // authoritative terminal outcome, empty for legacy producers
 	ID        string // upstream tool call identity; empty for legacy producers
 	Name      string
 	Result    string
@@ -243,6 +244,10 @@ type Callbacks struct {
 	// Consumers can bind a run identity here so callbacks retained by background
 	// work cannot be mistaken for events from a later run.
 	ToolCallbacks func() (func(ToolStart), func(ToolResult))
+	// OnToolQueued reports root calls awaiting approval or dispatch, without a timer.
+	OnToolQueued func(ToolStart)
+	// QueuedToolCallback binds queued events to the same run as ToolCallbacks.
+	QueuedToolCallback func() func(ToolStart)
 	// OnToolResult is called after a tool finishes, with its output. Optional.
 	OnToolResult func(res ToolResult)
 	// AgentCallbacks optionally captures OnAgentEvent once per SendMessage.

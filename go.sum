@@ -211,6 +211,10 @@ github.com/mudler/cogito v0.11.1-0.20261002202827-e6e428634a8d h1:MFpC7t2maB6WYL
 github.com/mudler/cogito v0.11.1-0.20261002202827-e6e428634a8d/go.mod h1:UxGNMBRakV0A2uVHv2JQIHjpnVPkEWFaS7SDhyynZqQ=
 github.com/mudler/cogito v0.11.1-0.20261009204940-616a1a5ef59a h1:arMpGq9yIxV4YQIkHhgFhPVb1Bo5T0VPHO5wyoLCmjw=
 github.com/mudler/cogito v0.11.1-0.20261009204940-616a1a5ef59a/go.mod h1:UxGNMBRakV0A2uVHv2JQIHjpnVPkEWFaS7SDhyynZqQ=
+github.com/mudler/cogito v0.11.1-0.20261010162850-056f31050229 h1:MipttOFarnTVftNJFA5uxQOpGDEFweJCVMhELtFkE7Y=
+github.com/mudler/cogito v0.11.1-0.20261010162850-056f31050229/go.mod h1:UxGNMBRakV0A2uVHv2JQIHjpnVPkEWFaS7SDhyynZqQ=
+github.com/mudler/cogito v0.11.1-0.20261010163539-a527cde5daaa h1:yJMC07SN5WW0mHxi575Wgcq4R+1ljc4p2d6wRz6kIDY=
+github.com/mudler/cogito v0.11.1-0.20261010163539-a527cde5daaa/go.mod h1:UxGNMBRakV0A2uVHv2JQIHjpnVPkEWFaS7SDhyynZqQ=
 github.com/mudler/xlog v0.0.6 h1:3nBV4THK8kY0Y8FDXXvWAnuAJoOyO7EAXteJeAoHUC0=
 github.com/mudler/xlog v0.0.6/go.mod h1:3pO/Dsp3ViWl1QLyNtK7VQDJqMlntVu+rm5lP5PkX1g=
 github.com/muesli/ansi v0.0.0-20230316100256-276c6243b2f6 h1:ZK8zHtRHOkbHy6Mmr5D264iyp3TiX5OmNcI5cIARiQI=

@@ -25,6 +25,7 @@ import (
 type runningTool struct {
 	id, name, args string
 	started        time.Time
+	queued         bool
 	// flipped inverts the ctrl+r fold state for this block alone (a click).
 	flipped bool
 }
@@ -49,8 +50,12 @@ func (m *Model) startTool(ts chat.ToolStart) {
 		return
 	}
 	if ts.ID != "" {
-		for _, r := range m.running {
+		for i, r := range m.running {
 			if r.id == ts.ID {
+				if r.queued {
+					m.running[i].queued = false
+					m.running[i].started = time.Now()
+				}
 				return
 			}
 		}
@@ -77,7 +82,10 @@ func (m *Model) finishTool(res chat.ToolResult) time.Duration {
 	}
 	for i, r := range m.running {
 		if toolKey(r.id, r.name, r.args) == key {
-			took := time.Since(r.started)
+			var took time.Duration
+			if !r.queued {
+				took = time.Since(r.started)
+			}
 			m.running = append(m.running[:i:i], m.running[i+1:]...)
 			if res.ID != "" {
 				m.finishedTools[key] = 1
@@ -101,6 +109,7 @@ type toolEvent struct {
 	gen       uint64
 	reasoning *reasoningEvent
 	text      *strings.Builder
+	queued    *chat.ToolStart
 	start     *chat.ToolStart
 	result    *chat.ToolResult
 	park      *parkEvent
@@ -159,7 +168,7 @@ func (q *toolEventQueue) push(e toolEvent) { q.pushFor(q.generation(), e) }
 func (q *toolEventQueue) pushFor(gen uint64, e toolEvent) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	if gen != q.gen || (!q.active && (e.start != nil || e.park != nil || e.reasoning != nil)) {
+	if gen != q.gen || (!q.active && (e.queued != nil || e.start != nil || e.park != nil || e.reasoning != nil)) {
 		return
 	}
 	e.gen = gen
@@ -237,6 +246,9 @@ func (m *Model) applyToolEvents(events []toolEvent) {
 			next, _ := m.Update(park)
 			*m = next.(Model)
 		}
+		if e.queued != nil {
+			m.queueTool(*e.queued)
+		}
 		if e.start != nil {
 			m.startTool(*e.start)
 		}
@@ -259,6 +271,11 @@ func (m Model) runningBlock(r runningTool) render.RunningTool {
 		Label:    toolLabel(r.name, r.args),
 		Elapsed:  time.Since(r.started),
 		Expanded: m.toolsExpanded() != r.flipped,
+	}
+	if r.queued {
+		rt.Queued = true
+		rt.Elapsed = 0
+		return rt
 	}
 	if r.name == "bash" {
 		if id, ok := m.foregroundShellJob(r.args); ok {
@@ -364,5 +381,25 @@ func (m *Model) clearToolFlips() {
 	}
 	for i := range m.running {
 		m.running[i].flipped = false
+	}
+}
+
+// queueTool keeps waiting calls visible without starting execution duration.
+func (m *Model) queueTool(ts chat.ToolStart) {
+	if !m.loading || m.interruptArmed || m.finishedTools[toolKey(ts.ID, ts.Name, ts.Arguments)] > 0 {
+		return
+	}
+	for _, r := range m.running {
+		if toolKey(r.id, r.name, r.args) == toolKey(ts.ID, ts.Name, ts.Arguments) {
+			return
+		}
+	}
+	m.running = append(m.running, runningTool{id: ts.ID, name: ts.Name, args: ts.Arguments, queued: true})
+}
+func (m Model) queuedToolCallback() func(chat.ToolStart) {
+	gen := m.toolEvents.generation()
+	return func(ts chat.ToolStart) {
+		marker := reasoningEvent{kind: reasoningEventStepEnd, gen: m.currentTurnGen(), toolGen: gen}
+		m.toolEvents.pushFor(gen, toolEvent{reasoning: &marker, queued: &ts})
 	}
 }

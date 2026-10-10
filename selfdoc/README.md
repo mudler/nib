@@ -314,6 +314,12 @@ sub-agent finishes, its line reports the same: `sub-agent explore finished · 3 
 usage report. When the backend reports no usage, nib counts the streamed output
 and marks it with `~`.
 
+Tool calls appear as queued while they await approval or dispatch, without an
+elapsed timer. The timer starts when execution starts. Each result appears as
+soon as its tool finishes, even while sibling tools continue running. Failed,
+denied, skipped, and cancelled calls show their terminal outcome instead of a
+success marker. The model waits for the full batch before its next request.
+
 ### The footer
 
 The footer keeps lifecycle status and front telemetry on one permanent row,

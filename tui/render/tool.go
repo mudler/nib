@@ -95,6 +95,7 @@ func writeToolLines(b *strings.Builder, lines []string, style lipgloss.Style, w 
 
 // RunningTool is a root-agent tool call that has started and not finished.
 type RunningTool struct {
+	Queued  bool          // awaiting approval or dispatch; no execution duration
 	Label   string        // the call summary, as Message.Label
 	Elapsed time.Duration // time since the call started
 	// Hint is a dim key hint after the elapsed time ("ctrl+b background"),
@@ -113,6 +114,9 @@ type RunningTool struct {
 // stays last and the block reads as live progress.
 func RunningToolBlock(r RunningTool, w int) string {
 	var meta []string
+	if r.Queued {
+		return toolHeaderMarked("○", r.Label, "queued", "", 0, w) + "\n"
+	}
 	if r.Elapsed >= time.Second {
 		meta = append(meta, theme.Elapsed(r.Elapsed))
 	}
