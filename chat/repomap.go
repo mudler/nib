@@ -1,9 +1,8 @@
 package chat
 
 import (
+	"context"
 	"fmt"
-	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 
@@ -26,8 +25,9 @@ type repoMapArgs struct {
 }
 
 type repoMapTool struct {
-	workingDir   string
-	resolvePath  func(string) string
+	workerFactory func(context.Context) repoMapWorker
+	workingDir    string
+	resolvePath   func(string) string
 }
 
 type repoMapFileEntry struct {
@@ -40,6 +40,11 @@ type repoMapFileEntry struct {
 // Run resolves the path, collects source files, indexes each, ranks them, and
 // renders a token-budgeted overview.
 func (t *repoMapTool) Run(args map[string]any) (string, any, error) {
+	return t.RunContext(context.Background(), args)
+}
+
+// RunContext is dispatched by Cogito when the calling session is cancelled.
+func (t *repoMapTool) RunContext(ctx context.Context, args map[string]any) (string, any, error) {
 	path, _ := args["path"].(string)
 	if path == "" {
 		path = "."
@@ -57,50 +62,15 @@ func (t *repoMapTool) Run(args map[string]any) (string, any, error) {
 		budget = repoMapMaxBudget
 	}
 
-	out, err := renderRepoMap(resolved, budget)
+	factory := t.workerFactory
+	if factory == nil {
+		factory = newRepoMapWorker
+	}
+	out, err := renderRepoMapWith(ctx, resolved, budget, factory, repoMapLimitsDefault)
 	if err != nil {
 		return "repo_map failed: " + err.Error(), nil, nil
 	}
 	return out, nil, nil
-}
-
-// collectRepoMapFiles walks root, skipping repoMapSkipDirs and files whose
-// extensions are not in codeindex.SupportedExtensions().
-func collectRepoMapFiles(root string) ([]string, error) {
-	supported := make(map[string]bool)
-	for _, ext := range codeindex.SupportedExtensions() {
-		supported[ext] = true
-	}
-
-	var files []string
-	walkErr := filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
-		if err != nil {
-			// Skip paths we can't stat; don't abort the whole walk.
-			return nil
-		}
-		if d.IsDir() {
-			if p == root {
-				return nil
-			}
-			if repoMapSkipDirs[d.Name()] {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		ext := strings.ToLower(filepath.Ext(p))
-		base := strings.ToLower(filepath.Base(p))
-		// Extensionless files like "Dockerfile" fall back to the basename,
-		// mirroring codeindex's own lookup.
-		if supported[ext] || (ext == "" && supported[base]) {
-			files = append(files, p)
-		}
-		return nil
-	})
-	if walkErr != nil {
-		return nil, walkErr
-	}
-	sort.Strings(files)
-	return files, nil
 }
 
 // filterRepoMapEntries drops the package/import/heading sections that don't
@@ -118,68 +88,9 @@ func filterRepoMapEntries(entries []codeindex.Entry) []codeindex.Entry {
 	return kept
 }
 
-// renderRepoMap indexes every supported source file under root, ranks them, and
-// emits a token-budgeted overview.
+// renderRepoMap is the legacy non-context entry point.
 func renderRepoMap(root string, budget int) (string, error) {
-	files, err := collectRepoMapFiles(root)
-	if err != nil {
-		return "", fmt.Errorf("collect files: %w", err)
-	}
-
-	var entries []repoMapFileEntry
-	for _, f := range files {
-		fi, statErr := os.Stat(f)
-		if statErr != nil {
-			continue
-		}
-		raw, _, indexErr := codeindex.Entries(f)
-		if indexErr != nil {
-			continue
-		}
-		kept := filterRepoMapEntries(raw)
-		if len(kept) == 0 {
-			continue
-		}
-		entries = append(entries, repoMapFileEntry{
-			path:     f,
-			entries:  kept,
-			defCount: len(kept),
-			size:     fi.Size(),
-		})
-	}
-
-	// Rank by definition count (more first), then file size (larger first).
-	sort.SliceStable(entries, func(i, j int) bool {
-		if entries[i].defCount != entries[j].defCount {
-			return entries[i].defCount > entries[j].defCount
-		}
-		return entries[i].size > entries[j].size
-	})
-
-	byteBudget := budget * 4
-	var b strings.Builder
-	shown := 0
-	for _, fe := range entries {
-		block := renderRepoMapFile(fe)
-		if shown > 0 && len(b.String())+len(block)+1 > byteBudget {
-			break
-		}
-		if shown > 0 {
-			b.WriteString("\n")
-		}
-		b.WriteString(block)
-		shown++
-	}
-
-	omitted := len(entries) - shown
-	if omitted > 0 {
-		if b.Len() > 0 {
-			b.WriteString("\n")
-		}
-		fmt.Fprintf(&b, "... (%d more file(s) not shown)\n", omitted)
-	}
-
-	return b.String(), nil
+	return renderRepoMapWith(context.Background(), root, budget, newRepoMapWorker, repoMapLimitsDefault)
 }
 
 // renderRepoMapFile formats a single file's entry block:
@@ -214,6 +125,7 @@ func repoMapToolDefinition(workingDir string, resolvePath func(string) string) c
 			"Use it once, early, to learn which file owns a symbol without grepping, then read or index "+
 			"that file for the details. When the map would exceed its token budget it drops the files "+
 			"with the fewest definitions and notes how many it omitted.\n\n"+
+			"Work is capped at 10s, 1000 attempted files, 16 MiB input and 20000 discovery entries; ignores and safe regular-file checks apply. Partial maps explain limits; narrow path to continue.\n\n"+
 			"Supported files: "+strings.Join(codeindex.SupportedExtensions(), " ")+".",
 	)
 }
