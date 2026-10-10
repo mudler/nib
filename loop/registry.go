@@ -42,10 +42,11 @@ type MonitorConfig struct {
 
 // Registry is a thread-safe store of cron jobs with an injectable clock.
 type Registry struct {
-	mu   sync.Mutex
-	jobs []Job
-	seq  int
-	now  func() time.Time
+	mu       sync.Mutex
+	jobs     []Job
+	seq      int
+	revision uint64
+	now      func() time.Time
 }
 
 // NewRegistry returns an empty registry using time.Now as its clock.
@@ -92,6 +93,7 @@ func (r *Registry) Add(expr, prompt string, recurring, durable bool, monitor Mon
 		next:          next,
 	}
 	r.jobs = append(r.jobs, j)
+	r.revision++
 	return j, nil
 }
 
@@ -135,6 +137,7 @@ func (r *Registry) Delete(id string) bool {
 	for i, j := range r.jobs {
 		if j.ID == id {
 			r.jobs = append(r.jobs[:i], r.jobs[i+1:]...)
+			r.revision++
 			return true
 		}
 	}
@@ -160,6 +163,9 @@ func (r *Registry) Pause(id string) bool {
 	defer r.mu.Unlock()
 	for i := range r.jobs {
 		if r.jobs[i].ID == id {
+			if !r.jobs[i].Paused {
+				r.revision++
+			}
 			r.jobs[i].Paused = true
 			return true
 		}
@@ -176,6 +182,7 @@ func (r *Registry) Resume(id string) bool {
 	for i := range r.jobs {
 		if r.jobs[i].ID == id {
 			if r.jobs[i].Paused {
+				r.revision++
 				r.jobs[i].Paused = false
 				if next, ok := r.jobs[i].sched.Next(r.now()); ok {
 					r.jobs[i].next = next
@@ -205,6 +212,7 @@ func (r *Registry) Due() []Job {
 		}
 		if !j.next.After(now) {
 			due = append(due, j)
+			r.revision++
 			if j.Recurring {
 				if next, ok := j.sched.Next(now); ok {
 					j.next = next

@@ -148,7 +148,7 @@ func TestListLoopsMarksPaused(t *testing.T) {
 func TestCronFireQueuesDuringTurn(t *testing.T) {
 	m := newLoopTestModel()
 	m.loading = true
-	got, _ := m.Update(cronFireMsg("/report"))
+	got, _ := m.Update(cronFireMsg{prompt: "/report"})
 	m = got.(Model)
 	if len(m.queue) != 1 || m.queue[0].text != "/report" {
 		t.Fatalf("queue = %v, want the triggered prompt queued", m.queue)

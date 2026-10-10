@@ -237,6 +237,7 @@ func restoredTranscript(hist []openai.ChatCompletionMessage) []ChatMessage {
 // resolveResumePick's picker case) already hold an addressable Model they
 // mutate in place, exactly like applyAgentEvent elsewhere in this package.
 func (m *Model) applyResume(rec chat.SessionRecord) tea.Cmd {
+	m.resetSchedules()
 	m.resetSuggestion()
 	if m.session != nil {
 		// The new session takes its approval mode from m.cfg, a startup

@@ -146,6 +146,7 @@ func (m *Model) stopLoop(id string) string {
 	// active, so we don't invalidate an unrelated agent-armed wake-up tick.
 	if sp > 0 {
 		m.wakeupGen++
+		m.invalidateWakeups(false)
 		m.selfPaced = 0
 		if m.session != nil && m.session.RunLive() {
 			m.session.Inject("The user stopped the loop. Do not schedule another wake-up; finish the current iteration and reply normally.")

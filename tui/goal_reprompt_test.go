@@ -123,7 +123,7 @@ func TestRepromptAutomaticQueueAndWakeup(t *testing.T) {
 				m.dispatchLoop("automatic")
 				cmd = m.flushQueueAsTurn()
 			case "wakeup":
-				next, c := m.Update(wakeupFireMsg{prompt: "automatic", gen: m.wakeupGen})
+				next, c := m.Update(armedTestFire(&m, wakeupFireMsg{prompt: "automatic", gen: m.wakeupGen}))
 				m = next.(Model)
 				cmd = c
 			case "kickoff":

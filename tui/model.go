@@ -331,7 +331,13 @@ type Model struct {
 	// wakeupGen invalidates pending reminder/self-paced wake-up ticks: a fired
 	// tea.Tick is honored only if its captured gen still matches. Bumped by
 	// /loop stop to cancel a self-paced loop. Poll wake-ups ride pollGen instead.
-	wakeupGen int
+	wakeupGen        int
+	scheduleEpoch    uint64
+	scheduleRevision uint64
+	wakeupSeq        uint64
+	pendingWakeups   map[string]pendingWakeup
+	scheduleNow      func() time.Time
+	scheduleTick     func(time.Duration, func(time.Time) tea.Msg) tea.Cmd
 	// pollGen invalidates pending *poll* wake-up ticks (those that only watch
 	// in-flight background work). Bumped on every park→resume so an orphan poll
 	// armed while parked cannot re-dispatch the task once the work it watched
@@ -457,11 +463,11 @@ type Model struct {
 	askRequestChan  chan chat.AskRequest
 	askResponseChan chan string
 	goalPausedChan  chan chat.GoalPausedNotice
-	wakeupChan      chan chat.WakeupRequest
-	cronFireChan    chan string    // prompts of cron jobs run now via cron_trigger
-	parkChan        chan parkEvent // park/resume signals from the live run
-	compactChan     chan tea.Msg   // compactNoticeMsg or compactFailedMsg from auto-compaction
-	pruneChan       chan [2]int    // {results, freedTokens} from tool-output pruning
+	wakeupChan      chan wakeupScheduledMsg
+	cronFireChan    chan cronFireMsg // prompts of cron jobs run now via cron_trigger
+	parkChan        chan parkEvent   // park/resume signals from the live run
+	compactChan     chan tea.Msg     // compactNoticeMsg or compactFailedMsg from auto-compaction
+	pruneChan       chan [2]int      // {results, freedTokens} from tool-output pruning
 
 	// /resume picker state (Phase 3 Task 15). Set synchronously by
 	// dispatchResolved's KindResume case — unlike ask_user's askMsg, there is
@@ -986,8 +992,8 @@ func NewModel(ctx context.Context, cfg types.Config, height int, shellJobs *wizm
 		askRequestChan:     make(chan chat.AskRequest),
 		askResponseChan:    make(chan string),
 		goalPausedChan:     make(chan chat.GoalPausedNotice, 1),
-		wakeupChan:         make(chan chat.WakeupRequest, 8),
-		cronFireChan:       make(chan string, 8),
+		wakeupChan:         make(chan wakeupScheduledMsg, 8),
+		cronFireChan:       make(chan cronFireMsg, 8),
 		parkChan:           make(chan parkEvent, 16),
 		compactChan:        make(chan tea.Msg, 4),
 		pruneChan:          make(chan [2]int, 4),
@@ -1135,7 +1141,7 @@ func (m Model) initSession() tea.Cmd {
 				// UI arms a timer; when it fires it injects the note into the live
 				// run (see wakeupFireMsg).
 				select {
-				case m.wakeupChan <- req:
+				case m.wakeupChan <- wakeupScheduledMsg{WakeupRequest: req, epoch: m.scheduleEpoch}:
 					if req.Reason != "" {
 						return fmt.Sprintf("Scheduled a wake-up in %ds (%s). You'll be re-invoked then.", req.DelaySeconds, req.Reason)
 					}
@@ -1194,7 +1200,7 @@ func (m Model) initSession() tea.Cmd {
 				// Hand the prompt to the UI loop, which queues it behind the
 				// current turn like any cron fire (see dispatchLoop).
 				select {
-				case m.cronFireChan <- j.Prompt:
+				case m.cronFireChan <- cronFireMsg{prompt: j.Prompt, epoch: m.scheduleEpoch}:
 					return "Queued " + id + " to run after this turn."
 				default:
 					return "Could not run " + id + " now (too many pending)."
@@ -2139,6 +2145,7 @@ func (m Model) Update(msg tea.Msg) (nextModel tea.Model, nextCmd tea.Cmd) {
 			// re-arms with the bumped gen, so only the now-moot orphan dies.
 			// Reminders ride wakeupGen and are left intact.
 			m.pollGen++
+			m.invalidateWakeups(true)
 		}
 		// Synchronize after releaseQueueFront: a parked notification either
 		// leaves the run Parked or immediately releases a queued follow-up and
@@ -2252,29 +2259,23 @@ func (m Model) Update(msg tea.Msg) (nextModel tea.Model, nextCmd tea.Cmd) {
 		}
 
 	case wakeupScheduledMsg:
-		// Arm a timer for the requested delay, then keep listening for more.
-		// Poll wake-ups capture pollGen (dropped on park→resume); reminders and
-		// self-paced steps capture wakeupGen (dropped only by /loop stop).
-		req := chat.WakeupRequest(msg)
-		d := time.Duration(req.DelaySeconds) * time.Second
-		prompt := req.Prompt
-		poll := req.Poll
-		gen := m.wakeupGen
-		if poll {
-			gen = m.pollGen
+		if c := m.armWakeup(msg); c != nil {
+			cmds = append(cmds, c)
 		}
-		cmds = append(cmds,
-			tea.Tick(d, func(time.Time) tea.Msg { return wakeupFireMsg{prompt: prompt, gen: gen, poll: poll} }),
-			m.listenWakeup(),
-		)
+		cmds = append(cmds, m.listenWakeup())
 
 	case cronFireMsg:
-		if c := m.dispatchLoop(string(msg)); c != nil {
-			cmds = append(cmds, c)
+		if msg.epoch == m.scheduleEpoch && !m.quitting {
+			if c := m.dispatchLoop(msg.prompt); c != nil {
+				cmds = append(cmds, c)
+			}
 		}
 		cmds = append(cmds, m.listenCronFire())
 
 	case wakeupFireMsg:
+		if !m.consumeWakeup(msg) {
+			break
+		}
 		// A stale tick — a cancelled self-paced loop, or a poll whose background
 		// work already completed (park→resume bumped pollGen): ignore.
 		curGen := m.wakeupGen
@@ -2963,12 +2964,17 @@ func (m Model) loopTick() tea.Cmd {
 }
 
 // wakeupScheduledMsg is emitted when the agent schedules an in-session wake-up.
-type wakeupScheduledMsg chat.WakeupRequest
+type wakeupScheduledMsg struct {
+	chat.WakeupRequest
+	epoch uint64
+}
 
 // wakeupFireMsg is emitted when a scheduled wake-up's delay elapses. poll marks
 // a tick that watches background work; it is validated against pollGen rather
 // than wakeupGen so only poll ticks are dropped on park→resume.
 type wakeupFireMsg struct {
+	id     string
+	epoch  uint64
 	prompt string
 	gen    int
 	poll   bool
@@ -2976,13 +2982,16 @@ type wakeupFireMsg struct {
 
 // listenWakeup waits for the agent to schedule a wake-up.
 // cronFireMsg carries the prompt of a cron job run now via cron_trigger.
-type cronFireMsg string
+type cronFireMsg struct {
+	prompt string
+	epoch  uint64
+}
 
 func (m Model) listenCronFire() tea.Cmd {
 	return func() tea.Msg {
 		select {
 		case p := <-m.cronFireChan:
-			return cronFireMsg(p)
+			return p
 		case <-m.ctx.Done():
 			return nil
 		}
@@ -2993,7 +3002,7 @@ func (m Model) listenWakeup() tea.Cmd {
 	return func() tea.Msg {
 		select {
 		case req := <-m.wakeupChan:
-			return wakeupScheduledMsg(req)
+			return req
 		case <-m.ctx.Done():
 			return nil
 		}
@@ -4717,6 +4726,7 @@ func (m Model) usageBadge() string {
 // quote the same snapshot.
 func (m Model) quit() (tea.Model, tea.Cmd) {
 	m.quitting = true
+	m.resetSchedules()
 	if m.session != nil {
 		m.sessionUsage = m.session.Usage()
 		// Before Close, for the same reason the usage refresh is: recordSession

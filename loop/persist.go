@@ -69,6 +69,7 @@ func (r *Registry) restore(id string, created time.Time, paused bool,
 			if !created.IsZero() {
 				r.jobs[i].Created = created
 			}
+			r.revision++
 			r.jobs[i].Paused = paused
 			r.jobs[i].LastOutputHash = lastHash
 			r.jobs[i].LastOutput = lastOutput

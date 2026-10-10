@@ -1,7 +1,9 @@
 package tui
 
 import (
+	tea "github.com/charmbracelet/bubbletea"
 	"testing"
+	"time"
 
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textarea"
@@ -26,9 +28,10 @@ func newWakeupTestModel() Model {
 
 func TestWakeupFireStaleGenIgnored(t *testing.T) {
 	m := newWakeupTestModel()
-	m.wakeupGen = 5
-
-	next, _ := m.Update(wakeupFireMsg{prompt: "tick", gen: 4})
+	m.wakeupGen = 4
+	fire := armedTestFire(&m, wakeupFireMsg{prompt: "tick", gen: 4})
+	m.wakeupGen++
+	next, _ := m.Update(fire)
 	nm := next.(Model)
 
 	if nm.loading {
@@ -43,7 +46,7 @@ func TestWakeupFireMatchingGenStartsTurn(t *testing.T) {
 	m := newWakeupTestModel()
 	m.wakeupGen = 5
 
-	next, cmd := m.Update(wakeupFireMsg{prompt: "tick", gen: 5})
+	next, cmd := m.Update(armedTestFire(&m, wakeupFireMsg{prompt: "tick", gen: 5}))
 	nm := next.(Model)
 
 	if !nm.loading {
@@ -69,7 +72,7 @@ func TestParkResumeInvalidatesOrphanPollWakeup(t *testing.T) {
 	m.parkChan = make(chan parkEvent, 1)
 
 	// A poll wake-up was armed while parked, capturing the current poll gen.
-	armedGen := m.pollGen
+	fire := armedTestFire(&m, wakeupFireMsg{prompt: "Check on the explore agent", poll: true})
 
 	// Background work completes: the parked run resumes (cogito onResume).
 	next, _ := m.Update(parkMsg{parked: false})
@@ -80,7 +83,7 @@ func TestParkResumeInvalidatesOrphanPollWakeup(t *testing.T) {
 	m.parked = false
 
 	// The orphan poll tick finally fires with its now-stale generation.
-	next, cmd := m.Update(wakeupFireMsg{prompt: "Check on the explore agent", gen: armedGen, poll: true})
+	next, cmd := m.Update(fire)
 	nm := next.(Model)
 
 	if nm.loading || cmd != nil || len(nm.messages) != 0 {
@@ -97,7 +100,7 @@ func TestParkResumeKeepsReminderWakeup(t *testing.T) {
 	m.parkChan = make(chan parkEvent, 1)
 
 	// A reminder was armed while parked, capturing the current wakeup gen.
-	armedGen := m.wakeupGen
+	fire := armedTestFire(&m, wakeupFireMsg{prompt: "stand-up reminder"})
 
 	// Background work completes and the parked run resumes.
 	next, _ := m.Update(parkMsg{parked: false})
@@ -108,7 +111,7 @@ func TestParkResumeKeepsReminderWakeup(t *testing.T) {
 	m.parked = false
 
 	// The reminder tick fires; it must still start a turn.
-	next, cmd := m.Update(wakeupFireMsg{prompt: "stand-up reminder", gen: armedGen, poll: false})
+	next, cmd := m.Update(fire)
 	nm := next.(Model)
 
 	if !nm.loading || cmd == nil || len(nm.messages) != 1 {
@@ -122,10 +125,20 @@ func TestParkResumeKeepsReminderWakeup(t *testing.T) {
 func TestWakeupFireEmptyPromptDefaultsToContinue(t *testing.T) {
 	m := newWakeupTestModel()
 
-	next, _ := m.Update(wakeupFireMsg{prompt: "  ", gen: 0})
+	next, _ := m.Update(armedTestFire(&m, wakeupFireMsg{prompt: "  ", gen: 0}))
 	nm := next.(Model)
 
 	if len(nm.messages) != 1 || nm.messages[0].Content != "continue" {
 		t.Fatalf("empty prompt should default to %q, got %v", "continue", nm.messages)
 	}
+}
+
+// Arm through the production lifecycle, then deliver a controllable callback.
+func armedTestFire(m *Model, want wakeupFireMsg) wakeupFireMsg {
+	m.scheduleTick = func(_ time.Duration, f func(time.Time) tea.Msg) tea.Cmd {
+		return func() tea.Msg { return f(time.Time{}) }
+	}
+	c := m.armWakeup(wakeupScheduledMsg{WakeupRequest: chat.WakeupRequest{Prompt: want.prompt, Poll: want.poll}, epoch: m.scheduleEpoch})
+	got := c().(wakeupFireMsg)
+	return got
 }
