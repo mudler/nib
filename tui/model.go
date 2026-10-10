@@ -333,6 +333,7 @@ type Model struct {
 	// /loop stop to cancel a self-paced loop. Poll wake-ups ride pollGen instead.
 	wakeupGen        int
 	scheduleEpoch    uint64
+	scheduleOwner    *scheduleOwner
 	scheduleRevision uint64
 	wakeupSeq        uint64
 	pendingWakeups   map[string]pendingWakeup
@@ -679,6 +680,7 @@ type pruneNoticeMsg [2]int
 // the run parked (assistant replied, run still alive); parked=false means an
 // injected message resumed it.
 type parkEvent struct {
+	epoch          uint64
 	parked         bool
 	reply          string
 	mailboxOrdered bool // already ordered by applyToolEvents
@@ -1000,6 +1002,7 @@ func NewModel(ctx context.Context, cfg types.Config, height int, shellJobs *wizm
 		mdRenderers:        make(map[int]*glamour.TermRenderer),
 		mdCache:            make(map[mdKey]string),
 		loops:              loop.NewRegistry(),
+		scheduleOwner:      &scheduleOwner{},
 		loopsPath:          filepath.Join(".nib", "loops.json"),
 		// Rooted at the per-user BaseDir (~/.config/nib by default, the same
 		// root config.yaml/plugins/skills already use), NOT at the process's
@@ -1136,82 +1139,6 @@ func (m Model) initSession() tea.Cmd {
 				m.askRequestChan <- req
 				return <-m.askResponseChan
 			},
-			OnScheduleWakeup: func(req chat.WakeupRequest) string {
-				// Non-blocking: hand the request to the UI loop and confirm now. The
-				// UI arms a timer; when it fires it injects the note into the live
-				// run (see wakeupFireMsg).
-				select {
-				case m.wakeupChan <- wakeupScheduledMsg{WakeupRequest: req, epoch: m.scheduleEpoch}:
-					if req.Reason != "" {
-						return fmt.Sprintf("Scheduled a wake-up in %ds (%s). You'll be re-invoked then.", req.DelaySeconds, req.Reason)
-					}
-					return fmt.Sprintf("Scheduled a wake-up in %ds: %q. You'll be re-invoked then.", req.DelaySeconds, req.Prompt)
-				default:
-					return "Could not schedule wake-up (too many pending)."
-				}
-			},
-			OnCronCreate: func(req chat.CronRequest) string {
-				j, err := m.loops.Add(req.Expr, req.Prompt, req.Recurring, req.Durable, loop.MonitorConfig{Script: req.MonitorScript, URL: req.MonitorURL})
-				if err != nil {
-					return "cron rejected: " + err.Error()
-				}
-				if req.Durable {
-					_ = m.loops.Save(m.loopsPath)
-				}
-				return fmt.Sprintf("Scheduled %s (%s) → %q", j.ID, j.Expr, j.Prompt)
-			},
-			OnCronList: func() string {
-				jobs := m.loops.List()
-				if len(jobs) == 0 {
-					return "No active cron loops."
-				}
-				var b strings.Builder
-				for _, j := range jobs {
-					b.WriteString(loopLine(j) + "\n")
-				}
-				return strings.TrimRight(b.String(), "\n")
-			},
-			OnCronDelete: func(id string) string {
-				if m.loops.Delete(id) {
-					_ = m.loops.Save(m.loopsPath)
-					return "Cancelled " + id
-				}
-				return "No such loop: " + id
-			},
-			OnCronPause: func(id string) string {
-				if m.loops.Pause(id) {
-					_ = m.loops.Save(m.loopsPath)
-					return "Paused " + id
-				}
-				return "No such loop: " + id
-			},
-			OnCronResume: func(id string) string {
-				if m.loops.Resume(id) {
-					_ = m.loops.Save(m.loopsPath)
-					return "Resumed " + id
-				}
-				return "No such loop: " + id
-			},
-			OnCronTrigger: func(id string) string {
-				j, ok := m.loops.Get(id)
-				if !ok {
-					return "No such loop: " + id
-				}
-				// Hand the prompt to the UI loop, which queues it behind the
-				// current turn like any cron fire (see dispatchLoop).
-				select {
-				case m.cronFireChan <- cronFireMsg{prompt: j.Prompt, epoch: m.scheduleEpoch}:
-					return "Queued " + id + " to run after this turn."
-				default:
-					return "Could not run " + id + " now (too many pending)."
-				}
-			},
-			OnParked: func(reply string) {
-				m.toolEvents.push(toolEvent{park: &parkEvent{parked: true, reply: reply}})
-			},
-			OnResumed: func() {
-				m.toolEvents.push(toolEvent{park: &parkEvent{parked: false}})
-			},
 			AgentCallbacks: m.agentCallbacks,
 			OnAgentTitle: func(id, title string) {
 				// A title is a nicety: dropped when the UI is behind.
@@ -1248,6 +1175,17 @@ func (m Model) initSession() tea.Cmd {
 			QueuedToolCallback:   m.queuedToolCallback,
 			ObservationCallbacks: m.toolEvents.observationCallback,
 		}
+
+		scheduled := m.scheduleCallbacks()
+		callbacks.OnScheduleWakeup = scheduled.OnScheduleWakeup
+		callbacks.OnCronCreate = scheduled.OnCronCreate
+		callbacks.OnCronList = scheduled.OnCronList
+		callbacks.OnCronDelete = scheduled.OnCronDelete
+		callbacks.OnCronPause = scheduled.OnCronPause
+		callbacks.OnCronResume = scheduled.OnCronResume
+		callbacks.OnCronTrigger = scheduled.OnCronTrigger
+		callbacks.OnParked = scheduled.OnParked
+		callbacks.OnResumed = scheduled.OnResumed
 
 		session, err := chat.NewSession(m.ctx, m.cfg, callbacks, m.transports...)
 		if session != nil {
@@ -2070,6 +2008,10 @@ func (m Model) Update(msg tea.Msg) (nextModel tea.Model, nextCmd tea.Cmd) {
 		}
 
 	case parkMsg:
+		if msg.epoch != m.scheduleEpoch || m.quitting {
+			cmds = append(cmds, m.listenPark())
+			break
+		}
 		if m.toolEvents != nil && !msg.mailboxOrdered {
 			m.applyToolEvents(m.toolEvents.drain())
 		}

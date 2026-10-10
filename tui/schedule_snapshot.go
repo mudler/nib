@@ -110,7 +110,11 @@ func (m *Model) invalidateWakeups(poll bool) {
 	m.scheduleRevision++
 }
 func (m *Model) resetSchedules() {
+	m.ensureScheduleOwner()
+	m.scheduleOwner.mu.Lock()
 	m.scheduleEpoch++
+	m.scheduleOwner.epoch = m.scheduleEpoch
+	m.scheduleOwner.mu.Unlock()
 	m.scheduleRevision++
 	m.wakeupGen++
 	m.pollGen++
