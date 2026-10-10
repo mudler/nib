@@ -37,7 +37,7 @@ func TestEmbeddedReadmeContainsKeySections(t *testing.T) {
 }
 
 func TestStatusDocumentation(t *testing.T) {
-	for _, want := range []string{"Working · 2 agents · 1 shell", "Waiting for jobs", "Reviewing results", "Ready for input", "foreground and background child agents", "scheduled eligibility", "availability, not task success", "physical terminal wrapping"} {
+	for _, want := range []string{"Working · 2 agents · 1 shell", "Waiting for jobs", "Reviewing results", "Ready for input", "foreground and background child agents", "scheduled eligibility", "availability, not task success", "explicit continuation lines", "Grapheme clusters", "it appears as `?` instead", "Semantic count fields never split"} {
 		if !strings.Contains(EmbeddedReadme(), want) {
 			t.Errorf("status documentation missing %q", want)
 		}

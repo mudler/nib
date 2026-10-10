@@ -356,8 +356,12 @@ schedules show `due now`.
 
 At narrow widths, count labels become `ag` and `sh`. Then the schedule disappears,
 followed by whole count fields. Zero and nonzero counts receive the same treatment.
-Phase words wrap rather than truncate. Below a single word's width, physical terminal wrapping
-is unavoidable; the layout reserves those extra rows.
+Phase and control words stay whole when they fit. A word wider than the terminal
+wraps onto explicit continuation lines without losing characters; the layout
+reserves those emitted rows. Grapheme clusters (such as a letter with combining
+marks) stay together. A single grapheme wider than the entire terminal cannot
+be displayed intact: it appears as `?` instead. For example, a two-cell CJK
+character uses this fallback at width 1. Semantic count fields never split.
 
 ### The footer
 

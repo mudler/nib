@@ -422,7 +422,7 @@ func (Base) Header(v ViewState) string {
 	return b.String()
 }
 
-// HeaderHeight measures the exact rendered header, including physical wrapping
+// HeaderHeight measures the exact rendered header, including explicit wrapping
 // of words wider than the terminal. Frame appends the body after its final newline.
 func (b Base) HeaderHeight(v ViewState) int {
 	return TerminalRows(b.Header(v), v.Width)

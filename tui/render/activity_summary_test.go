@@ -15,7 +15,7 @@ func TestActivitySummaryFit(t *testing.T) {
 	}{
 		{100, theme.WaitingMarker + " Waiting for your answer · 12s"},
 		{26, theme.WaitingMarker + " Waiting for your answer"},
-		{16, "Waiting for your\nanswer"}, {8, "Waiting\nfor your\nanswer"}, {1, "Waiting\nfor\nyour\nanswer"},
+		{16, "Waiting for your\nanswer"}, {8, "Waiting\nfor your\nanswer"}, {1, "W\na\ni\nt\ni\nn\ng\nf\no\nr\ny\no\nu\nr\na\nn\ns\nw\ne\nr"},
 	} {
 		if got := summaryLine(s, theme.SpinnerFrames()[0], tc.width); got != tc.want {
 			t.Errorf("width %d: %q want %q", tc.width, got, tc.want)
@@ -125,7 +125,7 @@ func TestStatusWholeFieldsAndFitOrder(t *testing.T) {
 		{25, "Ready for input · 123 ag"},
 		{20, "Ready for input"},
 		{8, "Ready\nfor\ninput"},
-		{1, "Ready\nfor\ninput"},
+		{1, "R\ne\na\nd\ny\nf\no\nr\ni\nn\np\nu\nt"},
 	} {
 		if got := statusLine(s, tc.width); got != tc.want {
 			t.Errorf("width %d: %q want %q", tc.width, got, tc.want)
@@ -137,11 +137,15 @@ func TestStatusSanitizedDisplayWidths(t *testing.T) {
 	s := ActivitySummary{Primary: "\x1b[31m界界\x1b[0m\r\nWorking\a", Schedule: "\x1b]0;title\a next\trun in 2m", CountsKnown: true, Agents: 123, Shells: 0}
 	for w := 1; w <= 100; w++ {
 		got := statusLine(s, w)
-		if strings.ContainsAny(got, "\x1b\r\t\a") || !strings.Contains(got, "界界") || !strings.Contains(got, "Working") {
+		wantWide := "界界"
+		if w == 1 {
+			wantWide = "??"
+		}
+		if strings.ContainsAny(got, "\x1b\r\t\a") || !strings.Contains(strings.ReplaceAll(got, "\n", ""), wantWide) || !strings.Contains(strings.ReplaceAll(got, "\n", ""), "Working") {
 			t.Fatalf("width %d unsafe/lost words: %q", w, got)
 		}
 		for _, line := range strings.Split(got, "\n") {
-			if ansi.StringWidth(line) > w && len(strings.Fields(line)) != 1 {
+			if ansi.StringWidth(line) > w {
 				t.Fatalf("width %d failed display-width fit: %q", w, line)
 			}
 		}
@@ -153,11 +157,31 @@ func TestStatusTerminalRows(t *testing.T) {
 		text        string
 		width, rows int
 	}{
-		{"Ready\nfor\ninput\n", 1, 13}, {"界界\nWorking\n", 3, 5},
+		{"Ready\nfor\ninput\n", 1, 3}, {"界界\nWorking\n", 3, 2},
 		{"\x1b[31mWorking\x1b[0m\n", 7, 1}, {"Working\n\n", 7, 2}, {"", 1, 0},
 	} {
 		if got := TerminalRows(tc.text, tc.width); got != tc.rows {
 			t.Errorf("%q width %d: %d want %d", tc.text, tc.width, got, tc.rows)
+		}
+	}
+}
+
+func TestReflowWordsContinuationBoundaries(t *testing.T) {
+	for _, tc := range []struct {
+		text  string
+		width int
+		want  string
+	}{
+		{"Ready for input", 8, "Ready\nfor\ninput"},
+		{"Ready for input", 15, "Ready for input"},
+		{"Working now", 3, "Wor\nkin\ng\nnow"},
+		{"\x1b[31m界界 e\u0301clair\x1b[0m", 3, "界\n界\ne\u0301cl\nair"},
+		{"界界", 1, "?\n?"},
+		{"👩‍💻a", 1, "?\na"},
+		{"👩‍💻a", 2, "👩‍💻\na"},
+	} {
+		if got := ReflowWords(tc.text, tc.width); got != tc.want {
+			t.Errorf("%q width %d: %q want %q", tc.text, tc.width, got, tc.want)
 		}
 	}
 }

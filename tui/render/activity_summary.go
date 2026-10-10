@@ -7,6 +7,7 @@ import (
 
 	"github.com/charmbracelet/x/ansi"
 	"github.com/mudler/nib/theme"
+	"github.com/rivo/uniseg"
 )
 
 // SummaryMarker selects the semantic lifecycle marker. Active modes consume
@@ -111,8 +112,10 @@ func statusLine(s ActivitySummary, w int) string {
 	return ReflowWords(phase, w)
 }
 
-// ReflowWords preserves words even below their display width. Such a word
-// wraps physically in the terminal; TerminalRows accounts for those rows.
+// ReflowWords keeps words whole when they fit. Oversized words use explicit
+// grapheme-aware continuation lines: Bubble Tea truncates over-width lines,
+// so relying on terminal autowrap would lose characters. A grapheme wider
+// than the entire terminal becomes "?"; it cannot be displayed intact there.
 func ReflowWords(text string, w int) string {
 	if w <= 0 {
 		return ""
@@ -124,10 +127,25 @@ func ReflowWords(text string, w int) string {
 			lines = append(lines, line)
 			line = ""
 		}
-		if line != "" {
-			line += " "
+		if ansi.StringWidth(word) <= w {
+			if line != "" {
+				line += " "
+			}
+			line += word
+			continue
 		}
-		line += word
+		clusters := uniseg.NewGraphemes(word)
+		for clusters.Next() {
+			cluster := clusters.Str()
+			if ansi.StringWidth(cluster) > w {
+				cluster = "?"
+			}
+			if line != "" && ansi.StringWidth(line+cluster) > w {
+				lines = append(lines, line)
+				line = ""
+			}
+			line += cluster
+		}
 	}
 	if line != "" {
 		lines = append(lines, line)
@@ -135,18 +153,15 @@ func ReflowWords(text string, w int) string {
 	return strings.Join(lines, "\n")
 }
 
-// TerminalRows measures physical display rows, including oversized words.
-// A trailing newline terminates the block without adding an empty row.
+// TerminalRows counts emitted lines, not hypothetical terminal autowrap:
+// Bubble Tea truncates any over-width line to one row. Callers that need to
+// preserve text must reflow it first. A trailing newline terminates the block
+// without adding an empty row.
 func TerminalRows(text string, w int) int {
 	if text == "" || w <= 0 {
 		return 0
 	}
-	text = strings.TrimSuffix(text, "\n")
-	rows := 0
-	for _, line := range strings.Split(text, "\n") {
-		rows += max(1, (ansi.StringWidth(line)+w-1)/w)
-	}
-	return rows
+	return strings.Count(strings.TrimSuffix(text, "\n"), "\n") + 1
 }
 
 func summaryLine(s ActivitySummary, spinner string, w int) string {

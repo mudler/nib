@@ -21,7 +21,7 @@ func TestStatusSemanticWidth(t *testing.T) {
 								t.Fatalf("%s width %d dishonest height", name, w)
 							}
 							for _, word := range strings.Fields(phase) {
-								if !strings.Contains(got, word) {
+								if !strings.Contains(strings.ReplaceAll(got, "\n", ""), word) {
 									t.Fatalf("%s width %d loses phase %q: %q", name, w, phase, got)
 								}
 							}
@@ -52,12 +52,12 @@ func TestStatusControlsAndFooter(t *testing.T) {
 				v := render.ViewState{Width: w, Summary: render.ActivitySummary{Primary: phase}, Help: "enter approve · esc cancel · ctrl+c interrupt"}
 				header, footer := ansi.Strip(p.Header(v)), ansi.Strip(p.Footer(v, w))
 				for _, word := range strings.Fields(phase) {
-					if !strings.Contains(header, word) {
+					if !strings.Contains(strings.ReplaceAll(header, "\n", ""), word) {
 						t.Fatalf("%s width %d lost %q: %q", name, w, word, header)
 					}
 				}
 				for _, word := range []string{"enter", "approve", "esc", "cancel", "ctrl+c", "interrupt"} {
-					if !strings.Contains(footer, word) {
+					if !strings.Contains(strings.ReplaceAll(footer, "\n", ""), word) {
 						t.Fatalf("%s width %d lost control %q: %q", name, w, word, footer)
 					}
 				}
