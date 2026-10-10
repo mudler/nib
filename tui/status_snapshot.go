@@ -96,6 +96,12 @@ func (m *Model) acceptStatus(request statusRequest, s statusSnapshot) bool {
 func (m *Model) invalidateStatus() {
 	m.statusDispatchSequence++
 	m.statusAttachment = statusDispatch{}
+	m.invalidatePendingStatus()
+}
+
+// Input acknowledgement is independent of the enclosing response ownership.
+// A follow-up resumes the same run; only a new dispatch invalidates its result.
+func (m *Model) invalidatePendingStatus() {
 	if !m.statusPending {
 		m.statusPendingExecution = m.statusSnapshot.Execution.RootExecutionSequence
 		if m.session != nil {
@@ -171,12 +177,10 @@ func summarizeStatus(s statusSnapshot, now time.Time) render.ActivitySummary {
 // finish before InjectWithDelivery returns. Failed injection owns no transition.
 func (m *Model) injectStatus(text string, delivery chat.InputDelivery) bool {
 	pending, sequence, snapshot := m.statusPending, m.statusPendingExecution, m.statusSnapshot
-	attachment := m.statusAttachment
-	m.invalidateStatus()
+	m.invalidatePendingStatus()
 	if m.session.InjectWithDelivery(text, delivery) {
 		return true
 	}
 	m.statusPending, m.statusPendingExecution, m.statusSnapshot = pending, sequence, snapshot
-	m.statusAttachment = attachment
 	return false
 }

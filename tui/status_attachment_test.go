@@ -2,9 +2,12 @@ package tui
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -129,6 +132,131 @@ func TestStatusAttachmentObsoleteResult(t *testing.T) {
 			m = next.(Model)
 			if !m.loading {
 				t.Fatal("obsolete result accepted without a newer dispatch")
+			}
+		})
+	}
+}
+
+// Follow-ups belong to the enclosing attachment turn, not a replacement turn.
+func TestStatusAttachmentFollowupResponse(t *testing.T) {
+	for _, route := range []string{"queue", "parked-loop"} {
+		t.Run(route, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			reached := make(chan struct{}, 1)
+			release := make(chan struct{})
+			var roots atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != "POST" {
+					http.NotFound(w, r)
+					return
+				}
+				var req struct {
+					Messages []struct{ Role, Content string }
+				}
+				json.NewDecoder(r.Body).Decode(&req)
+				child := false
+				for _, msg := range req.Messages {
+					child = child || msg.Role == "user" && msg.Content == "subtask"
+				}
+				msg := map[string]any{"role": "assistant", "content": "attachment final"}
+				if route == "queue" || child {
+					select {
+					case reached <- struct{}{}:
+					default:
+					}
+					select {
+					case <-release:
+					case <-ctx.Done():
+						return
+					}
+				} else if roots.Add(1) == 1 {
+					msg["content"] = ""
+					msg["tool_calls"] = []any{map[string]any{"id": "spawn", "type": "function", "function": map[string]any{"name": "spawn_agent", "arguments": `{"task":"subtask","background":true}`}}}
+				}
+				json.NewEncoder(w).Encode(map[string]any{"choices": []any{map[string]any{"index": 0, "message": msg, "finish_reason": "stop"}}})
+			}))
+			defer server.Close()
+			defer cancel()
+			parked := make(chan struct{}, 1)
+			s, err := chat.NewSession(ctx, types.Config{Model: "test", APIKey: "test", BaseURL: server.URL + "/v1", ApprovalMode: "auto", WorkingDir: t.TempDir(), AgentOptions: types.AgentOptions{Iterations: 8, MaxAttempts: 1, MaxRetries: 1}}, chat.Callbacks{OnParked: func(string) {
+				select {
+				case parked <- struct{}{}:
+				default:
+				}
+			}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer s.Close()
+			m := newWakeupTestModel()
+			m.ctx, m.session = ctx, s
+			m.toolEvents = newToolEventQueue()
+			file := filepath.Join(t.TempDir(), "input.txt")
+			if err := os.WriteFile(file, []byte("attachment contents"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			m.loading = true
+			cmd := m.sendWithAttachmentsDeliveryCmd("read attachment", []string{file}, nil, chat.InputAutomatic)
+			done := make(chan responseMsg, 1)
+			go func() { done <- cmd().(responseMsg) }()
+			wait := reached
+			if route == "parked-loop" {
+				wait = parked
+			}
+			select {
+			case <-wait:
+			case <-ctx.Done():
+				t.Fatal(ctx.Err())
+			}
+			if route == "queue" {
+				m.queue = []queuedInput{{text: "followup", delivery: chat.InputAccepted}}
+				if !m.releaseQueueFront() {
+					t.Fatal("followup injection rejected")
+				}
+			} else {
+				m.parked = true
+				if cmd := m.dispatchLoop("followup"); cmd != nil || m.parked || len(m.queue) != 0 {
+					t.Fatal("parked injection rejected")
+				}
+			}
+			// A non-turn queue entry must be flushed at the response boundary.
+			m.queue = append(m.queue, queuedInput{text: "/help", delivery: chat.InputAutomatic})
+			close(release)
+			var result responseMsg
+			select {
+			case result = <-done:
+			case <-ctx.Done():
+				t.Fatal(ctx.Err())
+			}
+			if result.err != nil {
+				t.Fatal(result.err)
+			}
+			if !s.ActivitySnapshot().ReadyAllowed {
+				t.Fatal("turn not authoritatively settled")
+			}
+			next, followup := m.Update(result)
+			m = next.(Model)
+			found := false
+			for _, msg := range m.messages {
+				found = found || msg.Role == "assistant" && msg.Content == "attachment final"
+			}
+			if !found {
+				t.Fatal("final attachment response discarded after successful followup injection")
+			}
+			if m.loading {
+				if !m.statusPending || followup == nil || len(m.redispatch) != 0 {
+					t.Fatal("undelivered followup was not redispatched normally")
+				}
+				next, _ = m.Update(followup())
+				m = next.(Model)
+			}
+			if len(m.queue) != 0 || m.loading || m.parked {
+				t.Fatalf("response did not settle UI/queue: loading=%v parked=%v queue=%+v", m.loading, m.parked, m.queue)
+			}
+			m.reconcileStatus()
+			if got := m.activitySummary(time.Now()); got.Primary != "Ready for input" {
+				t.Fatalf("settled response not ready: %+v", got)
 			}
 		})
 	}
