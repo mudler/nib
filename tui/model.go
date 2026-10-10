@@ -224,9 +224,15 @@ type Model struct {
 	shellJobs  *wizmcp.ShellJobs
 	// artifacts is the store the tool servers were started with; every
 	// session this model creates uses it (see WithArtifactStore).
-	artifacts    *wizmcp.ArtifactStore
-	cfg          types.Config
-	sessionReady bool
+	artifacts                                       *wizmcp.ArtifactStore
+	cfg                                             types.Config
+	sessionReady                                    bool
+	statusSnapshot                                  statusSnapshot
+	statusOwner                                     statusRequest
+	statusExecutionRevision, statusScheduleRevision uint64
+	statusPendingExecution                          uint64
+	statusPending                                   bool
+	statusTickSequence                              uint64
 
 	// UI state
 	width     int
@@ -1047,6 +1053,7 @@ func (m Model) Init() tea.Cmd {
 		textarea.Blink,
 		m.spinner.Tick,
 		m.initSession(),
+		m.statusTick(),
 	}
 	if m.boot != nil {
 		cmds = append(cmds, m.boot.nextBootCmd())
@@ -1205,6 +1212,12 @@ func (m Model) Update(msg tea.Msg) (nextModel tea.Model, nextCmd tea.Cmd) {
 	// bypass the budget update through an early return or delegated handler.
 	previousHint := m.hint
 	defer func() {
+		if next, ok := nextModel.(Model); ok {
+			next.reconcileStatus()
+			nextModel = next
+		}
+	}()
+	defer func() {
 		if next, ok := nextModel.(Model); ok && next.hint != previousHint {
 			next.reflowLayout()
 			nextModel = next
@@ -1229,6 +1242,12 @@ func (m Model) Update(msg tea.Msg) (nextModel tea.Model, nextCmd tea.Cmd) {
 	}
 
 	switch msg := msg.(type) {
+	case statusRefreshMsg:
+		if m.quitting || msg.sequence != m.statusTickSequence {
+			return m, nil
+		}
+		m.statusTickSequence++
+		return m, m.statusTick()
 	case tea.KeyMsg:
 		// Any key means the user is replying: no suggestion is fetched for
 		// this wait. One that already arrived stays, to match what they type.

@@ -72,6 +72,7 @@ func TestSummaryFooterSilentIdleTick(t *testing.T) {
 			m.toolEvents.begin()
 			now := time.Unix(100, 0)
 			m.syncActivityPhase(now)
+			seedSummaryStatus(&m)
 			m.toolEvents.observationCallback()(chat.Observation{OwnerKnown: true, HasText: true, Received: now, Order: 1})
 			before := m.toolEvents.rootObservation()
 			first := m.viewStateAt(now.Add(time.Second))
@@ -81,6 +82,8 @@ func TestSummaryFooterSilentIdleTick(t *testing.T) {
 			if cmd == nil {
 				t.Fatal("existing idle tick stopped")
 			}
+			// This test isolates footer age/cache behavior from collection.
+			seedSummaryStatus(&m)
 			second := m.viewStateAt(now.Add(3 * time.Second))
 			b, bh := m.renderFooter(second, 120)
 			if a == b || ah != bh || first.Summary.Primary != second.Summary.Primary || !strings.Contains(b, "3s") || strings.Contains(b, "ago") {

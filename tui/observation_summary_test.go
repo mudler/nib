@@ -17,12 +17,12 @@ func TestActivitySummaryCopyMatrixAndPriority(t *testing.T) {
 		model            Model
 		primary, compact string
 	}{
-		{"ready", Model{}, "Ready", "Ready"},
+		{"ready", Model{}, "Ready for input", "Ready for input"},
 		{"working", Model{loading: true}, "Working", "Working"},
-		{"named tool", Model{loading: true, running: []runningTool{{name: "  bash   -lc  "}}}, "Running bash -lc", "Running"},
-		{"unnamed tool", Model{loading: true, running: []runningTool{{}}}, "Running tool", "Running"},
-		{"tools", Model{loading: true, running: []runningTool{{name: "bash"}, {name: "read"}}}, "2 tools active", "Tools active"},
-		{"parked", Model{parked: true}, "Parked", "Parked"},
+		{"named tool", Model{loading: true, running: []runningTool{{name: "  bash   -lc  "}}}, "Working", "Working"},
+		{"unnamed tool", Model{loading: true, running: []runningTool{{}}}, "Working", "Working"},
+		{"tools", Model{loading: true, running: []runningTool{{name: "bash"}, {name: "read"}}}, "Working", "Working"},
+		{"parked", Model{parked: true}, "Waiting for jobs", "Waiting for jobs"},
 		{"working over parked", Model{loading: true, parked: true}, "Working", "Working"},
 		{"answer over tools", Model{awaitingAsk: true, running: []runningTool{{name: "bash"}}}, "Waiting for your answer", "Answer needed"},
 		{"approval over answer", Model{awaitingApproval: true, awaitingAsk: true}, "Approval needed", "Approval"},
@@ -30,6 +30,7 @@ func TestActivitySummaryCopyMatrixAndPriority(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			seedSummaryStatus(&tt.model)
 			got := tt.model.activitySummary(time.Unix(100, 0))
 			if got.Primary != tt.primary || got.Compact != tt.compact {
 				t.Fatalf("summary=%+v want %q/%q", got, tt.primary, tt.compact)
@@ -42,29 +43,35 @@ func TestPhaseIdentityResetsOnlyForDisplayedLifecycleChange(t *testing.T) {
 	now := time.Unix(100, 0)
 	m := Model{loading: true}
 	m.syncActivityPhase(now)
+	seedSummaryStatus(&m)
 	start := m.phaseStartedAt
 	m.syncActivityPhase(now.Add(time.Second))
+	seedSummaryStatus(&m)
 	_ = m.activitySummary(now.Add(2 * time.Second))
 	if !m.phaseStartedAt.Equal(start) {
 		t.Fatal("tick/projection reset phase")
 	}
 	m.running = []runningTool{{name: "bash"}}
 	m.syncActivityPhase(now.Add(3 * time.Second))
+	seedSummaryStatus(&m)
 	if !m.phaseStartedAt.Equal(now.Add(3 * time.Second)) {
 		t.Fatal("working to running did not reset")
 	}
 	m.running[0].name = "read"
 	m.syncActivityPhase(now.Add(4 * time.Second))
+	seedSummaryStatus(&m)
 	if !m.phaseStartedAt.Equal(now.Add(4 * time.Second)) {
 		t.Fatal("tool identity did not reset")
 	}
 	m.running = append(m.running, runningTool{name: "bash"})
 	m.syncActivityPhase(now.Add(5 * time.Second))
+	seedSummaryStatus(&m)
 	if !m.phaseStartedAt.Equal(now.Add(5 * time.Second)) {
 		t.Fatal("tool count did not reset")
 	}
 	m.running = nil
 	m.syncActivityPhase(now.Add(6 * time.Second))
+	seedSummaryStatus(&m)
 	if got := m.activitySummary(now.Add(8 * time.Second)); got.Primary != "Working" || got.Secondary != "2s" {
 		t.Fatalf("completion=%+v", got)
 	}
@@ -73,10 +80,12 @@ func TestPhaseIdentityResetsOnlyForDisplayedLifecycleChange(t *testing.T) {
 func TestActivitySummaryOmitsUnknownAndClampsFuturePhaseStart(t *testing.T) {
 	now := time.Unix(100, 0)
 	m := Model{loading: true}
+	seedSummaryStatus(&m)
 	if got := m.activitySummary(now).Secondary; got != "" {
 		t.Fatalf("unknown start=%q", got)
 	}
 	m.syncActivityPhase(now.Add(time.Hour))
+	seedSummaryStatus(&m)
 	if got := m.activitySummary(now).Secondary; got != "0s" {
 		t.Fatalf("future start=%q", got)
 	}
@@ -122,6 +131,7 @@ func TestObservationSummaryPriorityAndAge(t *testing.T) {
 	m := Model{toolEvents: q, loading: true}
 	now := time.Unix(100, 0)
 	m.syncActivityPhase(now)
+	seedSummaryStatus(&m)
 	emit := q.observationCallback()
 	emit(chat.Observation{OwnerKnown: true, Kind: "content", HasText: true, Received: now, Order: 1})
 	if got := m.activitySummary(now.Add(12500 * time.Millisecond)); got.Primary != "Working" || got.Secondary != "13s" {
@@ -130,11 +140,13 @@ func TestObservationSummaryPriorityAndAge(t *testing.T) {
 	m.awaitingApproval = true
 	m.loading = false
 	m.syncActivityPhase(now)
+	seedSummaryStatus(&m)
 	if got := m.activitySummary(now); got.Primary != "Approval needed" {
 		t.Fatal(got)
 	}
 	m.interruptArmed = true
 	m.syncActivityPhase(now)
+	seedSummaryStatus(&m)
 	if got := m.activitySummary(now); got.Primary != "Interrupting" {
 		t.Fatal(got)
 	}
@@ -151,7 +163,8 @@ func TestObservationSummaryLifecycle(t *testing.T) {
 	now := time.Unix(100, 0)
 	m := Model{loading: true, status: "Compacting conversation", stepThought: 1, reasoningSince: now, messages: []ChatMessage{{Role: "reasoning", Content: "retained reasoning"}}}
 	m.startTool(chat.ToolStart{ID: "t", Name: "bash"})
-	if got := m.activitySummary(now).Primary; got != "Running bash" {
+	seedSummaryStatus(&m)
+	if got := m.activitySummary(now).Primary; got != "Working" {
 		t.Fatal(got)
 	}
 	m.finishTool(chat.ToolResult{ID: "t", Name: "bash"})
@@ -165,7 +178,8 @@ func TestObservationSummaryLifecycle(t *testing.T) {
 		t.Fatal(got)
 	}
 	m.loading, m.parked = false, true
-	if got := m.activitySummary(now).Primary; got != "Parked" {
+	seedSummaryStatus(&m)
+	if got := m.activitySummary(now).Primary; got != "Waiting for jobs" {
 		t.Fatal(got)
 	}
 	m.awaitingAsk = true
@@ -173,7 +187,8 @@ func TestObservationSummaryLifecycle(t *testing.T) {
 		t.Fatal(got)
 	}
 	m.awaitingAsk, m.parked = false, false
-	if got := m.activitySummary(now).Primary; got != "Ready" {
+	seedSummaryStatus(&m)
+	if got := m.activitySummary(now).Primary; got != "Ready for input" {
 		t.Fatal(got)
 	}
 }
@@ -215,8 +230,10 @@ func TestObservationSummaryChildDetails(t *testing.T) {
 	}
 	m.interruptArmed = true
 	m.syncActivityPhase(now.Add(3 * time.Second))
+	seedSummaryStatus(&m)
+	m.statusSnapshot.Execution.Agents = []chat.ActivityJob{{ID: "a1", Running: true, Background: true}}
 	summary := m.activitySummary(now.Add(3 * time.Second))
-	if summary.Primary != "Interrupting" || summary.Secondary != "0s" || summary.Counts != "background: agents 1, shell 0" {
+	if summary.Primary != "Interrupting" || summary.Secondary != "0s" || !summary.CountsKnown || summary.Agents != 1 || summary.Shells != 0 {
 		t.Fatal(summary)
 	}
 	got = m.jobActivityTailAt(jobRef{Kind: "agent", ID: "a2"}, now)
@@ -248,6 +265,7 @@ func TestObservationSummaryStaleAndUnknownMetadata(t *testing.T) {
 	emit := q.observationCallback()
 	m := Model{toolEvents: q, loading: true}
 	m.syncActivityPhase(now)
+	seedSummaryStatus(&m)
 	emit(chat.Observation{Order: 1, OwnerKnown: true, HasText: true, Received: now})
 	emit(chat.Observation{Order: 2, Kind: "Compacting conversation", Received: now.Add(time.Hour)})
 	if got := m.activitySummary(now.Add(time.Second)); got.Primary != "Working" || got.Secondary != "1s" {
@@ -260,7 +278,22 @@ func TestObservationSummaryStaleAndUnknownMetadata(t *testing.T) {
 		t.Fatal(got)
 	}
 	// Restored state without lifecycle provenance must not invent a duration.
-	if got := (Model{}).activitySummary(now); got.Primary != "Ready" || got.Secondary != "" {
+	if got := (Model{}).activitySummary(now); got.Primary != "Working" || got.Secondary != "status updating" || got.CountsKnown {
 		t.Fatal(got)
+	}
+}
+
+// These presentation/receipt tests supply an authoritative cache explicitly;
+// UI flags alone no longer establish execution truth. Production reconciliation
+// and unknown transitions are covered separately in status_snapshot_test.go.
+func seedSummaryStatus(m *Model) {
+	m.statusSnapshot = knownStatus()
+	if m.loading || len(m.running) > 0 {
+		m.statusSnapshot.Execution.RootActive = true
+		m.statusSnapshot.Execution.ReadyAllowed = false
+	} else if m.parked {
+		m.statusSnapshot.Execution.RootParked = true
+		m.statusSnapshot.Execution.ReadyAllowed = false
+		m.statusSnapshot.Execution.Agents = []chat.ActivityJob{{ID: "child", Running: true}}
 	}
 }

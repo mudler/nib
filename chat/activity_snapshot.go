@@ -9,7 +9,11 @@ var activityGeneration atomic.Uint64
 
 // ActivitySnapshot is a caller-owned view of one session's execution state.
 type ActivitySnapshot struct {
-	Generation, Revision   uint64
+	Generation, Revision uint64
+	// RootExecutionSequence advances when root execution starts or resumes.
+	// Unlike Revision, unrelated job/barrier publications cannot advance it.
+	// It survives settlement so observers can detect execution between polls.
+	RootExecutionSequence  uint64
 	Known, Coherent        bool
 	RootActive, RootParked bool
 	Agents, Shells         []ActivityJob
@@ -47,6 +51,7 @@ func (s *Session) ActivitySnapshot() ActivitySnapshot {
 		return a
 	}
 	a.Known, a.Coherent = true, true
+	a.RootExecutionSequence = b.rootExecutionSequence
 	a.RootActive, a.RootParked = b.rootActive && !b.rootParked, b.rootParked
 	c := CompletionSnapshot{Known: true, Publishers: len(b.publishers), EventSequence: b.eventSequence, RootObservedSequence: b.rootObservedSequence, SupervisorQueued: b.reviewQueued, SupervisorReviewing: b.reviewing}
 	for _, n := range b.notices {

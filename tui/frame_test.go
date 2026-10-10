@@ -94,6 +94,7 @@ func TestFrameNeverPairsWorkingWithHistoricalToolAge(t *testing.T) {
 	m.toolEvents.begin()
 	started := time.Unix(100, 0)
 	m.syncActivityPhase(started)
+	seedSummaryStatus(&m)
 	m.toolEvents.observationCallback()(chat.Observation{
 		Kind:       "tool started",
 		OwnerKnown: true,

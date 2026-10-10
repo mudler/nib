@@ -25,11 +25,15 @@ const (
 // ActivitySummary is factual presentation data. Fitting and footer placement
 // belong to the presenter, not callback adapters or lifecycle registries.
 type ActivitySummary struct {
-	Primary   string
-	Compact   string
-	Secondary string
-	Counts    string
-	Marker    SummaryMarker
+	Agents, Shells int
+	CountsKnown    bool
+	Schedule       string
+	Updating       bool
+	Primary        string
+	Compact        string
+	Secondary      string
+	Counts         string
+	Marker         SummaryMarker
 }
 
 func summaryMarker(mode SummaryMarker, spinner string) string {

@@ -84,9 +84,10 @@ type backgroundState struct {
 	notices              []*sequencedNotice
 	nextReservation      uint64
 
-	rootActive     bool
-	rootRequesting bool
-	rootParked     bool
+	rootExecutionSequence uint64
+	rootActive            bool
+	rootRequesting        bool
+	rootParked            bool
 
 	goalIdentity  uint64
 	goalLifecycle goalLifecycle
@@ -314,6 +315,9 @@ func (s *backgroundState) setRoot(active, requesting, parked bool) {
 	s.mu.Lock()
 	defer s.publishUnlock()
 	wasParked := s.rootParked
+	if active && !parked && (!s.rootActive || wasParked) && !s.closed {
+		s.rootExecutionSequence++
+	}
 	// Interruption is a turn-local abnormal condition. Entering a requesting
 	// phase starts (or resumes) a turn and clears a previous interrupt.
 	if active && requesting && !s.closed {

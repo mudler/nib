@@ -52,6 +52,12 @@ func (m Model) currentActivityPhase() phaseIdentity {
 
 func (m *Model) syncActivityPhase(now time.Time) {
 	phase := m.currentActivityPhase()
+	if m.loading && m.activityPhase.state != phaseWorking && m.activityPhase.state != phaseRunning {
+		m.invalidateStatus()
+	}
+	if !m.sessionReady || m.quitting {
+		m.statusSnapshot = statusSnapshot{}
+	}
 	if phase == m.activityPhase {
 		return
 	}
@@ -88,43 +94,23 @@ func observationAge(s receiptState, now time.Time) string {
 // receipt metadata cannot establish a phase or clear an approval/cancellation.
 func (m Model) activitySummary(now time.Time) render.ActivitySummary {
 	phase := m.currentActivityPhase()
-	s := render.ActivitySummary{Primary: "Ready", Compact: "Ready", Marker: render.SummaryMarkerReady}
+	s := summarizeStatus(m.statusSnapshot, now)
 	switch phase.state {
 	case phaseInterrupting:
-		s.Primary, s.Compact = "Interrupting", "Interrupting"
-		s.Marker = render.SummaryMarkerInterrupting
+		s.Primary, s.Compact, s.Marker = "Interrupting", "Interrupting", render.SummaryMarkerInterrupting
 	case phaseApproval:
-		s.Primary, s.Compact = "Approval needed", "Approval"
-		s.Marker = render.SummaryMarkerApproval
+		s.Primary, s.Compact, s.Marker = "Approval needed", "Approval", render.SummaryMarkerApproval
 	case phaseWaiting:
-		s.Primary, s.Compact = "Waiting for your answer", "Answer needed"
-		s.Marker = render.SummaryMarkerWaiting
-	case phaseRunning:
-		s.Marker = render.SummaryMarkerRunning
-		s.Primary = fmt.Sprintf("%d tools active", phase.count)
-		s.Compact = "Tools active"
-		if phase.count == 1 {
-			s.Primary = "Running tool"
-			s.Compact = "Running"
-			if phase.tool != "" {
-				s.Primary = "Running " + phase.tool
-			}
-		}
-	case phaseWorking:
-		s.Primary, s.Compact = "Working", "Working"
-		s.Marker = render.SummaryMarkerWorking
-	case phaseParked:
-		s.Primary, s.Compact = "Parked", "Parked"
-		s.Marker = render.SummaryMarkerParked
+		s.Primary, s.Compact, s.Marker = "Waiting for your answer", "Answer needed", render.SummaryMarkerWaiting
 	}
-	if phase.state != phaseReady && phase == m.activityPhase && !m.phaseStartedAt.IsZero() {
+	if (!s.Updating || phase.state == phaseInterrupting || phase.state == phaseApproval || phase.state == phaseWaiting) && phase.state != phaseReady && phase == m.activityPhase && !m.phaseStartedAt.IsZero() {
 		elapsed := now.Sub(m.phaseStartedAt)
 		if elapsed < 0 {
 			elapsed = 0
 		}
 		s.Secondary = humanAge(elapsed)
 	}
-	s.Counts = backgroundCounts(m.jobs, m.shellJobs.List())
+	// Counts are supplied only by the cached execution snapshot.
 	return s
 }
 

@@ -110,6 +110,8 @@ func (m *Model) invalidateWakeups(poll bool) {
 	m.scheduleRevision++
 }
 func (m *Model) resetSchedules() {
+	m.statusSnapshot = statusSnapshot{}
+	m.statusPending = false
 	m.ensureScheduleOwner()
 	m.scheduleOwner.mu.Lock()
 	m.scheduleEpoch++
