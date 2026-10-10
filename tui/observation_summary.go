@@ -52,9 +52,6 @@ func (m Model) currentActivityPhase() phaseIdentity {
 
 func (m *Model) syncActivityPhase(now time.Time) {
 	phase := m.currentActivityPhase()
-	if m.loading && m.activityPhase.state != phaseWorking && m.activityPhase.state != phaseRunning {
-		m.invalidateStatus()
-	}
 	if !m.sessionReady || m.quitting {
 		m.statusSnapshot = statusSnapshot{}
 	}

@@ -113,7 +113,7 @@ func (m *Model) releaseQueueFront() bool {
 	}
 	// InjectUser (not Inject) so a follow-up the run never consumes is handed
 	// back at run end (TakeUndelivered) and re-dispatched instead of lost.
-	if !m.session.InjectWithDelivery(action.Text, front.delivery) {
+	if !m.injectStatus(action.Text, front.delivery) {
 		return false
 	}
 	m.queue = m.queue[1:]

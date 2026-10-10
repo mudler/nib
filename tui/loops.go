@@ -51,7 +51,7 @@ func (m *Model) dispatchLoop(payload string) tea.Cmd {
 	live := m.session != nil && (m.session.RunLive() || m.loading)
 	switch {
 	case live && m.parked:
-		if m.session.Inject(text) {
+		if m.injectStatus(text, chat.InputAutomatic) {
 			m.appendMessage(ChatMessage{Role: "user", Content: payload})
 			m.parked = false
 			m.loading = true

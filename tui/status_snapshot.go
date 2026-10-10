@@ -62,6 +62,9 @@ func (m *Model) acceptStatus(request statusRequest, s statusSnapshot) bool {
 	if !s.Known || !s.Coherent || !e.Known || !e.Coherent || !s.Schedule.Known || e.Generation != request.generation || s.Schedule.Generation != request.generation || e.Revision < m.statusExecutionRevision || s.Schedule.Revision < m.statusScheduleRevision {
 		return false
 	}
+	if m.compactPending {
+		return false
+	}
 	if m.statusPending && !e.RootActive && e.RootExecutionSequence <= m.statusPendingExecution {
 		return false
 	}
@@ -140,4 +143,16 @@ func summarizeStatus(s statusSnapshot, now time.Time) render.ActivitySummary {
 		}
 	}
 	return result
+}
+
+// Capture the execution baseline BEFORE publishing input: a resumed run can
+// finish before InjectWithDelivery returns. Failed injection owns no transition.
+func (m *Model) injectStatus(text string, delivery chat.InputDelivery) bool {
+	pending, sequence, snapshot := m.statusPending, m.statusPendingExecution, m.statusSnapshot
+	m.invalidateStatus()
+	if m.session.InjectWithDelivery(text, delivery) {
+		return true
+	}
+	m.statusPending, m.statusPendingExecution, m.statusSnapshot = pending, sequence, snapshot
+	return false
 }

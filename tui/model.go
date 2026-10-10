@@ -233,6 +233,9 @@ type Model struct {
 	statusPendingExecution                          uint64
 	statusPending                                   bool
 	statusTickSequence                              uint64
+	compactSequence                                 uint64
+	compactPending                                  bool
+	compactOwner                                    statusRequest
 
 	// UI state
 	width     int
@@ -667,6 +670,8 @@ type modelListMsg struct {
 
 // compactResultMsg is the outcome of a manual /compact run.
 type compactResultMsg struct {
+	owner         statusRequest
+	sequence      uint64
 	before, after int
 	err           error
 }
@@ -2117,6 +2122,10 @@ func (m Model) Update(msg tea.Msg) (nextModel tea.Model, nextCmd tea.Cmd) {
 		cmds = append(cmds, m.listenPark())
 
 	case compactResultMsg:
+		if !m.compactPending || msg.sequence != m.compactSequence || msg.owner != m.compactOwner || msg.owner.session != m.session || msg.owner.epoch != m.scheduleEpoch || msg.owner.generation != m.session.ActivitySnapshot().Generation {
+			return m, nil
+		}
+		m.compactPending = false
 		m.loading = false
 		m.syncActivityPhase(time.Now())
 		m.status = ""
@@ -2258,7 +2267,7 @@ func (m Model) Update(msg tea.Msg) (nextModel tea.Model, nextCmd tea.Cmd) {
 			// Non-KindSend payloads (skill/compact/error) intentionally degrade to literal text — loops carry slash-commands or prompts, not those.
 			text = prompt // fall back to the raw text for non-send payloads
 		}
-		if m.session != nil && m.parked && m.session.Inject(text) {
+		if m.session != nil && m.parked && m.injectStatus(text, chat.InputAutomatic) {
 			m.appendMessage(ChatMessage{Role: "user", Content: prompt})
 			m.parked = false
 			m.loading = true
@@ -2842,18 +2851,20 @@ func (m *Model) startGoalTurn(kickoff string) tea.Cmd {
 // — before the Cmd below is ever executed by bubbletea — marking this as a
 // genuinely NEW turn (see turnGen's doc) so any reasoningChan event a LATER
 // turn's OnStream stamps is distinguishable from a straggler out of this one.
-func (m Model) sendMessage(text string) tea.Cmd {
+func (m *Model) sendMessage(text string) tea.Cmd {
 	if m.session != nil {
 		m.session.AcceptHumanMessage(text)
 	}
 	return m.sendMessageDelivery(text, chat.InputAccepted)
 }
 
-func (m Model) sendMessageDelivery(text string, delivery chat.InputDelivery) tea.Cmd {
+func (m *Model) sendMessageDelivery(text string, delivery chat.InputDelivery) tea.Cmd {
+	m.invalidateStatus()
 	m.bumpTurnGen()
 	m.toolEvents.begin()
+	session := m.session
 	return func() tea.Msg {
-		response, err := m.session.SendMessageWithDelivery(text, delivery)
+		response, err := session.SendMessageWithDelivery(text, delivery)
 		return responseMsg{content: response, err: err}
 	}
 }
@@ -2861,18 +2872,21 @@ func (m Model) sendMessageDelivery(text string, delivery chat.InputDelivery) tea
 // sendWithAttachmentsCmd sends a message with staged + inline @path attachments.
 // Blocked entries and clear-on-success are handled in the responseMsg handler.
 // bumpTurnGen: see sendMessage's doc.
-func (m Model) sendWithAttachmentsCmd(text string, files []string, overrides map[string]attachments.Override) tea.Cmd {
+func (m *Model) sendWithAttachmentsCmd(text string, files []string, overrides map[string]attachments.Override) tea.Cmd {
 	if m.session != nil {
 		m.session.AcceptHumanMessage(text)
 	}
 	return m.sendWithAttachmentsDeliveryCmd(text, files, overrides, chat.InputAccepted)
 }
 
-func (m Model) sendWithAttachmentsDeliveryCmd(text string, files []string, overrides map[string]attachments.Override, delivery chat.InputDelivery) tea.Cmd {
+func (m *Model) sendWithAttachmentsDeliveryCmd(text string, files []string, overrides map[string]attachments.Override, delivery chat.InputDelivery) tea.Cmd {
+	m.invalidateStatus()
 	m.bumpTurnGen()
 	m.toolEvents.begin()
+	session := m.session
+	ctx := m.ctx
 	return func() tea.Msg {
-		reply, blocked, err := m.session.SendWithAttachmentsDelivery(m.ctx, text, files, overrides, delivery)
+		reply, blocked, err := session.SendWithAttachmentsDelivery(ctx, text, files, overrides, delivery)
 		return responseMsg{content: reply, err: err, blocked: blocked, images: attachmentImages(files)}
 	}
 }
@@ -3007,10 +3021,16 @@ func (m Model) listenPrune() tea.Cmd {
 }
 
 // compactCmd runs a manual /compact (an LLM call) off the event loop.
-func (m Model) compactCmd() tea.Cmd {
+func (m *Model) compactCmd() tea.Cmd {
+	m.compactSequence++
+	m.compactPending = true
+	owner := statusRequest{m.session, m.scheduleEpoch, m.session.ActivitySnapshot().Generation}
+	m.compactOwner = owner
+	sequence := m.compactSequence
+	m.statusSnapshot = statusSnapshot{}
 	return func() tea.Msg {
-		before, after, err := m.session.CompactHistory()
-		return compactResultMsg{before: before, after: after, err: err}
+		before, after, err := owner.session.CompactHistory()
+		return compactResultMsg{owner: owner, sequence: sequence, before: before, after: after, err: err}
 	}
 }
 

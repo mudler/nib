@@ -296,13 +296,15 @@ func TestStatusPendingProductionExecution(t *testing.T) {
 			m.reconcileStatus()
 			before := s.ActivitySnapshot().RootExecutionSequence
 			m.loading = true
+			m.toolEvents = newToolEventQueue()
+			cmd := m.sendMessageDelivery("hello", chat.InputAutomatic)
 			m.syncActivityPhase(time.Now())
 			m.reconcileStatus()
 			if got := m.activitySummary(time.Now()); !got.Updating || got.CountsKnown {
 				t.Fatal("pending input", got)
 			}
 			done := make(chan error, 1)
-			go func() { _, err := s.SendMessage("hello"); done <- err }()
+			go func() { done <- cmd().(responseMsg).err }()
 			select {
 			case <-entered:
 			case <-ctx.Done():
