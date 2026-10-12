@@ -1627,3 +1627,54 @@ result, and are not recovered by this API. Ordinary tool tracing is unchanged.
 ## License
 
 MIT
+
+
+## Model catalog maintenance
+
+The embedded model metadata in `llmprovider/catalog/catalog.json.zst` comes from
+[oh-my-pi's models.json](https://github.com/can1357/oh-my-pi/blob/c8913466dd7bf92040de911f8e00e30b8f4e48a2/packages/catalog/src/models.json).
+This is separate from the skill/plugin catalog. `llmprovider/catalog/provenance.json`
+records the immutable source revision, path, raw SHA-256 and validation version.
+The artifact retains the full upstream JSON, including records that are not chat
+models. A catalog entry is metadata, not proof of account entitlement, discovery
+availability or working inference. Provider-specific limits can differ for the
+same model ID; a refresh does not add provider adapters or change defaults.
+
+Reproduce the checked-in artifact with the pinned Go toolchain and dependencies:
+
+```sh
+go generate ./llmprovider/catalog/...
+```
+
+Ordinary generation fetches only the pinned revision, verifies its digest and
+produces deterministic compressed bytes and provenance, without timestamps.
+To deliberately refresh, resolve upstream main once or supply a reviewed commit:
+
+```sh
+cd llmprovider/catalog
+go run gen_catalog.go -refresh
+# Alternative: go run gen_catalog.go -revision <full-40-character-commit-sha>
+```
+
+The generator validates the consumed schema, bounds HTTP time and response size,
+and prints sorted provider/model additions, removals and consumed-field changes.
+Review that output and commit **both** the artifact and provenance; do not edit
+individual upstream records. Invalid input leaves both existing files untouched.
+Writes are staged in the same directory, and a failed second replacement rolls
+back the artifact. The two file replacements are not a crash-atomic transaction:
+a process interruption may require rerunning pinned generation to restore the
+pair. If rollback itself fails, the error names the retained recovery backup.
+
+The weekly workflow refreshes on master and updates a single PR on the reserved
+`automation/oh-my-pi-catalog` branch. Do not use that branch for human work; the
+updater may replace or delete it. Unchanged output produces no new commit or PR.
+Repository settings must allow GitHub Actions to create pull requests.
+
+Maintenance checks:
+
+```sh
+go test ./llmprovider/catalog/... -count=1
+python3 .github/tests/test_catalog_workflow.py
+make sync-readme
+cmp README.md selfdoc/README.md
+```

@@ -1,59 +1,48 @@
 //go:build ignore
 
-// gen_catalog fetches the oh-my-pi models.json from the upstream
-// repository and writes it as zstd-compressed data to catalog.json.zst.
-//
-// Usage:
-//
-//	go generate ./llmprovider/catalog/...
-//
-// The source URL and commit are pinned here so the catalog version is
-// reproducible. To update, change the commit below and re-run.
+// Normal generation reproduces provenance.json. -refresh resolves main once;
+// -revision selects an explicitly reviewed immutable refresh instead.
 package main
 
 import (
+	"flag"
 	"fmt"
-	"io"
+	"github.com/mudler/nib/llmprovider/catalog/internal/cataloggen"
 	"net/http"
 	"os"
-
-	"github.com/klauspost/compress/zstd"
 )
 
-// sourceURL is the raw GitHub URL of oh-my-pi's models.json on the main
-// branch. The CI workflow fetches this weekly and opens a PR when the
-// catalog changes.
-const sourceURL = "https://raw.githubusercontent.com/can1357/oh-my-pi/refs/heads/main/packages/catalog/src/models.json"
-
 func main() {
-	resp, err := http.Get(sourceURL)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "fetch: %v\n", err)
+	refresh := flag.Bool("refresh", false, "refresh from upstream main (resolve once)")
+	revision := flag.String("revision", "", "refresh from an explicit immutable commit")
+	flag.Parse()
+	if err := run(*refresh, *revision); err != nil {
+		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		fmt.Fprintf(os.Stderr, "fetch: %s\n", resp.Status)
-		os.Exit(1)
+}
+func run(refresh bool, revision string) error {
+	if refresh && revision != "" {
+		return fmt.Errorf("choose -refresh or -revision, not both")
 	}
-	raw, err := io.ReadAll(resp.Body)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "read: %v\n", err)
-		os.Exit(1)
+	updating := refresh || revision != ""
+	if refresh {
+		var e error
+		revision, e = cataloggen.ResolveMain(http.DefaultClient)
+		if e != nil {
+			return e
+		}
+	} else if !updating {
+		p, e := cataloggen.ReadProvenance(".")
+		if e != nil {
+			return e
+		}
+		revision = p.Revision
 	}
-
-	enc, err := zstd.NewWriter(nil, zstd.WithEncoderLevel(zstd.EncoderLevelFromZstd(19)))
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "zstd init: %v\n", err)
-		os.Exit(1)
+	summary, e := cataloggen.Generate(http.DefaultClient, cataloggen.SourceURL(revision), ".", revision, updating)
+	if e != nil {
+		return e
 	}
-	compressed := enc.EncodeAll(raw, nil)
-	enc.Close()
-
-	if err := os.WriteFile("catalog.json.zst", compressed, 0644); err != nil {
-		fmt.Fprintf(os.Stderr, "write: %v\n", err)
-		os.Exit(1)
-	}
-
-	fmt.Printf("catalog.json.zst: %d bytes (from %d raw)\n", len(compressed), len(raw))
+	fmt.Print(summary)
+	return nil
 }

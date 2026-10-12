@@ -2,9 +2,12 @@ package catalog
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"slices"
 	"strings"
 	"testing"
@@ -14,11 +17,11 @@ import (
 
 func TestLoadAndStats(t *testing.T) {
 	providers, models := Stats()
-	if providers != 69 {
-		t.Fatalf("expected 69 providers, got %d", providers)
+	if providers == 0 {
+		t.Fatalf("expected nonempty providers, got %d", providers)
 	}
-	if models != 5111 {
-		t.Fatalf("expected 5111 models, got %d", models)
+	if models < providers {
+		t.Fatalf("expected at least one model per provider, got %d", models)
 	}
 }
 
@@ -299,5 +302,47 @@ func TestLookupModelIDIgnoresCase(t *testing.T) {
 	lower, _ := Lookup("no-such-provider", "zai-org/glm-5.2", "")
 	if upper.Provider != lower.Provider || upper.ID != lower.ID {
 		t.Fatalf("case changed the match: %s/%s vs %s/%s", upper.Provider, upper.ID, lower.Provider, lower.ID)
+	}
+}
+
+// These values are upstream metadata, not a claim of inference support.
+func TestPinnedProviderSpecificLimits(t *testing.T) {
+	for _, tc := range []struct {
+		provider, id    string
+		context, output int
+	}{
+		{"openai", "gpt-6.1-sol", 1050000, 128000},
+		{"openai-codex", "gpt-6.1-sol", 500000, 128000},
+		{"openai", "gpt-6-sol", 1050000, 128000},
+		{"openai-codex", "gpt-6-sol", 272000, 128000},
+		{"github-copilot", "claude-opus-4.8", 200000, 64000},
+	} {
+		t.Run(tc.provider+"/"+tc.id, func(t *testing.T) {
+			m, ok := Lookup(tc.provider, tc.id, "")
+			if !ok || m.Provider != tc.provider || m.ID != tc.id {
+				t.Fatalf("wrong provider or spelling: %+v", m)
+			}
+			if m.ContextWindow == nil || *m.ContextWindow != tc.context || m.MaxTokens == nil || *m.MaxTokens != tc.output {
+				t.Fatalf("wrong limits: %+v", m)
+			}
+		})
+	}
+}
+
+func TestEmbeddedProvenance(t *testing.T) {
+	raw, err := decompress(compressedCatalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta, err := os.ReadFile("provenance.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var p struct{ Revision, SHA256 string }
+	if err := json.Unmarshal(meta, &p); err != nil {
+		t.Fatal(err)
+	}
+	if len(p.Revision) != 40 || p.SHA256 != fmt.Sprintf("%x", sha256.Sum256(raw)) {
+		t.Fatal("embedded artifact differs from provenance")
 	}
 }

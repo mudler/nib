@@ -12,12 +12,13 @@ import (
 	"github.com/klauspost/compress/zstd"
 )
 
-// To refresh the embedded catalog, run:
+// To reproduce the embedded catalog from pinned provenance, run:
 //
 //	go generate ./llmprovider/catalog/...
 //
-// This fetches the upstream oh-my-pi models.json, compresses it with
-// zstd, and writes catalog.json.zst. Commit the result.
+// This verifies the pinned upstream bytes and compresses them deterministically.
+// To refresh, run go run gen_catalog.go -refresh from this directory, then
+// review and commit both catalog.json.zst and provenance.json.
 //
 //go:generate go run gen_catalog.go
 //go:embed catalog.json.zst

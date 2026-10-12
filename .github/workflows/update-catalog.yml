@@ -10,42 +10,57 @@ permissions:
   contents: write
   pull-requests: write
 
+concurrency:
+  group: update-model-catalog
+  cancel-in-progress: false
+
 jobs:
   update:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          ref: master
 
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
           go-version: "1.26"
 
-      - name: Generate catalog
-        run: go generate ./llmprovider/catalog/...
-
-      - name: Check for changes
-        id: diff
+      - name: Refresh catalog and capture review summary
+        shell: bash
         run: |
-          if git diff --exit-code llmprovider/catalog/catalog.json.zst; then
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-          fi
+          set -euo pipefail
+          cd llmprovider/catalog
+          go run gen_catalog.go -refresh | tee "$RUNNER_TEMP/catalog-delta.txt"
+          {
+            echo 'Automated refresh of the oh-my-pi model catalog. Catalog metadata does not establish account entitlement or inference support.'
+            echo
+            echo 'Provenance:'
+            echo '```json'
+            cat provenance.json
+            echo '```'
+            echo
+            echo 'Sorted consumed-field changes (full diff is in the workflow log):'
+            echo '```text'
+            # Leave room below GitHub’s PR body limit for provenance and formatting.
+            head -c 50000 "$RUNNER_TEMP/catalog-delta.txt"
+            echo
+            echo '```'
+          } > "$RUNNER_TEMP/catalog-pr-body.md"
 
-      - name: Create pull request
-        if: steps.diff.outputs.changed == 'true'
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git checkout -b chore/update-catalog
-          git add llmprovider/catalog/catalog.json.zst
-          git commit -m "chore: update oh-my-pi model catalog"
-          git push origin chore/update-catalog
-          gh pr create \
-            --title "chore: update oh-my-pi model catalog" \
-            --body "Automated catalog refresh from \`go generate\`. Run weekly by the update-catalog workflow." \
-            --base master
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # Always run: the updater must handle no-op/stale branches as well as changes
+      # to either the artifact or provenance. This branch is reserved for automation.
+      - name: Create or update pull request
+        uses: peter-evans/create-pull-request@22a9089034f40e5a961c8808d113e2c98fb63676 # v7
+        with:
+          base: master
+          branch: automation/oh-my-pi-catalog
+          delete-branch: true
+          add-paths: |
+            llmprovider/catalog/catalog.json.zst
+            llmprovider/catalog/provenance.json
+          commit-message: 'chore(catalog): refresh pinned upstream models'
+          title: 'chore(catalog): refresh pinned upstream models'
+          body-path: ${{ runner.temp }}/catalog-pr-body.md

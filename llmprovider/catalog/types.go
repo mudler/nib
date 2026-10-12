@@ -1,11 +1,10 @@
-// Package catalog embeds the oh-my-pi model catalog (69 providers, 5111 models)
+// Package catalog embeds the oh-my-pi model catalog
 // as zstd-compressed JSON and provides max-output-token resolution for
 // OpenAI-compatible providers.
 //
 // The catalog is a straight copy of oh-my-pi's models.json — no hand-porting.
 // Go's json decoder ignores fields we don't define, so only the fields relevant
-// to max_tokens resolution are modelled here. To update the catalog, replace
-// catalog.json.zst with a fresh zstd-compressed copy of the upstream file.
+// to max_tokens resolution are modelled here. Use gen_catalog.go -refresh to update the catalog and its provenance.
 package catalog
 
 // Model is the subset of catalog fields needed for max_tokens resolution.
@@ -23,7 +22,7 @@ type Model struct {
 
 // Compat holds the compatibility flags that govern how max_tokens is sent
 // on the wire. Only the fields relevant to output-token resolution are
-// modelled; the full compat object has ~60 keys.
+// modelled; the full compat object includes additional upstream fields.
 type Compat struct {
 	// MaxTokensField selects the wire field name for the output cap:
 	// "max_completion_tokens" (most OpenAI-compatible APIs) or "max_tokens"
@@ -31,11 +30,11 @@ type Compat struct {
 	MaxTokensField string `json:"maxTokensField"`
 
 	// AlwaysSendMaxTokens forces a cap even when the caller omitted one.
-	// True for ~156 models (e.g. Kimi-class derives TPM limits from it).
+	// For example, Kimi-class models derive TPM limits from it.
 	AlwaysSendMaxTokens bool `json:"alwaysSendMaxTokens"`
 
 	// ClampOutputToModelMax uses the model's advertised MaxTokens as the
-	// hard ceiling. True for ~18 models (GLM, Kimi, ZAI, DeepSeek, Meta).
+	// hard ceiling.
 	ClampOutputToModelMax bool `json:"clampOutputToModelMax"`
 
 	// OmitMaxOutputTokens suppresses the wire field entirely. Null for most
