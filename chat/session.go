@@ -2444,7 +2444,7 @@ func (s *Session) SendMessageWithDelivery(text string, delivery InputDelivery, p
 	// swap them from another goroutine at any point in here (turnMu does not
 	// hold a turn), and a turn that changed model halfway would send its
 	// remaining requests to a different model than the one it started on.
-	llm, mainModel := s.currentLLM()
+	llm, mainModel, modelGeneration := s.currentLLMGeneration()
 	// Every request this turn makes reports its prompt size through the
 	// wrapper, which is the only race-free place to observe it: cogito writes
 	// LastUsage onto a Status the UI goroutine must not read (see liveUsage).
@@ -2786,7 +2786,7 @@ func (s *Session) SendMessageWithDelivery(text string, delivery InputDelivery, p
 					// Never compact for this: lower the reservation for the
 					// rest of the turn, from the backend's exact figures.
 					if w, ok := learnedWindowFrom(err); ok {
-						s.rememberWindow(w, mainModel)
+						s.rememberWindow(w, mainModel, modelGeneration)
 					}
 					if out, ok := budgetRetryOutput(turnOverflow); ok && !budgetRetried {
 						budgetRetried = true
@@ -2852,7 +2852,7 @@ func (s *Session) SendMessageWithDelivery(text string, delivery InputDelivery, p
 			}
 			if turnCtx.Err() == nil && turnOverflow.Kind == KindContext {
 				if w, ok := learnedWindowFrom(err); ok {
-					s.rememberWindow(w, mainModel)
+					s.rememberWindow(w, mainModel, modelGeneration)
 				}
 				s.overflowMu.Lock()
 				first := s.overflowRetried == 0
@@ -3708,9 +3708,17 @@ func (s *Session) ToolCount() int {
 // Callers that need both for a whole turn must take the snapshot once, up
 // front: SetModel can land at any point inside a turn.
 func (s *Session) currentLLM() (cogito.LLM, string) {
+	llm, model, _ := s.currentLLMGeneration()
+	return llm, model
+}
+
+// currentLLMGeneration also captures the provider generation under the same
+// lock. Turn results must carry this identity when learning backend limits:
+// different endpoints can serve the same model name with different limits.
+func (s *Session) currentLLMGeneration() (cogito.LLM, string, uint64) {
 	s.modelMu.RLock()
 	defer s.modelMu.RUnlock()
-	return s.llm, s.llmModel
+	return s.llm, s.llmModel, s.modelGeneration
 }
 
 // SetModel switches the session to a different model, rebuilding the LLM client

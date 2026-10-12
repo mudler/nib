@@ -138,16 +138,21 @@ const defaultSummaryMaxTokens = 16384
 const maxSummaryAttempts = 6
 
 // rememberWindow records a context window a backend stated for a specific
-// model. Values outside the plausibility band are discarded rather than
+// model and provider generation. In-flight results from a replaced client are
+// discarded, even when the new endpoint serves the same model name.
+// Values outside the plausibility band are discarded rather than
 // stored, because an implausible figure is a parse artefact and storing one
 // would be worse than the configured guess it replaced: too small and
 // compaction fires every turn, too large and it never fires at all.
-func (s *Session) rememberWindow(window int, model string) {
+func (s *Session) rememberWindow(window int, model string, generation uint64) {
 	if window < minPlausibleWindow || window > maxPlausibleWindow || model == "" {
 		return
 	}
 	s.modelMu.Lock()
 	defer s.modelMu.Unlock()
+	if generation != s.modelGeneration {
+		return
+	}
 	s.learnedWindow, s.learnedWindowModel = window, model
 }
 
@@ -155,14 +160,9 @@ func (s *Session) rememberWindow(window int, model string) {
 // when it belongs to the model currently in use, otherwise the configured
 // MaxContextTokens.
 //
-// Keyed on the model NAME rather than on whichever method changed the model.
-// A window learned from one backend's overflow error is a fact about ONE
-// model, so it is meaningless except read as a pair with llmModel: carrying a
-// 262k window into an 8k model would suppress compaction precisely when it is
-// most needed. Comparing the names makes that safe for every path that can
-// change the model, present or future, without anyone having to remember to
-// clear the field from it. (Today only NewSession and SetModel assign
-// llmModel; Reload does not.)
+// Model names provide an additional check on the learned pair. Provider
+// replacements clear it, and rememberWindow rejects results from older
+// generations, so same-name endpoints cannot inherit each other's limits.
 func (s *Session) contextWindow() int {
 	s.modelMu.RLock()
 	defer s.modelMu.RUnlock()

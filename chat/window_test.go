@@ -172,7 +172,7 @@ func TestRememberedWindowIsUsedForTheSameModel(t *testing.T) {
 	s := &Session{llmModel: "qwen"}
 	s.compaction = types.CompactionConfig{MaxContextTokens: 400000}
 
-	s.rememberWindow(262144, "qwen")
+	s.rememberWindow(262144, "qwen", s.modelGeneration)
 
 	if got := s.contextWindow(); got != 262144 {
 		t.Fatalf("contextWindow = %d, want the learned 262144", got)
@@ -187,7 +187,7 @@ func TestRememberedWindowIsUsedForTheSameModel(t *testing.T) {
 func TestRememberedWindowIsIgnoredAfterTheModelChanges(t *testing.T) {
 	s := &Session{llmModel: "qwen"}
 	s.compaction = types.CompactionConfig{MaxContextTokens: 128000}
-	s.rememberWindow(262144, "qwen")
+	s.rememberWindow(262144, "qwen", s.modelGeneration)
 
 	s.llmModel = "tiny"
 
@@ -201,7 +201,7 @@ func TestRememberedWindowIsIgnoredAfterTheModelChanges(t *testing.T) {
 func TestRememberedWindowAppliesAgainWhenTheModelComesBack(t *testing.T) {
 	s := &Session{llmModel: "qwen"}
 	s.compaction = types.CompactionConfig{MaxContextTokens: 128000}
-	s.rememberWindow(262144, "qwen")
+	s.rememberWindow(262144, "qwen", s.modelGeneration)
 
 	s.llmModel = "tiny"
 	s.llmModel = "qwen"
@@ -225,7 +225,7 @@ func TestContextWindowFallsBackToConfigWhenNothingLearned(t *testing.T) {
 func TestLearnedWindowOverridesASmallerConfiguredValue(t *testing.T) {
 	s := &Session{llmModel: "qwen"}
 	s.compaction = types.CompactionConfig{MaxContextTokens: 128000}
-	s.rememberWindow(262144, "qwen")
+	s.rememberWindow(262144, "qwen", s.modelGeneration)
 	if got := s.contextWindow(); got != 262144 {
 		t.Fatalf("contextWindow = %d, want the learned 262144", got)
 	}
@@ -240,7 +240,7 @@ func TestRememberWindowRejectsImplausibleValues(t *testing.T) {
 	s.compaction = types.CompactionConfig{MaxContextTokens: 128000, ReserveTokens: 4096}
 
 	for _, bad := range []int{0, -1, 100, 512, minPlausibleWindow - 1, maxPlausibleWindow + 1, math.MaxInt} {
-		s.rememberWindow(bad, "qwen")
+		s.rememberWindow(bad, "qwen", s.modelGeneration)
 		if got := s.contextWindow(); got != 128000 {
 			t.Fatalf("window %d was remembered; contextWindow = %d, want the configured 128000", bad, got)
 		}
@@ -252,7 +252,7 @@ func TestRememberWindowRejectsImplausibleValues(t *testing.T) {
 func TestRememberWindowRejectsAnEmptyModelName(t *testing.T) {
 	s := &Session{llmModel: ""}
 	s.compaction = types.CompactionConfig{MaxContextTokens: 128000}
-	s.rememberWindow(262144, "")
+	s.rememberWindow(262144, "", s.modelGeneration)
 	if got := s.contextWindow(); got != 128000 {
 		t.Fatalf("contextWindow = %d, want the configured 128000", got)
 	}
@@ -267,7 +267,7 @@ func TestRememberWindowAcceptsTheEdgesOfThePlausibilityBand(t *testing.T) {
 	for _, good := range []int{minPlausibleWindow, 2048, 4096, maxPlausibleWindow} {
 		s := &Session{llmModel: "tiny"}
 		s.compaction = types.CompactionConfig{MaxContextTokens: 128000, ReserveTokens: 4096}
-		s.rememberWindow(good, "tiny")
+		s.rememberWindow(good, "tiny", s.modelGeneration)
 		if got := s.contextWindow(); got != good {
 			t.Fatalf("window %d was not remembered; contextWindow = %d", good, got)
 		}
@@ -279,8 +279,8 @@ func TestRememberWindowAcceptsTheEdgesOfThePlausibilityBand(t *testing.T) {
 func TestRememberWindowOverwritesTheEarlierValue(t *testing.T) {
 	s := &Session{llmModel: "qwen"}
 	s.compaction = types.CompactionConfig{MaxContextTokens: 128000}
-	s.rememberWindow(262144, "qwen")
-	s.rememberWindow(8192, "qwen")
+	s.rememberWindow(262144, "qwen", s.modelGeneration)
+	s.rememberWindow(8192, "qwen", s.modelGeneration)
 	if got := s.contextWindow(); got != 8192 {
 		t.Fatalf("contextWindow = %d, want the most recent 8192", got)
 	}
