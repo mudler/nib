@@ -115,7 +115,7 @@ func (l *LLM) CreateChatCompletion(ctx context.Context, request openai.ChatCompl
 	case routeMessages:
 		return l.doMessages(ctx, endpoint, request)
 	case routeResponses:
-		return l.doResponses(ctx, endpoint, request)
+		return l.doResponses(ctx, endpoint, request, metadata.Capabilities.Supports.ReasoningSummary)
 	default:
 		return l.doChatCompletions(ctx, endpoint, request)
 	}
@@ -189,8 +189,8 @@ func (l *LLM) doChatCompletions(ctx context.Context, endpoint string, request op
 
 // doResponses translates to the OpenAI Responses API format and sends to
 // /responses.
-func (l *LLM) doResponses(ctx context.Context, endpoint string, request openai.ChatCompletionRequest) (cogito.LLMReply, cogito.LLMUsage, error) {
-	body, err := openairesponses.TranslateRequest(request)
+func (l *LLM) doResponses(ctx context.Context, endpoint string, request openai.ChatCompletionRequest, summary *bool) (cogito.LLMReply, cogito.LLMUsage, error) {
+	body, err := openairesponses.TranslateRequestWithSummary(request, openairesponses.SummaryOptions{Provider: "github-copilot", BaseURL: endpoint, Support: summary})
 	if err != nil {
 		return cogito.LLMReply{}, cogito.LLMUsage{}, fmt.Errorf("copilot: translate responses request: %w", err)
 	}

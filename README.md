@@ -496,9 +496,15 @@ provider unless `reasoning_effort` is `none`.
 The shared Responses adapter preserves the request's reasoning effort unless its
 configuration overrides it. It requests public summaries by default for supported
 reasoning models, even without an explicit effort. It sends explicit `none`
-without requesting summaries. Unknown deployment names need an explicit effort
-to request summaries. Ordinary OpenAI and custom endpoints keep their existing
-routing.
+without requesting summaries. Copilot passes explicit summary support from its
+model discovery to the shared adapter; explicit false disables summaries. Without
+that metadata, only exact model entries for known official Responses routes can
+supply catalog summary support. Custom endpoints do not inherit vendor summary
+capabilities from model names. Unknown models remain conservative; no GPT-6 name
+heuristic enables summaries. The legacy shared translator (including Azure
+deployment aliases) retains its explicit-effort fallback. Reasoning effort values
+are sent unchanged; summary support does not add transport support for new effort
+values. Routing is unchanged.
 
 ### `/loop` — recurring & self-paced tasks
 

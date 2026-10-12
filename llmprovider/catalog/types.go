@@ -24,6 +24,9 @@ type Model struct {
 // on the wire. Only the fields relevant to output-token resolution are
 // modelled; the full compat object includes additional upstream fields.
 type Compat struct {
+	// SupportsReasoningSummary is nil when upstream does not specify support.
+	SupportsReasoningSummary *bool `json:"supportsReasoningSummary,omitempty"`
+
 	// MaxTokensField selects the wire field name for the output cap:
 	// "max_completion_tokens" (most OpenAI-compatible APIs) or "max_tokens"
 	// (Mistral, Moonshot, Z.ai, Zhipu, Chutes, Fireworks, DeepSeek).

@@ -29,3 +29,18 @@ func ParseAPIError(status int, body []byte) error {
 // ErrNoResponseSentinel is returned when the API completes without an
 // assistant message. Exported for reuse.
 var ErrNoResponseSentinel = ErrNoResponse
+
+// SummaryOptions qualifies summary metadata by the actual provider route.
+// Support is tri-state: nil is unknown; false overrides all defaults.
+type SummaryOptions struct {
+	Provider string
+	BaseURL  string
+	Support  *bool
+}
+
+// TranslateRequestWithSummary uses explicit or route-qualified summary metadata.
+// Unlike the legacy translation entry point, unknown routes do not infer support.
+func TranslateRequestWithSummary(req openai.ChatCompletionRequest, options SummaryOptions) ([]byte, error) {
+	l := LLM{config: Config{summaryOptions: &options}}
+	return l.translateRequest(req)
+}

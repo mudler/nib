@@ -262,7 +262,7 @@ func TestCreateChatCompletionResponsesRoute(t *testing.T) {
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/models" {
-			fmt.Fprint(w, `{"data":[]}`)
+			fmt.Fprint(w, `{"data":[{"id":"gpt-5","capabilities":{"supports":{"reasoning_summary":true}}}]}`)
 			return
 		}
 		capturedPath = r.URL.Path

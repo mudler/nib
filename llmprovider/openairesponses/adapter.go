@@ -31,6 +31,9 @@ type Config struct {
 	Token           string // Bearer token (when IsOAuth is true)
 	IsOAuth         bool
 	ReasoningEffort string
+	// SummarySupport overrides catalog and legacy summary defaults when set.
+	SummarySupport *bool
+	summaryOptions *SummaryOptions
 }
 
 // LLM implements cogito.LLM against the OpenAI Responses API.
@@ -239,9 +242,10 @@ func (l *LLM) translateRequest(req openai.ChatCompletionRequest) ([]byte, error)
 		rr.ToolChoice = translateToolChoice(req.ToolChoice)
 	}
 	effort := firstNonEmpty(l.config.ReasoningEffort, req.ReasoningEffort)
-	if effort != "" || supportsReasoningSummary(rr.Model, false) {
+	summary := l.summarySupported(rr.Model, effort != "")
+	if effort != "" || summary {
 		rr.Reasoning = &responsesReasoning{Effort: effort}
-		if effort != "none" && supportsReasoningSummary(rr.Model, effort != "") {
+		if effort != "none" && summary {
 			rr.Reasoning.Summary = "auto"
 		}
 	}
@@ -255,7 +259,8 @@ func (l *LLM) translateRequest(req openai.ChatCompletionRequest) ([]byte, error)
 
 // supportsReasoningSummary is deliberately narrower than reasoning-effort
 // support: o1 and o3-mini accept effort but do not support public summaries.
-// The catalog exposes effort choices, not summary support. Unknown deployment
+// This legacy fallback is used only when route metadata is unavailable on
+// the legacy translator or official OpenAI route. Unknown deployment
 // aliases opt in only through an explicit effort; never guess their capability
 // from a provider-wide default.
 func supportsReasoningSummary(model string, explicitEffort bool) bool {

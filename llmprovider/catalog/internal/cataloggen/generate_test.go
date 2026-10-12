@@ -24,6 +24,7 @@ func TestRejectAndPreserve(t *testing.T) {
 		cases = append(cases, strings.Replace(valid, `:100`, `:`+v, 1))
 	}
 	cases = append(cases, strings.Replace(valid, `"max_tokens"`, `true`, 1), strings.Replace(valid, `"compat":{`, `"compat":{"alwaysSendMaxTokens":"yes",`, 1))
+	cases = append(cases, strings.Replace(valid, `"compat":{`, `"compat":{"supportsReasoningSummary":"yes",`, 1))
 	for i, body := range cases {
 		t.Run(fmt.Sprint(i), func(t *testing.T) {
 			dir := t.TempDir()
