@@ -65,11 +65,11 @@ func TestDetectContextSizeProbeWins(t *testing.T) {
 	}
 }
 
-func TestDetectContextSizeFallsBackToStatic(t *testing.T) {
-	// When the probe fails (server down), the static table is used.
+func TestDetectContextSizeCustomDoesNotUseStatic(t *testing.T) {
+	// A custom endpoint cannot inherit vendor limits when its probe fails.
 	got := detectContextSize(context.Background(), "http://127.0.0.1:1", "", "gpt-4o")
-	if got != 128000 {
-		t.Fatalf("detectContextSize = %d, want 128000 (static fallback)", got)
+	if got != 0 {
+		t.Fatalf("detectContextSize = %d, want 0 (custom endpoint)", got)
 	}
 }
 

@@ -756,7 +756,7 @@ func NewSession(ctx context.Context, cfg types.Config, callbacks Callbacks, tran
 	// session makes no request, so nib starts on a machine with no network.
 	if s.compaction.MaxContextTokens == 0 {
 		s.compactionAutoDetected = true
-		s.compaction.MaxContextTokens = defaultContextTokens
+		s.compaction.MaxContextTokens = fallbackContextSize(s.mainProvider)
 	}
 	setConfigOverflowPatterns(cfg.Compaction.OverflowPatterns)
 
@@ -3787,8 +3787,20 @@ func (s *Session) applyProvider(provider types.ModelProviderConfig, id string) e
 	s.llm = llm
 	s.modelLimitsProvider = limitsProvider
 	s.modelGeneration++
+	s.learnedWindow, s.learnedWindowModel = 0, ""
 	s.llmModel = name
 	s.mainProvider = provider
+	// The new model's context window and output cap are asked for at the start
+	// of the next turn (ensureModelLimits), not here: switching model must not
+	// block on the network, and a switch made offline still has to work. Clear
+	// limitsFor so ensureModelLimits re-runs for this selection. Reset an
+	// auto-detected window to the safe fallback so the gauge cannot keep showing
+	// the previous model's value while discovery is pending.
+	s.limitsFor = ""
+	if s.compactionAutoDetected {
+		s.compaction.MaxContextTokens = fallbackContextSize(s.mainProvider)
+	}
+
 	s.outputCap = outCap
 	if id != "" {
 		s.endpointID = id
@@ -3810,18 +3822,6 @@ func (s *Session) applyProvider(provider types.ModelProviderConfig, id string) e
 	// prefers a redundant "preparing" label over a silent minute.
 	s.prefixWarm.Store(false)
 
-	// The new model's context window and output cap are asked for at the start
-	// of the next turn (ensureModelLimits), not here: switching model must not
-	// block on the network, and a switch made offline still has to work. Clear
-	// limitsFor so ensureModelLimits re-runs for this selection. Reset an
-	// auto-detected window to the safe fallback so the gauge cannot keep showing
-	// the previous model's value while discovery is pending.
-	s.modelMu.Lock()
-	s.limitsFor = ""
-	if s.compactionAutoDetected {
-		s.compaction.MaxContextTokens = defaultContextTokens
-	}
-	s.modelMu.Unlock()
 	return nil
 }
 

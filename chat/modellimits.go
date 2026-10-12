@@ -52,8 +52,12 @@ func (s *Session) ensureModelLimits(ctx context.Context) {
 		}
 		if window <= 0 {
 			probeCtx, cancel := context.WithTimeout(ctx, probeTimeout)
-			window = detectContextSize(probeCtx, baseURL, apiKey, model)
+			window, _ = catalog.DiscoverContextWindow(probeCtx, baseURL, apiKey, model)
 			cancel()
+		}
+		if window <= 0 {
+			provider.Model = model
+			window = fallbackContextSize(provider)
 		}
 		if window > 0 {
 			s.modelMu.Lock()

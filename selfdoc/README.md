@@ -1031,6 +1031,16 @@ agents:
 # LOG_FORMAT=json switches to JSON lines.
 log_level: error
 
+# With no explicit context limit, nib starts with exact embedded metadata
+# for the selected official OpenAI, HTTP Codex, Anthropic or Google route.
+# Provider-reported context takes precedence when the first turn discovers it;
+# a reported current context is not enlarged to a catalog maximum. Older
+# vendor prefixes are a fallback only on their own official service. Unknown
+# models use 128000 tokens. Custom endpoints and Azure deployment aliases use
+# their own reported limits or that default, never vendor-name guesses.
+# Switching models or endpoints clears learned limits. Catalog metadata is
+# a budgeting hint, not proof of model access or availability.
+#
 # Optional: conversation compaction. When the context fills up, nib
 # summarizes the older turns and keeps the recent ones verbatim.
 # summary_max_tokens caps the output the summary request reserves (default
