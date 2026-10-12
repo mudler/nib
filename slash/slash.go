@@ -122,6 +122,9 @@ type Action struct {
 	// and Model; both empty opens the picker.
 	ClassifierOff bool
 
+	// Unlisted explicitly bypasses model-list membership for this switch only.
+	Unlisted bool
+
 	// Resume actions:
 	ResumeAll bool   // KindResume: widen the picker to sessions from any cwd
 	ResumeID  string // KindResume: non-empty loads this session directly, skipping the picker
@@ -206,6 +209,13 @@ func Resolve(input string, cmds []types.CommandConfig, skills []types.Skill, age
 		return Action{Kind: KindModelList, Endpoint: strings.TrimSpace(rest)}
 	case cmdModel:
 		name := strings.TrimSpace(rest)
+		args := strings.Fields(name)
+		if len(args) > 0 && strings.HasPrefix(args[0], "-") {
+			if len(args) != 2 || args[0] != "--unlisted" || strings.HasPrefix(args[1], "-") {
+				return Action{Kind: KindError, Err: "usage: /model --unlisted <exact-id>"}
+			}
+			return Action{Kind: KindModelSet, Model: args[1], Unlisted: true}
+		}
 		switch name {
 		case "":
 			return Action{Kind: KindModelPick}
@@ -214,6 +224,9 @@ func Resolve(input string, cmds []types.CommandConfig, skills []types.Skill, age
 		}
 		if verb, arg, _ := strings.Cut(name, " "); verb == cmdModelDefault {
 			return Action{Kind: KindModelDefault, Model: strings.TrimSpace(arg)}
+		}
+		if len(args) != 1 {
+			return Action{Kind: KindError, Err: "usage: /model <name> | /model --unlisted <exact-id>"}
 		}
 		return Action{Kind: KindModelSet, Model: name}
 	case cmdLoop:

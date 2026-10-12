@@ -2573,7 +2573,11 @@ func (m *Model) dispatchResolvedDelivery(input string, delivery chat.InputDelive
 		m.refreshContextTokens()
 		return nil
 	case slash.KindModelSet:
-		notice, err := m.session.SwitchModel(m.ctx, action.Model)
+		switchModel := m.session.SwitchModel
+		if action.Unlisted {
+			switchModel = m.session.SwitchUnlistedModel
+		}
+		notice, err := switchModel(m.ctx, action.Model)
 		var unserved *chat.UnservedModelError
 		switch {
 		case errors.As(err, &unserved):

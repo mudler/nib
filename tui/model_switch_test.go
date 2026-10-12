@@ -23,6 +23,11 @@ import (
 func newModelSwitchTestModel(t *testing.T, ids ...string) Model {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "GET" || r.URL.Path != "/v1/models" {
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL)
+			http.Error(w, "no inference", 500)
+			return
+		}
 		data := make([]map[string]string, 0, len(ids))
 		for _, id := range ids {
 			data = append(data, map[string]string{"id": id, "object": "model"})
@@ -439,4 +444,19 @@ func TestModelPickerDialogStates(t *testing.T) {
 			t.Fatalf("selected = %d, want 1 (model-b)", d.Selected)
 		}
 	})
+}
+
+func TestDispatchModelUnlisted(t *testing.T) {
+	m := newModelSwitchTestModel(t, "model-a")
+	if cmd := m.dispatchResolved("/model --unlisted Vendor/Future:Exact-01"); cmd != nil {
+		t.Fatal("switch started a turn")
+	}
+	msg := lastMessage(t, m)
+	if m.session.Model() != "Vendor/Future:Exact-01" || !strings.Contains(msg.Content, "unverified: the provider decides") {
+		t.Fatalf("model=%q message=%+v", m.session.Model(), msg)
+	}
+	m.dispatchResolved("/models")
+	if strings.Contains(lastMessage(t, m).Content, "Vendor/") {
+		t.Fatal("list mutated")
+	}
 }

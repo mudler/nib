@@ -4019,15 +4019,40 @@ func (e *UnservedModelError) Error() string {
 // cases switch (unless SetModel itself errors) and say the name went
 // unverified.
 func (s *Session) SwitchModel(ctx context.Context, name string) (string, error) {
+	return s.switchModel(ctx, name, false)
+}
+
+// SwitchUnlistedModel explicitly bypasses advertised-list membership for this
+// switch only. It does not probe the model, alter listings or grant child access.
+func (s *Session) SwitchUnlistedModel(ctx context.Context, name string) (string, error) {
+	return s.switchModel(ctx, name, true)
+}
+
+func (s *Session) switchModel(ctx context.Context, name string, unlisted bool) (string, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return "", errors.New("usage: /model <name>")
 	}
 
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	if unlisted {
+		if len(strings.Fields(name)) != 1 || strings.HasPrefix(name, "-") {
+			return "", errors.New("usage: /model --unlisted <exact-id>")
+		}
+		if err := s.SetModel(name); err != nil {
+			return "", err
+		}
+		return "model: " + name + " (unverified: the provider decides)", nil
+	}
 	lookupCtx, cancel := context.WithTimeout(ctx, ModelListTimeout)
 	models, partial, err := s.modelChoices(lookupCtx, s.resolvedSessionProvider())
 	cancel()
 
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 	switch {
 	case partial && !slices.Contains(models, name):
 		if serr := s.SetModel(name); serr != nil {

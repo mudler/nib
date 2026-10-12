@@ -583,3 +583,71 @@ func TestSetModelRefreshesContextWindowOnUnknownModel(t *testing.T) {
 		t.Fatalf("after switching to an unknown model, MaxContextTokens = %d, want the %d default (the previous model's %d window was kept)", got, defaultContextTokens, 200000)
 	}
 }
+
+func TestSwitchModelCanceled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	s := &Session{llmModel: "original", baseURL: "http://unused.invalid/v1"}
+	notice, err := s.SwitchModel(ctx, "new")
+	if !errors.Is(err, context.Canceled) || notice != "" || s.Model() != "original" {
+		t.Fatalf("notice=%q err=%v model=%q", notice, err, s.Model())
+	}
+}
+
+func TestSwitchUnlistedModel(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "ambient-must-not-leak")
+	for _, key := range []string{"", "explicit-key"} {
+		t.Run("key="+key, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != "GET" || r.URL.Path != "/v1/models" {
+					t.Errorf("unexpected request (inference forbidden): %s %s", r.Method, r.URL)
+					http.Error(w, "forbidden", 500)
+					return
+				}
+				want := ""
+				if key != "" {
+					want = "Bearer " + key
+				}
+				if got := r.Header.Get("Authorization"); got != want {
+					t.Errorf("credential = %q, want %q", got, want)
+				}
+				fmt.Fprint(w, `{"data":[{"id":"original"}]}`)
+			}))
+			defer srv.Close()
+			s := &Session{llmModel: "original", baseURL: srv.URL + "/v1", apiKey: key}
+			exact := "Vendor/Future:Exact-01"
+			if _, err := s.SwitchModel(context.Background(), exact); err == nil {
+				t.Fatal("ordinary switch accepted unlisted model")
+			}
+			notice, err := s.SwitchUnlistedModel(context.Background(), exact)
+			if err != nil || s.Model() != exact || notice != "model: "+exact+" (unverified: the provider decides)" {
+				t.Fatalf("notice=%q err=%v model=%q", notice, err, s.Model())
+			}
+			ids, partial, err := s.ModelChoices(context.Background(), "")
+			if err != nil || partial || len(ids) != 1 || ids[0] != "original" {
+				t.Fatalf("list mutated: %v %v %v", ids, partial, err)
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			if _, err := s.SwitchUnlistedModel(ctx, "other"); !errors.Is(err, context.Canceled) || s.Model() != exact {
+				t.Fatalf("canceled switch: %v model=%q", err, s.Model())
+			}
+			for _, name := range []string{"", "a b", "--bad"} {
+				if _, err := s.SwitchUnlistedModel(context.Background(), name); err == nil || s.Model() != exact {
+					t.Fatalf("invalid name %q: %v", name, err)
+				}
+			}
+		})
+	}
+}
+
+func TestSwitchModelCanceledDuringDiscovery(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { cancel(); fmt.Fprint(w, `{"data":[]}`) }))
+	defer srv.Close()
+	s := &Session{llmModel: "original", baseURL: srv.URL + "/v1"}
+	if _, err := s.SwitchModel(ctx, "other"); !errors.Is(err, context.Canceled) || s.Model() != "original" {
+		t.Fatalf("err=%v model=%q", err, s.Model())
+	}
+}

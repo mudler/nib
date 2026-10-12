@@ -323,3 +323,16 @@ func TestResolveHelp(t *testing.T) {
 		t.Fatalf("Resolve(/help).Kind = %v, want KindHelp", got.Kind)
 	}
 }
+
+func TestResolveModelUnlisted(t *testing.T) {
+	a := Resolve("/model --unlisted Vendor/Future:Exact-01", nil, nil, nil)
+	if a.Kind != KindModelSet || a.Model != "Vendor/Future:Exact-01" || !a.Unlisted {
+		t.Fatalf("action = %+v", a)
+	}
+	for _, input := range []string{"/model --unlisted", "/model --unlisted a b", "/model --unlisted --bad", "/model --unknown x", "/model a b"} {
+		a := Resolve(input, nil, nil, nil)
+		if a.Kind != KindError || !strings.Contains(a.Err, "usage:") {
+			t.Errorf("%q: %+v", input, a)
+		}
+	}
+}

@@ -649,7 +649,11 @@ func RunCLI(ctx context.Context, cfg types.Config, streams Streams, shellJobs *w
 				}
 				continue
 			case slash.KindModelSet:
-				notice, err := session.SwitchModel(ctx, action.Model)
+				switchModel := session.SwitchModel
+				if action.Unlisted {
+					switchModel = session.SwitchUnlistedModel
+				}
+				notice, err := switchModel(ctx, action.Model)
 				if err != nil {
 					fmt.Fprintln(errOut, theme.Error.Render(theme.Cross+" "+err.Error()))
 				} else {

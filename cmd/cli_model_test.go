@@ -16,6 +16,11 @@ import (
 func modelsEndpoint(t *testing.T, ids ...string) types.Config {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "GET" || r.URL.Path != "/v1/models" {
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL)
+			http.Error(w, "no inference", 500)
+			return
+		}
 		data := make([]map[string]string, 0, len(ids))
 		for _, id := range ids {
 			data = append(data, map[string]string{"id": id, "object": "model"})
@@ -114,5 +119,15 @@ func TestCLIModelsReportsAFailingEndpoint(t *testing.T) {
 	}
 	if strings.Contains(out, "no models available") {
 		t.Fatalf("a failure must not be rendered as an empty listing: %q", out)
+	}
+}
+
+func TestCLIModelUnlisted(t *testing.T) {
+	out, errOut := runCLIScript(t, modelsEndpoint(t, "model-a"), "/model --unlisted Vendor/Future:Exact-01\n/models\nexit\n")
+	if errOut != "" || !strings.Contains(out, "model: Vendor/Future:Exact-01 (unverified: the provider decides)") {
+		t.Fatalf("out=%q err=%q", out, errOut)
+	}
+	if strings.Contains(out, "* Vendor/") {
+		t.Fatalf("unlisted model added to list: %q", out)
 	}
 }

@@ -599,6 +599,11 @@ This is inspired by [maki](https://github.com/tontinton/maki)'s todo system.
   current one with `*`. In the TUI, bare `/model` opens a searchable model
   picker; in the CLI, bare `/model` prints the same listing as `/models`.
 - `/model <name>` switches the session to that model.
+- `/model --unlisted <exact-id>` explicitly selects an unlisted model in the
+  TUI or CLI. The notice says **unverified: the provider decides**. This only
+  bypasses list membership for this switch: it does not probe inference, add
+  the ID to the advertised list, grant access, or relax child-model allowlists.
+  Use the exact, case-sensitive ID as one argument.
 - `/model default [name]` saves a model as the default for new sessions on
   the current endpoint. With a name, it switches to that model first; without
   one, it saves the model in use. In the TUI picker, `ctrl+s` does the same for
@@ -617,8 +622,10 @@ it started with), and the sub-agents those turns spawn follow along. Use
 `/compact` first when the history needs trimming, for instance before moving to
 a model with a smaller context window.
 
-A name the endpoint does not serve is refused, and the refusal lists what it
-does serve. If the lookup fails or the endpoint advertises nothing (it is
+Without `--unlisted`, a name absent from a complete, nonempty endpoint list
+is refused, and the refusal lists what it does serve. Partial lists remain
+suggestions: other typed IDs are accepted with a provider-decides notice.
+If the lookup fails or the endpoint advertises nothing (it is
 bounded at 3 seconds, since it runs on the goroutine that draws the prompt),
 the switch still goes through and is marked unverified: a broken endpoint may
 be the very reason you are switching. Both the TUI and `--cli` support this.
