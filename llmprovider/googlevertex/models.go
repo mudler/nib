@@ -38,6 +38,11 @@ func (l *LLM) DiscoverModels(ctx context.Context) registry.ModelListResult {
 
 func (l *LLM) listModels(ctx context.Context) ([]string, error) {
 	if !l.config.IsOAuth {
+		// Only the official express-mode endpoint gets vendor suggestions.
+		// A custom endpoint has no known API-key listing contract.
+		if strings.TrimRight(l.config.BaseURL, "/") != "https://aiplatform.googleapis.com" {
+			return nil, registry.ErrNoModelList
+		}
 		return google.KnownChatModels(), nil
 	}
 	base := strings.TrimRight(l.config.BaseURL, "/")

@@ -39,13 +39,20 @@ func TestListModelsGeminiOnly(t *testing.T) {
 	}
 }
 
-func TestListModelsAPIKeyOffersKnownModels(t *testing.T) {
+func TestListModelsCustomAPIKeyHasNoVendorHints(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
 		t.Error("API-key mode must not call the listing, which refuses API keys")
 	}))
 	defer srv.Close()
 	ids, err := New(Config{BaseURL: srv.URL, APIKey: "AQ.key"}).ListModels(context.Background())
-	if err != nil || len(ids) == 0 || ids[0] != "gemini-2.5-pro" {
+	if err == nil || len(ids) != 0 {
 		t.Fatalf("ids = %v, err = %v", ids, err)
+	}
+}
+
+func TestListModelsOfficialAPIKeyOffersKnownModels(t *testing.T) {
+	result := New(Config{APIKey: "fixture"}).DiscoverModels(context.Background())
+	if result.Err != nil || !result.Partial || len(result.IDs) == 0 {
+		t.Fatalf("result=%+v", result)
 	}
 }

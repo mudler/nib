@@ -628,9 +628,15 @@ or inference turn. Both Codex transports retain exact visible model IDs,
 including IDs newer than nib's catalog, and omit hidden entries. Discovery
 still requires a working configured transport and credentials.
 
-Gemini CLI and API-key Vertex use a conservative subset of chat models from
+Native Anthropic, Google, and Vertex adapters use stored logins and provider
+environment keys only at the registered provider endpoint (including registered
+compatible providers). A custom base URL requires an explicit API key for that
+endpoint; it never inherits the provider login or ambient vendor key.
+
+Gemini CLI and API-key Vertex at its official endpoint use a conservative subset of chat models from
 the pinned catalog as partial suggestions, without a listing request. These
-hints are not an account-access check. Catalog metadata and discovery
+hints are not an account-access check. Custom API-key Vertex endpoints return
+an unsupported-listing diagnostic instead of vendor suggestions. Catalog metadata and discovery
 visibility do not guarantee that a model can run for your account.
 
 ### Sessions: `/resume` and `nib cleanup`

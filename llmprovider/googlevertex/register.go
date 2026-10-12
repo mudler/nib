@@ -16,7 +16,10 @@ func init() {
 }
 
 func factory(def provider.Definition, config types.ModelProviderConfig, store *auth.Store, _ float32) (cogito.LLM, error) {
-	resolved, _ := auth.Resolve(store, def, config.APIKey)
+	resolved, err := registry.ResolveEndpointCredentials(store, def, config)
+	if err != nil {
+		return nil, fmt.Errorf("google-vertex: resolve credentials: %w", err)
+	}
 
 	apiKey := resolved.APIKey
 	isOAuth := resolved.IsOAuth
