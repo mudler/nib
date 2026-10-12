@@ -3,7 +3,9 @@ package bedrock
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"github.com/mudler/nib/llmprovider/registry"
 	"io"
 	"net/http"
 	"net/url"
@@ -25,7 +27,18 @@ var controlPlaneURL = func(region string) string {
 // only reachable through one, e.g. "us.anthropic.claude-…"), then active
 // foundation models that stream text on demand.
 func (l *LLM) ListModels(ctx context.Context) ([]string, error) {
+	r := l.DiscoverModels(ctx)
+	return r.IDs, r.Err
+}
+
+func (l *LLM) DiscoverModels(ctx context.Context) registry.ModelListResult {
+	ids, err := l.listModels(ctx)
+	return registry.ModelListResult{IDs: ids, Partial: err != nil, Err: err}
+}
+
+func (l *LLM) listModels(ctx context.Context) ([]string, error) {
 	base := controlPlaneURL(l.config.Region)
+	var diagnostic error
 	var ids []string
 	seen := map[string]bool{}
 	add := func(id string) {
@@ -38,6 +51,8 @@ func (l *LLM) ListModels(ctx context.Context) ([]string, error) {
 	// Profiles are best-effort: an identity may be allowed to list models but
 	// not profiles, and the foundation models are still worth offering.
 	next := ""
+	seenCursors := map[string]bool{}
+	profilesComplete := false
 	for range maxModelPages {
 		q := url.Values{"typeEquals": {"SYSTEM_DEFINED"}, "maxResults": {"1000"}}
 		if next != "" {
@@ -51,6 +66,7 @@ func (l *LLM) ListModels(ctx context.Context) ([]string, error) {
 			NextToken string `json:"nextToken"`
 		}
 		if err := l.controlPlaneGet(ctx, base, "/inference-profiles", q, &page); err != nil {
+			diagnostic = fmt.Errorf("bedrock: inference profiles: %w", err)
 			break
 		}
 		for _, p := range page.Profiles {
@@ -59,11 +75,20 @@ func (l *LLM) ListModels(ctx context.Context) ([]string, error) {
 			}
 		}
 		if page.NextToken == "" {
+			profilesComplete = true
 			break
 		}
+		if seenCursors[page.NextToken] {
+			diagnostic = fmt.Errorf("bedrock: repeated profile cursor")
+			break
+		}
+		seenCursors[page.NextToken] = true
 		next = page.NextToken
 	}
 
+	if !profilesComplete && diagnostic == nil {
+		diagnostic = fmt.Errorf("bedrock: profile page limit reached")
+	}
 	q := url.Values{"byOutputModality": {"TEXT"}, "byInferenceType": {"ON_DEMAND"}}
 	var fm struct {
 		Models []struct {
@@ -76,10 +101,7 @@ func (l *LLM) ListModels(ctx context.Context) ([]string, error) {
 		} `json:"modelSummaries"`
 	}
 	if err := l.controlPlaneGet(ctx, base, "/foundation-models", q, &fm); err != nil {
-		if len(ids) > 0 {
-			return ids, nil
-		}
-		return nil, err
+		return ids, errors.Join(diagnostic, fmt.Errorf("bedrock: foundation models: %w", err))
 	}
 	for _, m := range fm.Models {
 		if m.Streaming != nil && !*m.Streaming {
@@ -93,7 +115,7 @@ func (l *LLM) ListModels(ctx context.Context) ([]string, error) {
 		}
 		add(m.ID)
 	}
-	return ids, nil
+	return ids, diagnostic
 }
 
 // controlPlaneGet performs a GET on the Bedrock control plane with the same

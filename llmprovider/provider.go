@@ -174,6 +174,10 @@ func ListModelChoices(ctx context.Context, config types.ModelProviderConfig, sto
 	if err != nil {
 		return nil, false, err
 	}
+	if discoverer, ok := llm.(registry.ModelDiscoverer); ok {
+		r := discoverer.DiscoverModels(ctx)
+		return r.IDs, r.Partial, r.Err
+	}
 	lister, ok := llm.(ModelLister)
 	if !ok {
 		return nil, false, ErrNoModelList

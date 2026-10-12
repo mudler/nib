@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/mudler/nib/llmprovider/registry"
 	"io"
 	"net/http"
 	"net/url"
@@ -26,11 +27,23 @@ const maxModelPages = 20
 // The listing refuses API keys ("API keys are not supported by this API"), so
 // an API-key (express mode) session is offered google.KnownChatModels instead.
 func (l *LLM) ListModels(ctx context.Context) ([]string, error) {
+	r := l.DiscoverModels(ctx)
+	return r.IDs, r.Err
+}
+
+func (l *LLM) DiscoverModels(ctx context.Context) registry.ModelListResult {
+	ids, err := l.listModels(ctx)
+	return registry.ModelListResult{IDs: ids, Partial: err != nil || !l.config.IsOAuth, Err: err}
+}
+
+func (l *LLM) listModels(ctx context.Context) ([]string, error) {
 	if !l.config.IsOAuth {
 		return google.KnownChatModels(), nil
 	}
 	base := strings.TrimRight(l.config.BaseURL, "/")
 	var ids []string
+	seenIDs := map[string]bool{}
+	seenCursors := map[string]bool{}
 	token := ""
 	for range maxModelPages {
 		q := url.Values{"pageSize": {"1000"}}
@@ -39,7 +52,7 @@ func (l *LLM) ListModels(ctx context.Context) ([]string, error) {
 		}
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/v1beta1/publishers/google/models?"+q.Encode(), nil)
 		if err != nil {
-			return nil, fmt.Errorf("google-vertex: create request: %w", err)
+			return ids, fmt.Errorf("google-vertex: create request: %w", err)
 		}
 		req.Header.Set("Accept", "application/json")
 		if l.config.IsOAuth {
@@ -53,15 +66,15 @@ func (l *LLM) ListModels(ctx context.Context) ([]string, error) {
 
 		resp, err := l.client.Do(req)
 		if err != nil {
-			return nil, fmt.Errorf("google-vertex: list models: %w", err)
+			return ids, fmt.Errorf("google-vertex: list models: %w", err)
 		}
 		body, err := io.ReadAll(resp.Body)
 		resp.Body.Close()
 		if err != nil {
-			return nil, fmt.Errorf("google-vertex: read models: %w", err)
+			return ids, fmt.Errorf("google-vertex: read models: %w", err)
 		}
 		if resp.StatusCode != http.StatusOK {
-			return nil, parseAPIError(resp.StatusCode, body)
+			return ids, parseAPIError(resp.StatusCode, body)
 		}
 
 		var page struct {
@@ -71,20 +84,27 @@ func (l *LLM) ListModels(ctx context.Context) ([]string, error) {
 			NextPageToken string `json:"nextPageToken"`
 		}
 		if err := json.Unmarshal(body, &page); err != nil {
-			return nil, fmt.Errorf("google-vertex: decode models: %w", err)
+			return ids, fmt.Errorf("google-vertex: decode models: %w", err)
 		}
 		for _, m := range page.PublisherModels {
 			id := m.Name[strings.LastIndex(m.Name, "/")+1:]
 			if strings.HasPrefix(id, "gemini") && !strings.Contains(id, "embedding") {
-				ids = append(ids, id)
+				if !seenIDs[id] {
+					seenIDs[id] = true
+					ids = append(ids, id)
+				}
 			}
 		}
 		if page.NextPageToken == "" {
-			break
+			return ids, nil
 		}
+		if seenCursors[page.NextPageToken] {
+			return ids, fmt.Errorf("googlevertex: repeated model cursor")
+		}
+		seenCursors[page.NextPageToken] = true
 		token = page.NextPageToken
 	}
-	return ids, nil
+	return ids, fmt.Errorf("googlevertex: model page limit reached")
 }
 
 // ModelListIsPartial: in API-key mode the list is google.KnownChatModels, a

@@ -146,44 +146,64 @@ type completion struct {
 	ToolCalls []openai.ToolCall
 }
 
-func (l *LLM) complete(ctx context.Context, request openai.ChatCompletionRequest) (completion, error) {
+// startRPC starts and initializes a process without creating an inference workspace.
+func (l *LLM) startRPC(ctx context.Context) (*rpcClient, *boundedBuffer, func(), error) {
 	cmd := exec.CommandContext(ctx, l.config.Command, l.config.Args...)
 	if l.config.Cwd != "" {
 		cmd.Dir = l.config.Cwd
 	}
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
-		return completion{}, err
+		return nil, nil, nil, err
 	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		return completion{}, err
-	}
-	var stderr boundedBuffer
-	cmd.Stderr = &stderr
-	if err := cmd.Start(); err != nil {
-		return completion{}, fmt.Errorf("start codex app-server: %w", err)
-	}
-	defer func() {
 		_ = stdin.Close()
-		if cmd.Process != nil {
-			_ = cmd.Process.Kill()
-		}
+		return nil, nil, nil, err
+	}
+	stderr := &boundedBuffer{}
+	cmd.Stderr = stderr
+	if err := cmd.Start(); err != nil {
+		_ = stdin.Close()
+		_ = stdout.Close()
+		return nil, nil, nil, fmt.Errorf("start codex app-server: %w", err)
+	}
+	cleanup := func() {
+		_ = stdin.Close()
+		_ = stdout.Close()
+		_ = cmd.Process.Kill()
 		_ = cmd.Wait()
+	}
+	success := false
+	defer func() {
+		if !success {
+			cleanup()
+		}
 	}()
 
 	rpc := &rpcClient{enc: json.NewEncoder(stdin), scanner: bufio.NewScanner(stdout)}
 	rpc.scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
 	initID, err := rpc.send("initialize", map[string]any{"clientInfo": map[string]string{"name": "nib", "version": "dev"}})
 	if err != nil {
-		return completion{}, err
+		return nil, nil, nil, err
 	}
 	if err := rpc.response(initID, nil); err != nil {
-		return completion{}, withStderr(err, &stderr)
+		return nil, nil, nil, withStderr(err, stderr)
 	}
 	if err := rpc.notify("initialized", map[string]any{}); err != nil {
+		return nil, nil, nil, err
+	}
+
+	success = true
+	return rpc, stderr, cleanup, nil
+}
+
+func (l *LLM) complete(ctx context.Context, request openai.ChatCompletionRequest) (completion, error) {
+	rpc, stderr, cleanup, err := l.startRPC(ctx)
+	if err != nil {
 		return completion{}, err
 	}
+	defer cleanup()
 
 	base, input := splitMessages(request.Messages)
 	threadCwd := l.config.Cwd
@@ -218,7 +238,7 @@ func (l *LLM) complete(ctx context.Context, request openai.ChatCompletionRequest
 		} `json:"thread"`
 	}
 	if err := rpc.response(threadID, &threadResult); err != nil {
-		return completion{}, withStderr(err, &stderr)
+		return completion{}, withStderr(err, stderr)
 	}
 	if threadResult.Thread.ID == "" {
 		return completion{}, errors.New("codex app-server returned an empty thread id")
@@ -251,14 +271,14 @@ func (l *LLM) complete(ctx context.Context, request openai.ChatCompletionRequest
 		} `json:"turn"`
 	}
 	if err := rpc.response(turnID, &turnResult); err != nil {
-		return completion{}, withStderr(err, &stderr)
+		return completion{}, withStderr(err, stderr)
 	}
 
 	var answer string
 	for {
 		msg, err := rpc.receive()
 		if err != nil {
-			return completion{}, withStderr(err, &stderr)
+			return completion{}, withStderr(err, stderr)
 		}
 		switch msg.Method {
 		case "item/tool/call":

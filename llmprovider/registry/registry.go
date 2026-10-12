@@ -11,6 +11,7 @@
 package registry
 
 import (
+	"context"
 	"errors"
 
 	"github.com/mudler/cogito"
@@ -53,4 +54,17 @@ var ErrNoModelList = errors.New("this provider does not advertise a model list")
 // from the list instead of refusing them.
 type PartialModelList interface {
 	ModelListIsPartial() bool
+}
+
+// ModelListResult describes one discovery call, not mutable adapter state.
+// Err retains a diagnostic even when IDs from earlier pages are useful.
+type ModelListResult struct {
+	IDs     []string
+	Partial bool
+	Err     error
+}
+
+// ModelDiscoverer optionally reports dynamic completeness for a single call.
+type ModelDiscoverer interface {
+	DiscoverModels(context.Context) ModelListResult
 }

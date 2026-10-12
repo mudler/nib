@@ -617,6 +617,22 @@ bounded at 3 seconds, since it runs on the goroutine that draws the prompt),
 the switch still goes through and is marked unverified: a broken endpoint may
 be the very reason you are switching. Both the TUI and `--cli` support this.
 
+Model discovery follows pagination for native Anthropic, Google, Vertex, and
+Bedrock listings. If a later page or Bedrock discovery source fails, the
+discovery result retains collected IDs with a partial-list diagnostic. A
+partial list does not rule out other model names; the provider decides whether
+a selected model is available.
+
+Codex app-server discovery uses `model/list` without starting a conversation
+or inference turn. Both Codex transports retain exact visible model IDs,
+including IDs newer than nib's catalog, and omit hidden entries. Discovery
+still requires a working configured transport and credentials.
+
+Gemini CLI and API-key Vertex use a conservative subset of chat models from
+the pinned catalog as partial suggestions, without a listing request. These
+hints are not an account-access check. Catalog metadata and discovery
+visibility do not guarantee that a model can run for your account.
+
 ### Sessions: `/resume` and `nib cleanup`
 
 nib records each conversation in `~/.config/nib/sessions/` at the end of every

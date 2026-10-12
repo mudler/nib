@@ -67,3 +67,36 @@ func TestModelLimitsUnknownOrHidden(t *testing.T) {
 		}
 	}
 }
+
+func TestListModelsFutureExactAndEmpty(t *testing.T) {
+	for _, tc := range []struct {
+		body string
+		want []string
+	}{
+		{`{"models":[{"slug":"gpt-6-future.Exact","id":"not-the-slug","visibility":"list"},{"id":"future/other"},{"slug":"hidden","visibility":"hide"},{"slug":"none","visibility":"none"}]}`, []string{"gpt-6-future.Exact", "future/other"}},
+		{`{"models":[]}`, nil},
+	} {
+		t.Run(tc.body, func(t *testing.T) {
+			ids, err := withModelsServer(t, tc.body).ListModels(context.Background())
+			if err != nil || !reflect.DeepEqual(ids, tc.want) {
+				t.Fatalf("ids=%v err=%v", ids, err)
+			}
+		})
+	}
+}
+
+func TestListModelsErrors(t *testing.T) {
+	for _, status := range []int{200, 500} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(status); w.Write([]byte(`invalid json`)) }))
+			defer srv.Close()
+			old := modelsBaseURL
+			modelsBaseURL = srv.URL
+			defer func() { modelsBaseURL = old }()
+			ids, err := New(Config{Token: "test"}).ListModels(context.Background())
+			if err == nil || len(ids) != 0 {
+				t.Fatalf("ids=%v err=%v", ids, err)
+			}
+		})
+	}
+}

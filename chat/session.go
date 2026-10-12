@@ -3841,12 +3841,6 @@ func (s *Session) listModels(ctx context.Context, provider types.ModelProviderCo
 // suggestion that other names may be valid beside; see
 // llmprovider.ListModelChoices).
 func (s *Session) modelChoices(ctx context.Context, provider types.ModelProviderConfig) ([]string, bool, error) {
-	if llmprovider.IsCodex(provider) {
-		if model := s.Model(); model != "" {
-			return []string{model}, false, nil
-		}
-		return nil, false, fmt.Errorf("Codex app-server model is not configured")
-	}
 	return llmprovider.ListModelChoices(ctx, provider, s.credStore)
 }
 
