@@ -617,6 +617,20 @@ bounded at 3 seconds, since it runs on the goroutine that draws the prompt),
 the switch still goes through and is marked unverified: a broken endpoint may
 be the very reason you are switching. Both the TUI and `--cli` support this.
 
+Copilot checks `/models` lazily before completion, even if you have not opened
+the model picker. Advertised `supported_endpoints` take precedence over model
+names: chat-only models use Chat Completions, and future model IDs can select
+Responses or Messages. If no advertised endpoint is implemented, nib reports
+an error without sending an inference request. Missing or unavailable metadata
+keeps the existing name-based routing; inference failures do not trigger a
+retry on another protocol.
+
+Copilot caches capabilities separately on each adapter, by endpoint, account,
+and exact model ID. Successful discovery expires after five minutes; failed
+discovery is cached for 30 seconds. Completion discovery has a five-second
+timeout and limits responses to 4 MiB and 512 chat models. Construction makes
+no network requests. Capability metadata does not establish model access.
+
 Model discovery follows pagination for native Anthropic, Google, Vertex, and
 Bedrock listings. If a later page or Bedrock discovery source fails, the
 discovery result retains collected IDs with a partial-list diagnostic. A

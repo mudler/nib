@@ -4,7 +4,7 @@
 // Completions, OpenAI Responses, or Anthropic Messages depending on the model.
 // The adapter discovers the API endpoint via GraphQL, resolves a token from
 // the gh CLI / Copilot client config, and routes each request to the right
-// protocol using model-name heuristics.
+// protocol using advertised capabilities, with model-name fallback.
 //
 // Token resolution (env → ~/.config/github-copilot/ → ~/.config/gh/) lives in
 // discovery.go. Protocol translation reuses the anthropic and openairesponses
@@ -20,6 +20,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/mudler/cogito"
 	"github.com/mudler/nib/llmprovider/anthropic"
@@ -45,8 +46,12 @@ type LLM struct {
 	client   *http.Client
 	endpoint string
 
-	mu       sync.Mutex
-	resolved bool
+	mu                              sync.Mutex
+	resolved                        bool
+	metadataMu                      sync.Mutex
+	metadataEndpoint, metadataToken string
+	metadataExpires                 time.Time
+	metadata                        map[string]modelCapabilities
 }
 
 // New creates a Copilot adapter. The API endpoint is discovered lazily on the
@@ -84,7 +89,7 @@ func (l *LLM) Ask(ctx context.Context, fragment cogito.Fragment) (cogito.Fragmen
 var ErrNoResponse = fmt.Errorf("copilot: completed without an assistant message")
 
 // CreateChatCompletion routes the request to the appropriate Copilot API
-// based on model-name heuristics, then translates the response back to OpenAI
+// based on advertised capabilities, then translates the response back to OpenAI
 // types.
 func (l *LLM) CreateChatCompletion(ctx context.Context, request openai.ChatCompletionRequest) (cogito.LLMReply, cogito.LLMUsage, error) {
 	endpoint, err := l.ensureEndpoint(ctx)
@@ -97,7 +102,16 @@ func (l *LLM) CreateChatCompletion(ctx context.Context, request openai.ChatCompl
 		model = l.config.Model
 	}
 
-	switch routeProtocol(model) {
+	request.Model = model
+	metadata, err := l.modelMetadata(ctx, endpoint, model)
+	if err != nil {
+		return cogito.LLMReply{}, cogito.LLMUsage{}, err
+	}
+	route, err := metadata.route(model)
+	if err != nil {
+		return cogito.LLMReply{}, cogito.LLMUsage{}, err
+	}
+	switch route {
 	case routeMessages:
 		return l.doMessages(ctx, endpoint, request)
 	case routeResponses:
@@ -116,8 +130,7 @@ const (
 )
 
 // routeProtocol determines which Copilot API endpoint to use based on model
-// name. This is a fallback heuristic; the proper approach is to query /models
-// and inspect supported_endpoints, but the heuristic covers the common cases.
+// name when discovery is unavailable or supported_endpoints is absent.
 func routeProtocol(model string) protocolRoute {
 	m := strings.ToLower(model)
 	if strings.HasPrefix(m, "claude") {

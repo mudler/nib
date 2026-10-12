@@ -3,6 +3,7 @@ package copilot
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -260,6 +261,10 @@ func TestCreateChatCompletionResponsesRoute(t *testing.T) {
 	}
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/models" {
+			fmt.Fprint(w, `{"data":[]}`)
+			return
+		}
 		capturedPath = r.URL.Path
 		if err := json.NewDecoder(r.Body).Decode(&captured); err != nil {
 			t.Error(err)
