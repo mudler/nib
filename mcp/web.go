@@ -2,8 +2,11 @@ package mcp
 
 import (
 	"context"
+	"path/filepath"
 
+	"github.com/mudler/nib/auth"
 	"github.com/mudler/nib/llmprovider"
+	"github.com/mudler/nib/plugin"
 	"github.com/mudler/nib/provenance"
 	"github.com/mudler/nib/types"
 
@@ -13,13 +16,19 @@ import (
 // StartWebMCPServer starts the web MCP server exposing web_fetch and web_search.
 // web_fetch reuses the session's main model and request options (model, API key,
 // base URL, metadata, and reasoning effort) for its extraction pass.
+//
+// The extraction LLM is built with the credential store so that providers whose
+// API key was stored by `nib login` (rather than set in config or env) are
+// authenticated. Without the store, web_fetch would send requests with no API
+// key and receive 401 from providers like regolo.
 func StartWebMCPServer(ctx context.Context, transport mcp.Transport, cfg types.Config) error {
 	server := mcp.NewServer(&mcp.Implementation{
 		Name:    "web",
 		Version: "v1.0.0",
 	}, nil)
 
-	llm, err := llmprovider.New(cfg.ResolvedMainModel())
+	store := auth.NewStore(filepath.Join(plugin.BaseDirIn(cfg.BaseDir), "credentials.json"))
+	llm, err := llmprovider.NewWithStore(cfg.ResolvedMainModel(), store)
 	if err != nil {
 		return err
 	}
