@@ -19,6 +19,7 @@ import (
 	"strings"
 
 	"github.com/mudler/cogito"
+	"github.com/mudler/nib/internal/fragmentreply"
 	openai "github.com/sashabaranov/go-openai"
 )
 
@@ -61,7 +62,7 @@ func (l *LLM) Ask(ctx context.Context, fragment cogito.Fragment) (cogito.Fragmen
 	if len(reply.ChatCompletionResponse.Choices) == 0 {
 		return fragment, ErrNoResponse
 	}
-	fragment.Messages = append(fragment.Messages, reply.ChatCompletionResponse.Choices[0].Message)
+	fragment = fragmentreply.Append(fragment, reply.ChatCompletionResponse.Choices[0].Message)
 	if fragment.Status != nil {
 		fragment.Status.LastUsage = usage
 		fragment.Status.CumulativeUsage.PromptTokens += usage.PromptTokens
