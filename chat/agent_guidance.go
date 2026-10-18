@@ -88,7 +88,7 @@ func (l *childGuidedLLM) CreateChatCompletion(ctx context.Context, req openai.Ch
 	return l.LLM.CreateChatCompletion(ctx, req)
 }
 func (l *childGuidedLLM) Ask(ctx context.Context, f cogito.Fragment) (cogito.Fragment, error) {
-	f.Messages = childMessages(f.Messages)
+	f = replaceMessages(f, childMessages(f.Messages))
 	return l.LLM.Ask(ctx, f)
 }
 func (l *childGuidedStreamingLLM) CreateChatCompletionStream(ctx context.Context, req openai.ChatCompletionRequest) (<-chan cogito.StreamEvent, error) {

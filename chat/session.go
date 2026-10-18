@@ -2966,7 +2966,10 @@ func (s *Session) SendMessageWithDelivery(text string, delivery InputDelivery, p
 			if canRetryTurn(turnCtx, err) {
 				class := classifyBackendError(err)
 				resume, progressed := resumableFragment(runFragment, newFragment)
-				if progressed {
+				// cogito appends its argument-correction batch to every failed
+				// attempt, so that batch looks like progress. Counting it would
+				// reset toolArgsBudget on each try and loop forever.
+				if progressed && class != errToolArgs {
 					stalled = 0
 					clear(classRetries)
 				}
@@ -3029,7 +3032,7 @@ func (s *Session) SendMessageWithDelivery(text string, delivery InputDelivery, p
 					kept, ok = dropFailedTurn(s.fragment.Messages, turnUser, noticesText(notices))
 				}
 				if ok {
-					s.fragment.Messages = kept
+					s.fragment = replaceMessages(s.fragment, kept)
 					s.messages = dropFailedDisplay(s.messages, text)
 				} else {
 					s.fragment = preTurnFragment
@@ -3572,7 +3575,9 @@ func (s *Session) ensureSystemPrompt() {
 	if s.sentSystemPrompt != "" {
 		for i, m := range s.fragment.Messages {
 			if m.Role == "system" && m.Content == s.sentSystemPrompt {
-				s.fragment.Messages[i].Content = prompt
+				msgs := append([]openai.ChatCompletionMessage(nil), s.fragment.Messages...)
+				msgs[i].Content = prompt
+				s.fragment = replaceMessages(s.fragment, msgs)
 				s.sentSystemPrompt = prompt
 				return
 			}

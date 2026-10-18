@@ -27,7 +27,7 @@ func keepFailedTurn(committed, returned cogito.Fragment, note string) cogito.Fra
 		msgs = msgs[:n-1]
 	}
 	if len(msgs) > len(committed.Messages) {
-		kept.Messages = msgs
+		kept = replaceMessages(kept, msgs)
 	}
 	return kept.AddMessage("user", note)
 }

@@ -203,8 +203,7 @@ func (c *turnCompactor) apply(f cogito.Fragment) (cogito.Fragment, []openai.Chat
 	}
 	tail := f.Messages[c.covered:]
 	msgs := make([]openai.ChatCompletionMessage, 0, len(c.replacement)+len(tail))
-	f.Messages = append(append(msgs, c.replacement...), tail...)
-	return f, tail, true
+	return replaceMessages(f, append(append(msgs, c.replacement...), tail...)), tail, true
 }
 
 // commitRun stores f, a fragment a run returned, as the session's history, in
