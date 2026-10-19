@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/mudler/nib/llmprovider/catalog"
+	"github.com/mudler/nib/provider"
 )
 
 // codexModelsEndpoint lists the models the ChatGPT subscription can use with
@@ -33,23 +34,52 @@ type codexModelsPage struct {
 	Models []codexModel `json:"models"`
 }
 
-// ListModels returns the Codex models visible to this ChatGPT account. Entries
-// the backend marks hidden are left out, as the Codex CLI does.
+// ListModels preserves the account's advertised models and appends conservative
+// catalog suggestions. Suggestions do not establish account access. Entries
+// the backend marks hidden are never added back from the catalog.
 func (l *LLM) ListModels(ctx context.Context) ([]string, error) {
 	page, err := l.fetchModels(ctx)
 	if err != nil {
 		return nil, err
 	}
 	var ids []string
+	seen, hidden := map[string]bool{}, map[string]bool{}
+	for _, m := range page.Models {
+		if modelHidden(m.Visibility) {
+			hidden[strings.ToLower(firstNonEmpty(m.Slug, m.ID))] = true
+		}
+	}
 	for _, m := range page.Models {
 		id := firstNonEmpty(m.Slug, m.ID)
-		if id == "" || modelHidden(m.Visibility) {
+		if id == "" || seen[id] || hidden[strings.ToLower(id)] {
 			continue
 		}
+		seen[id] = true
 		ids = append(ids, id)
 	}
+	if !l.catalogSuggestions {
+		return ids, nil
+	}
+	// Official Codex model guidance: https://learn.chatgpt.com/docs/models .
+	// Keep this allowlist narrow: the provider catalog also has image-only and
+	// restricted models. Resolve metadata only on the exact ChatGPT route.
+	for _, id := range []string{"gpt-6-astra", "gpt-6.1-sol", "gpt-6-luna"} {
+		if seen[id] || hidden[strings.ToLower(id)] {
+			continue
+		}
+		m, ok := catalog.Lookup("openai-codex", id, "")
+		if !ok || m.Provider != "openai-codex" || m.API != string(provider.ProtocolCodexResponses) || strings.TrimRight(m.BaseURL, "/") != codexBaseURL {
+			continue
+		}
+		ids = append(ids, m.ID)
+	}
+
 	return ids, nil
 }
+
+// ModelListIsPartial allows exact typed IDs outside the suggestions. A model
+// list is not an account entitlement check; the provider decides on inference.
+func (l *LLM) ModelListIsPartial() bool { return l.catalogSuggestions }
 
 // ModelLimits returns model metadata from ChatGPT's native Codex model catalog.
 func (l *LLM) ModelLimits(ctx context.Context, model string) (catalog.Limits, error) {

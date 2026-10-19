@@ -58,9 +58,10 @@ const (
 	ModelPickerSessionKeyHint = "type to filter · ↑↓ move · enter use in this session · ctrl+s use and save as default · esc cancel"
 	// ModelPickerTypeName replaces the key hint when the provider being
 	// switched to offers no model list: the typed query itself is the model.
-	ModelPickerTypeName  = "type the model name · enter use it · esc cancel"
-	ModelPickerNameLabel = "name:"
-	ModelPickerUseTyped  = "enter uses the typed name."
+	ModelPickerTypeName    = "type the model name · enter use it · esc cancel"
+	ModelPickerNameLabel   = "name:"
+	ModelPickerUseTyped    = "enter uses the typed name."
+	ModelSuggestionsNotice = "unverified suggestions"
 	// ModelPickerLoginHint follows the key hint in /model's picker, which
 	// only lists the current provider's models: switching provider is /login.
 	ModelPickerLoginHint = "/login to switch provider"

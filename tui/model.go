@@ -2534,7 +2534,7 @@ func (m *Model) dispatchResolvedDelivery(input string, delivery chat.InputDelive
 		// action.Endpoint ("" = the current endpoint) lets /models list ANY
 		// endpoint without switching to it, unlike /model's picker which is
 		// always the current one.
-		models, _, err := m.session.ModelChoices(lookupCtx, action.Endpoint)
+		models, partial, err := m.session.ModelChoices(lookupCtx, action.Endpoint)
 		name := m.session.ActiveProviderName()
 		if action.Endpoint != "" {
 			name = action.Endpoint
@@ -2546,6 +2546,9 @@ func (m *Model) dispatchResolvedDelivery(input string, delivery chat.InputDelive
 			m.appendMessage(ChatMessage{Role: "error", Content: err.Error()})
 		} else {
 			listing := fencedListing(chat.FormatProviderModelList(name, models, m.session.Model()))
+			if partial {
+				listing = theme.ModelSuggestionsNotice + "\n" + listing
+			}
 			m.appendMessage(ChatMessage{Role: "agent", Content: listing})
 		}
 		return nil

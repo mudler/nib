@@ -54,16 +54,17 @@ type Config struct {
 
 // LLM implements cogito.LLM against the Codex Responses API.
 type LLM struct {
-	config  Config
-	client  *http.Client
-	session *sessionState
+	config             Config
+	client             *http.Client
+	session            *sessionState
+	catalogSuggestions bool
 }
 
 var _ cogito.LLM = (*LLM)(nil)
 
 // New returns a Codex adapter.
 func New(config Config) *LLM {
-	return &LLM{config: config, client: &http.Client{}, session: newSessionState()}
+	return &LLM{config: config, client: &http.Client{}, session: newSessionState(), catalogSuggestions: true}
 }
 
 // ErrNoResponse is returned when the API completes without an assistant message.

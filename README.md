@@ -658,6 +658,15 @@ or inference turn. Both Codex transports retain exact visible model IDs,
 including IDs newer than nib's catalog, and omit hidden entries. Discovery
 still requires a working configured transport and credentials.
 
+The ChatGPT subscription picker adds conservative suggestions from the bundled
+catalog when the live list omits them: `gpt-6-astra`, `gpt-6.1-sol`, and
+`gpt-6-luna`. Astra's model ID is `gpt-6-astra`; GPT-6.1 Sol is a separate model.
+These suggestions apply only to the official ChatGPT route. A model explicitly
+hidden by the backend stays hidden. The picker and `/models` label the combined
+list as unverified suggestions. You can also type an exact ID outside this list;
+the provider decides whether your account can use it. Discovery errors still
+surface and do not establish access to a suggested model.
+
 Native Anthropic, Google, and Vertex adapters use stored logins and provider
 environment keys only at the registered provider endpoint (including registered
 compatible providers). A custom base URL requires an explicit API key for that

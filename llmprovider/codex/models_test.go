@@ -2,9 +2,12 @@ package codex
 
 import (
 	"context"
+	"github.com/mudler/nib/provider"
+	"github.com/mudler/nib/types"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"slices"
 	"testing"
 )
 
@@ -31,7 +34,7 @@ func TestListModelsSkipsHidden(t *testing.T) {
 		{"slug":"codex-none","visibility":"None"}
 	]}`)
 	ids, err := l.ListModels(context.Background())
-	if err != nil || !reflect.DeepEqual(ids, []string{"gpt-5-codex", "gpt-5"}) {
+	if err != nil || !reflect.DeepEqual(ids, []string{"gpt-5-codex", "gpt-5", "gpt-6-astra", "gpt-6.1-sol", "gpt-6-luna"}) {
 		t.Fatalf("ids = %v, err = %v", ids, err)
 	}
 }
@@ -73,8 +76,8 @@ func TestListModelsFutureExactAndEmpty(t *testing.T) {
 		body string
 		want []string
 	}{
-		{`{"models":[{"slug":"gpt-6-future.Exact","id":"not-the-slug","visibility":"list"},{"id":"future/other"},{"slug":"hidden","visibility":"hide"},{"slug":"none","visibility":"none"}]}`, []string{"gpt-6-future.Exact", "future/other"}},
-		{`{"models":[]}`, nil},
+		{`{"models":[{"slug":"gpt-6-future.Exact","id":"not-the-slug","visibility":"list"},{"id":"future/other"},{"slug":"hidden","visibility":"hide"},{"slug":"none","visibility":"none"}]}`, []string{"gpt-6-future.Exact", "future/other", "gpt-6-astra", "gpt-6.1-sol", "gpt-6-luna"}},
+		{`{"models":[]}`, []string{"gpt-6-astra", "gpt-6.1-sol", "gpt-6-luna"}},
 	} {
 		t.Run(tc.body, func(t *testing.T) {
 			ids, err := withModelsServer(t, tc.body).ListModels(context.Background())
@@ -96,6 +99,62 @@ func TestListModelsErrors(t *testing.T) {
 			ids, err := New(Config{Token: "test"}).ListModels(context.Background())
 			if err == nil || len(ids) != 0 {
 				t.Fatalf("ids=%v err=%v", ids, err)
+			}
+		})
+	}
+}
+
+func TestListModelsIncludesUnverifiedCatalogSuggestions(t *testing.T) {
+	l := withModelsServer(t, `{"models":[{"slug":"Vendor/Future:Exact"},{"slug":"gpt-6.1-sol"},{"slug":"Vendor/Future:Exact"},{"slug":"gpt-6-luna","visibility":"hide"}]}`)
+	ids, err := l.ListModels(context.Background())
+	want := []string{"Vendor/Future:Exact", "gpt-6.1-sol", "gpt-6-astra"}
+	if err != nil || !reflect.DeepEqual(ids, want) {
+		t.Fatalf("ids=%v err=%v; want %v", ids, err, want)
+	}
+	partial, ok := any(l).(interface{ ModelListIsPartial() bool })
+	if !ok || !partial.ModelListIsPartial() {
+		t.Fatal("catalog suggestions must not claim exhaustive account access")
+	}
+}
+
+func TestCatalogSuggestionsExcludeEveryHiddenCurrentModel(t *testing.T) {
+	l := withModelsServer(t, `{"models":[{"slug":"gpt-6-astra","visibility":"hide"},{"slug":"gpt-6.1-sol","visibility":"none"},{"slug":"gpt-6-luna","visibility":"HIDE"}]}`)
+	ids, err := l.ListModels(context.Background())
+	if err != nil || len(ids) != 0 {
+		t.Fatalf("hidden models reintroduced: %v, %v", ids, err)
+	}
+}
+
+func TestCatalogSuggestionsStayOnOfficialChatGPTRoute(t *testing.T) {
+	def, _ := provider.Get("openai-codex")
+	for _, tc := range []struct {
+		name, baseURL string
+		want          bool
+	}{
+		{"registered", "", true},
+		{"explicit-official", codexBaseURL + "/", true},
+		{"custom", "https://example.invalid", false},
+		{"lookalike", "https://chatgpt.com.example.invalid/backend-api", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			withModelsServer(t, `{"models":[{"slug":"live.Exact"}]}`)
+			l, err := factory(def, types.ModelProviderConfig{APIKey: "tok", BaseURL: tc.baseURL}, nil, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			adapter := l.(*LLM)
+			if adapter.ModelListIsPartial() != tc.want {
+				t.Fatalf("catalog suggestions enabled=%v, want %v", adapter.catalogSuggestions, tc.want)
+			}
+			ids, err := adapter.ListModels(context.Background())
+			if err != nil || len(ids) == 0 || ids[0] != "live.Exact" {
+				t.Fatalf("live result=%v, %v", ids, err)
+			}
+			if tc.want && !slices.Contains(ids, "gpt-6-astra") {
+				t.Fatalf("official suggestions missing: %v", ids)
+			}
+			if !tc.want && len(ids) != 1 {
+				t.Fatalf("custom route received catalog suggestions: %v", ids)
 			}
 		})
 	}

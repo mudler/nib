@@ -221,6 +221,10 @@ func (m Model) buildModelPickerDialog() render.Dialog {
 		d.Selected = p.selected - start
 	}
 
+	if p.partial && !p.loading {
+		d.Hint = theme.ModelSuggestionsNotice + " · " + d.Hint
+	}
+
 	return d
 }
 

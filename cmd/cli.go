@@ -637,7 +637,7 @@ func RunCLI(ctx context.Context, cfg types.Config, streams Streams, shellJobs *w
 				// prompt, so an endpoint that accepts the connection and never
 				// answers must not wedge the loop.
 				listCtx, cancel := context.WithTimeout(ctx, chat.ModelListTimeout)
-				models, err := session.ListModels(listCtx)
+				models, partial, err := session.ModelChoices(listCtx, "")
 				cancel()
 				if err != nil {
 					fmt.Fprintln(errOut, theme.Error.Render(theme.Cross+" "+err.Error()))
@@ -645,6 +645,9 @@ func RunCLI(ctx context.Context, cfg types.Config, streams Streams, shellJobs *w
 					// Raw, like the assistant's own reply: these are names the
 					// user reads and copies, and the marker column is the
 					// emphasis the listing needs.
+					if partial {
+						fmt.Fprintln(out, theme.ModelSuggestionsNotice)
+					}
 					fmt.Fprint(out, chat.FormatProviderModelList(session.ActiveProviderName(), models, session.Model()))
 				}
 				continue

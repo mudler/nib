@@ -2,6 +2,7 @@ package codex
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/mudler/cogito"
 	"github.com/mudler/nib/auth"
@@ -22,11 +23,13 @@ func factory(def provider.Definition, config types.ModelProviderConfig, store *a
 		return nil, fmt.Errorf("codex: no credentials — run 'nib login %s' or set %s", def.ID, def.EnvVar)
 	}
 
-	return New(Config{
+	llm := New(Config{
 		Model:           config.Model,
 		Token:           token,
 		ReasoningEffort: config.ReasoningEffort,
 		ServiceTier:     config.Metadata["service_tier"],
 		ResponsesLite:   config.Metadata["responses_lite"] == "true" || config.Metadata["responses_lite"] == "1",
-	}), nil
+	})
+	llm.catalogSuggestions = def.ID == "openai-codex" && (config.BaseURL == "" || strings.TrimRight(config.BaseURL, "/") == codexBaseURL)
+	return llm, nil
 }

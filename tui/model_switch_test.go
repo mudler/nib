@@ -460,3 +460,22 @@ func TestDispatchModelUnlisted(t *testing.T) {
 		t.Fatal("list mutated")
 	}
 }
+
+func TestModelPickerMarksCatalogSuggestionsUnverified(t *testing.T) {
+	m := newModelSwitchTestModel(t, "live-model")
+	m.openModelPicker()
+	next, _ := m.Update(modelListMsg{requestID: m.modelPicker.requestID, models: []string{"live-model", "gpt-6-astra"}, partial: true})
+	m = next.(Model)
+	if !strings.Contains(m.buildModelPickerDialog().Hint, "unverified suggestions") {
+		t.Fatal("suggestions must not imply account access")
+	}
+	m.modelPicker.appendQuery("gpt-6-astra")
+	if got, ok := m.modelPicker.choice(); !ok || got != "gpt-6-astra" {
+		t.Fatalf("Astra choice = %q, %v", got, ok)
+	}
+	m.modelPicker.query = "Vendor/Future:Exact"
+	m.modelPicker.filter()
+	if got, ok := m.modelPicker.choice(); !ok || got != "Vendor/Future:Exact" {
+		t.Fatalf("unlisted choice = %q, %v", got, ok)
+	}
+}
