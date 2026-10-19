@@ -35,7 +35,7 @@ import (
 
 const (
 	codexBaseURL   = "https://chatgpt.com/backend-api"
-	codexClientVer = "0.153.0"
+	codexClientVer = "0.162.1"
 	codexEndpoint  = "/codex/responses"
 
 	headerRoutingHint     = "x-codex-routing-hint"
