@@ -44,10 +44,11 @@ func StartTransports(ctx context.Context, cfg types.Config, shellJobs *ShellJobs
 	}()
 
 	// Start web MCP server (web_fetch + web_search)
-	webMCPServerTransport, webMCPServerClient := mcp.NewInMemoryTransports()
+	webMCPServerTransport, webClient := mcp.NewInMemoryTransports()
+	webMCPServerClient := &webModelTransport{Transport: webClient, current: cfg.ResolvedMainModel}
 
 	go func() {
-		if err := StartWebMCPServer(ctx, webMCPServerTransport, cfg); err != nil && !errors.Is(err, context.Canceled) {
+		if err := startWebMCPServer(ctx, webMCPServerTransport, cfg, webMCPServerClient.model); err != nil && !errors.Is(err, context.Canceled) {
 			fmt.Fprintf(os.Stderr, "Web MCP server error: %v\n", err)
 		}
 	}()

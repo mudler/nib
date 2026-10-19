@@ -760,6 +760,15 @@ func NewSession(ctx context.Context, cfg types.Config, callbacks Callbacks, tran
 	}
 	setConfigOverflowPatterns(cfg.Compaction.OverflowPatterns)
 
+	// Bind only after construction succeeds. The getter snapshots the validated
+	// active provider under modelMu; web tools create their own independent client.
+	for _, transport := range transports {
+		if web, ok := transport.(interface {
+			BindWebModel(func() types.ModelProviderConfig)
+		}); ok {
+			web.BindWebModel(s.resolvedSessionProvider)
+		}
+	}
 	return s, nil
 }
 

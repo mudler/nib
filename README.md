@@ -1348,6 +1348,10 @@ tools is built in — `bash`, the filesystem tools (`read`, `write`, `edit`, `gl
 `grep`, `tree`), the code tools (`index`, `repo_map`, `ast_grep`, `lsp`), and the web tools (`web_fetch`, `web_search`); add any external server with
 the `nib mcp` CLI or directly in your config.
 
+`web_fetch` extracts page content with the session's current provider, model, and
+authentication, including selections made after login. An extraction already in
+progress keeps the selection it started with.
+
 ### Bounded repository maps
 
 `repo_map` accepts an optional `path` (workspace by default) and `budget`

@@ -3,7 +3,9 @@ package mcp
 import (
 	"context"
 	"path/filepath"
+	"sync"
 
+	"github.com/mudler/cogito"
 	"github.com/mudler/nib/auth"
 	"github.com/mudler/nib/llmprovider"
 	"github.com/mudler/nib/plugin"
@@ -12,6 +14,28 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
+
+// webModelTransport binds the web tools to the owning session's current
+// provider without sharing its conversation or mutable LLM client. Like the
+// underlying in-memory transport, it belongs to one client connection.
+type webModelTransport struct {
+	mcp.Transport
+	mu      sync.RWMutex
+	current func() types.ModelProviderConfig
+}
+
+func (t *webModelTransport) BindWebModel(current func() types.ModelProviderConfig) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.current = current
+}
+
+func (t *webModelTransport) model() types.ModelProviderConfig {
+	t.mu.RLock()
+	current := t.current
+	t.mu.RUnlock()
+	return current()
+}
 
 // StartWebMCPServer starts the web MCP server exposing web_fetch and web_search.
 // web_fetch reuses the session's main model and request options (model, API key,
@@ -22,22 +46,22 @@ import (
 // authenticated. Without the store, web_fetch would send requests with no API
 // key and receive 401 from providers like regolo.
 func StartWebMCPServer(ctx context.Context, transport mcp.Transport, cfg types.Config) error {
+	return startWebMCPServer(ctx, transport, cfg, cfg.ResolvedMainModel)
+}
+
+func startWebMCPServer(ctx context.Context, transport mcp.Transport, cfg types.Config, current func() types.ModelProviderConfig) error {
 	server := mcp.NewServer(&mcp.Implementation{
 		Name:    "web",
 		Version: "v1.0.0",
 	}, nil)
 
 	store := auth.NewStore(filepath.Join(plugin.BaseDirIn(cfg.BaseDir), "credentials.json"))
-	llm, err := llmprovider.NewWithStore(cfg.ResolvedMainModel(), store)
-	if err != nil {
-		return err
-	}
 	classifier, err := provenance.ClassifierForConfig(cfg)
 	if err != nil {
 		return err
 	}
 	ws := &webServer{
-		llm:        llm,
+		newLLM:     func() (cogito.LLM, error) { return llmprovider.NewWithStore(current(), store) },
 		classifier: classifier,
 	}
 
