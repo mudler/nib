@@ -116,6 +116,13 @@ func TestClassifyBackendError(t *testing.T) {
 		want backendErrorClass
 	}{
 		{"nil", nil, errFatal},
+		{"codex unsupported account model", errors.New(`codex: HTTP 400: {"detail":"The 'gpt-6.1-sol' model is not supported when using Codex with a ChatGPT account."}`), errFatal},
+		{"codex structured unauthorized", errors.New("codex: 401 invalid_token: expired token"), errFatal},
+		{"wrapped codex forbidden", errors.New("failed to select tool: codex: 403 permission_denied: access denied"), errFatal},
+		{"codex rate limit", errors.New("codex: HTTP 429: quota exhausted"), errRateLimited},
+		{"codex structured rate limit", errors.New("codex: 429 usage_limit_reached: quota exhausted"), errRateLimited},
+		{"codex transient", errors.New("codex: HTTP 503: service unavailable"), errTransient},
+		{"codex timeout", errors.New("codex: 408 timeout: request timeout"), errTransient},
 		{"localai 429 as reported", errors.New(`failed to select tool: failed to pick tool: tool selection failed: failed to make a streaming decision after 3 attempts: localai stream: status 429: {"error":{"message":"Rate limit exceeded for user: x. Limit type: tokens. Limit resets at: 2026-09-21 21:40:55 UTC","type":"None","param":"None","code":"429"}}`), errRateLimited},
 		{"openai 429", errors.New("error, status code: 429, status: 429 Too Many Requests, message: slow down"), errRateLimited},
 		{"anthropic rate_limit_error", errors.New(`{"type":"error","error":{"type":"rate_limit_error","message":"x"}}`), errRateLimited},
@@ -268,6 +275,22 @@ func TestRetryRequestReturnsFatalAtOnce(t *testing.T) {
 	})
 	if err == nil || calls != 1 {
 		t.Fatalf("calls = %d, err = %v; a fatal error must not be retried", calls, err)
+	}
+}
+
+func TestRetryRequestStopsUnsupportedCodexModel(t *testing.T) {
+	waits := stubRetrySleep(t)
+	rejection := errors.New(`codex: HTTP 400: {"detail":"The 'gpt-6.1-sol' model is not supported when using Codex with a ChatGPT account."}`)
+	calls := 0
+	_, err := retryRequest(context.Background(), func() (string, error) {
+		calls++
+		return "", rejection
+	})
+	if err != rejection || calls != 1 || len(*waits) != 0 {
+		t.Fatalf("calls = %d, sleeps = %d, err = %v; want one attempt without sleeping and the provider rejection", calls, len(*waits), err)
+	}
+	if canRetryTurn(context.Background(), err) {
+		t.Fatal("the session must not restart a turn rejected by ChatGPT")
 	}
 }
 

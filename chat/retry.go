@@ -131,8 +131,9 @@ var rateLimitMarkers = []string{
 }
 
 // statusRe finds the HTTP status in "status 429:" (LocalAI) and
-// "status code: 429" (OpenAI SDK) error strings.
-var statusRe = regexp.MustCompile(`status(?: code:)? (\d{3})\b`)
+// "status code: 429" (OpenAI SDK), and "codex: HTTP 429" /
+// "codex: 429" (Codex) error strings.
+var statusRe = regexp.MustCompile(`(?:status(?: code:)? |codex: (?:http )?)(\d{3})\b`)
 
 // fatalMarkers are lower-case substrings of errors where retrying cannot help:
 // the request itself is wrong, so the same call fails the same way again.

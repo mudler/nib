@@ -665,7 +665,9 @@ These suggestions apply only to the official ChatGPT route. A model explicitly
 hidden by the backend stays hidden. The picker and `/models` label the combined
 list as unverified suggestions. You can also type an exact ID outside this list;
 the provider decides whether your account can use it. Discovery errors still
-surface and do not establish access to a suggested model.
+surface and do not establish access to a suggested model. If ChatGPT rejects a
+model or denies access, the turn stops with the provider error. Temporary
+backend failures and rate limits still retry.
 
 Native Anthropic, Google, and Vertex adapters use stored logins and provider
 environment keys only at the registered provider endpoint (including registered
