@@ -3,11 +3,13 @@ package tui
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/mudler/nib/auth"
 	"github.com/mudler/nib/chat"
 	"github.com/mudler/nib/llmprovider"
 )
@@ -113,11 +115,11 @@ func TestLoginAPIKeyInTUIThenPickModel(t *testing.T) {
 		t.Fatalf("after picking: provider=%q model=%q", m.session.ProviderID(), m.session.Model())
 	}
 
-	// Logged in now: the picker goes straight to the model list.
+	// /login permits replacing the saved key instead of reusing it.
 	m.dispatchResolved("/login")
 	m, _ = press(t, m, typeText("regolo"), keyEnter)
-	if m.loginForm.active || !m.modelPicker.active {
-		t.Fatal("a logged-in provider should skip the key form")
+	if !m.loginForm.active || m.modelPicker.active {
+		t.Fatal("/login should open the key form to replace a saved key")
 	}
 	m, _ = press(t, m, keyEsc)
 
@@ -194,5 +196,61 @@ func TestModelPickerAcceptsTypedNameForPartialList(t *testing.T) {
 	m, _ = press(t, m, keyEnter)
 	if m.session.Model() != "gemini-9-ultra" {
 		t.Fatalf("model = %q, want the typed name", m.session.Model())
+	}
+}
+
+func TestLoginChatGPTStartsAuthenticationBeforeModelDiscovery(t *testing.T) {
+	for _, stored := range []bool{false, true} {
+		name := "no-login"
+		if stored {
+			name = "unusable-stored-login"
+		}
+		t.Run(name, func(t *testing.T) {
+			t.Setenv("OPENAI_CODEX_OAUTH_TOKEN", "")
+			t.Setenv("SSH_CONNECTION", "test")
+			m := newLoginTestModel(t)
+			if stored {
+				store := auth.NewStore(filepath.Join(m.cfg.BaseDir, "credentials.json"))
+				if err := store.Save(auth.Credential{ProviderID: "openai-codex", Kind: auth.CredentialOAuth}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			m.dispatchResolved("/login")
+			m, cmd := press(t, m, typeText("chatgpt"), keyEnter)
+			if m.modelPicker.active {
+				next, _ := m.Update(cmd())
+				m = next.(Model)
+				t.Fatalf("opened model discovery before authentication: %s", m.buildModelPickerDialog().Hint)
+			}
+			if !m.loginWait.active || cmd == nil {
+				t.Fatalf("login did not start: %+v", m.messages)
+			}
+			m.cancelLoginWait()
+			cmd() // Complete the cancelled flow and close its callback listener.
+		})
+	}
+}
+
+func TestLoginReplacesReadyCredentialWhileEndpointReusesIt(t *testing.T) {
+	m := newLoginTestModel(t)
+	if _, err := m.session.SaveAPIKey("regolo", "test-key", ""); err != nil {
+		t.Fatal(err)
+	}
+	m.dispatchResolved("/login")
+	m, _ = press(t, m, typeText("regolo"), keyEnter)
+	if !m.loginForm.active || m.modelPicker.active {
+		t.Fatal("/login must authenticate a ready provider again")
+	}
+	if m.session.ProviderID() != chat.ConfigProviderID {
+		t.Fatal("opening login changed active provider")
+	}
+	m, _ = press(t, m, keyEsc)
+	m.dispatchResolved("/endpoint")
+	m, cmd := press(t, m, typeText("regolo"), keyEnter)
+	if m.loginForm.active || m.loginWait.active || !m.modelPicker.active || cmd == nil {
+		t.Fatal("/endpoint must reuse the ready credential and list models")
+	}
+	if m.session.ProviderID() != chat.ConfigProviderID {
+		t.Fatal("opening model picker changed active provider")
 	}
 }

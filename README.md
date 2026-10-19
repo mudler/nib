@@ -113,6 +113,9 @@ base_url: https://api.openai.com/v1   # or your local endpoint, e.g. http://loca
 saves a credential next to `config.yaml`. `nib login --list` shows what's
 available and its status.
 
+In the TUI, `/login` starts authentication for the selected provider, even if
+a saved credential exists. Use `/endpoint` to reuse an existing login.
+
 ```bash
 nib login anthropic          # Claude (OAuth)
 nib login openai-codex       # ChatGPT Plus/Pro (OAuth)

@@ -22,7 +22,7 @@ type pickerMode int
 
 const (
 	// pickerLogin is /login: registry providers only, Enter authenticates
-	// (or, once ready, moves straight to model selection).
+	// again even when a credential is already stored.
 	pickerLogin pickerMode = iota
 	// pickerLogout is /logout: only entries with a stored credential, Enter
 	// removes it.
@@ -283,10 +283,9 @@ func (m *Model) providerEntry(id string) (chat.ProviderEntry, bool) {
 	return chat.ProviderEntry{}, false
 }
 
-// useProvider is Enter in the /login picker. A provider that can already
-// authenticate goes straight to model selection; anything else logs in first.
-// force (an explicit `/login <id>`) logs in again even when a key exists, which
-// is how a rotated key gets replaced.
+// useProvider authenticates a registry provider or reuses its login for
+// endpoint selection. force (/login, with or without an ID) logs in again
+// even when a credential exists, which is how a stale login gets replaced.
 //
 // Every caller now hands it a registry entry only (KindProvider): the /login
 // picker's list is filtered to the registry, useEndpoint routes a
@@ -515,7 +514,7 @@ func (m Model) handleProviderPickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			case pickerClassifier:
 				cmd = m.openClassifierModelPicker(e)
 			default:
-				cmd = m.useProvider(e, false)
+				cmd = m.useProvider(e, true)
 			}
 		}
 	case tea.KeySpace:
