@@ -675,3 +675,54 @@ func TestResumeKeepsTheStartupModelWhenTheEndpointIsGone(t *testing.T) {
 		t.Fatalf("StartupNote = %q, want it to name the endpoint and model it could not restore", note)
 	}
 }
+
+func TestAnthropicIdentitySwitchLoginLogoutIndependent(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "")
+	s := newProviderSession(t, types.ModelProviderConfig{Model: "default", BaseURL: "http://localhost:8080/v1", APIKey: "local"})
+	oauth := auth.Credential{ProviderID: "anthropic", Kind: auth.CredentialOAuth, AccessToken: "oauth-sentinel"}
+	if err := s.credStore.Save(oauth); err != nil {
+		t.Fatal(err)
+	}
+	oauth, _, _ = s.credStore.Get("anthropic")
+	key, err := s.SaveAPIKey("anthropic-api-key", "independent-key-sentinel", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"anthropic", "anthropic-api-key", "anthropic"} {
+		if err := s.SwitchProvider(id, "claude-test"); err != nil {
+			t.Fatal(err)
+		}
+		if s.ProviderID() != id {
+			t.Fatal("wrong selected identity")
+		}
+		got, _, _ := s.credStore.Get("anthropic")
+		if got != oauth {
+			t.Fatal("switch changed OAuth")
+		}
+		got, _, _ = s.credStore.Get("anthropic-api-key")
+		if got != key {
+			t.Fatal("switch changed API key")
+		}
+	}
+	if _, err := s.Logout("anthropic-api-key"); err != nil {
+		t.Fatal(err)
+	}
+	got, _, _ := s.credStore.Get("anthropic")
+	if got != oauth || s.ProviderID() != "anthropic" {
+		t.Fatal("key logout affected OAuth")
+	}
+	key, err = s.SaveAPIKey("anthropic-api-key", "independent-key-sentinel", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SwitchProvider("anthropic-api-key", "claude-test"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Logout("anthropic"); err != nil {
+		t.Fatal(err)
+	}
+	got, _, _ = s.credStore.Get("anthropic-api-key")
+	if got != key || s.ProviderID() != "anthropic-api-key" {
+		t.Fatal("OAuth logout affected key")
+	}
+}

@@ -20,7 +20,7 @@ func factory(def provider.Definition, config types.ModelProviderConfig, store *a
 		return nil, fmt.Errorf("anthropic: resolve credentials: %w", err)
 	}
 	if resolved.APIKey == "" {
-		return nil, fmt.Errorf("anthropic: no credentials — run 'nib login anthropic' or set %s", def.EnvVar)
+		return nil, fmt.Errorf("anthropic: no credentials — run 'nib login %s' or set %s", def.ID, def.EnvVar)
 	}
 	return New(Config{
 		Model:   config.Model,

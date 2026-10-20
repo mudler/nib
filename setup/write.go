@@ -56,6 +56,7 @@ func Save(cfg types.Config) (string, error) {
 	if data, err := os.ReadFile(path); err == nil {
 		_ = yaml.Unmarshal(data, &existing)
 	}
+	existing["provider"] = cfg.Provider
 	existing["model"] = cfg.Model
 	existing["api_key"] = cfg.APIKey
 	existing["base_url"] = cfg.BaseURL
@@ -65,6 +66,9 @@ func Save(cfg types.Config) (string, error) {
 		return "", err
 	}
 	if err := os.WriteFile(path, out, 0o600); err != nil {
+		return "", err
+	}
+	if err := os.Chmod(path, 0o600); err != nil {
 		return "", err
 	}
 	return path, nil

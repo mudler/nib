@@ -13,7 +13,8 @@ func ContextRoute(provider, baseURL string) (string, string, bool) {
 	switch provider {
 	case "openai":
 		root = "https://api.openai.com/v1"
-	case "anthropic":
+	case "anthropic", "anthropic-api-key":
+		provider = "anthropic"
 		root = "https://api.anthropic.com"
 	case "openai-codex":
 		root = "https://chatgpt.com/backend-api"

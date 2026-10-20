@@ -9,7 +9,11 @@ func TestLookupContextRoute(t *testing.T) {
 	}{
 		{"openai", "gpt-6.1-sol", "", 1050000},
 		{"openai-codex", "gpt-6.1-sol", "", 500000},
-		{"anthropic", "claude-opus-4-6", "https://api.anthropic.com/", 1000000},
+		{"anthropic-api-key", "claude-opus-4-6", "", 1000000},
+ {"anthropic-api-key", "claude-opus-4-6", "https://api.anthropic.com/proxy", 0},
+ {"anthropic-api-key", "claude-opus-4-6", "https://api.anthropic.com.evil", 0},
+ {"anthropic-api-key", "claude-opus-4-6", "http://127.0.0.1:1234", 0},
+ {"anthropic", "claude-opus-4-6", "https://api.anthropic.com/", 1000000},
 		{"openai", "gpt-6.1-sol", "https://api.openai.com/v1/proxy", 0},
 		{"openai", "gpt-6.1-sol", "https://api.openai.com.evil/v1", 0},
 		{"openai", "gpt-6.1-sol", "https://api.openai.com:444/v1", 0},
@@ -32,4 +36,11 @@ func TestLookupContextRoute(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestAnthropicAPIKeyContextCanonicalIdentity(t *testing.T) {
+ for _, base := range []string{"", "https://api.anthropic.com", "https://api.anthropic.com/"} {
+  id, root, ok := ContextRoute("anthropic-api-key", base)
+  if !ok || id != "anthropic" || root != "https://api.anthropic.com" { t.Fatalf("route = %s %s %v", id, root, ok) }
+ }
 }

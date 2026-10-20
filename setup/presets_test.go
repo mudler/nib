@@ -4,8 +4,8 @@ import "testing"
 
 func TestPresets(t *testing.T) {
 	ps := Presets()
-	if len(ps) != 12 {
-		t.Fatalf("want 12 presets, got %d", len(ps))
+	if len(ps) != 13 {
+		t.Fatalf("want 13 presets, got %d", len(ps))
 	}
 
 	seen := map[string]bool{}
@@ -19,7 +19,7 @@ func TestPresets(t *testing.T) {
 		seen[p.Name] = true
 	}
 
-	if !seen["Anthropic"] || !seen["OpenAI"] || !seen["Ollama"] || !seen["Custom"] {
+	if !seen["Anthropic (Claude Pro/Max)"] || !seen["Anthropic (API key)"] || !seen["OpenAI"] || !seen["Ollama"] || !seen["Custom"] {
 		t.Fatalf("missing an expected preset: %v", seen)
 	}
 
@@ -41,5 +41,34 @@ func TestPresets(t *testing.T) {
 	last := ps[len(ps)-1]
 	if last.Name != "Custom" || last.BaseURL != "" || last.DefaultModel != "" || last.DefaultKey != "" {
 		t.Errorf("Custom preset should be all-empty, got %+v", last)
+	}
+}
+
+// Look up by name so adding a preset cannot silently change a test's provider.
+func presetNamed(t *testing.T, name string) Preset {
+	t.Helper()
+	for _, p := range Presets() {
+		if p.Name == name {
+			return p
+		}
+	}
+	t.Fatalf("missing preset %q", name)
+	return Preset{}
+}
+
+func TestAnthropicPresetsAreSeparate(t *testing.T) {
+	for _, tc := range []struct {
+		name, provider string
+		required       bool
+	}{
+		{"Anthropic (Claude Pro/Max)", "anthropic", false},
+		{"Anthropic (API key)", "anthropic-api-key", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := presetNamed(t, tc.name)
+			if p.Provider != tc.provider || p.KeyRequired != tc.required || p.DefaultKey != "" || p.BaseURL != "https://api.anthropic.com" || p.DefaultModel != "claude-sonnet-4-5-20250929" {
+				t.Fatalf("incorrect preset: %+v", p)
+			}
+		})
 	}
 }

@@ -16,7 +16,7 @@ import (
 
 // Exercise registered factories, not constructors that bypass credential resolution.
 func TestNativeCustomEndpointCredentials(t *testing.T) {
-	for _, id := range []string{"anthropic", "google", "google-vertex", "zai"} {
+	for _, id := range []string{"anthropic-api-key", "anthropic", "google", "google-vertex", "zai"} {
 		t.Run(id, func(t *testing.T) {
 			def, _ := provider.Get(id)
 			factory, _ := registry.Get(def.Protocol)

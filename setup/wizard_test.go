@@ -8,20 +8,20 @@ import (
 	"github.com/mudler/nib/types"
 )
 
-// Selecting the Ollama preset (index 3) should move to the fields step and
+// Selecting the Ollama preset (index 4) should move to the fields step and
 // prefill the base URL and model from that preset.
 func TestProviderSelectionPrefillsFields(t *testing.T) {
 	m := newModel(context.Background(), types.Config{})
 
-	// Move cursor down 3 times: Anthropic(0) -> OpenAI(1) -> Local(2) -> Ollama(3).
+	// Move cursor down 4 times: Claude(0) -> API key(1) -> OpenAI(2) -> Local(3) -> Ollama(4).
 	var mi tea.Model
-	for i := 0; i < 3; i++ {
+	for i := 0; i < 4; i++ {
 		mi, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
 		m = mi.(model)
 	}
 
-	if m.cursor != 3 {
-		t.Fatalf("cursor = %d, want 3", m.cursor)
+	if m.cursor != 4 {
+		t.Fatalf("cursor = %d, want 4", m.cursor)
 	}
 
 	// Enter selects the preset and advances to the fields step.
@@ -50,19 +50,22 @@ func TestProviderEscCancels(t *testing.T) {
 }
 
 func TestKeyRequiredTracksPreset(t *testing.T) {
-	// OpenAI (index 1) requires a key.
+	// OpenAI (index 2) requires a key.
 	m := newModel(context.Background(), types.Config{})
-	mi, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown}) // Anthropic(0) -> OpenAI(1)
-	m = mi.(model)
+	var mi tea.Model
+	for i := 0; i < 2; i++ {
+		mi, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+		m = mi.(model)
+	}
 	mi, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = mi.(model)
 	if !m.keyRequired {
 		t.Errorf("OpenAI preset should set keyRequired=true")
 	}
 
-	// Ollama (index 3) does not.
+	// Ollama (index 4) does not.
 	m2 := newModel(context.Background(), types.Config{})
-	for i := 0; i < 3; i++ {
+	for i := 0; i < 4; i++ {
 		mi2, _ := m2.Update(tea.KeyMsg{Type: tea.KeyDown})
 		m2 = mi2.(model)
 	}

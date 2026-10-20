@@ -109,8 +109,8 @@ base_url: https://api.openai.com/v1   # or your local endpoint, e.g. http://loca
 
 ### Logging in to providers (`nib login`)
 
-`nib login <provider>` authenticates with a provider's own OAuth flow and
-saves a credential next to `config.yaml`. `nib login --list` shows what's
+`nib login <provider>` starts OAuth or requests an API key, depending on the provider.
+nib saves each credential next to `config.yaml`. `nib login --list` shows what's
 available and its status.
 
 In the TUI, `/login` starts authentication for the selected provider, even if
@@ -122,6 +122,74 @@ nib login openai-codex       # ChatGPT Plus/Pro (OAuth)
 nib login google-gemini-cli  # Google AI Studio (OAuth)
 nib login xai-oauth          # xAI (device flow)
 ```
+
+### Anthropic API keys and Claude subscriptions
+
+The two Anthropic providers have separate identities:
+
+| Provider ID | Login | Display name |
+|---|---|---|
+| `anthropic` | Claude Pro/Max OAuth | Claude (OAuth) |
+| `anthropic-api-key` | Anthropic API key | Anthropic (API key) |
+
+Credentials and endpoint selections stay separate. Logging in, switching, or
+logging out of one identity does not replace or delete the other credential.
+An existing OAuth selection stays unchanged until you select another endpoint.
+
+To save an API key without opening a browser, run:
+
+```bash
+nib login anthropic-api-key
+```
+
+In the TUI, run `/login`, select **Anthropic (API key)**, and enter your key.
+The form masks the key. Select a model after login to switch endpoints.
+Use `/endpoint` to reuse saved credentials instead of logging in again.
+
+To add a named endpoint, open `/endpoint` and select **+ add new**.
+Choose **Anthropic (API key)** in **Add Endpoint**. Enter the name, model, and key, then submit the form.
+The template uses `https://api.anthropic.com` and saves `provider: anthropic-api-key`.
+The setup wizard offers two separate Anthropic choices:
+
+- **Anthropic (Claude Pro/Max)** saves `provider: anthropic`. The API key is optional when you use saved OAuth credentials.
+- **Anthropic (API key)** saves `provider: anthropic-api-key` and shows an API-key-required hint.
+
+For Claude Pro/Max, run `nib login anthropic` first to save your OAuth credentials.
+The wizard reuses that login; it does not start OAuth or open a browser.
+Both choices check the connection through native `/v1/models` discovery, without running inference.
+Switching presets resets the provider and API key fields, so the two choices do not carry over stale keys.
+
+Alternatively, configure the default endpoint in `config.yaml`:
+
+```yaml
+provider: anthropic-api-key
+model: claude-sonnet-4-5
+api_key: your-api-key
+```
+
+`your-api-key` is a placeholder. The model ID is illustrative, not an entitlement guarantee.
+Discovery and catalog metadata do not guarantee access to a model for your account.
+
+At the official endpoint, nib resolves the API key in this order:
+
+1. The saved `anthropic-api-key` API key.
+2. The explicit `api_key` in the endpoint configuration.
+3. The `ANTHROPIC_API_KEY` environment variable.
+
+The `anthropic` OAuth credential never supplies or refreshes this identity's key.
+If no key resolves, nib reports the login command and environment variable to use.
+For API-key-only providers, nib skips an incompatible saved credential without refreshing or changing it.
+Resolution continues with the explicit configuration key, then the environment variable.
+Run `nib login anthropic-api-key` to replace it with an API key.
+Provider authentication failures remain errors; nib does not fall back to OAuth.
+
+For a custom `base_url`, set an explicit `api_key` for that endpoint.
+Custom endpoints never inherit saved provider credentials or `ANTHROPIC_API_KEY`.
+Without an explicit key, nib rejects the custom endpoint before sending a request.
+
+The native Anthropic adapter currently uses nonstreaming `/v1/messages` requests,
+including tool calls and tool results. The host uses its nonstreaming fallback
+when the TUI requests streamed output; this adapter does not deliver token-by-token output.
 
 **Over SSH**, the OAuth callback (a localhost HTTP server) can't receive
 the browser redirect — the browser is on your laptop, the server is on the
