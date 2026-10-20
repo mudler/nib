@@ -20,6 +20,7 @@ type endpointTemplate struct {
 
 // endpointTemplates is the ordered list shown in the template picker.
 var endpointTemplates = []endpointTemplate{
+	{name: "Anthropic (API key)", provider: "anthropic-api-key", baseURL: "https://api.anthropic.com"},
 	{name: "OpenAI", provider: "openai", baseURL: "https://api.openai.com/v1"},
 	{name: "OpenAI Responses", provider: "openai-responses", baseURL: "https://api.openai.com/v1"},
 	{name: "OpenRouter", provider: "openai", baseURL: "https://openrouter.ai/api/v1"},
@@ -35,7 +36,8 @@ var endpointTemplates = []endpointTemplate{
 type endpointFormState struct {
 	active        bool
 	templatePhase bool
-	selected      int // template picker cursor
+	selected      int              // template picker cursor
+	template      endpointTemplate // chosen template, independent of picker reset
 	fields        []formField
 	focus         int
 	err           string
@@ -47,7 +49,8 @@ func (f *endpointFormState) openTemplate() {
 
 func (f *endpointFormState) openForm(tmpl endpointTemplate) {
 	*f = endpointFormState{
-		active: true,
+		active:   true,
+		template: tmpl,
 		fields: []formField{
 			{label: theme.EndpointFieldNameLabel},
 			{label: theme.EndpointFormURLLabel, value: []rune(tmpl.baseURL)},
@@ -84,7 +87,7 @@ func (f endpointFormState) templateDialog() render.Dialog {
 }
 
 func (f endpointFormState) formDialog() render.Dialog {
-	tmplName := endpointTemplates[f.selected].name
+	tmplName := f.template.name
 	d := render.Dialog{Kind: render.DialogModelPicker, Title: fmt.Sprintf(theme.EndpointFormTitle, tmplName), Selected: f.focus}
 	for _, fld := range f.fields {
 		shown := string(fld.value)
@@ -186,7 +189,7 @@ func (m *Model) submitEndpointForm() tea.Cmd {
 		return nil
 	}
 
-	tmpl := endpointTemplates[f.selected]
+	tmpl := f.template
 	cfg := types.ModelProviderConfig{
 		Provider: tmpl.provider,
 		BaseURL:  baseURL,

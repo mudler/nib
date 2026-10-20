@@ -19,7 +19,7 @@ func TestPresets(t *testing.T) {
 		seen[p.Name] = true
 	}
 
-	if !seen["Anthropic"] || !seen["OpenAI"] || !seen["Ollama"] || !seen["Custom"] {
+	if !seen["Anthropic (API key)"] || !seen["OpenAI"] || !seen["Ollama"] || !seen["Custom"] {
 		t.Fatalf("missing an expected preset: %v", seen)
 	}
 

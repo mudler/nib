@@ -2,6 +2,7 @@ package setup
 
 // Preset is a provider template that prefills connection fields in the wizard.
 type Preset struct {
+	Provider     string // native provider identity; empty preserves compatibility routing
 	Name         string // display name shown in the picker
 	BaseURL      string // prefilled, editable; "" means the OpenAI SDK default
 	DefaultModel string // prefilled model field
@@ -12,7 +13,7 @@ type Preset struct {
 // Presets returns the built-in provider presets, in display order.
 func Presets() []Preset {
 	return []Preset{
-		{Name: "Anthropic", BaseURL: "https://api.anthropic.com", DefaultModel: "claude-sonnet-4-5-20250929", DefaultKey: "", KeyRequired: false},
+		{Name: "Anthropic (API key)", Provider: "anthropic-api-key", BaseURL: "https://api.anthropic.com", DefaultModel: "claude-sonnet-4-5-20250929", DefaultKey: "", KeyRequired: true},
 		{Name: "OpenAI", BaseURL: "", DefaultModel: "gpt-4o-mini", DefaultKey: "", KeyRequired: true},
 		{Name: "Local (LocalAI / llama.cpp / vLLM)", BaseURL: "http://localhost:8080/v1", DefaultModel: "", DefaultKey: "sk-no-key", KeyRequired: false},
 		{Name: "Ollama", BaseURL: "http://localhost:11434/v1", DefaultModel: "llama3.1", DefaultKey: "sk-no-key", KeyRequired: false},

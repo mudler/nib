@@ -254,3 +254,36 @@ func TestLoginReplacesReadyCredentialWhileEndpointReusesIt(t *testing.T) {
 		t.Fatal("opening model picker changed active provider")
 	}
 }
+
+func TestAnthropicAPIKeyMaskedLoginNoOAuth(t *testing.T) {
+	m := newLoginTestModel(t)
+	m.dispatchResolved("/login")
+	seen := map[string]bool{}
+	for _, e := range m.providerPicker.all {
+		seen[e.ID] = true
+	}
+	if !seen["anthropic"] || !seen["anthropic-api-key"] {
+		t.Fatal("missing separate identities")
+	}
+	m, _ = press(t, m, typeText("anthropic-api-key"), keyEnter)
+	if !m.loginForm.active || m.loginWait.active {
+		t.Fatal("expected key form, not OAuth")
+	}
+	m, _ = press(t, m, typeText("tui-private-key-sentinel"))
+	if strings.Contains(m.View(), "tui-private-key-sentinel") || !strings.Contains(m.View(), "•") {
+		t.Fatal("key is not masked")
+	}
+	m, cmd := press(t, m, keyEnter)
+	if cmd == nil || m.loginForm.active {
+		t.Fatal("expected saved key and deferred discovery")
+	}
+	// Do not execute discovery: this test must never contact the provider.
+	store := auth.NewStore(filepath.Join(m.cfg.BaseDir, "credentials.json"))
+	cred, ok, err := store.Get("anthropic-api-key")
+	if err != nil || !ok || cred.Kind != auth.CredentialAPIKey || cred.APIKey != "tui-private-key-sentinel" {
+		t.Fatalf("saved key: %+v %v", cred, err)
+	}
+	if _, ok, _ := store.Get("anthropic"); ok {
+		t.Fatal("key login saved OAuth identity")
+	}
+}

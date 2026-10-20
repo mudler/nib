@@ -3,6 +3,8 @@ package setup
 import (
 	"context"
 	"fmt"
+	"github.com/mudler/nib/auth"
+	"path/filepath"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/textinput"
@@ -99,6 +101,7 @@ func (m *model) applyPreset(p Preset) {
 	m.inputs[fieldBaseURL].SetValue(p.BaseURL)
 	m.inputs[fieldModel].SetValue(p.DefaultModel)
 	m.inputs[fieldAPIKey].SetValue(p.DefaultKey)
+	m.cfg.Provider = p.Provider
 	m.keyRequired = p.KeyRequired
 }
 
@@ -122,7 +125,11 @@ func (m *model) collect() {
 func (m model) probeCmd() tea.Cmd {
 	ctx, cfg := m.ctx, m.cfg
 	return func() tea.Msg {
-		return probeResultMsg{err: Probe(ctx, cfg.Model, cfg.APIKey, cfg.BaseURL)}
+		dir, err := configDirIn(cfg.BaseDir)
+		if err != nil {
+			return probeResultMsg{err: err}
+		}
+		return probeResultMsg{err: ProbeConfig(ctx, cfg.ResolvedMainModel(), auth.NewStore(filepath.Join(dir, "credentials.json")))}
 	}
 }
 
@@ -300,7 +307,7 @@ func (m model) viewSaved() string {
 	if m.saveErr != nil {
 		b.WriteString(theme.Error.Render("Could not write config: "+m.saveErr.Error()) + "\n\n")
 		b.WriteString(theme.Help.Render("Add this to your config manually:") + "\n")
-		b.WriteString(fmt.Sprintf("  model: %s\n  api_key: %s\n  base_url: %s\n", m.cfg.Model, m.cfg.APIKey, m.cfg.BaseURL))
+		b.WriteString(fmt.Sprintf("  provider: %s\n  model: %s\n  api_key: <your-api-key>\n  base_url: %s\n", m.cfg.Provider, m.cfg.Model, m.cfg.BaseURL))
 		b.WriteString("\n" + theme.Hint.Render("e edit · any key quit"))
 		return b.String()
 	}
