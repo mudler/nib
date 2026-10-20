@@ -43,3 +43,16 @@ func TestStatusDocumentation(t *testing.T) {
 		}
 	}
 }
+
+// The built-in about-nib skill must distinguish subscription and API access.
+func TestAnthropicAPIKeyDocumentation(t *testing.T) {
+	for _, want := range []string{
+		"nib login anthropic-api-key", "Claude Pro/Max", "ANTHROPIC_API_KEY",
+		"provider: anthropic-api-key", "model: claude-sonnet-4-5", "api_key: your-api-key",
+		"nonstreaming", "incompatible saved credential", "illustrative", "Add Endpoint",
+	} {
+		if !strings.Contains(EmbeddedReadme(), want) {
+			t.Errorf("Anthropic API-key documentation missing %q", want)
+		}
+	}
+}

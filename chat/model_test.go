@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/mudler/cogito"
+	"github.com/mudler/nib/llmprovider"
 	"github.com/mudler/nib/llmprovider/catalog"
 	"github.com/mudler/nib/trace"
 	"github.com/mudler/nib/types"
@@ -649,5 +650,56 @@ func TestSwitchModelCanceledDuringDiscovery(t *testing.T) {
 	s := &Session{llmModel: "original", baseURL: srv.URL + "/v1"}
 	if _, err := s.SwitchModel(ctx, "other"); !errors.Is(err, context.Canceled) || s.Model() != "original" {
 		t.Fatalf("err=%v model=%q", err, s.Model())
+	}
+}
+
+// A TUI stream callback must not prevent a native, nonstreaming adapter
+// from completing a turn through the host's blocking fallback.
+func TestAnthropicAPIKeyHostNonstreamingFallback(t *testing.T) {
+	var mu sync.Mutex
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Model    string            `json:"model"`
+			Stream   bool              `json:"stream"`
+			Messages []json.RawMessage `json:"messages"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Error(err)
+		}
+		if r.URL.Path != "/v1/messages" || r.Method != http.MethodPost || req.Stream || req.Model != "claude-test" || len(req.Messages) == 0 {
+			t.Errorf("unexpected native request: %s %s %+v", r.Method, r.URL.Path, req)
+		}
+		if r.Header.Get("x-api-key") != "host-key-sentinel" || r.Header.Get("Authorization") != "" || r.Header.Get("anthropic-beta") != "" || r.Header.Get("anthropic-version") != "2023-06-01" {
+			t.Error("incorrect native API-key headers")
+		}
+		mu.Lock()
+		calls++
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"id":"msg-host","type":"message","role":"assistant","model":"claude-test","content":[{"type":"text","text":"host fallback complete"}],"stop_reason":"end_turn","usage":{"input_tokens":3,"output_tokens":4}}`)
+	}))
+	defer srv.Close()
+	llm, err := llmprovider.New(types.ModelProviderConfig{Provider: "anthropic-api-key", Model: "claude-test", BaseURL: srv.URL, APIKey: "host-key-sentinel"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := newWarmTestSession(t)
+	s.llm, s.llmModel = llm, "claude-test"
+	s.callbacks.OnStream = func(StreamEvent) {}
+	got, err := s.SendMessage("hello")
+	if err != nil || !strings.Contains(got, "host fallback complete") {
+		t.Fatalf("SendMessage = %q, %v", got, err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if calls != 1 {
+		t.Fatalf("native requests = %d, want 1", calls)
+	}
+	if u := s.Usage(); u.TotalTokens != 7 {
+		t.Fatalf("usage = %+v", u)
+	}
+	if history := s.ExportHistory(); len(history) < 2 || history[len(history)-1].Content != "host fallback complete" {
+		t.Fatalf("fallback lost conversation history: %+v", history)
 	}
 }

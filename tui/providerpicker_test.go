@@ -3,6 +3,8 @@ package tui
 import (
 	"context"
 	"errors"
+	"io"
+	"net/http"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -277,7 +279,29 @@ func TestAnthropicAPIKeyMaskedLoginNoOAuth(t *testing.T) {
 	if cmd == nil || m.loginForm.active {
 		t.Fatal("expected saved key and deferred discovery")
 	}
-	// Do not execute discovery: this test must never contact the provider.
+	// Execute the deferred command through a controlled official-route transport.
+	old := http.DefaultTransport
+	t.Cleanup(func() { http.DefaultTransport = old })
+	calls := 0
+	http.DefaultTransport = loginDiscoveryTransport(func(r *http.Request) (*http.Response, error) {
+		calls++
+		if r.Method != http.MethodGet || r.URL.Host != "api.anthropic.com" || r.URL.Path != "/v1/models" || r.Header.Get("x-api-key") != "tui-private-key-sentinel" || r.Header.Get("Authorization") != "" || r.Header.Get("anthropic-beta") != "" {
+			t.Fatal("discovery used wrong route or credential")
+		}
+		return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"data":[{"id":"claude-test"}],"has_more":false}`))}, nil
+	})
+	if m.session.ProviderID() != chat.ConfigProviderID {
+		t.Fatal("login switched before model selection")
+	}
+	next, _ := m.Update(cmd())
+	m = next.(Model)
+	if calls != 1 || m.loginWait.active || !m.modelPicker.active {
+		t.Fatal("deferred native discovery did not finish")
+	}
+	m, _ = press(t, m, keyEnter)
+	if m.session.ProviderID() != "anthropic-api-key" || m.session.Model() != "claude-test" {
+		t.Fatal("model selection lost identity")
+	}
 	store := auth.NewStore(filepath.Join(m.cfg.BaseDir, "credentials.json"))
 	cred, ok, err := store.Get("anthropic-api-key")
 	if err != nil || !ok || cred.Kind != auth.CredentialAPIKey || cred.APIKey != "tui-private-key-sentinel" {
@@ -287,3 +311,7 @@ func TestAnthropicAPIKeyMaskedLoginNoOAuth(t *testing.T) {
 		t.Fatal("key login saved OAuth identity")
 	}
 }
+
+type loginDiscoveryTransport func(*http.Request) (*http.Response, error)
+
+func (f loginDiscoveryTransport) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
