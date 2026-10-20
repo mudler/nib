@@ -13,6 +13,7 @@ type Preset struct {
 // Presets returns the built-in provider presets, in display order.
 func Presets() []Preset {
 	return []Preset{
+		{Name: "Anthropic (Claude Pro/Max)", Provider: "anthropic", BaseURL: "https://api.anthropic.com", DefaultModel: "claude-sonnet-4-5-20250929", DefaultKey: "", KeyRequired: false},
 		{Name: "Anthropic (API key)", Provider: "anthropic-api-key", BaseURL: "https://api.anthropic.com", DefaultModel: "claude-sonnet-4-5-20250929", DefaultKey: "", KeyRequired: true},
 		{Name: "OpenAI", BaseURL: "", DefaultModel: "gpt-4o-mini", DefaultKey: "", KeyRequired: true},
 		{Name: "Local (LocalAI / llama.cpp / vLLM)", BaseURL: "http://localhost:8080/v1", DefaultModel: "", DefaultKey: "sk-no-key", KeyRequired: false},

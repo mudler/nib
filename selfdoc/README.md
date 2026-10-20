@@ -149,8 +149,15 @@ Use `/endpoint` to reuse saved credentials instead of logging in again.
 To add a named endpoint, open `/endpoint` and select **+ add new**.
 Choose **Anthropic (API key)** in **Add Endpoint**. Enter the name, model, and key, then submit the form.
 The template uses `https://api.anthropic.com` and saves `provider: anthropic-api-key`.
-The setup wizard also offers an **Anthropic (API key)** preset.
-Its connection check lists models through the native `/v1/models` API; it does not run inference.
+The setup wizard offers two separate Anthropic choices:
+
+- **Anthropic (Claude Pro/Max)** saves `provider: anthropic`. The API key is optional when you use saved OAuth credentials.
+- **Anthropic (API key)** saves `provider: anthropic-api-key` and shows an API-key-required hint.
+
+For Claude Pro/Max, run `nib login anthropic` first to save your OAuth credentials.
+The wizard reuses that login; it does not start OAuth or open a browser.
+Both choices check the connection through native `/v1/models` discovery, without running inference.
+Switching presets resets the provider and API key fields, so the two choices do not carry over stale keys.
 
 Alternatively, configure the default endpoint in `config.yaml`:
 

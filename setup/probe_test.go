@@ -1,13 +1,16 @@
 package setup
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"github.com/mudler/nib/auth"
 	"github.com/mudler/nib/types"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -96,7 +99,7 @@ func TestProbeConfigNativeAuthAndWizardStore(t *testing.T) {
 			base = ""
 		}
 		m := newModel(context.Background(), types.Config{BaseDir: base})
-		m.applyPreset(Presets()[0])
+		m.applyPreset(presetNamed(t, "Anthropic (API key)"))
 		m.collect()
 		if result := m.probeCmd()().(probeResultMsg); result.err != nil {
 			t.Fatal(result.err)
@@ -129,5 +132,62 @@ func TestProbeConfigNativeCustomErrorsAndCancellation(t *testing.T) {
 	cancel()
 	if err := ProbeConfig(ctx, cfg, nil); !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancellation: %v", err)
+	}
+}
+
+func TestWizardClaudePresetProbesSavedOAuthWithoutChangingKeyIdentity(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "")
+	for _, defaultRoot := range []bool{false, true} {
+		t.Run(fmt.Sprint("defaultRoot=", defaultRoot), func(t *testing.T) {
+			root := t.TempDir()
+			base := root
+			if defaultRoot {
+				t.Setenv("XDG_CONFIG_HOME", root)
+				root = filepath.Join(root, "nib")
+				base = ""
+			}
+			store := auth.NewStore(filepath.Join(root, "credentials.json"))
+			for _, cred := range []auth.Credential{
+				{ProviderID: "anthropic", Kind: auth.CredentialOAuth, AccessToken: "oauth-sentinel", ExpiresAt: time.Now().Add(time.Hour)},
+				{ProviderID: "anthropic-api-key", Kind: auth.CredentialAPIKey, APIKey: "key-sentinel"},
+			} {
+				if err := store.Save(cred); err != nil {
+					t.Fatal(err)
+				}
+			}
+			before, err := os.ReadFile(store.Path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			old := http.DefaultTransport
+			defer func() { http.DefaultTransport = old }()
+			calls := 0
+			http.DefaultTransport = probeTransport(func(r *http.Request) (*http.Response, error) {
+				calls++
+				if r.Method != "GET" || r.URL.Host != "api.anthropic.com" || r.URL.Path != "/v1/models" {
+					t.Fatalf("not native model discovery: %s %s", r.Method, r.URL)
+				}
+				if r.Header.Get("Authorization") != "Bearer oauth-sentinel" || r.Header.Get("x-api-key") != "" || r.Header.Get("anthropic-beta") == "" || r.Header.Get("anthropic-version") == "" {
+					t.Fatal("incorrect OAuth discovery headers")
+				}
+				return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"data":[{"id":"claude-test"}],"has_more":false}`))}, nil
+			})
+			m := newModel(context.Background(), types.Config{BaseDir: base, Provider: "anthropic-api-key", APIKey: "stale-key"})
+			m.applyPreset(presetNamed(t, "Anthropic (Claude Pro/Max)"))
+			m.collect()
+			if m.cfg.Provider != "anthropic" || m.cfg.APIKey != "" {
+				t.Fatal("wrong OAuth config")
+			}
+			if result := m.probeCmd()().(probeResultMsg); result.err != nil {
+				t.Fatal(result.err)
+			}
+			if calls != 1 {
+				t.Fatalf("discovery calls = %d", calls)
+			}
+			after, err := os.ReadFile(store.Path)
+			if err != nil || !bytes.Equal(before, after) {
+				t.Fatal("probe changed saved credentials")
+			}
+		})
 	}
 }

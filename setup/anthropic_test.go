@@ -14,7 +14,7 @@ import (
 
 func TestAnthropicPresetSwitchAndSave(t *testing.T) {
 	m := newModel(context.Background(), types.Config{BaseDir: t.TempDir()})
-	p := Presets()[0]
+	p := presetNamed(t, "Anthropic (API key)")
 	if p.Name != "Anthropic (API key)" || p.Provider != "anthropic-api-key" || !p.KeyRequired {
 		t.Fatalf("preset: %+v", p)
 	}
@@ -27,9 +27,17 @@ func TestAnthropicPresetSwitchAndSave(t *testing.T) {
 	if err := os.WriteFile(path, []byte("unrelated: retained\nprovider: old\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	for _, preset := range []Preset{p, Presets()[1], p, Presets()[11]} {
+	for _, preset := range []Preset{p, presetNamed(t, "Anthropic (Claude Pro/Max)"), p, presetNamed(t, "OpenAI"), p, presetNamed(t, "Custom")} {
+		m.inputs[fieldAPIKey].SetValue("stale-key-sentinel")
+		m.cfg.Provider = "stale-provider"
 		m.applyPreset(preset)
 		m.collect()
+		if m.cfg.APIKey != preset.DefaultKey || m.keyRequired != preset.KeyRequired {
+			t.Fatal("stale key or key hint survived switching")
+		}
+		if strings.Contains(m.viewFields(), "This provider requires an API key.") != preset.KeyRequired {
+			t.Fatal("incorrect key hint")
+		}
 		if m.cfg.Provider != preset.Provider {
 			t.Fatal("provider not cleared/set")
 		}
@@ -41,7 +49,7 @@ func TestAnthropicPresetSwitchAndSave(t *testing.T) {
 		if err := yaml.Unmarshal(data, &got); err != nil {
 			t.Fatal(err)
 		}
-		if got["provider"] != preset.Provider || got["unrelated"] != "retained" {
+		if got["provider"] != preset.Provider || got["api_key"] != preset.DefaultKey || got["unrelated"] != "retained" {
 			t.Fatalf("saved: %v", got)
 		}
 		info, _ := os.Stat(path)
@@ -53,7 +61,7 @@ func TestAnthropicPresetSwitchAndSave(t *testing.T) {
 
 func TestSetupDiagnosticsMaskKey(t *testing.T) {
 	m := newModel(context.Background(), types.Config{})
-	m.applyPreset(Presets()[0])
+	m.applyPreset(presetNamed(t, "Anthropic (API key)"))
 	m.inputs[fieldAPIKey].SetValue("sentinel-setup-private-key")
 	m.collect()
 	m.saveErr = errors.New("write failed")
