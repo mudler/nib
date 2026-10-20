@@ -1,6 +1,7 @@
 package chat
 
 import (
+	"context"
 	"errors"
 	"sync"
 	"testing"
@@ -31,7 +32,10 @@ func TestToolPolicyPrecedesApprovals(t *testing.T) {
 			case "classifier":
 				s = classifySession(verdictFor("build_test", .95), nil)
 			case "hook":
-				s.hooks = hooks.New([]types.HookConfig{{Event: "PreToolUse", Command: `echo '{"approved":true}'`}})
+				s.hooks = policyHookFunc(func(context.Context, hooks.Event, string, any) []hooks.Decision {
+					approved := true
+					return []hooks.Decision{{Approved: &approved}}
+				})
 			case "external":
 				s = newTestSessionWithExternalSource(t)
 			}
@@ -122,4 +126,11 @@ func TestToolPolicyConcurrentReentry(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("policy deadlocked")
 	}
+}
+
+// policyHookFunc is per-session and never starts a hook subprocess.
+type policyHookFunc func(context.Context, hooks.Event, string, any) []hooks.Decision
+
+func (f policyHookFunc) Fire(ctx context.Context, event hooks.Event, name string, payload any) []hooks.Decision {
+	return f(ctx, event, name, payload)
 }

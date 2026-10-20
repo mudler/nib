@@ -38,6 +38,12 @@ import (
 	openai "github.com/sashabaranov/go-openai"
 )
 
+// sessionHooks keeps lifecycle dispatch replaceable without executing hook commands.
+// The production dispatcher implements this private interface.
+type sessionHooks interface {
+	Fire(context.Context, hooks.Event, string, any) []hooks.Decision
+}
+
 // Session represents a chat session with the AI assistant
 type Session struct {
 	ctx                 context.Context
@@ -75,7 +81,7 @@ type Session struct {
 	approvalMode         types.ApprovalMode // raw approval_mode, "" meaning prompt; guarded by approvalMu
 	approvalMu           sync.RWMutex       // guards approvalMode: /settings changes it while a turn reads it
 	readOnlyCommands     readOnlyCommands   // bash commands auto-approved in prompt mode
-	hooks                *hooks.Dispatcher
+	hooks                sessionHooks
 	provenanceMu         sync.Mutex
 	externalSources      map[string]provenance.Envelope
 	externalToolNames    map[string]bool // tools supplied by configured/plugin MCP servers
