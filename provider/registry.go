@@ -167,6 +167,7 @@ var providerOrder = []string{
 	"muse-code",
 	"github-copilot",
 	// API-key cloud providers (most popular first, then alphabetical)
+	"anthropic-api-key",
 	"openai",
 	"groq",
 	"together",
@@ -449,8 +450,16 @@ var registry = map[string]Definition{
 	},
 
 	// -----------------------------------------------------------------------
-	// OpenAI-compatible API-key providers (cloud)
+	// API-key providers (cloud)
 	// -----------------------------------------------------------------------
+	"anthropic-api-key": {
+		ID:        "anthropic-api-key",
+		Name:      "Anthropic (API key)",
+		Protocol:  ProtocolAnthropicMessages,
+		BaseURL:   "https://api.anthropic.com",
+		EnvVar:    "ANTHROPIC_API_KEY",
+		LoginKind: LoginAPIKey,
+	},
 	"openai": {
 		ID:        "openai",
 		Name:      "OpenAI",

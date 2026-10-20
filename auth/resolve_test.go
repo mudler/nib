@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -253,5 +255,54 @@ func TestResolveOrErrorWithStoredCred(t *testing.T) {
 	}
 	if r.APIKey != "stored" {
 		t.Errorf("APIKey = %q, want 'stored'", r.APIKey)
+	}
+}
+
+func TestAnthropicAPIKeyResolutionIsolation(t *testing.T) {
+	// A definition literal also exercises the guard before registry support exists.
+	def := provider.Definition{ID: "anthropic-api-key", EnvVar: "ANTHROPIC_API_KEY"}
+	for _, tc := range []struct{ name, stored, config, env, want string }{
+		{"stored", "sentinel-stored", "sentinel-config", "sentinel-env", "sentinel-stored"},
+		{"config", "", "sentinel-config", "sentinel-env", "sentinel-config"},
+		{"env", "", "", "sentinel-env", "sentinel-env"},
+		{"missing", "", "", "", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv(def.EnvVar, tc.env)
+			s := NewStore(testStorePath(t))
+			if err := s.Save(Credential{ProviderID: "anthropic", Kind: CredentialOAuth, AccessToken: "sentinel-oauth", RefreshToken: "sentinel-refresh", ExpiresAt: time.Now().Add(-time.Hour)}); err != nil {
+				t.Fatal(err)
+			}
+			before, _, _ := s.Get("anthropic")
+			if err := s.Save(Credential{ProviderID: def.ID, Kind: CredentialAPIKey, APIKey: tc.stored}); err != nil {
+				t.Fatal(err)
+			}
+			got, err := Resolve(s, def, tc.config)
+			if err != nil || got.APIKey != tc.want || got.IsOAuth {
+				t.Fatalf("unexpected resolution: %+v, %v", got, err)
+			}
+			after, _, _ := s.Get("anthropic")
+			if !reflect.DeepEqual(before, after) {
+				t.Fatal("OAuth credential changed")
+			}
+		})
+	}
+	for _, kind := range []CredentialKind{CredentialOAuth, "unknown", ""} {
+		t.Run("incompatible-"+string(kind), func(t *testing.T) {
+			t.Setenv(def.EnvVar, "sentinel-env")
+			s := NewStore(testStorePath(t))
+			if err := s.Save(Credential{ProviderID: def.ID, Kind: kind, AccessToken: "sentinel-token", RefreshToken: "sentinel-refresh", ExpiresAt: time.Now().Add(-time.Hour)}); err != nil {
+				t.Fatal(err)
+			}
+			before, _, _ := s.Get(def.ID)
+			_, err := Resolve(s, def, "sentinel-config")
+			if err == nil || !strings.Contains(err.Error(), "nib login anthropic-api-key") {
+				t.Fatalf("want actionable incompatible-credential error, got %v", err)
+			}
+			after, _, _ := s.Get(def.ID)
+			if !reflect.DeepEqual(before, after) {
+				t.Fatal("incompatible credential refreshed or modified")
+			}
+		})
 	}
 }

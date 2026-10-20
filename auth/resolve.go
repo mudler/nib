@@ -38,6 +38,10 @@ func Resolve(store *Store, def provider.Definition, configAPIKey string) (Resolv
 	if store != nil {
 		cred, ok, err := store.Get(def.ID)
 		if err == nil && ok {
+			// The API-key identity must never refresh or use OAuth credentials.
+			if def.ID == "anthropic-api-key" && cred.Kind != CredentialAPIKey {
+				return Resolved{}, fmt.Errorf("auth: incompatible saved credential for %s — run 'nib login %s' to save an API key", def.ID, def.ID)
+			}
 			if cred.Kind == CredentialOAuth {
 				r, _ := resolveOAuth(store, def, cred)
 				if r.APIKey != "" {
