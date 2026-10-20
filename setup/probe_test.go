@@ -55,6 +55,15 @@ func TestProbeConfigNativeAuthAndWizardStore(t *testing.T) {
 	if err := store.Save(auth.Credential{ProviderID: "anthropic", Kind: auth.CredentialOAuth, AccessToken: "oauth-sentinel"}); err != nil {
 		t.Fatal(err)
 	}
+	// An incompatible saved credential does not block explicit config/env keys.
+	incompatible := auth.Credential{ProviderID: "anthropic-api-key", Kind: auth.CredentialOAuth, AccessToken: "wrong-token", RefreshToken: "wrong-refresh", ExpiresAt: time.Now().Add(-time.Hour)}
+	if err := store.Save(incompatible); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(store.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
 	old := http.DefaultTransport
 	defer func() { http.DefaultTransport = old }()
 	calls := 0
@@ -83,6 +92,19 @@ func TestProbeConfigNativeAuthAndWizardStore(t *testing.T) {
 	if calls != 1 {
 		t.Fatal("missing key made a request")
 	}
+	expected = "env-sentinel"
+	t.Setenv("ANTHROPIC_API_KEY", expected)
+	if err := ProbeConfig(context.Background(), cfg, store); err != nil {
+		t.Fatal(err)
+	}
+	after, err := os.ReadFile(store.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatal("incompatible stored credential changed")
+	}
+	t.Setenv("ANTHROPIC_API_KEY", "")
 	expected = "store-sentinel"
 	if err := store.Save(auth.Credential{ProviderID: "anthropic-api-key", Kind: auth.CredentialAPIKey, APIKey: expected}); err != nil {
 		t.Fatal(err)

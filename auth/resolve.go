@@ -24,7 +24,7 @@ type Resolved struct {
 
 // Resolve runs the credential resolution ladder for a provider:
 //
-//  1. Stored credential from /login (OAuth with refresh, or API key)
+//  1. Compatible stored credential from /login (OAuth with refresh, or API key)
 //  2. configAPIKey (from types.Config.APIKey — the existing YAML/env path)
 //  3. Environment variable (def.EnvVar — e.g. ANTHROPIC_API_KEY)
 //  4. Fallback (empty Resolved)
@@ -37,11 +37,9 @@ func Resolve(store *Store, def provider.Definition, configAPIKey string) (Resolv
 	// 1. Stored credential
 	if store != nil {
 		cred, ok, err := store.Get(def.ID)
-		if err == nil && ok {
-			// The API-key identity must never refresh or use OAuth credentials.
-			if def.ID == "anthropic-api-key" && cred.Kind != CredentialAPIKey {
-				return Resolved{}, fmt.Errorf("auth: incompatible saved credential for %s — run 'nib login %s' to save an API key", def.ID, def.ID)
-			}
+		// API-key-only providers skip incompatible credentials before any OAuth
+		// refresh. Other login kinds retain their existing credential behavior.
+		if err == nil && ok && (def.LoginKind != provider.LoginAPIKey || cred.Kind == CredentialAPIKey) {
 			if cred.Kind == CredentialOAuth {
 				r, _ := resolveOAuth(store, def, cred)
 				if r.APIKey != "" {

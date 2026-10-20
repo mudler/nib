@@ -178,7 +178,8 @@ At the official endpoint, nib resolves the API key in this order:
 
 The `anthropic` OAuth credential never supplies or refreshes this identity's key.
 If no key resolves, nib reports the login command and environment variable to use.
-An incompatible saved credential causes an error before configuration or environment fallback.
+For API-key-only providers, nib skips an incompatible saved credential without refreshing or changing it.
+Resolution continues with the explicit configuration key, then the environment variable.
 Run `nib login anthropic-api-key` to replace it with an API key.
 Provider authentication failures remain errors; nib does not fall back to OAuth.
 

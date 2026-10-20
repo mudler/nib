@@ -1,11 +1,14 @@
 package auth
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -259,8 +262,7 @@ func TestResolveOrErrorWithStoredCred(t *testing.T) {
 }
 
 func TestAnthropicAPIKeyResolutionIsolation(t *testing.T) {
-	// A definition literal also exercises the guard before registry support exists.
-	def := provider.Definition{ID: "anthropic-api-key", EnvVar: "ANTHROPIC_API_KEY"}
+	def, _ := provider.Get("anthropic-api-key")
 	for _, tc := range []struct{ name, stored, config, env, want string }{
 		{"stored", "sentinel-stored", "sentinel-config", "sentinel-env", "sentinel-stored"},
 		{"config", "", "sentinel-config", "sentinel-env", "sentinel-config"},
@@ -287,22 +289,93 @@ func TestAnthropicAPIKeyResolutionIsolation(t *testing.T) {
 			}
 		})
 	}
-	for _, kind := range []CredentialKind{CredentialOAuth, "unknown", ""} {
-		t.Run("incompatible-"+string(kind), func(t *testing.T) {
-			t.Setenv(def.EnvVar, "sentinel-env")
-			s := NewStore(testStorePath(t))
-			if err := s.Save(Credential{ProviderID: def.ID, Kind: kind, AccessToken: "sentinel-token", RefreshToken: "sentinel-refresh", ExpiresAt: time.Now().Add(-time.Hour)}); err != nil {
-				t.Fatal(err)
+}
+
+func TestResolveAPIKeyOnlyCompatibility(t *testing.T) {
+	for _, id := range []string{"anthropic-api-key", "groq"} {
+		def, ok := provider.Get(id)
+		if !ok || def.LoginKind != provider.LoginAPIKey {
+			t.Fatalf("expected API-key definition: %s", id)
+		}
+		for _, kind := range []CredentialKind{CredentialOAuth, "unknown", "", CredentialAPIKey} {
+			for _, source := range []string{"config", "env", "missing"} {
+				t.Run(id+"/"+string(kind)+"/"+source, func(t *testing.T) {
+					var calls atomic.Int32
+					server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+						calls.Add(1)
+						w.Header().Set("Content-Type", "application/json")
+						_, _ = w.Write([]byte(`{"access_token":"refreshed-sentinel","refresh_token":"changed","expires_in":3600}`))
+					}))
+					defer server.Close()
+					def.TokenURL = server.URL
+					s := NewStore(testStorePath(t))
+					cred := Credential{ProviderID: id, Kind: kind, APIKey: "stored-sentinel", AccessToken: "oauth-sentinel", RefreshToken: "refresh-sentinel", ExpiresAt: time.Now().Add(-time.Hour)}
+					if err := s.Save(cred); err != nil {
+						t.Fatal(err)
+					}
+					before, err := os.ReadFile(s.Path)
+					if err != nil {
+						t.Fatal(err)
+					}
+					config, env, want := "", "", ""
+					if source == "config" {
+						config, env, want = "config-sentinel", "env-sentinel", "config-sentinel"
+					}
+					if source == "env" {
+						env, want = "env-sentinel", "env-sentinel"
+					}
+					if kind == CredentialAPIKey {
+						want = cred.APIKey
+					}
+					t.Setenv(def.EnvVar, env)
+					got, err := Resolve(s, def, config)
+					if err != nil || got != (Resolved{APIKey: want}) {
+						t.Errorf("Resolve = %+v, %v; want key %q", got, err, want)
+					}
+					required, err := ResolveOrError(s, def, config)
+					if want == "" {
+						if err == nil || !strings.Contains(err.Error(), "no credentials for "+id) || !strings.Contains(err.Error(), "nib login "+id) || !strings.Contains(err.Error(), def.EnvVar) {
+							t.Errorf("want normal actionable missing error, got %v", err)
+						}
+					} else if err != nil || required != got {
+						t.Errorf("ResolveOrError = %+v, %v", required, err)
+					}
+					if calls.Load() != 0 {
+						t.Errorf("incompatible credential triggered %d refreshes", calls.Load())
+					}
+					after, err := os.ReadFile(s.Path)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if !bytes.Equal(before, after) {
+						t.Error("stored credential changed")
+					}
+				})
 			}
-			before, _, _ := s.Get(def.ID)
-			_, err := Resolve(s, def, "sentinel-config")
-			if err == nil || !strings.Contains(err.Error(), "nib login anthropic-api-key") {
-				t.Fatalf("want actionable incompatible-credential error, got %v", err)
-			}
-			after, _, _ := s.Get(def.ID)
-			if !reflect.DeepEqual(before, after) {
-				t.Fatal("incompatible credential refreshed or modified")
-			}
-		})
+		}
+	}
+}
+
+func TestResolveOtherLoginKindsPreserveCredentials(t *testing.T) {
+	for _, login := range []provider.LoginKind{provider.LoginNone, provider.LoginOAuthCode, provider.LoginDeviceCode, provider.LoginCopilot, "future-kind"} {
+		for _, kind := range []CredentialKind{CredentialOAuth, CredentialAPIKey} {
+			t.Run(string(login)+"/"+string(kind), func(t *testing.T) {
+				def, _ := provider.Get("anthropic")
+				def.LoginKind = login
+				s := NewStore(testStorePath(t))
+				if err := s.Save(Credential{ProviderID: def.ID, Kind: kind, APIKey: "stored-key", AccessToken: "stored-oauth", ExpiresAt: time.Now().Add(time.Hour)}); err != nil {
+					t.Fatal(err)
+				}
+				t.Setenv(def.EnvVar, "env-key")
+				got, err := Resolve(s, def, "config-key")
+				want := Resolved{APIKey: "stored-key"}
+				if kind == CredentialOAuth {
+					want = Resolved{APIKey: "stored-oauth", IsOAuth: true}
+				}
+				if err != nil || got != want {
+					t.Fatalf("Resolve = %+v, %v; want %+v", got, err, want)
+				}
+			})
+		}
 	}
 }

@@ -22,7 +22,7 @@ type apiKeyTransport func(*http.Request) (*http.Response, error)
 func (f apiKeyTransport) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
 func TestAnthropicAPIKeyNativeRoute(t *testing.T) {
-	for _, source := range []string{"stored", "config", "env", "missing"} {
+	for _, source := range []string{"stored", "config", "env", "missing", "incompatible-config", "incompatible-env", "incompatible-missing"} {
 		t.Run(source, func(t *testing.T) {
 			store := auth.NewStore(filepath.Join(t.TempDir(), "credentials.json"))
 			oauth := auth.Credential{ProviderID: "anthropic", Kind: auth.CredentialOAuth, AccessToken: "sentinel-oauth", RefreshToken: "sentinel-refresh", ExpiresAt: time.Now().Add(-time.Hour)}
@@ -30,6 +30,22 @@ func TestAnthropicAPIKeyNativeRoute(t *testing.T) {
 				t.Fatal(err)
 			}
 			before, _, _ := store.Get("anthropic")
+			if strings.HasPrefix(source, "incompatible-") {
+				incompatible := oauth
+				incompatible.ProviderID = "anthropic-api-key"
+				if err := store.Save(incompatible); err != nil {
+					t.Fatal(err)
+				}
+			}
+			keyBefore, _, _ := store.Get("anthropic-api-key")
+			defer func() {
+				if strings.HasPrefix(source, "incompatible-") {
+					after, _, _ := store.Get("anthropic-api-key")
+					if !reflect.DeepEqual(keyBefore, after) {
+						t.Error("incompatible credential changed")
+					}
+				}
+			}()
 			cfg := types.ModelProviderConfig{Provider: "anthropic-api-key", Model: "claude-test"}
 			t.Setenv("ANTHROPIC_API_KEY", "sentinel-env")
 			want := "sentinel-env"
@@ -40,11 +56,11 @@ func TestAnthropicAPIKeyNativeRoute(t *testing.T) {
 				cfg.APIKey = "sentinel-config"
 				want = "sentinel-stored"
 			}
-			if source == "config" {
+			if source == "config" || source == "incompatible-config" {
 				cfg.APIKey = "sentinel-config"
 				want = cfg.APIKey
 			}
-			if source == "missing" {
+			if source == "missing" || source == "incompatible-missing" {
 				t.Setenv("ANTHROPIC_API_KEY", "")
 			}
 			old := http.DefaultTransport
@@ -101,7 +117,7 @@ func TestAnthropicAPIKeyNativeRoute(t *testing.T) {
 				return &http.Response{StatusCode: status, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body)), Request: r}, nil
 			})
 			llm, err := NewWithStore(cfg, store)
-			if source == "missing" {
+			if source == "missing" || source == "incompatible-missing" {
 				if err == nil || !strings.Contains(err.Error(), "nib login anthropic-api-key") {
 					t.Fatalf("missing-key error: %v", err)
 				}
