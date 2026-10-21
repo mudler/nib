@@ -1,6 +1,18 @@
 package chat
 
-import "time"
+import (
+	"time"
+
+	"github.com/mudler/cogito"
+)
+
+// ToolExecutionBridge intercepts the frozen native call. Only the host may consume
+// the single-use body; errors fail closed without exposing their contents.
+// Implementations must be concurrency-safe. IDs are correlation, not authority.
+type ToolExecutionBridge = cogito.ExecutionInterceptor
+type ToolExecutionCall = cogito.ExecutionCall
+type ToolExecutionBody = cogito.ToolBody
+type ToolExecutionResult = cogito.ExecutionResult
 
 // ToolPolicy is an optional mandatory veto. A non-nil error denies execution;
 // nil continues ordinary approval and never grants permission. Errors are not
@@ -75,10 +87,13 @@ type Message struct {
 
 // ToolCallRequest contains information about a tool the agent wants to run.
 type ToolCallRequest struct {
-	Name      string
-	Arguments string
-	Reasoning string
-	AgentID   string // non-empty when the requesting caller is a sub-agent
+	// ID is the provider protocol ID; InvocationID identifies this frozen invocation.
+	ID           string
+	InvocationID string
+	Name         string
+	Arguments    string
+	Reasoning    string
+	AgentID      string // non-empty when the requesting caller is a sub-agent
 	// ExternalSources identifies untrusted data still present in the active
 	// conversation. A non-empty value forces consequential calls through the
 	// approval gate unless session-wide auto-approval is active.
@@ -171,6 +186,9 @@ type CronRequest struct {
 
 // Callbacks defines the interface for UI interactions.
 type Callbacks struct {
+	// ToolExecutionBridge is inherited by every local helper, including resume.
+	// Return only authorized projected results; nib provides no durable journal.
+	ToolExecutionBridge ToolExecutionBridge
 	// ObservationCallbacks is optional and captured once per SendMessage.
 	// It must return a nonblocking metadata sink bound to the originating run.
 	// It does not enable streaming or replace existing content/lifecycle paths.

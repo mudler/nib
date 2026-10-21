@@ -56,6 +56,9 @@ type Session struct {
 	cfgClients          map[string]*mcp.ClientSession // config/plugin MCP servers, by name
 	cfgServers          map[string]types.MCPServer    // desired set, for diffing
 	skillsClient        *mcp.ClientSession            // the load_skill server
+
+	requireToolExecutionBridge bool
+
 	// historyMu guards the parallel conversation state — fragment (the real
 	// model context handed to cogito) and messages (the {role,content} log
 	// surfaced to the UI). SendMessage mutates both as a turn progresses; the
@@ -518,6 +521,9 @@ func toCogitoDefinitions(cfgs []types.AgentTypeConfig) []cogito.AgentDefinition 
 // app.Run preflights the directory, so in practice only embedders calling this
 // directly reach the failure.
 func NewSession(ctx context.Context, cfg types.Config, callbacks Callbacks, transports ...mcp.Transport) (*Session, error) {
+	if cfg.RequireToolExecutionBridge && callbacks.ToolExecutionBridge == nil {
+		return nil, errors.New("required tool execution bridge is missing")
+	}
 	// LocalAIClient, not OpenAIClient: LocalAI (and vLLM) put reasoning/thinking
 	// text in a "reasoning" response field, which go-openai's SDK — and so
 	// OpenAIClient — doesn't know about (it only binds the older, now-deprecated
@@ -628,6 +634,8 @@ func NewSession(ctx context.Context, cfg types.Config, callbacks Callbacks, tran
 		tracer:               tracer,
 		traceDir:             cfg.TraceDir,
 		provenanceClassifier: classifier,
+
+		requireToolExecutionBridge: cfg.RequireToolExecutionBridge,
 	}
 
 	// Build the LSP server set: explicit config first, then auto-detect
@@ -831,10 +839,14 @@ func (s *Session) decideToolCall(req ToolCallRequest) cogito.ToolCallDecision {
 }
 
 func (s *Session) decideToolCallForTurn(req ToolCallRequest, turn *turnApproval) cogito.ToolCallDecision {
+	return s.decideToolCallWithPolicy(req, turn, true)
+}
+
+func (s *Session) decideToolCallWithPolicy(req ToolCallRequest, turn *turnApproval, evaluatePolicy bool) cogito.ToolCallDecision {
 	req.ExternalSources = s.activeExternalSourceIDs()
 	// Mandatory embedder policy precedes every approval path. Never expose
 	// the error: it may contain sensitive call data. No approval lock is held.
-	if policy := s.callbacks.ToolPolicy; policy != nil {
+	if policy := s.callbacks.ToolPolicy; evaluatePolicy && policy != nil {
 		if err := policy(req); err != nil {
 			return cogito.ToolCallDecision{Approved: false, Adjustment: "tool call denied by embedder policy"}
 		}
@@ -909,7 +921,7 @@ func (s *Session) decideToolCallForTurn(req ToolCallRequest, turn *turnApproval)
 		req.Verdict = v.String()
 	}
 	if s.callbacks.OnToolCall == nil {
-		return cogito.ToolCallDecision{Approved: true}
+		return cogito.ToolCallDecision{Approved: s.callbacks.ToolExecutionBridge == nil}
 	}
 	resp := s.callbacks.OnToolCall(req)
 	s.grantsMu.Lock()
@@ -2027,6 +2039,21 @@ func (s *Session) toolOptions(turnCtx context.Context, goal, mainModel string) [
 	// external provenance sources, so install it even when the allowlist is empty.
 	opts = append(opts, cogito.WithMCPToolFilter(s.mcpToolFilter()))
 
+	if bridge := s.callbacks.ToolExecutionBridge; bridge != nil {
+		opts = append(opts, cogito.WithExecutionInterceptor(bridge))
+		if policy := s.callbacks.ToolPolicy; policy != nil {
+			opts = append(opts, cogito.WithExecutionPolicy(func(_ context.Context, call cogito.ExecutionCall) error {
+				args, err := json.Marshal(call.Arguments())
+				if err != nil {
+					return errors.New("tool call denied by embedder policy")
+				}
+				return policy(ToolCallRequest{ID: call.ToolCallID(), InvocationID: call.InvocationID(), Name: call.Name(), AgentID: call.AgentID(), Arguments: string(args), ExternalSources: s.activeExternalSourceIDs()})
+			}))
+		}
+	}
+	if s.requireToolExecutionBridge {
+		opts = append(opts, cogito.WithRequiredExecutionInterceptor())
+	}
 	return opts
 }
 
@@ -2210,13 +2237,15 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 			// compaction, the post-compaction nudge is no longer needed.
 			s.trackContextFileRead(tool.Name, string(args))
 			change := PreviewFileChange(s.workingDir, tool.Name, string(args))
-			decision := s.decideToolCallForTurn(ToolCallRequest{
-				Name:      tool.Name,
-				Arguments: string(args),
-				Reasoning: tool.Reasoning,
-				AgentID:   state.AgentID,
-				Change:    change,
-			}, approvalTurn)
+			decision := s.decideToolCallWithPolicy(ToolCallRequest{
+				ID:           tool.ID,
+				InvocationID: tool.InvocationID,
+				Name:         tool.Name,
+				Arguments:    string(args),
+				Reasoning:    tool.Reasoning,
+				AgentID:      state.AgentID,
+				Change:       change,
+			}, approvalTurn, s.callbacks.ToolExecutionBridge == nil)
 			if decision.Approved && state.AgentID == "" && toolCallbacks.OnToolResult != nil {
 				s.changes.put(changeKey(tool.ID, tool.Name, string(args)), change)
 			}
@@ -2621,7 +2650,7 @@ func (s *Session) SendMessage(text string, parts ...ContentPart) (string, error)
 			// Bounded by turnRetryBudget attempts in a row without progress,
 			// and never after an interrupt: Ctrl+C cancels turnCtx, which
 			// also ends the wait.
-			if canRetryTurn(turnCtx, err) {
+			if !errors.Is(err, cogito.ErrExecutionRejected) && canRetryTurn(turnCtx, err) {
 				class := classifyBackendError(err)
 				resume, progressed := resumableFragment(runFragment, newFragment)
 				if progressed {

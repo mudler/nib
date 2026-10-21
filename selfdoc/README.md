@@ -1426,3 +1426,44 @@ result, and are not recovered by this API. Ordinary tool tracing is unchanged.
 ## License
 
 MIT
+
+### Embedded secure execution bridge
+
+Embedders can set `require_tool_execution_bridge: true` (`types.Config.RequireToolExecutionBridge`)
+and supply `chat.Callbacks.ToolExecutionBridge`. Session construction fails before
+provider setup if the required bridge is missing. This is opt-in; standalone
+legacy execution is unchanged. It does not enable any tools.
+
+`chat.ToolExecutionBridge`, `ToolExecutionCall`, `ToolExecutionBody` and
+`ToolExecutionResult` alias Cogito's native interceptor types. The call provides
+immutable `Name()`, `Arguments()` (an independent copy), `ToolCallID()`,
+`InvocationID()` and engine-stamped `AgentID()` accessors. `ToolCallRequest.ID`
+and `.InvocationID` preserve that correlation through mandatory policy and
+ordinary approval. IDs are correlation, **not authorization**.
+
+Mandatory `ToolPolicy` evaluates the frozen candidate before approval fast paths
+and hooks; it can veto but cannot grant permission. In bridged execution,
+Cogito re-freezes and re-evaluates observed approval modifications; identity
+changes and textual adjustment requests fail closed. Ordinary approval remains
+separate: absent a prompt callback and applicable explicit/automatic grant,
+bridged execution denies. Local foreground, background, nested and resumed
+helpers inherit the bridge, policy and required mode. Required mode rejects
+unsupported custom/remote dispatch and native bodies without context support.
+
+A bridge may consume the supplied body once, using its invocation context, or
+substitute an authorized `ToolExecutionResult` without entering the native body.
+The continuation expires on bridge return and rejects duplicate/concurrent use.
+Successful substitutions enter the protocol, next model request and exported
+context normally. `Data` is live transport only, not a durable replay encoding.
+Bridge errors discard result text/data and expose a fixed rejection; nib does
+not retry that rejection as a backend failure. Do not put sensitive data in
+ordinary observation callbacks: tool requests still follow normal UI reporting.
+
+The embedding host must validate principal/conversation/turn/attempt/epoch,
+registered helper identity, tool/config/provenance bindings and current grants;
+it must authorize/project results and durably settle its journal **before**
+returning success. This upstream bridge is not a durable registry, broker,
+recovery mapping or exactly-once provider guarantee. Durable host registry and
+result projection, production LocalAI wiring, tool enablement and cutover remain
+separate integration work. A failed or unknown effect must hold at that host,
+not be redispatched through a replacement continuation.

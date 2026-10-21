@@ -203,6 +203,9 @@ type HookConfig struct {
 
 // Config holds configuration for creating a new session
 type Config struct {
+	// RequireToolExecutionBridge rejects session construction without a host bridge.
+	// It also requires context-aware native tools and supported local helper dispatch.
+	RequireToolExecutionBridge bool `yaml:"require_tool_execution_bridge,omitempty"`
 	// Provider selects the main LLM transport. Empty defaults to "openai",
 	// meaning any OpenAI-compatible endpoint; "codex" uses Codex app-server.
 	Provider string `yaml:"provider,omitempty"`
