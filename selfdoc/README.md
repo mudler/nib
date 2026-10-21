@@ -1380,7 +1380,14 @@ spawning or change the default child-tool inheritance rules.
 Embedders can use `chat.Callbacks.AgentCallbacks` to capture an event sink once
 per `SendMessage`. Detached children's completion events retain the sink of the
 turn that spawned them, even after a later turn captures a new sink. Existing
-`OnAgentEvent` callbacks remain the fallback when no factory is supplied.
+`OnAgentEvent` callbacks remain the fallback when no factory is supplied. Lifecycle
+`AgentEvent.ParentID` copies Cogito's engine-captured parent ID; an empty value
+means a direct child of the session root. Nested agents appear in the public
+`Session.AgentManager()` registry. Resuming a native agent retains its ID,
+original parent and captured lifecycle sink. These IDs correlate records; they
+do not grant authority. Exported native fields are trusted integration data,
+not tamper-proof credentials. Existing tool grants, MCP scopes and mandatory
+execution-bridge checks still apply.
 
 ### Mandatory embedder tool policy
 

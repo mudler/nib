@@ -1083,6 +1083,7 @@ func (s *Session) emitAgentEvent(a *cogito.AgentState) {
 
 func (s *Session) emitAgentEventTo(a *cogito.AgentState, emit func(AgentEvent)) {
 	ev := AgentEvent{
+		ParentID:   a.ParentID,
 		ID:         a.ID,
 		Type:       a.Type,
 		Task:       a.Task,

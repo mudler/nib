@@ -38,9 +38,13 @@ type AgentEvent struct {
 	// it zero; a run-bound AgentCallbacks sink may stamp it before queueing.
 	ObservationScope ObservationScope
 	ID               string
-	Type             string // agent type name (e.g. "explore"); empty for generic
-	Task             string
-	Status           AgentStatus
+	// ParentID is Cogito engine provenance; empty means the session root.
+	// IDs correlate lifecycle records, not authorization. Native exported
+	// fields are trusted integration data, not tamper-proof credentials.
+	ParentID string
+	Type     string // agent type name (e.g. "explore"); empty for generic
+	Task     string
+	Status   AgentStatus
 	// Background is true for a sub-agent that runs detached from the turn:
 	// spawned in the background. One the user detached stays false here;
 	// the UI records that itself.
