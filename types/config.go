@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Masterminds/sprig/v3"
+	"github.com/mudler/cogito"
 	openai "github.com/sashabaranov/go-openai"
 	"gopkg.in/yaml.v3"
 )
@@ -241,6 +242,18 @@ func (g *GoalConfig) UnmarshalYAML(node *yaml.Node) error {
 
 // Config holds configuration for creating a new session
 type Config struct {
+	// LLM, when set, is the main model client. NewSession uses it instead of
+	// building one from Provider, BaseURL and APIKey, so an embedding host can
+	// serve the model in process. Model still names the model for limits and
+	// display. It is not part of the config file.
+	LLM cogito.LLM `yaml:"-" json:"-"`
+	// InputSource, when set, is asked before every model request for texts the
+	// host wants the model to see (for example messages the user sent while the
+	// turn ran). The texts reach the model as one user message, in order. settle
+	// is called with nil once the request succeeded, or with its error, so the
+	// host can put the texts back. A nil settle is allowed. It is not part of the
+	// config file.
+	InputSource func() (texts []string, settle func(error)) `yaml:"-" json:"-"`
 	// Provider selects the main LLM transport. Empty defaults to "openai",
 	// meaning any OpenAI-compatible endpoint; "codex" uses Codex app-server.
 	Provider string `yaml:"provider,omitempty"`

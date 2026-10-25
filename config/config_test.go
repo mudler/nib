@@ -1,6 +1,7 @@
 package config
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -9,7 +10,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mudler/cogito"
 	"github.com/mudler/nib/types"
+	"github.com/sashabaranov/go-openai"
 )
 
 func TestGoalCheckInDelaysDefaultsAndFreshCopies(t *testing.T) {
@@ -684,8 +687,22 @@ func (fv fillVariant) into(t *testing.T, v reflect.Value) {
 		fv.into(t, p.Elem())
 		v.Set(p)
 	case reflect.Interface:
-		// Nothing sensible to synthesize; leave it. types.Config has none today,
-		// and the caller's IsZero check would flag one that appeared.
+		// Only cogito.LLM is synthesized (the host-supplied model client). Any
+		// other interface is left alone, and the caller's IsZero check would flag
+		// a new one that appeared.
+		if v.Type() == reflect.TypeOf((*cogito.LLM)(nil)).Elem() {
+			v.Set(reflect.ValueOf(stubLLM{}))
+		}
+	case reflect.Func:
+		// A host-supplied callback (types.Config.InputSource). A non-nil function
+		// that returns zero values is enough: the guards only need it present.
+		v.Set(reflect.MakeFunc(v.Type(), func([]reflect.Value) []reflect.Value {
+			out := make([]reflect.Value, v.Type().NumOut())
+			for i := range out {
+				out[i] = reflect.Zero(v.Type().Out(i))
+			}
+			return out
+		}))
 	default:
 		t.Fatalf("fillVariant: unhandled kind %s", v.Kind())
 	}
@@ -763,4 +780,14 @@ func TestReloadStartupEndpointNeedsARegisteredSource(t *testing.T) {
 	if got, _ := ReloadStartupEndpoint(dir); got.Model != "from-file" {
 		t.Fatalf("after an edit: Model = %q, want the file read again", got.Model)
 	}
+}
+
+// stubLLM is the smallest cogito.LLM; fillVariant uses it to populate
+// types.Config.LLM in the merge guards.
+type stubLLM struct{}
+
+func (stubLLM) Ask(_ context.Context, f cogito.Fragment) (cogito.Fragment, error) { return f, nil }
+
+func (stubLLM) CreateChatCompletion(context.Context, openai.ChatCompletionRequest) (cogito.LLMReply, cogito.LLMUsage, error) {
+	return cogito.LLMReply{}, cogito.LLMUsage{}, nil
 }

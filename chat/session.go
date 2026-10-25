@@ -45,6 +45,7 @@ type Session struct {
 	turnMu              sync.Mutex
 	turnCancel          context.CancelFunc
 	llm                 cogito.LLM                      // guarded by modelMu
+	inputSource         func() ([]string, func(error))  // host texts for the next request; nil when unused
 	modelLimitsProvider llmprovider.ModelLimitsProvider // native capability hidden by tracing wrappers; guarded by modelMu
 	clients             []*mcp.ClientSession
 	mcpClient           *mcp.Client
@@ -536,9 +537,16 @@ func NewSession(ctx context.Context, cfg types.Config, callbacks Callbacks, tran
 	// "reasoning_content" key). LocalAIClient parses both.
 	credStore := auth.NewStore(filepath.Join(plugin.BaseDirIn(cfg.BaseDir), "credentials.json"))
 	mainProvider := cfg.ResolvedMainModel()
-	llm, err := llmprovider.NewWithStore(mainProvider, credStore)
-	if err != nil {
-		return nil, fmt.Errorf("create main LLM: %w", err)
+	var llm cogito.LLM
+	if cfg.LLM != nil {
+		// The host serves the model itself (in process), so no provider is built.
+		llm = cfg.LLM
+	} else {
+		var err error
+		llm, err = llmprovider.NewWithStore(mainProvider, credStore)
+		if err != nil {
+			return nil, fmt.Errorf("create main LLM: %w", err)
+		}
 	}
 	// Read capabilities before tracing wraps the client and hides them.
 	outCap := factoryOutputCap(llm, mainProvider, credStore)
@@ -603,6 +611,7 @@ func NewSession(ctx context.Context, cfg types.Config, callbacks Callbacks, tran
 		callbacks:            callbacks,
 		inject:               make(chan openai.ChatCompletionMessage, 16),
 		cogitoOptions:        cfg.AgentOptions,
+		inputSource:          cfg.InputSource,
 		compaction:           cfg.Compaction,
 		pruning:              cfg.ToolOutputPruning,
 		outputLimits:         cfg.ToolOutputLimits,
@@ -2467,6 +2476,7 @@ func (s *Session) SendMessageWithDelivery(text string, delivery InputDelivery, p
 	// Durable completions are attached at the actual root request handoff, not
 	// once per SendMessage: Cogito may issue several requests in a tool turn.
 	llm = withNoticeDelivery(llm, s.background)
+	llm = withInputSource(llm, s.inputSource)
 
 	// Build cogito options from config
 	var supervisorPass uint64
