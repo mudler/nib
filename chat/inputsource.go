@@ -15,6 +15,9 @@ import (
 type inputSourceLLM struct {
 	cogito.LLM
 	source func() ([]string, func(error))
+	// kept receives the texts of a request that went through, so the session
+	// can keep them in its history (see Session.keepInput).
+	kept func([]string)
 }
 
 type inputSourceStreamingLLM struct {
@@ -23,11 +26,11 @@ type inputSourceStreamingLLM struct {
 }
 
 // withInputSource returns llm unchanged when source is nil.
-func withInputSource(llm cogito.LLM, source func() ([]string, func(error))) cogito.LLM {
+func withInputSource(llm cogito.LLM, source func() ([]string, func(error)), kept func([]string)) cogito.LLM {
 	if source == nil {
 		return llm
 	}
-	base := &inputSourceLLM{LLM: llm, source: source}
+	base := &inputSourceLLM{LLM: llm, source: source, kept: kept}
 	if stream, ok := llm.(cogito.StreamingLLM); ok {
 		return &inputSourceStreamingLLM{inputSourceLLM: base, stream: stream}
 	}
@@ -55,7 +58,17 @@ func (l *inputSourceLLM) include(messages []openai.ChatCompletionMessage) ([]ope
 		Role:    openai.ChatMessageRoleUser,
 		Content: strings.Join(kept, "\n\n"),
 	})
-	return out, settle
+	// The request carries the batch once. When it went through, the model has
+	// seen the batch, so it is also kept for the history: cogito's fragment does
+	// not hold what a wrapper adds to one request.
+	return out, func(err error) {
+		if settle != nil {
+			settle(err)
+		}
+		if err == nil && l.kept != nil {
+			l.kept(kept)
+		}
+	}
 }
 
 func (l *inputSourceLLM) Ask(ctx context.Context, fragment cogito.Fragment) (cogito.Fragment, error) {

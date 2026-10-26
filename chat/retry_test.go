@@ -523,3 +523,15 @@ func TestTurnRetryStatusIsClearedAfterTheWait(t *testing.T) {
 		t.Fatalf("last status = %q, want %q; statuses seen: %v", rec.lines[len(rec.lines)-1], retryResumeStatus, rec.lines)
 	}
 }
+
+// An error a host marked permanent is fatal at every retry layer, whatever its
+// text says: a quota refusal reads like a rate limit but no wait fixes it.
+func TestClassifyBackendErrorTreatsAPermanentErrorAsFatal(t *testing.T) {
+	err := errors.New("the model refused the request: 429 too many requests")
+	if got := classifyBackendError(err); got == errFatal {
+		t.Fatalf("setup: the plain error is already fatal (%v)", got)
+	}
+	if got := classifyBackendError(cogito.Permanent(err)); got != errFatal {
+		t.Fatalf("classifyBackendError(permanent) = %v, want fatal", got)
+	}
+}

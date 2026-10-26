@@ -46,6 +46,8 @@ type Session struct {
 	turnCancel          context.CancelFunc
 	llm                 cogito.LLM                      // guarded by modelMu
 	inputSource         func() ([]string, func(error))  // host texts for the next request; nil when unused
+	keptMu              sync.Mutex                      // guards kept
+	kept                []string                        // batches of inputSource the model saw, not yet in the history
 	modelLimitsProvider llmprovider.ModelLimitsProvider // native capability hidden by tracing wrappers; guarded by modelMu
 	clients             []*mcp.ClientSession
 	mcpClient           *mcp.Client
@@ -2476,7 +2478,7 @@ func (s *Session) SendMessageWithDelivery(text string, delivery InputDelivery, p
 	// Durable completions are attached at the actual root request handoff, not
 	// once per SendMessage: Cogito may issue several requests in a tool turn.
 	llm = withNoticeDelivery(llm, s.background)
-	llm = withInputSource(llm, s.inputSource)
+	llm = withInputSource(llm, s.inputSource, s.keepInput)
 
 	// Build cogito options from config
 	var supervisorPass uint64

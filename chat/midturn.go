@@ -217,6 +217,7 @@ func (c *turnCompactor) apply(f cogito.Fragment) (cogito.Fragment, []openai.Chat
 // never sees one copy updated without the other.
 func (s *Session) commitRun(c *turnCompactor, f cogito.Fragment, display ...openai.ChatCompletionMessage) {
 	f, tail, compacted := c.apply(f)
+	f = s.addKeptInput(f)
 	s.historyMu.Lock()
 	defer s.historyMu.Unlock()
 	s.fragment = f

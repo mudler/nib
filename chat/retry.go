@@ -165,6 +165,9 @@ func classifyBackendError(err error) backendErrorClass {
 	// strings. A truncated tool call is handled by the turn itself (see
 	// truncationCause): repeating the same request truncates it the same way.
 	switch {
+	case cogito.IsPermanent(err):
+		// The host knows no retry fixes this, whatever the text says.
+		return errFatal
 	case errors.Is(err, cogito.ErrToolArgumentsTruncated):
 		return errFatal
 	case errors.Is(err, cogito.ErrStreamInterrupted):
