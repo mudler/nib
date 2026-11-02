@@ -38,7 +38,7 @@ require (
 	github.com/msuozzo/bonsai/bonsai-tsx v0.4.0
 	github.com/msuozzo/bonsai/bonsai-typescript v0.4.0
 	github.com/msuozzo/bonsai/bonsai-yaml v0.4.0
-	github.com/mudler/cogito v0.11.1-0.20261026081256-13801ad68a86
+	github.com/mudler/cogito v0.11.1-0.20261102210640-d6e79113568b
 	github.com/mudler/xlog v0.0.6
 	github.com/muesli/termenv v0.16.0
 	github.com/sashabaranov/go-openai v1.41.2

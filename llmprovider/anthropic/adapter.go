@@ -296,10 +296,25 @@ func translateTools(tools []openai.Tool) []anthropicTool {
 		out = append(out, anthropicTool{
 			Name:        t.Function.Name,
 			Description: t.Function.Description,
-			InputSchema: t.Function.Parameters,
+			InputSchema: toolInputSchema(t.Function.Parameters),
 		})
 	}
 	return out
+}
+
+// toolInputSchema returns the JSON schema to send as a tool's input_schema.
+// The Messages API rejects a request when any input_schema is not an object
+// ("tools.N.custom.input_schema: Input does not match the expected shape"),
+// so a tool that declares no parameters gets an empty object schema. The
+// marshal check also catches typed nils (a nil json.RawMessage or pointer
+// stored in the interface), which a plain == nil comparison misses.
+func toolInputSchema(params any) any {
+	if params != nil {
+		if b, err := json.Marshal(params); err == nil && string(b) != "null" {
+			return params
+		}
+	}
+	return map[string]any{"type": "object", "properties": map[string]any{}}
 }
 
 func translateToolChoice(choice any) any {
