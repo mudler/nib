@@ -63,13 +63,7 @@ func (t *waitAgentsTool) Run(args map[string]any) (string, any, error) {
 	if mode != waitModeAll && mode != waitModeAnyFailedOrAll {
 		return fmt.Sprintf("Unknown mode %q: use %s or %s.", mode, waitModeAll, waitModeAnyFailedOrAll), nil, nil
 	}
-	n := 0
-	switch v := args["timeout_seconds"].(type) {
-	case float64:
-		n = int(v)
-	case int:
-		n = v
-	}
+	n := numArg(args["timeout_seconds"])
 	timeout := clampSeconds(n, waitAgentsDefaultTimeout, waitAgentsMinTimeout, waitAgentsMaxTimeout)
 	return waitAgents(t.ctx, t.src, ids, mode, timeout), nil, nil
 }
@@ -197,12 +191,7 @@ func (t *hostWaitAgentsTool) Run(args map[string]any) (string, any, error) {
 		req.IDs = v
 	}
 	req.Mode, _ = args["mode"].(string)
-	switch v := args["timeout_seconds"].(type) {
-	case float64:
-		req.Timeout = time.Duration(v) * time.Second
-	case int:
-		req.Timeout = time.Duration(v) * time.Second
-	}
+	req.Timeout = time.Duration(numArg(args["timeout_seconds"])) * time.Second
 	return t.run(t.ctx, req), nil, nil
 }
 

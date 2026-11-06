@@ -68,3 +68,19 @@ func TestHostWaitAgentsPassesTheRequestAndTheTurnContext(t *testing.T) {
 		t.Errorf("out %q ctx %v req %+v", out, gotCtx, got)
 	}
 }
+
+func TestWaitToolsReadJSONNumbers(t *testing.T) {
+	// The tool loop decodes numbers as json.Number.
+	var got WaitRequest
+	tool := &hostWaitForTool{arm: func(r WaitRequest) string { got = r; return "ok" }}
+	tool.Run(map[string]any{"url": "http://x", "then": "t", "timeout_seconds": json.Number("90"), "interval_seconds": json.Number("30"), "max_errors": json.Number("2")})
+	if got.Timeout != 90*time.Second || got.IntervalSeconds != 30 || got.MaxErrors != 2 {
+		t.Errorf("numbers lost: %+v", got)
+	}
+	var gotA WaitAgentsRequest
+	wa := &hostWaitAgentsTool{ctx: context.Background(), run: func(_ context.Context, r WaitAgentsRequest) string { gotA = r; return "" }}
+	wa.Run(map[string]any{"timeout_seconds": json.Number("20")})
+	if gotA.Timeout != 20*time.Second {
+		t.Errorf("timeout lost: %v", gotA.Timeout)
+	}
+}

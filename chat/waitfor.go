@@ -1,6 +1,7 @@
 package chat
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -37,15 +38,7 @@ func (t *waitForTool) Run(args map[string]any) (string, any, error) {
 		return "Waiting is not available in this session.", nil, nil
 	}
 	str := func(k string) string { s, _ := args[k].(string); return s }
-	num := func(k string) int {
-		switch v := args[k].(type) {
-		case float64:
-			return int(v)
-		case int:
-			return v
-		}
-		return 0
-	}
+	num := func(k string) int { return numArg(args[k]) }
 	req := WaitRequest{
 		Script:          str("script"),
 		URL:             str("url"),
@@ -135,15 +128,7 @@ type hostWaitForTool struct{ arm func(WaitRequest) string }
 
 func (t *hostWaitForTool) Run(args map[string]any) (string, any, error) {
 	str := func(k string) string { s, _ := args[k].(string); return strings.TrimSpace(s) }
-	num := func(k string) int {
-		switch v := args[k].(type) {
-		case float64:
-			return int(v)
-		case int:
-			return v
-		}
-		return 0
-	}
+	num := func(k string) int { return numArg(args[k]) }
 	req := WaitRequest{
 		Tool:            str("tool"),
 		URL:             str("url"),
@@ -175,4 +160,24 @@ func (t *hostWaitForTool) Run(args map[string]any) (string, any, error) {
 
 func hostWaitForToolDefinition(arm func(WaitRequest) string) cogito.ToolDefinitionInterface {
 	return cogito.NewToolDefinition[map[string]any](&hostWaitForTool{arm: arm}, hostWaitForSchema, "wait_for", hostWaitForDescription)
+}
+
+// numArg reads a number argument. The tool loop decodes numbers as
+// json.Number, a test or a host may pass float64 or int.
+func numArg(v any) int {
+	switch n := v.(type) {
+	case json.Number:
+		if i, err := n.Int64(); err == nil {
+			return int(i)
+		}
+		f, _ := n.Float64()
+		return int(f)
+	case float64:
+		return int(n)
+	case int:
+		return n
+	case int64:
+		return int(n)
+	}
+	return 0
 }
