@@ -224,3 +224,90 @@ func TestLongTextDoesNotPanic(t *testing.T) {
 		t.Error("promise at the end of a long text should match")
 	}
 }
+
+// A statement conditioned on the person telling or sending something waits
+// for that message, so it is not an empty promise.
+func TestUserTriggerIsNotAPromise(t *testing.T) {
+	run(t, []tcase{
+		// English
+		{"Tell me when it is finished and I will move the file.", false},
+		{"Let me know when the download ends, and I'll verify it shortly.", false},
+		{"Once you send the file, I'll check it shortly.", false},
+		{"As soon as you've shared the logs I will look at them later.", false},
+		{"I'll check when it finishes.", true},
+		{"I'll let you know when it finishes.", true},
+		{"The upload runs now. I'll check it once it is done.", true},
+		// Italian
+		{"Dimmi quando hai finito e sposto il file.", false},
+		{"Fammi sapere quando è pronto e controllo tra poco.", false},
+		{"Appena mi invii il file, controllo tra poco.", false},
+		{"Quando mi mandi i log li verifico a breve.", false},
+		{"Controllo quando il job finisce.", true},
+		{"Ti faccio sapere appena finisce.", true},
+		// Spanish
+		{"Dime cuando termine y muevo el archivo.", false},
+		{"Avísame cuando esté listo y reviso más tarde.", false},
+		{"En cuanto me envíes el archivo, lo reviso en breve.", false},
+		{"Cuando me confirmes, compruebo el resultado cuando acabe.", false},
+		{"Reviso el resultado cuando acabe.", true},
+		{"Te aviso cuando termine.", true},
+		// French
+		{"Dis-moi quand c'est fini et je déplacerai le fichier.", false},
+		{"Préviens-moi quand c'est prêt, je vérifierai plus tard.", false},
+		{"Dès que tu m'envoies le fichier, je vérifie plus tard.", false},
+		{"Une fois que vous m'aurez envoyé les logs, je regarderai tout à l'heure.", false},
+		{"Je vérifierai quand le job sera terminé.", true},
+		{"Je te tiens au courant.", true},
+		// German
+		{"Sag mir Bescheid, wenn es fertig ist, dann verschiebe ich die Datei.", false},
+		{"Gib mir Bescheid, sobald du fertig bist, ich prüfe das dann später.", false},
+		{"Sobald du mir die Datei schickst, prüfe ich das später.", false},
+		{"Wenn du mir die Logs gesendet hast, schaue ich gleich nach.", false},
+		{"Ich prüfe das, sobald der Job fertig ist.", true},
+		{"Ich gebe Bescheid, wenn es durch ist.", true},
+	})
+}
+
+// A negation cancels the promise only when it applies to the promise verb. A
+// reassurance such as "don't worry" does not.
+func TestNegationScope(t *testing.T) {
+	run(t, []tcase{
+		// English
+		{"Don't worry, I'll check later.", true},
+		{"No worries, I'll retry in a few minutes.", true},
+		{"It did not fail, I'll check back shortly.", true},
+		{"I can't do more right now, but I'll check later.", true},
+		{"I won't check later.", false},
+		{"I will not retry.", false},
+		{"I'm not going to monitor it.", false},
+		{"I can't monitor it after this turn.", false},
+		// Italian
+		{"Non preoccuparti, controllo tra poco.", true},
+		{"Non ti preoccupare, ricontrollerò più tardi.", true},
+		{"Non è ancora finito, controllo tra poco.", true},
+		{"Non controllerò tra poco.", false},
+		{"Non lo controllo più tardi.", false},
+		{"Non ti avviso quando finisce.", false},
+		// Spanish
+		{"No te preocupes, revisaré más tarde.", true},
+		{"No hay problema, reintentaré en unos minutos.", true},
+		{"Aún no termina, revisaré más tarde.", true},
+		{"No revisaré más tarde.", false},
+		{"Nunca voy a monitorear el trabajo.", false},
+		{"No te aviso cuando termine.", false},
+		// French
+		{"Ne t'inquiète pas, je vérifierai plus tard.", true},
+		{"Pas de souci, je réessaierai dans quelques minutes.", true},
+		{"Ce n'est pas fini, je vérifierai plus tard.", true},
+		{"Je ne vérifierai pas plus tard.", false},
+		{"Je ne vais pas surveiller le job.", false},
+		{"Je vérifierai pas plus tard.", false},
+		// German
+		{"Keine Sorge, ich prüfe das später.", true},
+		{"Mach dir keine Sorgen, ich schaue gleich nach.", true},
+		{"Es ist noch nicht fertig, ich prüfe das später.", true},
+		{"Ich werde es nicht später prüfen.", false},
+		{"Ich prüfe das später nicht.", false},
+		{"Ich werde den Deploy nicht beobachten.", false},
+	})
+}

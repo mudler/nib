@@ -141,8 +141,24 @@ type language struct {
 	prep func(string) string
 	// must must match the sentence for any rule to apply, or nil.
 	must *regexp.Regexp
-	// skip rejects the sentence: offers, negations, conditions on the user.
+	// opener matches a reassurance such as "don't worry". It is cut out of the
+	// sentence before any other rule, so its negation does not cancel a
+	// promise that follows it. It may be nil.
+	opener *regexp.Regexp
+	// trigger matches an action that waits for the person to tell or send
+	// something ("tell me when it is finished and I will move the file"). The
+	// person's message starts that action, so nothing is left to arm. It may be
+	// nil.
+	trigger *regexp.Regexp
+	// skip rejects the sentence: offers, conditions on the user.
 	skip *regexp.Regexp
+	// negBefore matches the end of the text before a promise verb when the
+	// negation applies to that verb ("non controllero"). negIn matches a
+	// negation inside the promise or right after it, up to the next
+	// punctuation (German "ich warte nicht"). Both may be nil. A negation
+	// elsewhere in the sentence does not cancel the promise.
+	negBefore *regexp.Regexp
+	negIn     *regexp.Regexp
 	// wait promises to wait. It does not count when the text after it says the
 	// wait is for the user (userWait).
 	wait     *regexp.Regexp
@@ -162,18 +178,53 @@ func (l *language) matches(sentence string) bool {
 	if l.must != nil && !l.must.MatchString(s) {
 		return false
 	}
+	if l.opener != nil {
+		s = l.opener.ReplaceAllString(s, " ")
+	}
+	if l.trigger != nil && l.trigger.MatchString(s) {
+		return false
+	}
 	if l.skip.MatchString(s) {
 		return false
 	}
 	for _, loc := range l.wait.FindAllStringIndex(s, -1) {
-		if !l.userWait.MatchString(s[loc[1]:]) {
+		if !l.userWait.MatchString(s[loc[1]:]) && !l.negated(s, loc) {
 			return true
 		}
 	}
-	if l.strong.MatchString(s) {
+	if l.live(l.strong, s) {
 		return true
 	}
-	return l.weak.MatchString(s) && l.time.MatchString(s)
+	return l.live(l.weak, s) && l.time.MatchString(s)
+}
+
+// live reports whether re matches s at a place where the promise verb is not
+// negated.
+func (l *language) live(re *regexp.Regexp, s string) bool {
+	for _, loc := range re.FindAllStringIndex(s, -1) {
+		if !l.negated(s, loc) {
+			return true
+		}
+	}
+	return false
+}
+
+// negated reports whether the match at loc is negated.
+func (l *language) negated(s string, loc []int) bool {
+	if l.negBefore != nil && l.negBefore.MatchString(s[:loc[0]]) {
+		return true
+	}
+	if l.negIn != nil {
+		end := loc[1]
+		if i := strings.IndexAny(s[end:], ",;.:"); i >= 0 {
+			s = s[:end+i]
+		}
+		if len(s) > end+24 {
+			s = s[:end+24]
+		}
+		return l.negIn.MatchString(s[loc[0]:])
+	}
+	return false
 }
 
 // re compiles the parts joined with "|" inside one group.

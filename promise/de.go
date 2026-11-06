@@ -10,13 +10,18 @@ import (
 var deAscii = strings.NewReplacer("ae", "a", "oe", "o", "ue", "u")
 
 var german = &language{
-	code: "de",
-	prep: func(s string) string { return deAscii.Replace(s) },
-	must: regexp.MustCompile(`\bich\b`),
-	skip: regexp.MustCompile(`\b(?:soll ich|mochtest du|mochten sie|willst du|wollen sie|ich kann|ich konnte|ich wurde|nicht|kein\w*|nie|niemals|ohne)\b` +
+	code:   "de",
+	prep:   func(s string) string { return deAscii.Replace(s) },
+	must:   regexp.MustCompile(`\bich\b`),
+	opener: regexp.MustCompile(`\b(?:mach dir |machen sie sich |macht euch )?keine (?:sorge|sorgen|angst|panik)\b|\bkein problem\b`),
+	trigger: regexp.MustCompile(`\b(?:sag|sagt|gib|gebt|schreib|schreibt)\w*\s+(?:mir|uns)\b.{0,25}?\b(?:wenn|sobald|nachdem)\b|\bmelde(?:t)? (?:dich|euch)\b|\bmelden sie sich\b` +
+		`|\b(?:sobald|wenn|nachdem)\s+(?:du|sie|ihr)\s+(?:mir\s+|uns\s+)?(?:\w+\s+){0,3}?(?:schickst|sendest|schickt|sendet|schicken|senden|gibst|sagst|schreibst|bestatigst|antwortest|hochladst|ubermittelst|zeigst|freigibst|geschickt|gesendet|gegeben|gesagt|bestatigt|geantwortet|hochgeladen|ubermittelt|bescheid gibst)\b`),
+	skip: regexp.MustCompile(`\b(?:soll ich|mochtest du|mochten sie|willst du|wollen sie|ich kann|ich konnte|ich wurde|ohne)\b` +
 		`|\bwenn (?:du|sie) (?:willst|wollen|mochtest|mochten|magst)\b|\bfalls (?:du|sie)\b|\b(?:sag|sagen sie|lass) (?:mir|es mich|mich)\b`),
-	wait:     re(`\b(?:warte|werde warten|werde abwarten|warte ab)\b`),
-	userWait: regexp.MustCompile(`^\W*(?:ab\b\W*)?(?:auf (?:deine|deinen|dein|dir|ihre|ihren|ihr|sie|euch|eure|eine|ein|die (?:antwort|bestatigung|freigabe|ruckmeldung|ruckspra)\w*)|bis (?:du|sie|ihr)\b|(?:deine|ihre) )`),
+	negBefore: regexp.MustCompile(`\b(?:nicht|nie|niemals|kein\w*)\s+(?:\w+\s+){0,2}$`),
+	negIn:     regexp.MustCompile(`\b(?:nicht|nie|niemals|kein\w*)\b`),
+	wait:      re(`\b(?:warte|werde warten|werde abwarten|warte ab)\b`),
+	userWait:  regexp.MustCompile(`^\W*(?:ab\b\W*)?(?:auf (?:deine|deinen|dein|dir|ihre|ihren|ihr|sie|euch|eure|eine|ein|die (?:antwort|bestatigung|freigabe|ruckmeldung|ruckspra)\w*)|bis (?:du|sie|ihr)\b|(?:deine|ihre) )`),
 	strong: re(
 		`\b(?:beobachte|uberwache|werde\b.{0,30}?\b(?:beobachten|uberwachen)|melde mich|werde mich melden|bleibe dran|werde dranbleiben)\b`,
 		`\b(?:halte|behalte)\b.{0,30}?\bim auge\b|\bwerde\b.{0,30}?\bim auge behalten\b`,

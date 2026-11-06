@@ -6,10 +6,14 @@ import (
 )
 
 var italian = &language{
-	code: "it",
-	prep: func(s string) string { return strings.ReplaceAll(s, "non appena", "appena") },
-	skip: regexp.MustCompile(`\b(?:vuoi|vuole|volete|posso|potrei|potrebbe|potremmo|vorrei|puoi|puo|non|mai|senza|nessun\w*|ti aspetto|ti attendo)\b` +
+	code:   "it",
+	prep:   func(s string) string { return strings.ReplaceAll(s, "non appena", "appena") },
+	opener: regexp.MustCompile(`\bnon (?:(?:ti|vi) )?preoccup\w*|\bnon c'e (?:problema|fretta)|\bnessun problema|\bnon importa\b`),
+	trigger: regexp.MustCompile(`\b(?:dimmi|dimmelo|ditemi|fammi sapere|fammelo sapere|fatemi sapere|avvisami|avvertimi|scrivimi|fammi un cenno|dammi un cenno)\b.{0,20}?\b(?:quando|appena|una volta|dopo)\b` +
+		`|\b(?:quando|appena|una volta(?: che)?|dopo che)\s+(?:tu\s+|voi\s+)?(?:mi|ci|me|ce)\s+(?:lo\s+|la\s+|li\s+|le\s+|ne\s+)?(?:avrai\s+|hai\s+|avete\s+|avrete\s+)?(?:invi\w*|mand\w*|scriv\w*|dic\w*|dai|dar\w*|dia|conferm\w*|rispond\w*|pass\w*|gir\w*|caric\w*|condivid\w*|segnal\w*|avvis\w*|fai sapere|fa\w* sapere)`),
+	skip: regexp.MustCompile(`\b(?:vuoi|vuole|volete|posso|potrei|potrebbe|potremmo|vorrei|puoi|puo|senza|ti aspetto|ti attendo)\b` +
 		`|\bse (?:vuoi|vuole|preferisci|preferite|desideri|ti serve|ti va|serve)\b|\b(?:fammi|dimmi) sapere se\b|\bdimmi se\b`),
+	negBefore: regexp.MustCompile(`\b(?:non|mai)\s+(?:(?:ti|lo|la|li|le|ci|mi|ne|vi|piu)\s+)*$`),
 	wait: re(
 		`\b(?:aspett(?:o|ero|eremo|iamo)|attend(?:o|ero|iamo)|sto aspettando|sto attendendo|rimango in attesa|resto in attesa)\b`,
 	),

@@ -13,8 +13,11 @@
 // is future, progressive or (in Italian, Spanish, French and German) present
 // with a time word, and the verb is about waiting, watching or checking back.
 // These are ignored: questions, offers ("I can check it if you want"),
-// negations, waiting for the user, quoted text, code and block quotes, and
-// past tense. Only the last few sentences of the text are read, since the
+// a negated promise verb ("I won't check"), waiting for the user, an action
+// that starts when the person tells or sends something ("tell me when it is
+// finished and I will move the file"), quoted text, code and block quotes, and
+// past tense. A negation that does not touch the promise verb, as in "don't
+// worry, I'll check later", does not cancel the promise. Only the last few sentences of the text are read, since the
 // promise that matters is the one the turn ends on.
 //
 // The package uses only the standard library and holds no state, so it is safe

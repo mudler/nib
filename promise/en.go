@@ -10,8 +10,10 @@ const enSubj = `\b(?:i|we)(?:'ll| will| shall|'m going to| am going to|'m gonna|
 var english = &language{
 	code: "en",
 	skip: regexp.MustCompile(`\b(?:if you(?:'d| would)? (?:want|like|wish|prefer|need|say)|want me to|would you like|do you want|shall i|should i|` +
-		`let me know if|i can|i could|i would|i'd|i may|i might|happy to|glad to|feel free|unless|you can|you could|you may|you might|you should|you need to)\b` +
-		`|\b(?:not|never|cannot|unable)\b|n't|\bno longer\b`),
+		`let me know if|i can |i could |i would |i'd|i may|i might|happy to|glad to|feel free|unless|you can|you could|you may|you might|you should|you need to)\b`),
+	opener: regexp.MustCompile(`\b(?:do not|don't|dont|no need to|not to) worry\b|\bno worries\b|\bno problem\b|\bdon't you worry\b`),
+	trigger: regexp.MustCompile(`\b(?:tell|let|message|ping|text|notify|warn) me(?: know)?,? (?:when|once|as soon as|after|the moment)\b` +
+		`|\b(?:when|once|as soon as|after|the moment)\s+you(?:'ve|'re| have| are)?\s+(?:\w+\s+){0,2}?(?:send|sent|tell|told|share|shared|upload\w*|paste\w*|provide\w*|give|gave|given|confirm\w*|reply|replied|respond\w*|say|said|approve\w*|answer\w*|message\w*|ping\w*|forward\w*|attach\w*|let me know)\b`),
 	wait: re(
 		enSubj+`(?:wait|hold off|sit tight)\b`,
 		`\b(?:i|we)(?:'m| am|'re| are)\s+(?:now |still |currently |also )*waiting\b`,

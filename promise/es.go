@@ -3,9 +3,13 @@ package promise
 import "regexp"
 
 var spanish = &language{
-	code: "es",
-	skip: regexp.MustCompile(`\b(?:quieres|quiere|quieren|prefieres|prefiere|puedo|podria|podre|puedes|no|nunca|sin|nadie|ningun\w*)\b` +
+	code:   "es",
+	opener: regexp.MustCompile(`\bno te preocupes\b|\bno se preocupe\b|\bno os preocupeis\b|\bno hay (?:problema|prisa)\b|\bsin problema\b|\btranquilo\b|\btranquila\b`),
+	trigger: regexp.MustCompile(`\b(?:dime|dimelo|avisame|avisenme|avisadme|hazme saber|hazmelo saber|escribeme|dame el visto bueno)\b.{0,20}?\b(?:cuando|en cuanto|apenas|una vez|tan pronto)\b` +
+		`|\b(?:cuando|en cuanto|una vez que|tan pronto como|apenas|despues de que)\s+(?:tu\s+|usted\s+)?(?:me|nos)\s+(?:lo\s+|la\s+|los\s+|las\s+)?(?:haya[sn]?\s+)?(?:envi\w*|mand\w*|escrib\w*|dig\w*|dec\w*|de[sn]?|dado|confirm\w*|respond\w*|pas\w*|compart\w*|sub\w*|cargu\w*|aprueb\w*|apruebe\w*|aviss?\w*)`),
+	skip: regexp.MustCompile(`\b(?:quieres|quiere|quieren|prefieres|prefiere|puedo|podria|podre|puedes|sin)\b` +
 		`|\bsi (?:quieres|quiere|prefieres|prefiere|lo deseas|lo desea|necesitas|necesita|deseas)\b|\bme gustaria\b|\b(?:avisame|dime) si\b`),
+	negBefore: regexp.MustCompile(`\b(?:no|nunca|jamas)\s+(?:(?:te|lo|la|los|las|le|se|me|os)\s+)*$`),
 	wait: re(
 		`\b(?:esperare|aguardare|voy a esperar|estoy esperando|espero a que|aguardo|me quedo esperando)\b`,
 	),
