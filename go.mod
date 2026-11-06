@@ -38,7 +38,7 @@ require (
 	github.com/msuozzo/bonsai/bonsai-tsx v0.4.0
 	github.com/msuozzo/bonsai/bonsai-typescript v0.4.0
 	github.com/msuozzo/bonsai/bonsai-yaml v0.4.0
-	github.com/mudler/cogito v0.11.1-0.20261102210640-d6e79113568b
+	github.com/mudler/cogito v0.11.1-0.20261106211749-0fc4e5761794
 	github.com/mudler/xlog v0.0.6
 	github.com/muesli/termenv v0.16.0
 	github.com/sashabaranov/go-openai v1.41.2
@@ -84,7 +84,6 @@ require (
 	github.com/shopspring/decimal v1.4.0 // indirect
 	github.com/spf13/cast v1.7.0 // indirect
 	github.com/tetratelabs/wazero v1.7.3 // indirect
-	github.com/tmc/langchaingo v0.1.13 // indirect
 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
 	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
 	github.com/yuin/goldmark v1.7.13 // indirect

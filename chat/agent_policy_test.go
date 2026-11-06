@@ -103,30 +103,32 @@ func (p *policyCallLLM) CreateChatCompletion(ctx context.Context, req openai.Cha
 	return cogito.LLMReply{ChatCompletionResponse: openai.ChatCompletionResponse{Choices: []openai.ChatCompletionChoice{{Message: msg, FinishReason: openai.FinishReasonStop}}}}, cogito.LLMUsage{}, nil
 }
 
-func TestAgentToolPolicyDeniedInheritedSend(t *testing.T) {
+// A host tool that shares a name with a Cogito agent tool is never dropped by
+// the agent-tool policy, and the model sees one tool of that name: the host's.
+func TestAgentToolPolicyHostToolKeepsItsName(t *testing.T) {
 	for _, allow := range []map[string]bool{{"spawn_agent": true}, {"check_agent": true, "get_agent_result": true}, {"agent_logs": true}} {
 		s := newWarmTestSession(t)
 		s.toolAllow = allow
 		probe := &policyCountingTool{}
-		opts := append(s.toolOptions(context.Background(), "", ""), cogito.WithTools(cogito.NewToolDefinition(probe, struct{}{}, "send_agent_message", "inherited probe")), cogito.WithMaxRetries(1))
+		opts := append(s.toolOptions(context.Background(), "", ""), cogito.WithTools(cogito.NewToolDefinition(probe, struct{}{}, "send_agent_message", "host probe")), cogito.WithMaxRetries(1))
 		warm := &captureLLM{}
 		f := cogito.NewEmptyFragment().AddMessage("user", "send")
 		if err := cogito.Prefill(context.Background(), warm, f, opts...); err != nil {
 			t.Fatal(err)
 		}
-		if slices.Contains(toolNames(warm.lastRequest().Tools), "send_agent_message") {
-			t.Error("prefill restored excluded inherited send")
+		count := 0
+		for _, name := range toolNames(warm.lastRequest().Tools) {
+			if name == "send_agent_message" {
+				count++
+			}
+		}
+		if count != 1 {
+			t.Errorf("send_agent_message offered %d times, want 1", count)
 		}
 		llm := &policyCallLLM{name: "send_agent_message", args: `{}`}
-		_, err := cogito.ExecuteTools(llm, f, opts...)
-		if err == nil || !strings.Contains(err.Error(), "not found") {
-			t.Fatalf("expected excluded tool rejection, got %v", err)
-		}
-		if llm.calls() == 0 {
-			t.Fatal("model was not called")
-		}
-		if probe.calls != 0 {
-			t.Fatal("denied inherited send executed")
+		_, _ = cogito.ExecuteTools(llm, f, opts...)
+		if probe.calls != 1 {
+			t.Fatalf("host tool ran %d times, want 1", probe.calls)
 		}
 	}
 }
