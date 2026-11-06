@@ -60,7 +60,8 @@ func (m Model) sessionScheduleCallbacks() chat.Callbacks {
 			}
 			return fmt.Sprintf("Scheduled %s (%s) → %q", j.ID, j.Expr, j.Prompt)
 		},
-		OnWaitFor: m.armWait,
+		OnWaitFor:    m.armWait,
+		OnArmedCount: func() int { return len(m.loops.List()) },
 		OnCronList: func() string {
 			jobs := m.loops.List()
 			if len(jobs) == 0 {

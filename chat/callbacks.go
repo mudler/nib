@@ -290,6 +290,11 @@ type Callbacks struct {
 	// agent's turn, and wakes the model when the wait ends. It returns a
 	// confirmation (incl. the job id), or the reason the wait was rejected.
 	OnWaitFor func(req WaitRequest) string
+	// OnArmedCount returns how many scheduled jobs the host holds (cron jobs,
+	// monitors and waits). It is also the switch for the promise guard: when it
+	// is nil the host cannot arm a later check, so the guard stays off. See
+	// promise_guard.go.
+	OnArmedCount func() int
 	// OnCronList returns a human-readable listing of active cron jobs.
 	OnCronList func() string
 	// OnCronDelete cancels a cron job by id and returns a confirmation.

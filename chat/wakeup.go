@@ -82,6 +82,6 @@ func scheduleWakeupToolDefinition(schedule func(WakeupRequest) string, pending f
 		&scheduleWakeupTool{schedule: schedule, pending: pending},
 		scheduleWakeupArgs{},
 		"schedule_wakeup",
-		"Schedule the session to re-engage you after a delay — an in-session reminder/cron. Returns immediately. When the delay elapses you are re-invoked with your prompt, so you can come back to long-running background work instead of blocking: e.g. read a shell job's output with bash_job_output, list jobs with bash_jobs, or inspect a sub-agent with agent_logs / check_agent / get_agent_result. In a self-paced loop, set `prompt` to the task to repeat; omit this call when the loop should end.",
+		"Schedule the session to re-engage you after a delay — an in-session reminder/cron. Returns immediately. When the delay elapses you are re-invoked with your prompt, so you can come back to long-running background work instead of blocking: e.g. read a shell job's output with bash_job_output, list jobs with bash_jobs, or inspect a sub-agent with agent_logs / check_agent / get_agent_result. In a self-paced loop, set `prompt` to the task to repeat; omit this call when the loop should end. Arm this (or cron, wait_for) before you tell the person you will check later: a promise to look again, with nothing armed, is never kept.",
 	)
 }

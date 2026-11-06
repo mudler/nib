@@ -98,7 +98,8 @@ type Session struct {
 	// loop blocks on this channel; sending a message wakes it and continues the
 	// SAME run. Shell-job completions, scheduled wake-ups, and mid-run user
 	// follow-ups all flow through here. Buffered so non-blocking sends rarely drop.
-	inject chan openai.ChatCompletionMessage
+	wakeups wakeupTracker // wake-ups the model scheduled; see promise_guard.go
+	inject  chan openai.ChatCompletionMessage
 	// runLive is set while ExecuteTools is in flight (between SendMessage start
 	// and return), so Inject can tell whether there is a live run to inject into.
 	runMu   sync.Mutex
@@ -2153,6 +2154,7 @@ func (s *Session) toolOptions(turnCtx context.Context, goal, mainModel string) [
 	if s.toolEnabled("schedule_wakeup") {
 		opts = append(opts, s.withTool(scheduleWakeupToolDefinition(func(req WakeupRequest) string {
 			if s.callbacks.OnScheduleWakeup != nil {
+				s.noteWakeup(req.DelaySeconds)
 				return s.callbacks.OnScheduleWakeup(req)
 			}
 			return "Scheduling is not available in this session."
@@ -2724,6 +2726,9 @@ func (s *Session) SendMessageWithDelivery(text string, delivery InputDelivery, p
 	var err error
 	var response string
 	var barrierContinuation *cogito.Fragment
+	// Promise guard state: it speaks once per SendMessage, and never on the
+	// run that follows a goal reminder. See promise_guard.go.
+	promiseRetried, afterGoalReminder := false, false
 	for {
 		s.runMu.Lock()
 		s.goalDone = false
@@ -3142,6 +3147,7 @@ func (s *Session) SendMessageWithDelivery(text string, delivery InputDelivery, p
 			Content: response,
 		})
 
+		reviewTurn := supervisorPass != 0
 		s.runMu.Lock()
 		done := s.goalDone
 		goal := s.activeGoalLocked()
@@ -3179,6 +3185,20 @@ func (s *Session) SendMessageWithDelivery(text string, delivery InputDelivery, p
 			}
 		}
 
+		// The answer promises a later check and nothing is armed to keep the
+		// promise: tell the model once. Goal reminder and review runs are left
+		// alone; the goal loop has its own guard.
+		if !promiseRetried && !afterGoalReminder && !reviewTurn && turnCtx.Err() == nil && s.promiseUnkept(response) {
+			promiseRetried = true
+			if s.callbacks.OnStepContent != nil {
+				s.callbacks.OnStepContent(response)
+			}
+			continuation := newFragment.AddMessage("user", promiseGuardMessage)
+			barrierContinuation = &continuation
+			continue
+		}
+		afterGoalReminder = false
+
 		// Stop when there is no goal, the model declared it done, or the turn
 		// was interrupted. Interrupt also pauses the goal (user stopped it).
 		if goal == "" || done {
@@ -3193,6 +3213,7 @@ func (s *Session) SendMessageWithDelivery(text string, delivery InputDelivery, p
 		if !s.appendGoalReminder(time.Now()) {
 			break
 		}
+		afterGoalReminder = true
 		if s.callbacks.OnStatus != nil {
 			s.callbacks.OnStatus("Goal not yet met — continuing…")
 		}

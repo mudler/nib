@@ -656,6 +656,30 @@ work stops, completion notices reach the root model, and the root replies
 after observing them. Cancellation or shutdown can return an interrupted
 error before that normal terminal state.
 
+### Promise guard
+
+A model sometimes ends a turn with "I'll check on it shortly" or "I'll wait and
+move it when it finishes" while nothing is armed, so nothing ever runs. At the
+end of a turn, if the final answer makes such a promise and nothing will run
+later (no cron job, monitor or `wait_for`, no pending `schedule_wakeup`, no
+running sub-agent or background shell job, no queued input), nib sends the model
+one short host notice. It asks the model to arm the check with `cron`,
+`wait_for`, `schedule_wakeup`, `bash_background` or `spawn_agent` with
+`background=true`, or to tell the person plainly that it cannot watch it.
+
+The notice is sent once per message and never twice in a row. It is not shown as
+a message from the person. The guard is off in piped, JSON and MCP runs, where
+nothing can be armed and the run ends with the turn. It does not run on goal
+reminder or goal review turns. A sub-agent's final report goes to its parent and
+is not checked.
+
+The matcher is the standard-library package `github.com/mudler/nib/promise`
+(`Promises(text) bool`, `Find(text) (Match, bool)`). It reads English, Italian,
+Spanish, French and German. It looks for a first-person future or progressive
+statement about checking, waiting, monitoring or retrying, and ignores
+questions, offers, negations, waiting for the user, quoted text, code and past
+tense. It reads only the last four sentences.
+
 ### Goal reminder guard
 
 The guard permits ten automatic stop-gate reminders within a rolling two-minute

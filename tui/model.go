@@ -1200,6 +1200,7 @@ func (m Model) initSession() tea.Cmd {
 		callbacks.OnCronCreate = scheduled.OnCronCreate
 		callbacks.OnWaitFor = scheduled.OnWaitFor
 		callbacks.OnCronList = scheduled.OnCronList
+		callbacks.OnArmedCount = scheduled.OnArmedCount
 		callbacks.OnCronDelete = scheduled.OnCronDelete
 		callbacks.OnCronPause = scheduled.OnCronPause
 		callbacks.OnCronResume = scheduled.OnCronResume
