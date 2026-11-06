@@ -677,7 +677,8 @@ The matcher is the standard-library package `github.com/mudler/nib/promise`
 (`Promises(text) bool`, `Find(text) (Match, bool)`). It reads English, Italian,
 Spanish, French and German. It looks for a first-person future or progressive
 statement about checking, waiting, monitoring or retrying, and ignores
-questions, offers, negations, waiting for the user, quoted text, code and past
+questions, offers, a negated promise verb, waiting for the user, an action that
+starts when the person tells or sends something, quoted text, code and past
 tense. It reads only the last four sentences.
 
 ### Goal reminder guard
