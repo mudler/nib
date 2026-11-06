@@ -2,6 +2,7 @@ package watch
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -291,4 +292,115 @@ func ExampleCompare() {
 	// baseline
 	// unchanged
 	// changed
+}
+
+// roundTrip saves the waiter, encodes the state as JSON and restores it.
+func roundTrip(t *testing.T, wt *Waiter) *Waiter {
+	t.Helper()
+	b, err := json.Marshal(wt.State())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var st WaiterState
+	if err := json.Unmarshal(b, &st); err != nil {
+		t.Fatal(err)
+	}
+	r, err := RestoreWaiter(wt.Wait(), st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r
+}
+
+type stepIn struct {
+	res Result
+	at  time.Duration
+}
+
+// Run the same checks on a waiter that is never saved and on one that is saved
+// and restored before every step. The verdicts must be the same.
+func sameAsUninterrupted(t *testing.T, w Wait, steps []stepIn) []Verdict {
+	t.Helper()
+	plain := newWaiter(t, w)
+	saved := newWaiter(t, w)
+	var out []Verdict
+	for i, s := range steps {
+		saved = roundTrip(t, saved)
+		want := plain.Step(s.res, t0.Add(s.at))
+		got := saved.Step(s.res, t0.Add(s.at))
+		if got != want {
+			t.Fatalf("step %d: restored %+v, uninterrupted %+v", i, got, want)
+		}
+		if plain.State() != saved.State() {
+			t.Fatalf("step %d: state %+v, want %+v", i, saved.State(), plain.State())
+		}
+		out = append(out, got)
+		if want.Done {
+			break
+		}
+	}
+	return out
+}
+
+func TestWaiterRestoreChanged(t *testing.T) {
+	v := sameAsUninterrupted(t, Wait{Mode: UntilChange}, []stepIn{
+		{okRes("a"), time.Second}, {okRes("a"), 2 * time.Second}, {okRes("b"), 3 * time.Second}})
+	if last := v[len(v)-1]; last.Reason != ReasonChanged || !strings.Contains(last.Detail, "+b") {
+		t.Fatalf("got %+v", last)
+	}
+}
+
+func TestWaiterRestoreMatched(t *testing.T) {
+	v := sameAsUninterrupted(t, Wait{Mode: UntilMatch, Pattern: `done`}, []stepIn{
+		{okRes("running"), time.Second}, {okRes("done"), 2 * time.Second}})
+	if v[len(v)-1].Reason != ReasonMatched {
+		t.Fatalf("got %+v", v)
+	}
+}
+
+func TestWaiterRestoreErrorStreak(t *testing.T) {
+	boom := Result{Err: errors.New("boom")}
+	v := sameAsUninterrupted(t, Wait{Mode: UntilChange, MaxErrors: 3}, []stepIn{
+		{okRes("a"), time.Second}, {boom, 2 * time.Second}, {boom, 3 * time.Second},
+		{okRes("a"), 4 * time.Second}, // resets the streak
+		{boom, 5 * time.Second}, {boom, 6 * time.Second}, {boom, 7 * time.Second}})
+	if last := v[len(v)-1]; last.Reason != ReasonSourceFailing || !strings.Contains(last.Detail, "boom") {
+		t.Fatalf("got %+v", last)
+	}
+}
+
+func TestWaiterRestoreTimeout(t *testing.T) {
+	v := sameAsUninterrupted(t, Wait{Mode: UntilMatch, Pattern: "never", Timeout: 10 * time.Second}, []stepIn{
+		{okRes("x"), time.Second}, {okRes("last"), 5 * time.Second}, {okRes("last"), 11 * time.Second}})
+	if last := v[len(v)-1]; last.Reason != ReasonTimedOut || !strings.Contains(last.Detail, "last output: last") {
+		t.Fatalf("got %+v", last)
+	}
+	v = sameAsUninterrupted(t, Wait{Mode: UntilChange, Timeout: 10 * time.Second, MaxErrors: 99}, []stepIn{
+		{Result{Err: errors.New("down")}, time.Second}, {Result{Err: errors.New("down")}, 11 * time.Second}})
+	if last := v[len(v)-1]; last.Reason != ReasonTimedOut || !strings.Contains(last.Detail, "last error: down") {
+		t.Fatalf("got %+v", last)
+	}
+}
+
+func TestWaiterStateKeepsDeadlineAndChecks(t *testing.T) {
+	wt := newWaiter(t, Wait{Mode: UntilChange, Timeout: time.Hour})
+	wt.Step(okRes("a"), t0.Add(time.Second))
+	wt.Step(okRes("a"), t0.Add(2*time.Second))
+	r := roundTrip(t, wt)
+	if !r.Deadline().Equal(wt.Deadline()) || r.Checks() != 2 {
+		t.Fatalf("deadline %v checks %d", r.Deadline(), r.Checks())
+	}
+}
+
+func TestRestoreWaiterRejectsBadInput(t *testing.T) {
+	good := Wait{Source: Source{Script: "true"}, Mode: UntilChange, Timeout: time.Minute}
+	if _, err := RestoreWaiter(good, WaiterState{}); err == nil {
+		t.Error("a state with no deadline must fail")
+	}
+	if _, err := RestoreWaiter(good, WaiterState{Deadline: t0, Errors: -1}); err == nil {
+		t.Error("a negative count must fail")
+	}
+	if _, err := RestoreWaiter(Wait{Mode: UntilChange, Timeout: time.Minute}, WaiterState{Deadline: t0}); err == nil {
+		t.Error("an invalid Wait must fail")
+	}
 }

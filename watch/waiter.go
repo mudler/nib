@@ -86,7 +86,78 @@ type Waiter struct {
 	errs     int
 	lastErr  error
 	last     string
+	checks   int
 }
+
+// WaiterState is the private state of a Waiter, in a form that can be stored.
+// Take it with [Waiter.State] and give it to [RestoreWaiter] to resume a wait
+// after a restart or on another host. It does not hold the [Wait]: the caller
+// keeps that and passes it again. The JSON field names are part of the API,
+// and fields may be added but not renamed. A missing field reads as its zero
+// value.
+type WaiterState struct {
+	// BaselineHash and BaselineOutput are the snapshot that UntilChange
+	// compares with. Both are empty until the first successful check.
+	BaselineHash   string `json:"baseline_hash,omitempty"`
+	BaselineOutput string `json:"baseline_output,omitempty"`
+	// Errors is how many failed checks in a row there are.
+	Errors int `json:"errors,omitempty"`
+	// Deadline is when the wait times out.
+	Deadline time.Time `json:"deadline"`
+	// Checks is how many checks were fed to Step.
+	Checks int `json:"checks,omitempty"`
+	// LastError is the message of the last failed check in the current
+	// streak, and LastOutput the output of the last successful check. A
+	// timeout reports them.
+	LastError  string `json:"last_error,omitempty"`
+	LastOutput string `json:"last_output,omitempty"`
+}
+
+// State returns the state of the Waiter. Take it after each Step to be able to
+// resume.
+func (wt *Waiter) State() WaiterState {
+	st := WaiterState{
+		BaselineHash:   wt.base.Hash,
+		BaselineOutput: wt.base.Output,
+		Errors:         wt.errs,
+		Deadline:       wt.deadline,
+		Checks:         wt.checks,
+		LastOutput:     wt.last,
+	}
+	if wt.lastErr != nil {
+		st.LastError = wt.lastErr.Error()
+	}
+	return st
+}
+
+// RestoreWaiter rebuilds a Waiter from w and a state taken with
+// [Waiter.State]. The next Step behaves as it would have on the Waiter the
+// state came from. It fails when w is invalid, as NewWaiter does, or when the
+// state is not usable: no deadline, or a negative count.
+func RestoreWaiter(w Wait, st WaiterState) (*Waiter, error) {
+	if st.Deadline.IsZero() {
+		return nil, errors.New("state has no deadline")
+	}
+	if st.Errors < 0 || st.Checks < 0 {
+		return nil, errors.New("state has a negative count")
+	}
+	wt, err := NewWaiter(w, st.Deadline.Add(-w.Timeout))
+	if err != nil {
+		return nil, err
+	}
+	wt.deadline = st.Deadline
+	wt.base = Snapshot{Hash: st.BaselineHash, Output: st.BaselineOutput}
+	wt.errs = st.Errors
+	wt.checks = st.Checks
+	wt.last = st.LastOutput
+	if st.LastError != "" {
+		wt.lastErr = errors.New(st.LastError)
+	}
+	return wt, nil
+}
+
+// Checks is how many checks were fed to Step.
+func (wt *Waiter) Checks() int { return wt.checks }
 
 // NewWaiter validates w and starts the wait at now.
 func NewWaiter(w Wait, now time.Time) (*Waiter, error) {
@@ -127,6 +198,7 @@ func (wt *Waiter) Wait() Wait { return wt.w }
 // Step feeds the result of one check made at now. Once it returns Done, the
 // Waiter is finished: do not call Step again.
 func (wt *Waiter) Step(res Result, now time.Time) Verdict {
+	wt.checks++
 	if v, ok := wt.evaluate(res); ok {
 		return v
 	}

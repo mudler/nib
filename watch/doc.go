@@ -7,6 +7,9 @@
 // matched a pattern, or a script exited with status 0, with a deadline and a
 // limit on consecutive failures so that silence is never mistaken for success.
 //
+// A Waiter can be saved with [Waiter.State] and resumed with [RestoreWaiter],
+// so a host can survive a restart or move a wait to another node.
+//
 // The package keeps no state of its own and has no dependency on a session, a
 // UI or a scheduler. The caller owns the polling loop and the stored
 // [Snapshot], so any host can embed it.
