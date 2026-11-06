@@ -3,6 +3,7 @@ package chat
 import (
 	"context"
 	"encoding/json"
+	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 	"strings"
 	"testing"
 	"time"
@@ -82,5 +83,36 @@ func TestWaitToolsReadJSONNumbers(t *testing.T) {
 	wa.Run(map[string]any{"timeout_seconds": json.Number("20")})
 	if gotA.Timeout != 20*time.Second {
 		t.Errorf("timeout lost: %v", gotA.Timeout)
+	}
+}
+
+func TestHostTransportToolsPassTheAllowlistAndReplaceBuiltins(t *testing.T) {
+	s := newReloadTestSession(t)
+	host := connectTestMCP(t, "host", 1, 10)
+	other := connectTestMCP(t, "other", 1, 10)
+	s.hostClients = map[*sdkmcp.ClientSession]bool{host: true}
+	s.hostNames = map[string]bool{"cron": true}
+	s.toolAllow = map[string]bool{"memory": true}
+
+	// The filter is rebuilt per call, as its comment requires.
+	f := s.mcpToolFilter()
+	if !f(host, "host_0") {
+		t.Error("a host tool not in the allowlist must pass")
+	}
+	if f(other, "other_0") {
+		t.Error("a tool of another transport is still gated by the allowlist")
+	}
+	if !f(other, "memory") {
+		t.Error("the allowlist still admits what it names")
+	}
+	if s.toolEnabled("cron") {
+		t.Error("a built-in is registered although the host serves a tool of that name")
+	}
+	s.toolAllow = nil
+	if s.toolEnabled("cron") {
+		t.Error("an empty allowlist must not bring the replaced built-in back")
+	}
+	if !s.toolEnabled("tree") {
+		t.Error("an empty allowlist still enables the other built-ins")
 	}
 }

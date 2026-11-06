@@ -50,6 +50,8 @@ type Session struct {
 	kept                []string                        // batches of inputSource the model saw, not yet in the history
 	modelLimitsProvider llmprovider.ModelLimitsProvider // native capability hidden by tracing wrappers; guarded by modelMu
 	clients             []*mcp.ClientSession
+	hostClients         map[*mcp.ClientSession]bool // sessions of HostTransport
+	hostNames           map[string]bool             // tools they serve; they replace built-ins of the same name
 	mcpClient           *mcp.Client
 	cfgClients          map[string]*mcp.ClientSession // config/plugin MCP servers, by name
 	cfgServers          map[string]types.MCPServer    // desired set, for diffing
@@ -591,8 +593,11 @@ func NewSession(ctx context.Context, cfg types.Config, callbacks Callbacks, tran
 
 	client := mcp.NewClient(&mcp.Implementation{Name: "aish", Version: "v1.0.0"}, nil)
 	clients := []*mcp.ClientSession{}
+	hostClients := map[*mcp.ClientSession]bool{}
+	hostNames := map[string]bool{}
 
 	for _, transport := range transports {
+		_, isHost := transport.(hostTransport)
 		session, err := client.Connect(ctx, transport, nil)
 		if err != nil {
 			// A single MCP server that fails to start (e.g. a plugin whose
@@ -602,6 +607,12 @@ func NewSession(ctx context.Context, cfg types.Config, callbacks Callbacks, tran
 			continue
 		}
 		clients = append(clients, session)
+		if isHost {
+			hostClients[session] = true
+			for _, n := range hostToolNames(ctx, session) {
+				hostNames[n] = true
+			}
+		}
 	}
 
 	background := newBackgroundState()
@@ -612,6 +623,8 @@ func NewSession(ctx context.Context, cfg types.Config, callbacks Callbacks, tran
 		modelLimitsProvider:  limitsProvider,
 		modelGeneration:      1,
 		clients:              clients,
+		hostClients:          hostClients,
+		hostNames:            hostNames,
 		fragment:             cogito.NewEmptyFragment(),
 		messages:             []openai.ChatCompletionMessage{},
 		callbacks:            callbacks,
@@ -1816,6 +1829,9 @@ var agentToolNames = [...]string{"spawn_agent", "check_agent", "get_agent_result
 // empty BuiltinTools allowlist (the default) every tool is exposed; otherwise only the
 // named ones. Approval gating is separate (see allowedTools).
 func (s *Session) toolEnabled(name string) bool {
+	if s.hostNames[name] {
+		return false // the host serves a tool of this name: it replaces the built-in
+	}
 	return len(s.toolAllow) == 0 || s.toolAllow[name]
 }
 
@@ -1836,6 +1852,9 @@ func (s *Session) mcpToolFilter() func(*mcp.ClientSession, string) bool {
 		cfgSessions[sess] = true
 	}
 	return func(sess *mcp.ClientSession, name string) bool {
+		if s.hostClients[sess] {
+			return true
+		}
 		if cfgSessions[sess] {
 			s.provenanceMu.Lock()
 			if s.externalToolNames == nil {
