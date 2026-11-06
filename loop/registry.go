@@ -5,6 +5,8 @@ import (
 	"sort"
 	"sync"
 	"time"
+
+	"github.com/mudler/nib/watch"
 )
 
 // Job is a registered recurring (or one-shot) task. Prompt is the payload to
@@ -21,13 +23,25 @@ type Job struct {
 
 	// Monitor fields (optional): when set, the job runs a script or fetches a
 	// URL at fire time and only dispatches the agent when the output changed
-	// (its SHA-256 differs from LastOutputHash). LastOutputHash/LastOutput/
-	// LastChangedAt persist across restarts for durable jobs.
-	MonitorScript  string    `json:"monitor_script,omitempty"`
-	MonitorURL     string    `json:"monitor_url,omitempty"`
-	LastOutputHash string    `json:"last_output_hash,omitempty"`
-	LastOutput     string    `json:"last_output,omitempty"`
-	LastChangedAt  time.Time `json:"last_changed_at,omitempty"`
+	// (its SHA-256 differs from LastOutputHash). The first successful check
+	// only stores the baseline, unless MonitorNotifyFirst is set. A failed
+	// check leaves the stored state alone. LastOutputHash/LastOutput/
+	// LastChangedAt persist across restarts for durable jobs. See Observe.
+	MonitorScript      string    `json:"monitor_script,omitempty"`
+	MonitorURL         string    `json:"monitor_url,omitempty"`
+	MonitorNotifyFirst bool      `json:"monitor_notify_first,omitempty"`
+	LastOutputHash     string    `json:"last_output_hash,omitempty"`
+	LastOutput         string    `json:"last_output,omitempty"`
+	LastChangedAt      time.Time `json:"last_changed_at,omitempty"`
+	// LastError is the error of the latest failed check, cleared by the next
+	// good one. ErrorStreak counts the failed checks in a row.
+	LastError   string `json:"-"`
+	ErrorStreak int    `json:"-"`
+
+	// wait is set for a job made by AddWait. It is never persisted.
+	wait *watch.Waiter
+	// busy is true while a check is in flight (see BeginCheck).
+	busy bool
 
 	sched Schedule  `json:"-"`
 	next  time.Time `json:"-"`
@@ -38,6 +52,9 @@ type Job struct {
 type MonitorConfig struct {
 	Script string
 	URL    string
+	// NotifyFirst makes the first successful check dispatch the job too,
+	// instead of only storing the baseline.
+	NotifyFirst bool
 }
 
 // Registry is a thread-safe store of cron jobs with an injectable clock.
@@ -81,16 +98,17 @@ func (r *Registry) Add(expr, prompt string, recurring, durable bool, monitor Mon
 		return Job{}, fmt.Errorf("cron %q never fires", expr)
 	}
 	j := Job{
-		ID:            fmt.Sprintf("loop-%d", r.seq),
-		Expr:          expr,
-		Prompt:        prompt,
-		Recurring:     recurring,
-		Durable:       durable,
-		Created:       now,
-		MonitorScript: monitor.Script,
-		MonitorURL:    monitor.URL,
-		sched:         sched,
-		next:          next,
+		ID:                 fmt.Sprintf("loop-%d", r.seq),
+		Expr:               expr,
+		Prompt:             prompt,
+		Recurring:          recurring,
+		Durable:            durable,
+		Created:            now,
+		MonitorScript:      monitor.Script,
+		MonitorURL:         monitor.URL,
+		MonitorNotifyFirst: monitor.NotifyFirst,
+		sched:              sched,
+		next:               next,
 	}
 	r.jobs = append(r.jobs, j)
 	r.revision++
@@ -213,7 +231,9 @@ func (r *Registry) Due() []Job {
 		if !j.next.After(now) {
 			due = append(due, j)
 			r.revision++
-			if j.Recurring {
+			// A one-shot monitor or wait stays until it has something to
+			// report: Observe removes it then.
+			if j.Recurring || j.isCheck() {
 				if next, ok := j.sched.Next(now); ok {
 					j.next = next
 					kept = append(kept, j)

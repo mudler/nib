@@ -279,7 +279,7 @@ read your files and inspect your repo to answer you:
 
 - read-only tools: `read`, `grep`, `glob`, `tree`, `index`, `repo_map`, `lsp`, `read_image`, `read_video`, `transcribe_audio`,
   `bash_jobs`, `bash_job_output`, `agent_logs`, `check_agent`, `get_agent_result`,
-  `cron_list`
+  `wait_agents`, `cron_list`, and `wait_for` when it checks a URL or a read-only shell command
 - read-only shell commands, run through `bash` or `bash_background`: `ls`, `cat`, `head`, `tail`, `grep`, `rg`,
   `wc`, `pwd`, `stat`, `file`, `du`, `df`, `basename`, `dirname`, `echo`, `printf`,
   `whoami`, `uname`, `which`, `type`, `cut`, `column`, `nl`, `less`, `more`, plus specific
@@ -357,6 +357,16 @@ The root chooses how to wait for a sub-agent:
   activity. `get_agent_result` retrieves the final result and supports `wait=true`.
   Logs and status do not replace the result. Avoid tight polling; continue
   independent work or wait for the needed result.
+- `wait_agents` waits for several sub-agents at once. Pass `ids` (empty means every
+  running agent) and a `mode`: `all` (the default) returns when every agent is done;
+  `any_failed_or_all` also returns as soon as one fails. It blocks for at most
+  `timeout_seconds` (default 30, minimum 10, maximum 600). On timeout it returns the
+  current statuses, not an error, so the model can call it again. It reports statuses
+  only; read a result with `get_agent_result`.
+
+A sub-agent with no activity for 5 minutes, and a background shell job with no output
+and no exit for 10 minutes, each raise one notice to the model. New output re-arms the
+notice. A quiet build is normal, so the shell limit is longer.
 
 Children should return relevant paths or artifacts, checks actually run and their
 results, uncertainty, blockers, and suggested follow-ups. The root reviews that
@@ -588,6 +598,37 @@ values. Routing is unchanged.
 Loops are session-only by default. The model can also schedule jobs directly
 with the `cron`, `cron_list`, and `cron_delete` tools; `cron(durable: true)`
 persists across restarts to `.nib/loops.json`.
+
+**Monitor mode.** `cron` takes `monitor_script` (a shell command) or `monitor_url`
+(a page to fetch). Each tick nib runs the source in the background, hashes the output,
+and wakes the model only when the hash changed. The prompt then carries a unified diff
+of the change, cut to 4000 characters. Rules:
+
+- The first successful check stores the baseline and does not wake the model. Set
+  `monitor_notify_first: true` to wake it on that check too.
+- A failed check (non-zero exit, timeout, HTTP error) is an error, never a change. It
+  leaves the stored hash alone, shows once in the chat (and again every 10th failure
+  in a row), and appears in `/loop list`.
+- The new hash is stored, and saved to disk for a durable job, before the model is
+  woken. A run that fails does not repeat the same alert.
+- A slow source skips ticks instead of piling up checks.
+- A one-shot monitor (`recurring: false`) stays armed until the first change.
+
+**`wait_for`.** The model arms a wait on a command or a URL and ends its turn. nib
+checks the source on a timer, off the turn, and wakes the model when the wait ends.
+`until` is `change` (the output differs from the first check; the default), `match`
+(the output matches `pattern`, a regular expression) or `exit_zero` (a script exits
+with status 0). `then` is carried into the wake-up as the next step. Other arguments:
+`timeout_seconds` (default 600, minimum 10, maximum 43200), `interval_seconds` (default
+15, minimum 5, maximum 3600) and `max_errors` (default 3).
+
+A wait never ends in silence. The model is woken when the condition is met, when the
+source fails `max_errors` checks in a row, and when the timeout passes. A wake-up
+names the reason, and a failure or a timeout says that the condition was not met.
+An armed wait shows in `/loop list`, `cron_list` and the footer's loops count, and
+`cron_delete` cancels it. It is not saved across restarts. Approval: a URL check and a
+read-only shell command run without a prompt; any other script is approved like `bash`.
+Monitor and wait logic is in the `watch` Go package, which other programs can import.
 
 ### `/goal` — keep going until a goal is met
 
@@ -1714,6 +1755,8 @@ including all four agent tools. A nonempty list selects each name independently:
 - `check_agent` checks their status.
 - `get_agent_result` retrieves their results.
 - `send_agent_message` sends a message to a running agent or resumes a completed one.
+
+`wait_agents` is a separate built-in tool, selected by its own name in `builtin_tools`.
 
 For example, `builtin_tools: [check_agent, get_agent_result]` permits inspection
 without exposing spawn or send. Include any other built-in tools you need in the

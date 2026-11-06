@@ -13,7 +13,7 @@ func (r *Registry) Save(path string) error {
 	r.mu.Lock()
 	var durable []Job
 	for _, j := range r.jobs {
-		if j.Durable {
+		if j.Durable && j.wait == nil {
 			durable = append(durable, j)
 		}
 	}
@@ -99,7 +99,7 @@ func (r *Registry) Load(path string) (int, error) {
 	}
 	loaded := 0
 	for _, j := range stored {
-		added, err := r.Add(j.Expr, j.Prompt, j.Recurring, true, MonitorConfig{Script: j.MonitorScript, URL: j.MonitorURL})
+		added, err := r.Add(j.Expr, j.Prompt, j.Recurring, true, MonitorConfig{Script: j.MonitorScript, URL: j.MonitorURL, NotifyFirst: j.MonitorNotifyFirst})
 		if err != nil {
 			continue // drop jobs that no longer parse or can never fire
 		}

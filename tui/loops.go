@@ -161,6 +161,9 @@ func loopLine(j loop.Job) string {
 	if j.Paused {
 		paused = " (paused)"
 	}
+	if l := j.Label(); l != "" {
+		return fmt.Sprintf("%s · %s%s · %s · %q", j.ID, j.Expr, paused, l, j.Prompt)
+	}
 	return fmt.Sprintf("%s · %s%s · %q", j.ID, j.Expr, paused, j.Prompt)
 }
 

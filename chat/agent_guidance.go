@@ -40,6 +40,9 @@ Use send_agent_message with the existing ID for clarification, correction, or re
 	if s.toolEnabled("agent_logs") {
 		b += " agent_logs shows recent activity when needed."
 	}
+	if s.toolEnabled("wait_agents") {
+		b += " wait_agents blocks, for a bounded time, until several agents are done (or one fails); on timeout it returns their statuses and you can call it again."
+	}
 	b += ` Logs and status are not substitutes for the result. Avoid tight polling: continue independent work or wait for the needed result.
 Review returned evidence against acceptance criteria before integrating it. Report files/artifacts, checks and outcomes, failures, and remaining work. Distinguish child-reported checks from checks independently verified by the root. A successful spawn or completed status does not prove correctness.
 These are model-facing instructions, not behavioral or security guarantees.`

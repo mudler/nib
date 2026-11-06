@@ -136,7 +136,10 @@ type Session struct {
 	// shellJobs lets the pending-work predicate keep the run parked while a
 	// backgrounded shell command is still running (cogito only knows about
 	// sub-agents). May be nil (e.g. headless CLI without a job registry).
-	shellJobs       *wizmcp.ShellJobs
+	shellJobs *wizmcp.ShellJobs
+	// shellStallAfter is how long a background shell job may be silent before
+	// the model is told. Zero means defaultShellStallAfter.
+	shellStallAfter time.Duration
 	background      *backgroundState
 	goalSupervisor  *goalSupervisor
 	goalWake        chan struct{}
@@ -2205,6 +2208,17 @@ func (s *Session) toolOptions(turnCtx context.Context, goal, mainModel string) [
 			return "No scheduler available."
 		})))
 	}
+	if s.toolEnabled("wait_for") {
+		opts = append(opts, s.withTool(waitForToolDefinition(func(req WaitRequest) string {
+			if s.callbacks.OnWaitFor != nil {
+				return s.callbacks.OnWaitFor(req)
+			}
+			return "Waiting is not available in this session."
+		})))
+	}
+	if s.toolEnabled("wait_agents") {
+		opts = append(opts, s.withTool(waitAgentsToolDefinition(turnCtx, s.agentManager)))
+	}
 
 	// Media understanding tools, gated by the allowlist. Each delegates to a
 	// specialist client with the tool's dedicated model and scopes the path to
@@ -3708,6 +3722,7 @@ func (s *Session) ToolCount() int {
 		"ask_user", "agent_logs",
 		"schedule_wakeup",
 		"cron", "cron_list", "cron_delete", "cron_pause", "cron_resume", "cron_trigger",
+		"wait_for", "wait_agents",
 		"read_image", "transcribe_audio", "read_video",
 		"memory", "index", "repo_map", "tree", "lsp", "todo_write",
 	}

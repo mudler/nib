@@ -104,8 +104,8 @@ func TestSessionAutoCompacts(t *testing.T) {
 		AgentOptions: types.AgentOptions{Iterations: 10, MaxAttempts: 3, MaxRetries: 3},
 		Compaction: types.CompactionConfig{
 			// Budget 23000 (window less half of it). The history below is
-			// 40000 byte/4 tokens, 60000 as counted: the skew alone on it
-			// is 20000, which the old residual calibration took for a floor
+			// 38000 byte/4 tokens, 57000 as counted: the skew alone on it
+			// is 19000, which the old residual calibration took for a floor
 			// over the budget. The window has room for the first request
 			// as estimated, so it is sent: nib holds back one that does
 			// not leave the reply room.
@@ -131,7 +131,7 @@ func TestSessionAutoCompacts(t *testing.T) {
 	}
 	defer session.Close()
 
-	if _, err := session.SendMessage(strings.Repeat("earlier detail ", 40000*4/15)); err != nil {
+	if _, err := session.SendMessage(strings.Repeat("earlier detail ", 38000*4/15)); err != nil {
 		t.Fatalf("SendMessage: %v", err)
 	}
 	if _, err := session.SendMessage("hi"); err != nil {

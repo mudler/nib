@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -53,15 +54,22 @@ type lockedBuffer struct {
 	mu      sync.Mutex
 	buf     bytes.Buffer
 	dropped int // bytes discarded from the front
+
+	// onWrite, when set before the first write, is called after each write,
+	// outside mu. A job uses it to track when it last produced output.
+	onWrite func()
 }
 
 func (w *lockedBuffer) Write(p []byte) (int, error) {
 	w.mu.Lock()
-	defer w.mu.Unlock()
 	w.buf.Write(p)
 	if excess := w.buf.Len() - bgMaxOutput; excess > 0 {
 		w.buf.Next(excess)
 		w.dropped += excess
+	}
+	w.mu.Unlock()
+	if w.onWrite != nil && len(p) > 0 {
+		w.onWrite()
 	}
 	return len(p), nil // always report full consumption so the command isn't blocked
 }
@@ -128,6 +136,10 @@ type bgJob struct {
 	killed        bool // terminal result was process cancellation, not a natural exit
 	exitCode      int
 	errMsg        string
+
+	// Stall tracking, see stall.go.
+	lastActive    atomic.Int64 // unix nanoseconds of the start or the last output
+	stallNotified atomic.Bool  // the current stall was reported
 
 	// lifecycleMu serializes this job's start and terminal lifecycle callbacks.
 	// lifecycleObserver is captured when the job first becomes background work,
@@ -241,6 +253,9 @@ func (m *bgJobManager) launch(parent context.Context, script string, foreground 
 
 	ctx, cancel := context.WithCancel(parent)
 	j := &bgJob{id: id, script: script, cancel: cancel, started: time.Now(), doneCh: make(chan struct{})}
+	j.touch(j.started)
+	j.stdout.onWrite = func() { j.touch(time.Now()) }
+	j.stderr.onWrite = j.stdout.onWrite
 	if foreground {
 		j.detach = make(chan struct{}, 1)
 	}

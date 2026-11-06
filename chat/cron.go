@@ -3,12 +3,13 @@ package chat
 import "github.com/mudler/cogito"
 
 type cronArgs struct {
-	Expr      string `json:"expr" jsonschema:"5- or 6-field cron in local time: '[S] M H DoM Mon DoW' — a 6th leading field adds seconds (e.g. '*/10 * * * * *' = every 10s, '*/5 * * * *' = every 5 min, '0 9 * * 1-5' = weekdays 9am)"`
-	Prompt    string `json:"prompt" jsonschema:"the task to run at each fire — a slash command like /foo or a plain instruction"`
-	Recurring bool   `json:"recurring" jsonschema:"true = fire on every match (default); false = fire once then auto-delete"`
-	Durable   bool   `json:"durable" jsonschema:"true = persist across restarts to .nib/loops.json; false = session-only (default)"`
-	MonitorScript string `json:"monitor_script" jsonschema:"optional. A shell command whose stdout is hashed each tick; the agent runs only when the hash changes. Mutually exclusive with monitor_url."`
-	MonitorURL    string `json:"monitor_url" jsonschema:"optional. A URL whose response body is hashed each tick. Mutually exclusive with monitor_script."`
+	Expr               string `json:"expr" jsonschema:"5- or 6-field cron in local time: '[S] M H DoM Mon DoW' — a 6th leading field adds seconds (e.g. '*/10 * * * * *' = every 10s, '*/5 * * * *' = every 5 min, '0 9 * * 1-5' = weekdays 9am)"`
+	Prompt             string `json:"prompt" jsonschema:"the task to run at each fire — a slash command like /foo or a plain instruction"`
+	Recurring          bool   `json:"recurring" jsonschema:"true = fire on every match (default); false = fire once then auto-delete"`
+	Durable            bool   `json:"durable" jsonschema:"true = persist across restarts to .nib/loops.json; false = session-only (default)"`
+	MonitorScript      string `json:"monitor_script" jsonschema:"optional. A shell command whose stdout is hashed each tick; the prompt runs only when the hash changes, with a diff of the change. A failed run is an error, not a change. Mutually exclusive with monitor_url."`
+	MonitorURL         string `json:"monitor_url" jsonschema:"optional. A URL whose response body is hashed each tick; the prompt runs only when it changes. Mutually exclusive with monitor_script."`
+	MonitorNotifyFirst bool   `json:"monitor_notify_first" jsonschema:"optional. With a monitor: also run the prompt on the first successful check. Default false: the first check only records the baseline."`
 }
 
 type cronTool struct{ create func(CronRequest) string }
@@ -23,10 +24,11 @@ func (t *cronTool) Run(args map[string]any) (string, any, error) {
 	durable, _ := args["durable"].(bool)
 	monitorScript, _ := args["monitor_script"].(string)
 	monitorURL, _ := args["monitor_url"].(string)
+	notifyFirst, _ := args["monitor_notify_first"].(bool)
 	if t.create == nil {
 		return "Scheduling is not available in this session.", nil, nil
 	}
-	return t.create(CronRequest{Expr: expr, Prompt: prompt, Recurring: recurring, Durable: durable, MonitorScript: monitorScript, MonitorURL: monitorURL}), nil, nil
+	return t.create(CronRequest{Expr: expr, Prompt: prompt, Recurring: recurring, Durable: durable, MonitorScript: monitorScript, MonitorURL: monitorURL, MonitorNotifyFirst: notifyFirst}), nil, nil
 }
 
 func cronToolDefinition(create func(CronRequest) string) cogito.ToolDefinitionInterface {
@@ -34,7 +36,7 @@ func cronToolDefinition(create func(CronRequest) string) cogito.ToolDefinitionIn
 		&cronTool{create: create},
 		cronArgs{},
 		"cron",
-		"Schedule a prompt to run on a recurring cron schedule (or once). Returns a job id. Jobs fire only while the session is idle (queued otherwise). Use cron_list to see active jobs and cron_delete to cancel one. Session-only unless durable is true.",
+		"Schedule a prompt to run on a recurring cron schedule (or once). Returns a job id. Jobs fire only while the session is idle (queued otherwise). To react to a change in a command or a URL, set monitor_script or monitor_url: the prompt then runs only when the output changes. To wait once for a condition, use wait_for instead. Use cron_list to see active jobs and cron_delete to cancel one. Session-only unless durable is true.",
 	)
 }
 

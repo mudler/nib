@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -87,7 +88,42 @@ func (s *Session) notifyStaleAgents(now time.Time) {
 	}
 }
 
-// watchStaleAgents checks for stalled sub-agents until ctx is done.
+// A background shell job can stall the same way: no output and no exit. The
+// check below uses the same tick as the sub-agent one. The limit is long,
+// because a quiet build is normal; shellStallAfter on the session overrides it.
+const defaultShellStallAfter = 10 * time.Minute
+
+// notifyStalledShells tells the live run about each background shell job that
+// stalled at now, once per stall. New output from a job re-arms its notice. A
+// notice the run could not take is retried on the next check.
+func (s *Session) notifyStalledShells(now time.Time) {
+	if s.shellJobs == nil {
+		return
+	}
+	after := s.shellStallAfter
+	if after <= 0 {
+		after = defaultShellStallAfter
+	}
+	for _, j := range s.shellJobs.Stalled(now, after) {
+		msg := fmt.Sprintf("Shell job %s has printed nothing and has not exited for %s (command: %s). "+
+			"It may be stuck. Read it with bash_job_output, then decide whether to keep waiting, "+
+			"or stop it with bash_job_kill and go on without it.",
+			j.ID, j.Idle.Round(time.Second), shortCommand(j.Script))
+		if s.Inject(msg) {
+			s.shellJobs.MarkStallReported(j.ID)
+		}
+	}
+}
+
+func shortCommand(script string) string {
+	script = strings.Join(strings.Fields(script), " ")
+	if len(script) > 80 {
+		script = script[:80] + "..."
+	}
+	return script
+}
+
+// watchStaleAgents checks for stalled sub-agents and shell jobs until ctx is done.
 func (s *Session) watchStaleAgents(ctx context.Context) {
 	ticker := time.NewTicker(staleAgentCheck)
 	defer ticker.Stop()
@@ -97,6 +133,7 @@ func (s *Session) watchStaleAgents(ctx context.Context) {
 			return
 		case now := <-ticker.C:
 			s.notifyStaleAgents(now)
+			s.notifyStalledShells(now)
 		}
 	}
 }

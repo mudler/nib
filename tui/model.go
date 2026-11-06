@@ -40,6 +40,7 @@ import (
 	"github.com/mudler/nib/slash"
 	"github.com/mudler/nib/tui/render"
 	"github.com/mudler/nib/tui/termimg"
+	"github.com/mudler/nib/watch"
 )
 
 // ChatMessage represents a message in the chat history
@@ -395,7 +396,10 @@ type Model struct {
 	// state here — they ride the wake-up timer (see wakeupGen).
 	loops     *loop.Registry
 	loopsPath string // .nib/loops.json for durable jobs
-	status    string
+	// runCheck runs the source of a monitor or wait job. Nil means watch.Run;
+	// tests replace it.
+	runCheck func(context.Context, watch.Source) watch.Result
+	status   string
 	// thinkingLine is the funny one-liner shown in place of the plain
 	// "thinking" verb while the agent works. Picked at random each turn
 	// by startThinking(); empty when ui.no_funny is on.
@@ -1194,6 +1198,7 @@ func (m Model) initSession() tea.Cmd {
 		scheduled := m.scheduleCallbacks()
 		callbacks.OnScheduleWakeup = scheduled.OnScheduleWakeup
 		callbacks.OnCronCreate = scheduled.OnCronCreate
+		callbacks.OnWaitFor = scheduled.OnWaitFor
 		callbacks.OnCronList = scheduled.OnCronList
 		callbacks.OnCronDelete = scheduled.OnCronDelete
 		callbacks.OnCronPause = scheduled.OnCronPause
@@ -2223,6 +2228,14 @@ func (m Model) Update(msg tea.Msg) (nextModel tea.Model, nextCmd tea.Cmd) {
 		durableFired := false
 		for _, j := range m.loops.Due() {
 			durableFired = durableFired || j.Durable
+			if j.IsCheck() {
+				// A monitor or a wait wakes the agent only when its source
+				// says so; see applyCheck.
+				if c := m.startCheck(j.ID); c != nil {
+					cmds = append(cmds, c)
+				}
+				continue
+			}
 			if c := m.dispatchLoop(j.Prompt); c != nil {
 				cmds = append(cmds, c)
 			}
@@ -2234,6 +2247,11 @@ func (m Model) Update(msg tea.Msg) (nextModel tea.Model, nextCmd tea.Cmd) {
 		}
 		if !m.quitting {
 			cmds = append(cmds, m.loopTick())
+		}
+
+	case monitorCheckMsg:
+		if c := m.applyCheck(msg); c != nil {
+			cmds = append(cmds, c)
 		}
 
 	case wakeupScheduledMsg:

@@ -51,6 +51,8 @@ var toolFormatters = map[string]func(map[string]any) string{
 	"cron_delete":      func(a map[string]any) string { return "cancel cron " + argStr(a, "id") },
 	"cron_pause":       func(a map[string]any) string { return "pause cron " + argStr(a, "id") },
 	"cron_resume":      func(a map[string]any) string { return "resume cron " + argStr(a, "id") },
+	"wait_for":         fmtWaitFor,
+	"wait_agents":      func(map[string]any) string { return "wait for sub-agents" },
 	"cron_trigger":     func(a map[string]any) string { return "run cron " + argStr(a, "id") + " now" },
 	"spawn_agent":      func(a map[string]any) string { return "spawn " + argStr(a, "agent_type") + ": " + argStr(a, "task") },
 	"check_agent":      func(a map[string]any) string { return "check agent " + argStr(a, "agent_id") },
@@ -289,4 +291,9 @@ func stringifyArg(v any) string {
 		}
 		return string(b)
 	}
+}
+
+// fmtWaitFor summarizes a wait_for call.
+func fmtWaitFor(a map[string]any) string {
+	return "wait for " + argStrOr(a, "until", "change") + " on " + argStr(a, "script") + argStr(a, "url")
 }

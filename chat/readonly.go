@@ -1,5 +1,7 @@
 package chat
 
+import "encoding/json"
+
 // readOnlyTools are built-in tools that only observe state, regardless of
 // their arguments. Anything not listed here (write, edit, cron, spawn_agent,
 // schedule_wakeup, load_skill, ask_user, and all MCP/plugin tools) is treated
@@ -20,6 +22,7 @@ var readOnlyTools = map[string]bool{
 	"check_agent":      true,
 	"get_agent_result": true,
 	"cron_list":        true,
+	"wait_agents":      true,
 	"read_image":       true,
 	"transcribe_audio": true,
 	"read_video":       true,
@@ -32,6 +35,22 @@ var readOnlyTools = map[string]bool{
 func IsReadOnly(name, argsJSON string, cmds readOnlyCommands) bool {
 	if readOnlyTools[name] {
 		return true
+	}
+	if name == "wait_for" {
+		// A URL check is a GET. A script check runs a command, so it needs
+		// the same approval as bash unless it is a read-only command.
+		var a struct {
+			Script string `json:"script"`
+			URL    string `json:"url"`
+		}
+		if json.Unmarshal([]byte(argsJSON), &a) != nil || (a.Script == "") == (a.URL == "") {
+			return false
+		}
+		if a.URL != "" {
+			return true
+		}
+		words, ok := safeCommand(argsJSON)
+		return ok && cmds.match(words)
 	}
 	if name == "bash" || name == "bash_background" {
 		words, ok := safeCommand(argsJSON)

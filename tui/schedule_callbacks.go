@@ -51,7 +51,7 @@ func (m Model) sessionScheduleCallbacks() chat.Callbacks {
 			if m.scheduleOwner.epoch != m.scheduleEpoch {
 				return "cron rejected: session replaced"
 			}
-			j, err := m.loops.Add(req.Expr, req.Prompt, req.Recurring, req.Durable, loop.MonitorConfig{Script: req.MonitorScript, URL: req.MonitorURL})
+			j, err := m.loops.Add(req.Expr, req.Prompt, req.Recurring, req.Durable, loop.MonitorConfig{Script: req.MonitorScript, URL: req.MonitorURL, NotifyFirst: req.MonitorNotifyFirst})
 			if err != nil {
 				return "cron rejected: " + err.Error()
 			}
@@ -60,6 +60,7 @@ func (m Model) sessionScheduleCallbacks() chat.Callbacks {
 			}
 			return fmt.Sprintf("Scheduled %s (%s) → %q", j.ID, j.Expr, j.Prompt)
 		},
+		OnWaitFor: m.armWait,
 		OnCronList: func() string {
 			jobs := m.loops.List()
 			if len(jobs) == 0 {

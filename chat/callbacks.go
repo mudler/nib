@@ -168,6 +168,28 @@ type CronRequest struct {
 	Durable       bool
 	MonitorScript string
 	MonitorURL    string
+	// MonitorNotifyFirst also runs the prompt on the first successful monitor
+	// check. By default that check only records the baseline.
+	MonitorNotifyFirst bool
+}
+
+// WaitRequest is a condition the agent wants to be woken for (wait_for tool).
+// Exactly one of Script and URL is set.
+type WaitRequest struct {
+	Script string
+	URL    string
+	// Until is "change", "match" or "exit_zero". An empty value means change.
+	Until string
+	// Pattern is the regular expression of Until == "match".
+	Pattern string
+	// Then is what to tell the model to do once the wait ends.
+	Then string
+	// Timeout ends the wait. IntervalSeconds is the time between checks.
+	Timeout         time.Duration
+	IntervalSeconds int
+	// MaxErrors is how many failed checks in a row end the wait. Zero means
+	// the default.
+	MaxErrors int
 }
 
 // GoalPausedNotice reports a guard-triggered pause without replacing the final
@@ -264,6 +286,10 @@ type Callbacks struct {
 	OnScheduleWakeup func(req WakeupRequest) string
 	// OnCronCreate registers a cron job and returns a confirmation (incl. its id).
 	OnCronCreate func(req CronRequest) string
+	// OnWaitFor arms a wait: the host checks the source on a timer, off the
+	// agent's turn, and wakes the model when the wait ends. It returns a
+	// confirmation (incl. the job id), or the reason the wait was rejected.
+	OnWaitFor func(req WaitRequest) string
 	// OnCronList returns a human-readable listing of active cron jobs.
 	OnCronList func() string
 	// OnCronDelete cancels a cron job by id and returns a confirmation.
