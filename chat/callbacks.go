@@ -1,6 +1,9 @@
 package chat
 
-import "time"
+import (
+	"context"
+	"time"
+)
 
 // ToolPolicy is an optional mandatory veto. A non-nil error denies execution;
 // nil continues ordinary approval and never grants permission. Errors are not
@@ -174,22 +177,47 @@ type CronRequest struct {
 }
 
 // WaitRequest is a condition the agent wants to be woken for (wait_for tool).
-// Exactly one of Script and URL is set.
+// Exactly one of Script, URL and Tool is set. Tool, Arguments, Field, Equals
+// and Reason are set only when Callbacks.HostWaits is on.
 type WaitRequest struct {
 	Script string
 	URL    string
-	// Until is "change", "match" or "exit_zero". An empty value means change.
+	// Tool is a read-only tool of the host to poll, with Arguments.
+	Tool      string
+	Arguments map[string]any
+	// Until is "change", "match", "exit_zero" or (with HostWaits) "json_equals".
+	// An empty value means change.
 	Until string
+	// Field and Equals are the condition of Until == "json_equals": the field
+	// of the JSON output (dots for depth, numbers for list items) and the
+	// value it must equal.
+	Field  string
+	Equals any
+	// Reason is one short line about what is awaited, for the person.
+	Reason string
 	// Pattern is the regular expression of Until == "match".
 	Pattern string
 	// Then is what to tell the model to do once the wait ends.
 	Then string
-	// Timeout ends the wait. IntervalSeconds is the time between checks.
+	// Timeout ends the wait. IntervalSeconds is the time between checks. With
+	// HostWaits both are zero when the model did not set them, and the host
+	// applies its own defaults and bounds.
 	Timeout         time.Duration
 	IntervalSeconds int
 	// MaxErrors is how many failed checks in a row end the wait. Zero means
 	// the default.
 	MaxErrors int
+}
+
+// WaitAgentsRequest is a call of wait_agents when the host answers it
+// (Callbacks.OnWaitAgents).
+type WaitAgentsRequest struct {
+	// IDs are the sub-agents to wait for. Empty means all that run now.
+	IDs []string
+	// Mode is "all" or "any_failed_or_all". An empty value means all.
+	Mode string
+	// Timeout is how long to block at most. Zero when the model did not set it.
+	Timeout time.Duration
 }
 
 // GoalPausedNotice reports a guard-triggered pause without replacing the final
@@ -290,6 +318,15 @@ type Callbacks struct {
 	// agent's turn, and wakes the model when the wait ends. It returns a
 	// confirmation (incl. the job id), or the reason the wait was rejected.
 	OnWaitFor func(req WaitRequest) string
+	// HostWaits makes wait_for the tool of a host that runs its own checks:
+	// the source is a url or a read-only tool of the host (no script), until
+	// can be json_equals, and nib applies no default or bound to the times.
+	// It has no effect without OnWaitFor.
+	HostWaits bool
+	// OnWaitAgents answers wait_agents when the sub-agents are the host's, not
+	// nib's own. It blocks for at most the timeout and returns the statuses.
+	// Without it wait_agents reads nib's own sub-agents.
+	OnWaitAgents func(ctx context.Context, req WaitAgentsRequest) string
 	// OnArmedCount returns how many scheduled jobs the host holds (cron jobs,
 	// monitors and waits). It is also the switch for the promise guard: when it
 	// is nil the host cannot arm a later check, so the guard stays off. See

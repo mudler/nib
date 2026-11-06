@@ -30,14 +30,14 @@ func TestSymbolKindString(t *testing.T) {
 		kind int
 		want string
 	}{
-		{12, "Function"},  // SymbolKindFunction
-		{6, "Method"},      // SymbolKindMethod
-		{5, "Type"},        // SymbolKindClass
-		{23, "Type"},       // SymbolKindStruct
-		{11, "Type"},       // SymbolKindInterface
-		{13, "Variable"},   // SymbolKindVariable
-		{14, "Constant"},   // SymbolKindConstant
-		{0, "Symbol"},      // Unknown
+		{12, "Function"}, // SymbolKindFunction
+		{6, "Method"},    // SymbolKindMethod
+		{5, "Type"},      // SymbolKindClass
+		{23, "Type"},     // SymbolKindStruct
+		{11, "Type"},     // SymbolKindInterface
+		{13, "Variable"}, // SymbolKindVariable
+		{14, "Constant"}, // SymbolKindConstant
+		{0, "Symbol"},    // Unknown
 	}
 	for _, tc := range tests {
 		got := symbolKindString(tc.kind)

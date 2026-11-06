@@ -164,3 +164,48 @@ func waitAgentsToolDefinition(ctx context.Context, src agentSource) cogito.ToolD
 		"Block until several sub-agents are done, for at most timeout_seconds (default 30, max 600). Use it when you need the results of more than one agent before you can go on. mode=any_failed_or_all returns early when one agent fails, so you can react to it. On timeout it returns the current statuses, not an error: call it again to keep waiting. It reports statuses only; read a result with get_agent_result. If other work can go on, do that instead of waiting.",
 	)
 }
+
+var hostWaitAgentsSchema = map[string]any{
+	"type": "object",
+	"properties": map[string]any{
+		"ids":             map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Ids of the sub-agents. Omit for all that run now."},
+		"mode":            map[string]any{"type": "string", "enum": []string{waitModeAll, waitModeAnyFailedOrAll}, "description": "all (default) or any_failed_or_all."},
+		"timeout_seconds": map[string]any{"type": "integer", "description": "Longest time to block. On timeout the current statuses are returned and the sub-agents keep running."},
+	},
+}
+
+const hostWaitAgentsDescription = "Wait for background sub-agents and see how they stand. ids are the sub-agents to wait for; omit them to wait for all that run now. " +
+	"mode all returns when every one is done; any_failed_or_all returns as soon as one failed or was stopped, or when all are done. " +
+	"timeout_seconds bounds the wait: when it passes, the tool returns the current statuses and the sub-agents keep running. " +
+	"The result of a finished sub-agent also arrives as a message."
+
+type hostWaitAgentsTool struct {
+	ctx context.Context
+	run func(context.Context, WaitAgentsRequest) string
+}
+
+func (t *hostWaitAgentsTool) Run(args map[string]any) (string, any, error) {
+	var req WaitAgentsRequest
+	switch v := args["ids"].(type) {
+	case []any:
+		for _, x := range v {
+			if s, ok := x.(string); ok && s != "" {
+				req.IDs = append(req.IDs, s)
+			}
+		}
+	case []string:
+		req.IDs = v
+	}
+	req.Mode, _ = args["mode"].(string)
+	switch v := args["timeout_seconds"].(type) {
+	case float64:
+		req.Timeout = time.Duration(v) * time.Second
+	case int:
+		req.Timeout = time.Duration(v) * time.Second
+	}
+	return t.run(t.ctx, req), nil, nil
+}
+
+func hostWaitAgentsToolDefinition(ctx context.Context, run func(context.Context, WaitAgentsRequest) string) cogito.ToolDefinitionInterface {
+	return cogito.NewToolDefinition[map[string]any](&hostWaitAgentsTool{ctx: ctx, run: run}, hostWaitAgentsSchema, "wait_agents", hostWaitAgentsDescription)
+}

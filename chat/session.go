@@ -2211,15 +2211,24 @@ func (s *Session) toolOptions(turnCtx context.Context, goal, mainModel string) [
 		})))
 	}
 	if s.toolEnabled("wait_for") {
-		opts = append(opts, s.withTool(waitForToolDefinition(func(req WaitRequest) string {
+		arm := func(req WaitRequest) string {
 			if s.callbacks.OnWaitFor != nil {
 				return s.callbacks.OnWaitFor(req)
 			}
 			return "Waiting is not available in this session."
-		})))
+		}
+		if s.callbacks.HostWaits && s.callbacks.OnWaitFor != nil {
+			opts = append(opts, s.withTool(hostWaitForToolDefinition(arm)))
+		} else {
+			opts = append(opts, s.withTool(waitForToolDefinition(arm)))
+		}
 	}
 	if s.toolEnabled("wait_agents") {
-		opts = append(opts, s.withTool(waitAgentsToolDefinition(turnCtx, s.agentManager)))
+		if s.callbacks.OnWaitAgents != nil {
+			opts = append(opts, s.withTool(hostWaitAgentsToolDefinition(turnCtx, s.callbacks.OnWaitAgents)))
+		} else {
+			opts = append(opts, s.withTool(waitAgentsToolDefinition(turnCtx, s.agentManager)))
+		}
 	}
 
 	// Media understanding tools, gated by the allowlist. Each delegates to a

@@ -12,10 +12,10 @@ import (
 )
 
 type lspArgs struct {
-	Action string `json:"action" jsonschema:"one of: definition, references, symbols, hover, diagnostics, rename, code_actions, status"`
-	File   string `json:"file,omitempty" jsonschema:"path to the source file (relative to the workspace or absolute). Required for all actions except status."`
-	Line   int    `json:"line,omitempty" jsonschema:"1-indexed line number. Required for definition, references, hover, rename, and code_actions."`
-	Symbol string `json:"symbol,omitempty" jsonschema:"substring of the symbol on that line; used to resolve the column. Required for definition, references, hover, rename, and code_actions."`
+	Action  string `json:"action" jsonschema:"one of: definition, references, symbols, hover, diagnostics, rename, code_actions, status"`
+	File    string `json:"file,omitempty" jsonschema:"path to the source file (relative to the workspace or absolute). Required for all actions except status."`
+	Line    int    `json:"line,omitempty" jsonschema:"1-indexed line number. Required for definition, references, hover, rename, and code_actions."`
+	Symbol  string `json:"symbol,omitempty" jsonschema:"substring of the symbol on that line; used to resolve the column. Required for definition, references, hover, rename, and code_actions."`
 	NewName string `json:"new_name,omitempty" jsonschema:"new name for the symbol. Required for rename."`
 }
 
