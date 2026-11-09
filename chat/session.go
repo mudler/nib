@@ -2237,7 +2237,7 @@ func (s *Session) toolOptions(turnCtx context.Context, goal, mainModel string) [
 			return "Waiting is not available in this session."
 		}
 		if s.callbacks.HostWaits && s.callbacks.OnWaitFor != nil {
-			opts = append(opts, s.withTool(hostWaitForToolDefinition(arm)))
+			opts = append(opts, s.withTool(hostWaitForToolDefinition(arm, s.callbacks.HostWaitScripts)))
 		} else {
 			opts = append(opts, s.withTool(waitForToolDefinition(arm)))
 		}

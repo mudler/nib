@@ -630,6 +630,19 @@ An armed wait shows in `/loop list`, `cron_list` and the footer's loops count, a
 read-only shell command run without a prompt; any other script is approved like `bash`.
 Monitor and wait logic is in the `watch` Go package, which other programs can import.
 
+An embedding host can run `wait_for` itself (`Callbacks.HostWaits` with `OnWaitFor`).
+The source is then a host `tool`, a `url` or, when the host sets
+`Callbacks.HostWaitScripts`, a `script`: exactly one of the three. The request
+reaches `OnWaitFor` as a `chat.WaitRequest`, with `Script` and `Until` set; `until`
+can also be `json_equals`, and `exit_zero` (script only) when scripts are on. Without
+`HostWaitScripts` a script is refused. The host runs the command with its own
+executor. In the `watch` package, `Runner.Exec` takes that executor (an
+`ExecFunc` returning the output, the exit status and an error) and
+`ResultFromExec` builds a `Result` from the three values. A non-zero exit status is
+part of the observation, not a failed check: it feeds `change`, `match`,
+`json_equals` and `exit_zero`. Only a command that cannot start or does not finish
+in time is an error.
+
 ### `/goal` — keep going until a goal is met
 
 - `/goal <text>` — set a goal. nib keeps working until the model calls

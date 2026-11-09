@@ -404,3 +404,86 @@ func TestRestoreWaiterRejectsBadInput(t *testing.T) {
 		t.Error("an invalid Wait must fail")
 	}
 }
+
+func TestRunnerExecNonZeroExitIsAValue(t *testing.T) {
+	var gotScript string
+	r := Runner{Exec: func(_ context.Context, script string) (string, int, error) {
+		gotScript = script
+		return "partial\n", 3, nil
+	}}
+	res := r.Run(context.Background(), Source{Script: "check it"})
+	if res.Err != nil || res.ExitCode != 3 || res.Output != "partial\n" || res.Hash == "" {
+		t.Fatalf("got %+v", res)
+	}
+	if gotScript != "check it" {
+		t.Errorf("script %q", gotScript)
+	}
+	if res.Hash == Hash("partial\n") {
+		t.Error("the exit status is not part of the hash")
+	}
+	// Exit 0 keeps the plain output hash, like the local runner.
+	ok := ResultFromExec("partial\n", 0, nil, 0)
+	if ok.Hash != Hash("partial\n") || ok.ExitCode != 0 || ok.Err != nil {
+		t.Fatalf("got %+v", ok)
+	}
+}
+
+func TestRunnerExecErrorAndURL(t *testing.T) {
+	boom := errors.New("cannot start")
+	r := Runner{Exec: func(context.Context, string) (string, int, error) { return "ignored", 0, boom }}
+	if res := r.Run(context.Background(), Source{Script: "x"}); !errors.Is(res.Err, boom) || res.Output != "" || res.Hash != "" {
+		t.Fatalf("got %+v", res)
+	}
+	called := false
+	r = Runner{Exec: func(context.Context, string) (string, int, error) { called = true; return "", 0, nil }}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { fmt.Fprint(w, "page") }))
+	defer srv.Close()
+	if res := r.Run(context.Background(), Source{URL: srv.URL}); res.Output != "page" || called {
+		t.Fatalf("a url must not use Exec: %+v called=%v", res, called)
+	}
+	if res := r.Run(context.Background(), Source{}); res.Err == nil {
+		t.Error("an empty source must fail")
+	}
+}
+
+func TestRunnerExecTimeout(t *testing.T) {
+	r := Runner{Timeout: 20 * time.Millisecond, Exec: func(ctx context.Context, _ string) (string, int, error) {
+		<-ctx.Done()
+		return "", 0, ctx.Err()
+	}}
+	if res := r.Run(context.Background(), Source{Script: "sleep"}); res.Err == nil || !strings.Contains(res.Err.Error(), "did not finish") {
+		t.Fatalf("got %+v", res)
+	}
+}
+
+func TestExecResultsFeedCompareAndTheWaiter(t *testing.T) {
+	// A change of status alone, with the same empty output, is a change.
+	a := ResultFromExec("", 1, nil, 0)
+	b := ResultFromExec("", 0, nil, 0)
+	if out := Compare(Snapshot{Hash: a.Hash, Output: a.Output}, b, 100); out.Kind != Changed {
+		t.Fatalf("got %v", out.Kind)
+	}
+	now := time.Now()
+	wt, err := NewWaiter(Wait{Source: Source{Script: "test -f x"}, Mode: UntilExitZero, Timeout: time.Hour, MaxErrors: 2}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Non-zero statuses never count as failed checks, however many.
+	for i := 0; i < 5; i++ {
+		if v := wt.Step(ResultFromExec("no\n", 1, nil, 0), now); v.Done {
+			t.Fatalf("a non-zero exit ended the wait: %+v", v)
+		}
+	}
+	v := wt.Step(ResultFromExec("yes\n", 0, nil, 0), now)
+	if !v.Done || v.Reason != ReasonExitedZero {
+		t.Fatalf("got %+v", v)
+	}
+}
+
+func TestWaiterMatchOnNonZeroExecValue(t *testing.T) {
+	now := time.Now()
+	wt, _ := NewWaiter(Wait{Source: Source{Script: "x"}, Mode: UntilMatch, Pattern: "ready", Timeout: time.Hour}, now)
+	if v := wt.Step(ResultFromExec("ready\n", 2, nil, 0), now); !v.Done || v.Reason != ReasonMatched {
+		t.Fatalf("got %+v", v)
+	}
+}

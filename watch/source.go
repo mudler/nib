@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -92,6 +93,40 @@ type Runner struct {
 	Client *http.Client
 	// Dir is the working directory of a script. Empty means the current one.
 	Dir string
+	// Exec runs a script in place of "sh -c", for a host that has its own
+	// executor (a remote machine, a sandbox). Nil means run it locally. Dir is
+	// not used when Exec is set. A script that exits with a non-zero status is
+	// not an error here: see [ExecFunc].
+	Exec ExecFunc
+}
+
+// ExecFunc runs script and returns what it wrote to standard output and its
+// exit status. Return a non-nil err only when the script could not be run to
+// the end: it did not start, or ctx was done first. A non-zero exitCode with a
+// nil err is a plain value. It is part of the observation, so it feeds
+// [Compare] and an exit-zero [Waiter] like the output does, and it is never
+// counted as a failed check.
+type ExecFunc func(ctx context.Context, script string) (stdout string, exitCode int, err error)
+
+// ResultFromExec turns what an [ExecFunc] returned into a [Result], with the
+// output cut to max bytes (zero means [DefaultMaxOutput]). When err is set the
+// Result carries it and no output. Else the exit status is kept in ExitCode
+// and Err stays nil, whatever the status is. A non-zero status is added to the
+// Hash, so a script that prints nothing but changes its status still counts as
+// a change.
+func ResultFromExec(stdout string, exitCode int, err error, max int) Result {
+	if err != nil {
+		return Result{Err: err}
+	}
+	if max <= 0 {
+		max = DefaultMaxOutput
+	}
+	out := Cap(stdout, max)
+	h := Hash(out)
+	if exitCode != 0 {
+		h = Hash(out + "\x00exit=" + strconv.Itoa(exitCode))
+	}
+	return Result{Output: out, Hash: h, ExitCode: exitCode}
 }
 
 // Run checks src once with a zero Runner.
@@ -112,6 +147,13 @@ func (r Runner) Run(ctx context.Context, src Source) Result {
 	max := r.MaxOutput
 	if max <= 0 {
 		max = DefaultMaxOutput
+	}
+	if src.Script != "" && r.Exec != nil {
+		stdout, code, err := r.Exec(ctx, src.Script)
+		if err != nil && ctx.Err() != nil {
+			err = fmt.Errorf("script did not finish: %w", ctx.Err())
+		}
+		return ResultFromExec(stdout, code, err, max)
 	}
 	if src.Script != "" {
 		return r.runScript(ctx, src.Script, max)

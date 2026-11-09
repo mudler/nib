@@ -43,7 +43,7 @@ func TestHostWaitForRefusesBadSources(t *testing.T) {
 }
 
 func TestHostWaitSchemasAreObjectsWithTheHostFields(t *testing.T) {
-	def := hostWaitForToolDefinition(func(WaitRequest) string { return "" }).Tool()
+	def := hostWaitForToolDefinition(func(WaitRequest) string { return "" }, false).Tool()
 	b, _ := json.Marshal(def.Function.Parameters)
 	for _, want := range []string{`"tool"`, `"json_equals"`, `"field"`} {
 		if !strings.Contains(string(b), want) {
@@ -114,5 +114,67 @@ func TestHostTransportToolsPassTheAllowlistAndReplaceBuiltins(t *testing.T) {
 	}
 	if !s.toolEnabled("tree") {
 		t.Error("an empty allowlist still enables the other built-ins")
+	}
+}
+
+func TestHostWaitForWithoutScriptsKeepsTheRefusal(t *testing.T) {
+	tool := &hostWaitForTool{arm: func(WaitRequest) string { t.Fatal("armed"); return "" }}
+	out, _, _ := tool.Run(map[string]any{"script": "ls", "then": "x"})
+	if out != "wait_for cannot run a script in this session: use a tool or a url." {
+		t.Errorf("refusal changed: %q", out)
+	}
+	if out, _, _ := tool.Run(map[string]any{"url": "http://x", "until": "exit_zero", "then": "x"}); out == "" {
+		t.Error("exit_zero accepted without scripts")
+	}
+}
+
+func TestHostWaitForScriptsPassesTheScriptAndExitZero(t *testing.T) {
+	var got WaitRequest
+	tool := &hostWaitForTool{scripts: true, arm: func(r WaitRequest) string { got = r; return "armed" }}
+	out, _, _ := tool.Run(map[string]any{"script": " test -f /x ", "until": "exit_zero", "then": "go", "interval_seconds": float64(30)})
+	if out != "armed" || got.Script != "test -f /x" || got.Until != "exit_zero" || got.IntervalSeconds != 30 || got.Tool != "" || got.URL != "" {
+		t.Errorf("out %q req %+v", out, got)
+	}
+	// The other conditions work on a script too.
+	got = WaitRequest{}
+	tool.Run(map[string]any{"script": "echo", "until": "match", "pattern": "a", "then": "go"})
+	if got.Script != "echo" || got.Until != "match" || got.Pattern != "a" {
+		t.Errorf("req %+v", got)
+	}
+}
+
+func TestHostWaitForScriptsValidatesTheSource(t *testing.T) {
+	tool := &hostWaitForTool{scripts: true, arm: func(WaitRequest) string { t.Fatal("armed a bad wait"); return "" }}
+	for name, args := range map[string]map[string]any{
+		"none":                {"then": "x"},
+		"script and url":      {"script": "ls", "url": "http://x", "then": "x"},
+		"script and tool":     {"script": "ls", "tool": "t", "then": "x"},
+		"all three":           {"script": "ls", "tool": "t", "url": "http://x", "then": "x"},
+		"exit_zero on a url":  {"url": "http://x", "until": "exit_zero", "then": "x"},
+		"exit_zero on a tool": {"tool": "t", "until": "exit_zero", "then": "x"},
+		"unknown until":       {"script": "ls", "until": "never", "then": "x"},
+		"no then":             {"script": "ls"},
+	} {
+		out, _, _ := tool.Run(args)
+		if out == "" {
+			t.Errorf("%s: no refusal", name)
+		}
+	}
+	out, _, _ := tool.Run(map[string]any{"script": "ls", "url": "u", "then": "x"})
+	if !strings.Contains(out, "one of tool, url or script") {
+		t.Errorf("unclear error: %q", out)
+	}
+}
+
+func TestHostWaitForScriptSchema(t *testing.T) {
+	def := hostWaitForToolDefinition(func(WaitRequest) string { return "" }, true).Tool()
+	b, _ := json.Marshal(def.Function.Parameters)
+	for _, want := range []string{`"script"`, `"exit_zero"`, `"json_equals"`, `"tool"`} {
+		if !strings.Contains(string(b), want) {
+			t.Errorf("schema lacks %s: %s", want, b)
+		}
+	}
+	if def.Function.Name != "wait_for" {
+		t.Errorf("name %q", def.Function.Name)
 	}
 }

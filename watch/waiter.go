@@ -231,7 +231,9 @@ func (wt *Waiter) evaluate(res Result) (Verdict, bool) {
 
 	switch wt.w.Mode {
 	case UntilExitZero:
-		if res.Err == nil {
+		// A host executor reports a non-zero status as a value (Err nil,
+		// ExitCode set), the Runner as an *ExitError.
+		if res.Err == nil && res.ExitCode == 0 {
 			return Verdict{Done: true, Reason: ReasonExitedZero, Detail: "script exited with status 0" + tail(res.Output)}, true
 		}
 	case UntilMatch:

@@ -98,14 +98,26 @@ func waitForToolDefinition(arm func(WaitRequest) string) cogito.ToolDefinitionIn
 
 // hostWaitForSchema is the schema of wait_for for a host that runs its own
 // checks (Callbacks.HostWaits). It has no script and no time defaults: the
-// host knows what it allows.
-var hostWaitForSchema = map[string]any{
-	"type": "object",
-	"properties": map[string]any{
+// host knows what it allows. A host that also runs scripts
+// (Callbacks.HostWaitScripts) gets hostWaitForScriptSchema.
+var hostWaitForSchema = buildHostWaitForSchema(false)
+
+// hostWaitForScriptSchema is hostWaitForSchema with the script source and the
+// exit_zero condition.
+var hostWaitForScriptSchema = buildHostWaitForSchema(true)
+
+func buildHostWaitForSchema(scripts bool) map[string]any {
+	until := []string{"change", "match", "json_equals"}
+	untilDesc := "change (default) = the output differs from the first check; match = the output matches the regular expression in pattern; json_equals = the JSON field of the output equals the value."
+	if scripts {
+		until = append(until, "exit_zero")
+		untilDesc += " exit_zero = the script exits with status 0 (script only). A non-zero exit is not an error: it is part of the observation, and the wait goes on."
+	}
+	props := map[string]any{
 		"tool":             map[string]any{"type": "string", "description": "Name of a read-only tool of this session to poll, such as one that lists downloads."},
 		"arguments":        map[string]any{"type": "object", "description": "The fixed arguments of that tool."},
 		"url":              map[string]any{"type": "string", "description": "An http or https address to poll instead of a tool."},
-		"until":            map[string]any{"type": "string", "enum": []string{"change", "match", "json_equals"}, "description": "change (default) = the output differs from the first check; match = the output matches the regular expression in pattern; json_equals = the JSON field of the output equals the value."},
+		"until":            map[string]any{"type": "string", "enum": until, "description": untilDesc},
 		"pattern":          map[string]any{"type": "string", "description": "For match: a regular expression the output must match."},
 		"field":            map[string]any{"type": "string", "description": "For json_equals: the field of the JSON output, with dots for depth and numbers for list items, such as items.0.status."},
 		"equals":           map[string]any{"description": "For json_equals: the value the field must equal, such as \"done\"."},
@@ -114,8 +126,11 @@ var hostWaitForSchema = map[string]any{
 		"max_errors":       map[string]any{"type": "integer", "minimum": 1, "description": "End the wait after this many failed checks in a row."},
 		"then":             map[string]any{"type": "string", "description": "What you should do when the wait ends. It must make sense without the rest of this turn."},
 		"reason":           map[string]any{"type": "string", "maxLength": 300, "description": "One short line about what you wait for, which the person sees."},
-	},
-	"required": []string{"then"},
+	}
+	if scripts {
+		props["script"] = map[string]any{"type": "string", "description": "A shell command to poll instead of a tool or a url. Its standard output is the observed value, and its exit status is observed too. A command that exits with a non-zero status is not a failed check."}
+	}
+	return map[string]any{"type": "object", "properties": props, "required": []string{"then"}}
 }
 
 const hostWaitForDescription = "Wait for something to happen without spending a model call on each check: the server checks for you and wakes you once. " +
@@ -124,7 +139,18 @@ const hostWaitForDescription = "Wait for something to happen without spending a 
 	"You are woken when the condition holds, when the source fails max_errors checks in a row, or when the timeout passes; the wake-up text says plainly when the condition was NOT met. " +
 	"End your turn after you arm it. The person sees the wait and can stop it."
 
-type hostWaitForTool struct{ arm func(WaitRequest) string }
+const hostWaitForScriptDescription = "Wait for something to happen without spending a model call on each check: the server checks for you and wakes you once. " +
+	"Use it when you tell the person that you will wait until a download or a job is done, or until a page, a tool's output or a command's output changes. " +
+	"The source is one of: tool (a read-only tool of this session, with fixed arguments), url (a page) or script (a shell command). " +
+	"You are woken when the condition holds, when the source fails max_errors checks in a row, or when the timeout passes; the wake-up text says plainly when the condition was NOT met. " +
+	"End your turn after you arm it. The person sees the wait and can stop it."
+
+// hostWaitForTool is wait_for for a host that runs its own checks. scripts is
+// true when the host also runs shell commands (Callbacks.HostWaitScripts).
+type hostWaitForTool struct {
+	arm     func(WaitRequest) string
+	scripts bool
+}
 
 func (t *hostWaitForTool) Run(args map[string]any) (string, any, error) {
 	str := func(k string) string { s, _ := args[k].(string); return strings.TrimSpace(s) }
@@ -143,14 +169,42 @@ func (t *hostWaitForTool) Run(args map[string]any) (string, any, error) {
 		MaxErrors:       num("max_errors"),
 	}
 	req.Arguments, _ = args["arguments"].(map[string]any)
-	if req.Script = str("script"); req.Script != "" {
-		return "wait_for cannot run a script in this session: use a tool or a url.", nil, nil
+	req.Script = str("script")
+	if !t.scripts {
+		if req.Script != "" {
+			return "wait_for cannot run a script in this session: use a tool or a url.", nil, nil
+		}
+		if req.Tool == "" && req.URL == "" {
+			return "wait_for needs a tool or a url to check.", nil, nil
+		}
+		if req.Tool != "" && req.URL != "" {
+			return "wait_for takes a tool or a url, not both.", nil, nil
+		}
+	} else {
+		n := 0
+		for _, v := range []string{req.Tool, req.URL, req.Script} {
+			if v != "" {
+				n++
+			}
+		}
+		if n == 0 {
+			return "wait_for needs a tool, a url or a script to check.", nil, nil
+		}
+		if n > 1 {
+			return "wait_for takes one of tool, url or script, not several.", nil, nil
+		}
 	}
-	if req.Tool == "" && req.URL == "" {
-		return "wait_for needs a tool or a url to check.", nil, nil
-	}
-	if req.Tool != "" && req.URL != "" {
-		return "wait_for takes a tool or a url, not both.", nil, nil
+	switch req.Until {
+	case "", "change", "match", "json_equals":
+	case "exit_zero":
+		if !t.scripts || req.Script == "" {
+			return "until=exit_zero needs a script to check.", nil, nil
+		}
+	default:
+		if t.scripts {
+			return fmt.Sprintf("Unknown until %q: use change, match, json_equals or exit_zero.", req.Until), nil, nil
+		}
+		return fmt.Sprintf("Unknown until %q: use change, match or json_equals.", req.Until), nil, nil
 	}
 	if req.Then == "" {
 		return "wait_for needs then: say what to do when the wait ends.", nil, nil
@@ -158,7 +212,12 @@ func (t *hostWaitForTool) Run(args map[string]any) (string, any, error) {
 	return t.arm(req), nil, nil
 }
 
-func hostWaitForToolDefinition(arm func(WaitRequest) string) cogito.ToolDefinitionInterface {
+// hostWaitForToolDefinition builds wait_for for a host. scripts offers the
+// script source and the exit_zero condition.
+func hostWaitForToolDefinition(arm func(WaitRequest) string, scripts bool) cogito.ToolDefinitionInterface {
+	if scripts {
+		return cogito.NewToolDefinition[map[string]any](&hostWaitForTool{arm: arm, scripts: true}, hostWaitForScriptSchema, "wait_for", hostWaitForScriptDescription)
+	}
 	return cogito.NewToolDefinition[map[string]any](&hostWaitForTool{arm: arm}, hostWaitForSchema, "wait_for", hostWaitForDescription)
 }
 

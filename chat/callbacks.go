@@ -178,7 +178,8 @@ type CronRequest struct {
 
 // WaitRequest is a condition the agent wants to be woken for (wait_for tool).
 // Exactly one of Script, URL and Tool is set. Tool, Arguments, Field, Equals
-// and Reason are set only when Callbacks.HostWaits is on.
+// and Reason are set only when Callbacks.HostWaits is on. With HostWaits, Script
+// is set only when Callbacks.HostWaitScripts is on too.
 type WaitRequest struct {
 	Script string
 	URL    string
@@ -186,6 +187,7 @@ type WaitRequest struct {
 	Tool      string
 	Arguments map[string]any
 	// Until is "change", "match", "exit_zero" or (with HostWaits) "json_equals".
+	// With HostWaits, "exit_zero" needs HostWaitScripts and a Script.
 	// An empty value means change.
 	Until string
 	// Field and Equals are the condition of Until == "json_equals": the field
@@ -323,6 +325,12 @@ type Callbacks struct {
 	// can be json_equals, and nib applies no default or bound to the times.
 	// It has no effect without OnWaitFor.
 	HostWaits bool
+	// HostWaitScripts lets wait_for take a shell command as the source, and
+	// until=exit_zero. The host runs the command itself; nib never does for
+	// a host wait. WaitRequest.Script then reaches OnWaitFor. A command that
+	// exits with a non-zero status is an observation, not a failed check:
+	// see watch.Runner.Exec. It has no effect without HostWaits.
+	HostWaitScripts bool
 	// OnWaitAgents answers wait_agents when the sub-agents are the host's, not
 	// nib's own. It blocks for at most the timeout and returns the statuses.
 	// Without it wait_agents reads nib's own sub-agents.
