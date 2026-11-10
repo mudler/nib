@@ -7,6 +7,10 @@
 // matched a pattern, or a script exited with status 0, with a deadline and a
 // limit on consecutive failures so that silence is never mistaken for success.
 //
+// A host that runs background jobs can use a Job source: the package never
+// reads a job, the host feeds each observation as a [Result] with Exited,
+// ExitCode and Idle, and a Waiter judges UntilExit and UntilStall.
+//
 // A Waiter can be saved with [Waiter.State] and resumed with [RestoreWaiter],
 // so a host can survive a restart or move a wait to another node.
 //

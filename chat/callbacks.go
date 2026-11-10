@@ -177,17 +177,27 @@ type CronRequest struct {
 }
 
 // WaitRequest is a condition the agent wants to be woken for (wait_for tool).
-// Exactly one of Script, URL and Tool is set. Tool, Arguments, Field, Equals
-// and Reason are set only when Callbacks.HostWaits is on. With HostWaits, Script
-// is set only when Callbacks.HostWaitScripts is on too.
+// Exactly one of Script, URL, Tool and Job is set. Tool, Arguments, Field,
+// Equals and Reason are set only when Callbacks.HostWaits is on. With
+// HostWaits, Script is set only when Callbacks.HostWaitScripts is on too, and
+// Job, Idle and the Until values "exit" and "stall" only when
+// Callbacks.HostWaitJobs is on.
 type WaitRequest struct {
 	Script string
 	URL    string
+	// Job is the id of a background job the host started earlier, to watch.
+	Job string
+	// Idle is the silence of a job that ends an Until == "stall" wait. It is
+	// between one minute and one hour, and 10 minutes when the model gave
+	// none. It is zero for any other Until.
+	Idle time.Duration
 	// Tool is a read-only tool of the host to poll, with Arguments.
 	Tool      string
 	Arguments map[string]any
 	// Until is "change", "match", "exit_zero" or (with HostWaits) "json_equals".
-	// With HostWaits, "exit_zero" needs HostWaitScripts and a Script.
+	// With HostWaits, "exit_zero" needs HostWaitScripts and a Script. "exit"
+	// (the job has exited) and "stall" (the job is running but silent for
+	// Idle) need HostWaitJobs and a Job.
 	// An empty value means change.
 	Until string
 	// Field and Equals are the condition of Until == "json_equals": the field
@@ -331,6 +341,13 @@ type Callbacks struct {
 	// exits with a non-zero status is an observation, not a failed check:
 	// see watch.Runner.Exec. It has no effect without HostWaits.
 	HostWaitScripts bool
+	// HostWaitJobs lets wait_for watch a background job of the host by its
+	// id: the source job, until=exit and until=stall with idle. The host runs
+	// the jobs and the checks; WaitRequest.Job, Idle and Until reach
+	// OnWaitFor. match runs over the output the job wrote since the last
+	// check. See watch.Result.Exited and watch.UntilStall. It has no effect
+	// without HostWaits.
+	HostWaitJobs bool
 	// OnWaitAgents answers wait_agents when the sub-agents are the host's, not
 	// nib's own. It blocks for at most the timeout and returns the statuses.
 	// Without it wait_agents reads nib's own sub-agents.

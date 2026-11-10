@@ -24,21 +24,36 @@ const (
 	scriptWaitGap  = 2 * time.Second
 )
 
-// Source is what to check: exactly one of Script or URL.
+// Source is what to check: exactly one of Script, URL or Job.
 type Source struct {
 	// Script is a command run with "sh -c". Its standard output is the
 	// observed value.
 	Script string
 	// URL is fetched with GET. The response body is the observed value.
 	URL string
+	// Job is the id of a background job of the caller. The package never
+	// runs or reads a job: the caller observes it and feeds the observation
+	// as a Result (see Result.Exited and Result.Idle). Runner.Run refuses a
+	// Job source.
+	Job string
 }
 
-// Validate reports an error unless exactly one of Script and URL is set.
+// Validate reports an error unless exactly one of Script, URL and Job is set.
 func (s Source) Validate() error {
+	n := 0
+	for _, v := range []string{s.Script, s.URL, s.Job} {
+		if v != "" {
+			n++
+		}
+	}
 	switch {
+	case s.Job != "" && n > 1:
+		return errors.New("set only one of script, url and job")
+	case s.Job != "":
+		return nil
 	case s.Script != "" && s.URL != "":
 		return errors.New("set only one of script and url")
-	case s.Script == "" && s.URL == "":
+	case n == 0:
 		return errors.New("no source: set script or url")
 	}
 	return nil
@@ -46,6 +61,9 @@ func (s Source) Validate() error {
 
 // String describes the source in one short line.
 func (s Source) String() string {
+	if s.Job != "" {
+		return "job " + oneLine(s.Job, 60)
+	}
 	if s.Script != "" {
 		return "script " + oneLine(s.Script, 60)
 	}
@@ -72,6 +90,13 @@ type Result struct {
 	Hash string
 	// ExitCode is the exit status of a script that ran to the end, else 0.
 	ExitCode int
+	// Exited is set by a caller that observes a background job (Source.Job)
+	// when the job has exited. ExitCode is then its exit status. Runner never
+	// sets it.
+	Exited bool
+	// Idle is how long a job that is still running has written no output.
+	// A caller that observes a job sets it. Runner never does.
+	Idle time.Duration
 	// Err is set when the check could not be made. A script that exits with a
 	// non-zero status sets an *ExitError; Output still holds what it wrote.
 	Err error
@@ -137,6 +162,9 @@ func Run(ctx context.Context, src Source) Result { return Runner{}.Run(ctx, src)
 func (r Runner) Run(ctx context.Context, src Source) Result {
 	if err := src.Validate(); err != nil {
 		return Result{Err: err}
+	}
+	if src.Job != "" {
+		return Result{Err: errors.New("a job source is observed by the caller, not run")}
 	}
 	timeout := r.Timeout
 	if timeout <= 0 {

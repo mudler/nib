@@ -643,6 +643,17 @@ part of the observation, not a failed check: it feeds `change`, `match`,
 `json_equals` and `exit_zero`. Only a command that cannot start or does not finish
 in time is an error.
 
+A host that runs background jobs sets `Callbacks.HostWaitJobs` (with `HostWaits`).
+`wait_for` then takes a `job`, the id of a job the host started earlier, as the
+fourth source, and two more `until` values: `exit` (the job has exited; the wake-up
+carries the exit code and the output tail) and `stall` (the job is still running but
+wrote no output for `idle` seconds; 60 to 3600, default 600). `match` runs over the
+output the job wrote since the last check. `WaitRequest` carries `Job` and `Idle`.
+The host observes the job itself. In the `watch` package it feeds each observation as
+a `Result` with `Exited`, `ExitCode` and `Idle`, with `Source{Job: id}`, and a `Waiter`
+judges `UntilExit` and `UntilStall`. A job that has exited never stalls: the wait ends
+as `exited`. Without `HostWaitJobs` the schema and the refusals are unchanged.
+
 ### `/goal` — keep going until a goal is met
 
 - `/goal <text>` — set a goal. nib keeps working until the model calls

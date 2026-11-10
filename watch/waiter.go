@@ -19,6 +19,14 @@ const (
 	// UntilExitZero waits for a script to exit with status 0. It needs a
 	// Script source.
 	UntilExitZero
+	// UntilExit waits for a job to exit, with any status. It needs a Job
+	// source. The caller feeds Result.Exited and Result.ExitCode.
+	UntilExit
+	// UntilStall waits for a job that is still running to write no output
+	// for Wait.Idle. It needs a Job source and an Idle. The caller feeds
+	// Result.Idle. A job that has exited never stalls: the wait ends with
+	// ReasonExited instead.
+	UntilStall
 )
 
 func (m Mode) String() string {
@@ -29,6 +37,10 @@ func (m Mode) String() string {
 		return "match"
 	case UntilExitZero:
 		return "exit-zero"
+	case UntilExit:
+		return "exit"
+	case UntilStall:
+		return "stall"
 	}
 	return "unknown"
 }
@@ -42,6 +54,9 @@ type Wait struct {
 	Mode   Mode
 	// Pattern is a regular expression, used by UntilMatch.
 	Pattern string
+	// Idle is the silence that ends an UntilStall wait. It must be positive
+	// for UntilStall.
+	Idle time.Duration
 	// Timeout ends the wait. It must be positive.
 	Timeout time.Duration
 	// MaxErrors is how many failed checks in a row end the wait. Zero means
@@ -53,9 +68,13 @@ type Wait struct {
 type Reason string
 
 const (
-	ReasonChanged       Reason = "changed"
-	ReasonMatched       Reason = "matched"
-	ReasonExitedZero    Reason = "exited-zero"
+	ReasonChanged    Reason = "changed"
+	ReasonMatched    Reason = "matched"
+	ReasonExitedZero Reason = "exited-zero"
+	// ReasonExited means a job exited. Detail has its exit status.
+	ReasonExited Reason = "exited"
+	// ReasonStalled means a running job wrote nothing for Wait.Idle.
+	ReasonStalled       Reason = "stalled"
 	ReasonSourceFailing Reason = "source-failing"
 	ReasonTimedOut      Reason = "timed-out"
 )
@@ -63,7 +82,7 @@ const (
 // Satisfied reports whether the condition was met, as opposed to a failure or
 // a timeout.
 func (r Reason) Satisfied() bool {
-	return r == ReasonChanged || r == ReasonMatched || r == ReasonExitedZero
+	return r == ReasonChanged || r == ReasonMatched || r == ReasonExitedZero || r == ReasonExited || r == ReasonStalled
 }
 
 // Verdict is the state of a wait after a check.
@@ -183,6 +202,17 @@ func NewWaiter(w Wait, now time.Time) (*Waiter, error) {
 		if w.Source.Script == "" {
 			return nil, errors.New("exit-zero needs a script source")
 		}
+	case UntilExit:
+		if w.Source.Job == "" {
+			return nil, errors.New("exit needs a job source")
+		}
+	case UntilStall:
+		if w.Source.Job == "" {
+			return nil, errors.New("stall needs a job source")
+		}
+		if w.Idle <= 0 {
+			return nil, errors.New("stall needs a positive idle")
+		}
 	default:
 		return nil, errors.New("unknown mode")
 	}
@@ -229,7 +259,17 @@ func (wt *Waiter) evaluate(res Result) (Verdict, bool) {
 	wt.errs, wt.lastErr = 0, nil
 	wt.last = res.Output
 
+	if res.Exited && (wt.w.Mode == UntilExit || wt.w.Mode == UntilStall) {
+		return Verdict{Done: true, Reason: ReasonExited,
+			Detail: fmt.Sprintf("job exited with status %d%s", res.ExitCode, tail(res.Output))}, true
+	}
+
 	switch wt.w.Mode {
+	case UntilStall:
+		if !res.Exited && res.Idle >= wt.w.Idle {
+			return Verdict{Done: true, Reason: ReasonStalled,
+				Detail: fmt.Sprintf("job still running but wrote no output for %s%s", res.Idle.Round(time.Second), tail(res.Output))}, true
+		}
 	case UntilExitZero:
 		// A host executor reports a non-zero status as a value (Err nil,
 		// ExitCode set), the Runner as an *ExitError.
