@@ -204,6 +204,7 @@ var providerOrder = []string{
 	"vercel-ai-gateway",
 	"coreweave",
 	"abliteration",
+	"abliteratedllm",
 	"aiand",
 	"synthetic",
 	"wafer-serverless",
@@ -706,6 +707,14 @@ var registry = map[string]Definition{
 		Protocol:  ProtocolOpenAICompletions,
 		BaseURL:   "https://api.abliteration.ai/v1",
 		EnvVar:    "ABLITERATION_API_KEY",
+		LoginKind: LoginAPIKey,
+	},
+	"abliteratedllm": {
+		ID:        "abliteratedllm",
+		Name:      "AbliteratedLLM",
+		Protocol:  ProtocolOpenAICompletions,
+		BaseURL:   "https://api.abliteratedllm.dev/v1",
+		EnvVar:    "ABLITERATEDLLM_API_KEY",
 		LoginKind: LoginAPIKey,
 	},
 	"aiand": {

@@ -27,3 +27,24 @@ func TestAnthropicAPIKeyIdentity(t *testing.T) {
 		}
 	}
 }
+
+func TestAbliteratedLLMDefinition(t *testing.T) {
+	d, ok := Get("abliteratedllm")
+	if !ok {
+		t.Fatal("missing abliteratedllm provider")
+	}
+	if d.ID != "abliteratedllm" || d.Name != "AbliteratedLLM" || d.Protocol != ProtocolOpenAICompletions || d.BaseURL != "https://api.abliteratedllm.dev/v1" || d.EnvVar != "ABLITERATEDLLM_API_KEY" || d.LoginKind != LoginAPIKey {
+		t.Fatalf("incorrect definition: %+v", d)
+	}
+	for _, list := range [][]Definition{All(), Loginable()} {
+		n := 0
+		for _, def := range list {
+			if def.ID == d.ID {
+				n++
+			}
+		}
+		if n != 1 {
+			t.Fatalf("abliteratedllm listed %d times, want 1", n)
+		}
+	}
+}
