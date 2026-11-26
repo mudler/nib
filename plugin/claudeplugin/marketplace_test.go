@@ -331,3 +331,64 @@ func TestCopyTreeSymlinks(t *testing.T) {
 		}
 	}
 }
+
+func TestResolveRef(t *testing.T) {
+	ctx := context.Background()
+	repo, first := gitRepo(t, map[string]string{"a": "1"})
+	if _, err := DefaultGit(ctx, repo, "-c", "user.email=t@example.com", "-c", "user.name=t", "-c", "tag.gpgsign=false", "tag", "-a", "v1", "-m", "v1"); err != nil {
+		t.Fatal(err)
+	}
+	second := commit(t, repo, map[string]string{"a": "2"})
+	src := Source{Kind: SourceURL, URL: "file://" + repo}
+	tests := []struct {
+		ref  string
+		src  Source
+		want string
+	}{
+		{"", src, second},
+		{"main", src, second},
+		{"v1", src, first},
+		{"", Source{Kind: SourceURL, URL: src.URL, SHA: first}, first},
+		{"", Source{Kind: SourceURL, URL: src.URL, Ref: "v1"}, first},
+		{sha40, src, sha40},
+	}
+	for _, tt := range tests {
+		got, err := ResolveRef(ctx, tt.src, tt.ref, FetchOptions{})
+		if err != nil || got != tt.want {
+			t.Errorf("ResolveRef(%q, %+v) = %q, %v; want %q", tt.ref, tt.src, got, err, tt.want)
+		}
+	}
+	if _, err := ResolveRef(ctx, src, "nope", FetchOptions{}); err == nil {
+		t.Error("unknown ref")
+	}
+	if _, err := ResolveRef(ctx, Source{Kind: SourceNPM, Package: "x"}, "", FetchOptions{}); !errors.Is(err, ErrUnsupportedSource) {
+		t.Errorf("npm: %v", err)
+	}
+}
+
+func TestFetchLimits(t *testing.T) {
+	ctx := context.Background()
+	mroot := t.TempDir()
+	writeTree(t, mroot, map[string]string{
+		".claude-plugin/marketplace.json": `{"name":"m","owner":{"name":"o"},"plugins":[{"name":"p","source":"./p"}]}`,
+		"p/a.md":                          "12345", "p/b.md": "12345", "p/c.md": "12345",
+	})
+	m, err := LoadMarketplace(mroot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e, _ := m.Find("p")
+	work := t.TempDir()
+	for name, opts := range map[string]FetchOptions{"files": {MaxFiles: 2}, "bytes": {MaxBytes: 12}} {
+		dest := filepath.Join(work, name)
+		if _, err := Fetch(ctx, m, e, dest, opts); !errors.Is(err, ErrTooLarge) {
+			t.Errorf("%s: err = %v", name, err)
+		}
+		if _, err := os.Stat(dest); !os.IsNotExist(err) {
+			t.Errorf("%s: dest left behind", name)
+		}
+	}
+	if _, err := Fetch(ctx, m, e, filepath.Join(work, "ok"), FetchOptions{MaxFiles: 3, MaxBytes: 15}); err != nil {
+		t.Errorf("at the limit: %v", err)
+	}
+}

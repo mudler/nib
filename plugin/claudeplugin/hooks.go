@@ -2,6 +2,7 @@ package claudeplugin
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"os"
@@ -14,11 +15,11 @@ import (
 
 // Hook handler types.
 const (
-	HookCommand = "command"
-	HookHTTP    = "http"
-	HookMCPTool = "mcp_tool"
-	HookPrompt  = "prompt"
-	HookAgent   = "agent"
+	HookTypeCommand = "command"
+	HookTypeHTTP    = "http"
+	HookTypeMCPTool = "mcp_tool"
+	HookTypePrompt  = "prompt"
+	HookTypeAgent   = "agent"
 )
 
 // HookEvents lists the hook event names of the format. An event outside this
@@ -108,9 +109,9 @@ func (h HookHandler) TimeoutFor(event string) time.Duration {
 		return time.Duration(h.Timeout) * time.Second
 	}
 	switch h.Type {
-	case HookPrompt:
+	case HookTypePrompt:
 		return 30 * time.Second
-	case HookAgent:
+	case HookTypeAgent:
 		return 60 * time.Second
 	}
 	switch event {
@@ -177,16 +178,16 @@ type rawGroup struct {
 func (l *loader) parseHookFile(path string) []HookGroup {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		l.p.skip("hook", l.rel(path), err.Error())
+		l.p.skip(SkipReadError, "hook", l.rel(path), err.Error())
 		return nil
 	}
 	var doc hooksDoc
 	if err := json.Unmarshal(data, &doc); err != nil {
-		l.p.skip("hook", l.rel(path), "invalid JSON: "+err.Error())
+		l.p.skip(SkipInvalidJSON, "hook", l.rel(path), "invalid JSON: "+err.Error())
 		return nil
 	}
 	if len(doc.Modules) > 0 && string(doc.Modules) != "null" {
-		l.p.skip("hook", l.rel(path), "JavaScript hook modules are not supported")
+		l.p.skip(SkipUnsupportedComponent, "hook", l.rel(path), "JavaScript hook modules are not supported")
 	}
 	if len(doc.Hooks) == 0 || string(doc.Hooks) == "null" {
 		return nil
@@ -198,22 +199,22 @@ func (l *loader) parseHookFile(path string) []HookGroup {
 func (l *loader) parseHookEvents(raw json.RawMessage, source string) []HookGroup {
 	var events map[string][]json.RawMessage
 	if err := json.Unmarshal(raw, &events); err != nil {
-		l.p.skip("hook", source, "invalid hooks object: "+err.Error())
+		l.p.skip(SkipInvalidJSON, "hook", source, "invalid hooks object: "+err.Error())
 		return nil
 	}
 	var out []HookGroup
 	for _, event := range slices.Sorted(maps.Keys(events)) {
 		if !KnownHookEvent(event) {
-			l.p.skip("hook", event, source+": unknown hook event")
+			l.p.skip(SkipUnknownHookEvent, "hook", event, source+": unknown hook event")
 		}
 		for i, gr := range events[event] {
 			var g rawGroup
 			if err := json.Unmarshal(gr, &g); err != nil {
-				l.p.skip("hook", fmt.Sprintf("%s[%d]", event, i), source+": "+err.Error())
+				l.p.skip(SkipInvalidHook, "hook", fmt.Sprintf("%s[%d]", event, i), source+": "+err.Error())
 				continue
 			}
 			if g.Hooks == nil {
-				l.p.skip("hook", fmt.Sprintf("%s[%d]", event, i), source+": matcher group has no \"hooks\" list")
+				l.p.skip(SkipInvalidHook, "hook", fmt.Sprintf("%s[%d]", event, i), source+": matcher group has no \"hooks\" list")
 				continue
 			}
 			group := HookGroup{Event: event, Source: source}
@@ -223,7 +224,7 @@ func (l *loader) parseHookEvents(raw json.RawMessage, source string) []HookGroup
 			for j, hr := range g.Hooks {
 				h, err := parseHookHandler(hr)
 				if err != nil {
-					l.p.skip("hook", fmt.Sprintf("%s[%d].hooks[%d]", event, i, j), source+": "+err.Error())
+					l.p.skip(hookErrCode(err), "hook", fmt.Sprintf("%s[%d].hooks[%d]", event, i, j), source+": "+err.Error())
 					continue
 				}
 				group.Handlers = append(group.Handlers, h)
@@ -236,33 +237,42 @@ func (l *loader) parseHookEvents(raw json.RawMessage, source string) []HookGroup
 	return out
 }
 
+var errUnknownHookType = errors.New("unknown hook type")
+
+func hookErrCode(err error) SkipCode {
+	if errors.Is(err, errUnknownHookType) {
+		return SkipUnsupportedHookType
+	}
+	return SkipInvalidHook
+}
+
 func parseHookHandler(raw json.RawMessage) (HookHandler, error) {
 	var h HookHandler
 	if err := json.Unmarshal(raw, &h); err != nil {
 		return HookHandler{}, err
 	}
 	if h.Type == "" && h.Command != "" {
-		h.Type = HookCommand
+		h.Type = HookTypeCommand
 	}
 	switch h.Type {
-	case HookCommand:
+	case HookTypeCommand:
 		if strings.TrimSpace(h.Command) == "" {
 			return HookHandler{}, fmt.Errorf("command hook without command")
 		}
-	case HookHTTP:
+	case HookTypeHTTP:
 		if h.URL == "" {
 			return HookHandler{}, fmt.Errorf("http hook without url")
 		}
-	case HookMCPTool:
+	case HookTypeMCPTool:
 		if h.Server == "" || h.Tool == "" {
 			return HookHandler{}, fmt.Errorf("mcp_tool hook needs server and tool")
 		}
-	case HookPrompt, HookAgent:
+	case HookTypePrompt, HookTypeAgent:
 		if h.Prompt == "" {
 			return HookHandler{}, fmt.Errorf("%s hook without prompt", h.Type)
 		}
 	default:
-		return HookHandler{}, fmt.Errorf("unknown hook type %q", h.Type)
+		return HookHandler{}, fmt.Errorf("%w %q", errUnknownHookType, h.Type)
 	}
 	return h, nil
 }
@@ -275,7 +285,7 @@ func (l *loader) loadHooks(m *manifest) {
 	l.forEachShape("hook", m.Hooks, func(rel string) {
 		abs, err := CheckPath(l.p.Root, rel, false)
 		if err != nil {
-			l.p.skip("hook", rel, err.Error())
+			l.p.skip(SkipInvalidPath, "hook", rel, err.Error())
 			return
 		}
 		if abs == filepath.Join(l.p.Root, "hooks", "hooks.json") {
@@ -286,7 +296,17 @@ func (l *loader) loadHooks(m *manifest) {
 		groups = append(groups, l.parseHookEvents(inline, "plugin.json")...)
 	})
 	if len(l.entryHooks) > 0 {
-		entry := l.parseHookEvents(l.entryHooks, "marketplace entry")
+		var entry []HookGroup
+		l.forEachShape("hook", l.entryHooks, func(rel string) {
+			abs, err := CheckPath(l.p.Root, rel, false)
+			if err != nil {
+				l.p.skip(SkipInvalidPath, "hook", rel, err.Error())
+				return
+			}
+			entry = append(entry, l.parseHookFile(abs)...)
+		}, func(inline json.RawMessage) {
+			entry = append(entry, l.parseHookEvents(inline, "marketplace entry")...)
+		})
 		replaced := map[string]bool{}
 		for _, g := range entry {
 			replaced[g.Event] = true

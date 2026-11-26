@@ -69,7 +69,7 @@ func (l *loader) loadAgents(m *manifest) {
 	} else {
 		paths, err := pathList(raw)
 		if err != nil {
-			l.p.skip("agent", "agents", "manifest field: "+err.Error())
+			l.p.skip(SkipInvalidField, "agent", "agents", "manifest field: "+err.Error())
 		}
 		l.loadAgentPaths(paths)
 	}
@@ -80,7 +80,7 @@ func (l *loader) loadAgentPaths(paths []string) {
 	for _, rel := range paths {
 		abs, err := CheckPath(l.p.Root, rel, false)
 		if err != nil {
-			l.p.skip("agent", rel, err.Error())
+			l.p.skip(SkipInvalidPath, "agent", rel, err.Error())
 			continue
 		}
 		switch {
@@ -89,10 +89,10 @@ func (l *loader) loadAgentPaths(paths []string) {
 		case isDir(abs):
 			// The format accepts files only; read the directory anyway
 			// and say so, since real plugins do this.
-			l.p.skip("agent", rel, "agents paths must be .md files; directory read anyway")
+			l.p.skip(SkipNonstandardPath, "agent", rel, "agents paths must be .md files; directory read anyway")
 			l.loadAgentDir(abs)
 		default:
-			l.p.skip("agent", rel, "path not found or not a .md file")
+			l.p.skip(SkipNotFound, "agent", rel, "path not found or not a .md file")
 		}
 	}
 }
@@ -128,14 +128,14 @@ func (l *loader) loadAgentDir(dir string) {
 func (l *loader) loadAgentFile(path, prefix string) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		l.p.skip("agent", l.rel(path), err.Error())
+		l.p.skip(SkipReadError, "agent", l.rel(path), err.Error())
 		return
 	}
 	fmRaw, body := SplitFrontmatter(data)
 	fm, ferr := parseFrontmatter(fmRaw)
 	if ferr != nil {
 		// As in Claude Code: the agent loads with every field ignored.
-		l.p.skip("agent", l.rel(path), ferr.Error()+"; all fields ignored")
+		l.p.skip(SkipInvalidFrontmatter, "agent", l.rel(path), ferr.Error()+"; all fields ignored")
 		fm = frontmatter{}
 	}
 	name := fm.str("name")
@@ -169,7 +169,7 @@ func (l *loader) loadAgentFile(path, prefix string) {
 	for _, k := range ignoredAgentFields {
 		if fm.has(k) {
 			a.Ignored = append(a.Ignored, k)
-			l.p.skip("agent", a.QualifiedName, "plugin agents ignore the "+k+" field")
+			l.p.skip(SkipIgnoredField, "agent", a.QualifiedName, "plugin agents ignore the "+k+" field")
 		}
 	}
 	l.p.Agents = append(l.p.Agents, a)

@@ -254,7 +254,8 @@ type Marketplace struct {
 }
 
 // ParseMarketplace decodes a marketplace.json document. An invalid entry is
-// listed in Skipped and does not fail the marketplace.
+// listed in Skipped and does not fail the marketplace. It only reads data: it
+// runs no git and touches no file, so it is safe on untrusted input.
 func ParseMarketplace(data []byte) (*Marketplace, error) {
 	var doc struct {
 		Name        string            `json:"name"`
@@ -304,7 +305,7 @@ func ParseMarketplace(data []byte) (*Marketplace, error) {
 	for i, raw := range doc.Plugins {
 		var e Entry
 		if err := json.Unmarshal(raw, &e); err != nil {
-			m.Skipped = append(m.Skipped, Skipped{Component: "entry", Name: fmt.Sprintf("plugins[%d]", i), Reason: err.Error()})
+			m.Skipped = append(m.Skipped, Skipped{Code: SkipInvalidEntry, Component: "entry", Name: fmt.Sprintf("plugins[%d]", i), Reason: err.Error()})
 			continue
 		}
 		var a struct {
@@ -314,15 +315,15 @@ func ParseMarketplace(data []byte) (*Marketplace, error) {
 		e.Author = decodePerson(a.Author)
 		e.Raw = raw
 		if err := ValidateMarketplaceName(e.Name); err != nil {
-			m.Skipped = append(m.Skipped, Skipped{Component: "entry", Name: fmt.Sprintf("plugins[%d]", i), Reason: err.Error()})
+			m.Skipped = append(m.Skipped, Skipped{Code: SkipInvalidName, Component: "entry", Name: fmt.Sprintf("plugins[%d]", i), Reason: err.Error()})
 			continue
 		}
 		if err := e.Source.Validate(); err != nil {
-			m.Skipped = append(m.Skipped, Skipped{Component: "entry", Name: e.Name, Reason: err.Error()})
+			m.Skipped = append(m.Skipped, Skipped{Code: SkipInvalidSource, Component: "entry", Name: e.Name, Reason: err.Error()})
 			continue
 		}
 		if seen[e.Name] {
-			m.Skipped = append(m.Skipped, Skipped{Component: "entry", Name: e.Name, Reason: "duplicate plugin name"})
+			m.Skipped = append(m.Skipped, Skipped{Code: SkipDuplicate, Component: "entry", Name: e.Name, Reason: "duplicate plugin name"})
 			continue
 		}
 		seen[e.Name] = true
@@ -343,7 +344,9 @@ func ValidateMarketplaceName(name string) error {
 }
 
 // LoadMarketplace reads <dir>/.claude-plugin/marketplace.json and sets Root
-// to dir and SHA to the checkout's commit when dir is a git work tree.
+// to dir. When dir holds a .git entry it also runs "git rev-parse HEAD" there
+// (through DefaultGit) to set SHA. A host that must not run git reads the
+// file itself and calls ParseMarketplace.
 func LoadMarketplace(dir string) (*Marketplace, error) {
 	root, err := filepath.Abs(dir)
 	if err != nil {

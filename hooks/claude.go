@@ -1,7 +1,6 @@
 package hooks
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -143,85 +142,30 @@ func claudeInput(tool string, args any) map[string]any {
 	return out
 }
 
-// claudeOutput is the JSON a Claude-format hook may print on exit 0.
-type claudeOutput struct {
-	Continue      *bool  `json:"continue"`
-	StopReason    string `json:"stopReason"`
-	SystemMessage string `json:"systemMessage"`
-	Decision      string `json:"decision"`
-	Reason        string `json:"reason"`
-	HookSpecific  *struct {
-		PermissionDecision       string `json:"permissionDecision"`
-		PermissionDecisionReason string `json:"permissionDecisionReason"`
-		AdditionalContext        string `json:"additionalContext"`
-	} `json:"hookSpecificOutput"`
-}
-
-// runClaudeHook runs a hook with the Claude Code contract:
-//
-//   - exit 2 blocks, with stderr as the reason;
-//   - another non-zero exit, a timeout or a start failure is logged and does
-//     not block;
-//   - on exit 0, a JSON object is read for decision, permissionDecision and
-//     additionalContext; plain stdout of SessionStart and UserPromptSubmit is
-//     context.
+// runClaudeHook runs a hook with the Claude Code contract, parsed by
+// claudeplugin.ParseOutput: exit 2 blocks with stderr as the reason; another
+// non-zero exit or a timeout is logged and does not block; on exit 0 the JSON
+// output gives the decision and additionalContext, and plain stdout of
+// SessionStart and UserPromptSubmit is context.
 func runClaudeHook(ctx context.Context, h types.HookConfig, event Event, stdin []byte) Decision {
-	timeout := claudeplugin.HookHandler{Type: claudeplugin.HookCommand, Timeout: h.Timeout}.TimeoutFor(string(event))
+	timeout := claudeplugin.HookHandler{Type: claudeplugin.HookTypeCommand, Timeout: h.Timeout}.TimeoutFor(string(event))
 	stdout, stderr, err := execHook(ctx, h, stdin, timeout)
+	r := claudeplugin.HookResult{Stdout: stdout, Stderr: stderr}
 	if err != nil {
 		var exit *exec.ExitError
-		if errors.As(err, &exit) && exit.ExitCode() == 2 {
-			reason := strings.TrimSpace(string(stderr))
-			if reason == "" {
-				reason = "blocked by hook"
-			}
-			return Decision{Block: true, Reason: reason}
-		}
-		xlog.Warn("hook failed", "event", string(event), "command", h.Command, "error", err, "stderr", strings.TrimSpace(string(stderr)))
-		return Decision{}
-	}
-	text := bytes.TrimSpace(stdout)
-	if len(text) == 0 {
-		return Decision{}
-	}
-	if text[0] == '{' {
-		var o claudeOutput
-		if json.Unmarshal(text, &o) == nil {
-			return claudeDecision(event, o)
+		if errors.As(err, &exit) {
+			r.ExitCode = exit.ExitCode()
+		} else {
+			r.TimedOut = true
 		}
 	}
-	if event == EventSessionStart || event == EventUserPromptSubmit {
-		return Decision{Context: string(text)}
+	o, _ := claudeplugin.ParseOutput(string(event), r)
+	if o.Error != "" {
+		xlog.Warn("hook failed", "event", string(event), "command", h.Command, "error", o.Error)
 	}
-	return Decision{}
-}
-
-func claudeDecision(event Event, o claudeOutput) Decision {
-	d := Decision{SystemMessage: o.SystemMessage, Reason: o.Reason}
-	if hs := o.HookSpecific; hs != nil {
-		d.Context = hs.AdditionalContext
-		if hs.PermissionDecisionReason != "" {
-			d.Reason = hs.PermissionDecisionReason
-		}
-		if event == EventPreToolUse {
-			switch hs.PermissionDecision {
-			case "allow":
-				d.Approved = boolPtr(true)
-			case "deny":
-				d.Block = true
-			}
-		}
-	}
-	switch o.Decision {
-	case "block":
-		d.Block = true
-	case "approve":
-		if event == EventPreToolUse && !d.Block {
-			d.Approved = boolPtr(true)
-		}
-	}
-	if d.Block && d.Reason == "" {
-		d.Reason = "blocked by hook"
+	d := Decision{Block: o.Block, Reason: o.Reason, Context: o.AdditionalContext, SystemMessage: o.SystemMessage}
+	if event == EventPreToolUse && !o.Block && o.PermissionDecision == claudeplugin.PermissionAllow {
+		d.Approved = boolPtr(true)
 	}
 	return d
 }

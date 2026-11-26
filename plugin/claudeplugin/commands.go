@@ -55,7 +55,7 @@ func (l *loader) loadCommands(m *manifest) {
 	} else {
 		paths, err := pathList(raw)
 		if err != nil {
-			l.p.skip("command", "commands", "manifest field: "+err.Error())
+			l.p.skip(SkipInvalidField, "command", "commands", "manifest field: "+err.Error())
 		}
 		l.loadCommandPaths(paths)
 	}
@@ -66,7 +66,7 @@ func (l *loader) loadCommandPaths(paths []string) {
 	for _, rel := range paths {
 		abs, err := CheckPath(l.p.Root, rel, false)
 		if err != nil {
-			l.p.skip("command", rel, err.Error())
+			l.p.skip(SkipInvalidPath, "command", rel, err.Error())
 			continue
 		}
 		switch {
@@ -75,7 +75,7 @@ func (l *loader) loadCommandPaths(paths []string) {
 		case isFile(abs):
 			l.loadCommandFile(abs, strings.TrimSuffix(filepath.Base(abs), ".md"))
 		default:
-			l.p.skip("command", rel, "path not found")
+			l.p.skip(SkipNotFound, "command", rel, "path not found")
 		}
 	}
 }
@@ -108,7 +108,7 @@ func (l *loader) loadCommandDir(dir string, nested bool) {
 func (l *loader) loadCommandFile(path, name string) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		l.p.skip("command", l.rel(path), err.Error())
+		l.p.skip(SkipReadError, "command", l.rel(path), err.Error())
 		return
 	}
 	c := l.parseCommand(name, data, path)
@@ -119,7 +119,7 @@ func (l *loader) parseCommand(name string, data []byte, path string) Command {
 	fmRaw, body := SplitFrontmatter(data)
 	fm, ferr := parseFrontmatter(fmRaw)
 	if ferr != nil {
-		l.p.skip("command", l.rel(path), ferr.Error())
+		l.p.skip(SkipInvalidFrontmatter, "command", l.rel(path), ferr.Error())
 	}
 	c := Command{
 		Name:          name,
@@ -141,7 +141,7 @@ func (l *loader) parseCommand(name string, data []byte, path string) Command {
 func (l *loader) loadCommandMap(raw json.RawMessage) {
 	var entries map[string]commandMapEntry
 	if err := json.Unmarshal(raw, &entries); err != nil {
-		l.p.skip("command", "commands", "manifest field: "+err.Error())
+		l.p.skip(SkipInvalidField, "command", "commands", "manifest field: "+err.Error())
 		return
 	}
 	names := make([]string, 0, len(entries))
@@ -152,19 +152,19 @@ func (l *loader) loadCommandMap(raw json.RawMessage) {
 	for _, name := range names {
 		e := entries[name]
 		if (e.Source == "") == (e.Content == "") {
-			l.p.skip("command", name, "set exactly one of source and content")
+			l.p.skip(SkipInvalidField, "command", name, "set exactly one of source and content")
 			continue
 		}
 		var c Command
 		if e.Source != "" {
 			abs, err := CheckPath(l.p.Root, e.Source, false)
 			if err != nil {
-				l.p.skip("command", name, err.Error())
+				l.p.skip(SkipInvalidPath, "command", name, err.Error())
 				continue
 			}
 			data, err := os.ReadFile(abs)
 			if err != nil {
-				l.p.skip("command", name, err.Error())
+				l.p.skip(SkipReadError, "command", name, err.Error())
 				continue
 			}
 			c = l.parseCommand(name, data, abs)

@@ -52,7 +52,7 @@ func (l *loader) loadLSP(m *manifest) {
 	l.forEachShape("lsp", m.LSPServers, func(rel string) {
 		abs, err := CheckPath(l.p.Root, rel, false)
 		if err != nil {
-			l.p.skip("lsp", rel, err.Error())
+			l.p.skip(SkipInvalidPath, "lsp", rel, err.Error())
 			return
 		}
 		l.loadLSPFile(abs)
@@ -67,7 +67,7 @@ func (l *loader) loadLSP(m *manifest) {
 func (l *loader) loadLSPFile(path string) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		l.p.skip("lsp", l.rel(path), err.Error())
+		l.p.skip(SkipReadError, "lsp", l.rel(path), err.Error())
 		return
 	}
 	l.addLSP(data, l.rel(path))
@@ -76,13 +76,13 @@ func (l *loader) loadLSPFile(path string) {
 func (l *loader) addLSP(data []byte, where string) {
 	var servers map[string]json.RawMessage
 	if err := json.Unmarshal(data, &servers); err != nil {
-		l.p.skip("lsp", where, "invalid JSON: "+err.Error())
+		l.p.skip(SkipInvalidJSON, "lsp", where, "invalid JSON: "+err.Error())
 		return
 	}
 	for _, name := range slices.Sorted(maps.Keys(servers)) {
 		s, err := parseLSPServer(name, servers[name])
 		if err != nil {
-			l.p.skip("lsp", name, fmt.Sprintf("%s: %v", where, err))
+			l.p.skip(SkipInvalidLSPServer, "lsp", name, fmt.Sprintf("%s: %v", where, err))
 			continue
 		}
 		l.p.LSPServers[name] = s

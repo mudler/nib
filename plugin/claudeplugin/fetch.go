@@ -45,6 +45,30 @@ type FetchOptions struct {
 	// HTTPClient fetches a marketplace.json by URL. Nil uses
 	// http.DefaultClient.
 	HTTPClient *http.Client
+	// MaxBytes and MaxFiles cap the size of the copied plugin or
+	// marketplace (regular files only). 0 means no cap. A fetch over a cap
+	// fails with ErrTooLarge and leaves nothing at dest. The context
+	// deadline bounds the whole fetch, git included.
+	MaxBytes int64
+	MaxFiles int
+}
+
+// ErrTooLarge is returned when a fetch exceeds FetchOptions.MaxBytes or
+// MaxFiles.
+var ErrTooLarge = errors.New("fetch exceeds the size limit")
+
+func (o FetchOptions) limits() copyLimits {
+	return copyLimits{maxBytes: o.MaxBytes, maxFiles: o.MaxFiles}
+}
+
+// copyLimitsAndClean copies src to dst under the limits and removes dst on
+// failure.
+func copyLimited(src, dst string, lim copyLimits) error {
+	if err := copyTree(src, dst, lim); err != nil {
+		_ = os.RemoveAll(dst)
+		return err
+	}
+	return nil
 }
 
 func (o FetchOptions) git() GitFunc {
@@ -91,7 +115,7 @@ func Fetch(ctx context.Context, m *Marketplace, e *Entry, dest string, opts Fetc
 		if opts.SHA != "" && m.SHA != "" && opts.SHA != m.SHA {
 			return nil, fmt.Errorf("marketplace %q is at %s, not at the pinned %s; update the marketplace first", m.Name, m.SHA, opts.SHA)
 		}
-		if err := CopyTree(dir, dest); err != nil {
+		if err := copyLimited(dir, dest, opts.limits()); err != nil {
 			return nil, err
 		}
 		res.SHA = m.SHA
@@ -126,7 +150,7 @@ func Fetch(ctx context.Context, m *Marketplace, e *Entry, dest string, opts Fetc
 			return nil, fmt.Errorf("path %q not found in %s", src.Path, src.GitURL())
 		}
 	}
-	if err := CopyTree(dir, dest); err != nil {
+	if err := copyLimited(dir, dest, opts.limits()); err != nil {
 		return nil, err
 	}
 	res.SHA = head
@@ -260,7 +284,7 @@ func FetchMarketplace(ctx context.Context, src MarketplaceSource, dest string, o
 			return nil, fmt.Errorf("%s: no %s", src.Path, MarketplacePath)
 		}
 		sha := gitHead(src.Path)
-		if err := CopyTree(src.Path, dest); err != nil {
+		if err := copyLimited(src.Path, dest, opts.limits()); err != nil {
 			return nil, err
 		}
 		m, err := LoadMarketplace(dest)
@@ -286,7 +310,7 @@ func FetchMarketplace(ctx context.Context, src MarketplaceSource, dest string, o
 		if !IsMarketplace(tmp) {
 			return nil, fmt.Errorf("%s: no %s", url, MarketplacePath)
 		}
-		if err := CopyTree(tmp, dest); err != nil {
+		if err := copyLimited(tmp, dest, opts.limits()); err != nil {
 			return nil, err
 		}
 		m, err := LoadMarketplace(dest)
@@ -335,7 +359,16 @@ func FetchMarketplace(ctx context.Context, src MarketplaceSource, dest string, o
 // CopyTree copies the files under src into dst (created), skipping .git.
 // File modes are kept so scripts stay executable. A symlink is copied only
 // when its target stays inside src; others are skipped.
-func CopyTree(src, dst string) error {
+func CopyTree(src, dst string) error { return copyTree(src, dst, copyLimits{}) }
+
+type copyLimits struct {
+	maxBytes int64
+	maxFiles int
+}
+
+func copyTree(src, dst string, lim copyLimits) error {
+	var bytes int64
+	var files int
 	srcAbs, err := filepath.Abs(src)
 	if err != nil {
 		return err
@@ -380,6 +413,11 @@ func CopyTree(src, dst string) error {
 			}
 			return os.Symlink(link, target)
 		case info.Mode().IsRegular():
+			files++
+			bytes += info.Size()
+			if lim.maxFiles > 0 && files > lim.maxFiles || lim.maxBytes > 0 && bytes > lim.maxBytes {
+				return fmt.Errorf("%w (%d files, %d bytes so far)", ErrTooLarge, files, bytes)
+			}
 			return copyFile(p, target, info.Mode().Perm())
 		}
 		return nil
@@ -422,4 +460,58 @@ func firstNonEmpty(vals ...string) string {
 		}
 	}
 	return ""
+}
+
+// ResolveRef returns the commit a git-based source points at without a
+// checkout, for update checks: the source's sha when set, otherwise the
+// commit of ref (or of the source's ref, or of the default branch) from
+// "git ls-remote". An annotated tag resolves to the commit it tags. A
+// relative source has no commit of its own (it is the marketplace's), and
+// other kinds are unsupported.
+func ResolveRef(ctx context.Context, src Source, ref string, opts FetchOptions) (string, error) {
+	switch src.Kind {
+	case SourceGitHub, SourceURL, SourceGitSubdir:
+	case SourceRelative:
+		return "", fmt.Errorf("a relative source has the marketplace's commit")
+	default:
+		return "", fmt.Errorf("%w %q", ErrUnsupportedSource, src.Kind)
+	}
+	if ref == "" && src.SHA != "" {
+		return src.SHA, nil
+	}
+	ref = firstNonEmpty(ref, src.Ref)
+	if fullSHA.MatchString(ref) {
+		return ref, nil
+	}
+	pattern := firstNonEmpty(ref, "HEAD")
+	args := []string{"ls-remote", "--", src.GitURL(), pattern}
+	if ref != "" {
+		args = append(args, ref+"^{}") // the commit of an annotated tag
+	}
+	out, err := opts.git()(ctx, "", args...)
+	if err != nil {
+		return "", err
+	}
+	var direct, peeled string
+	for _, line := range strings.Split(out, "\n") {
+		sha, name, ok := strings.Cut(strings.TrimSpace(line), "\t")
+		if !ok || !fullSHA.MatchString(sha) {
+			continue
+		}
+		switch {
+		case strings.HasSuffix(name, "^{}"):
+			if peeled == "" {
+				peeled = sha
+			}
+		case direct == "":
+			direct = sha
+		}
+	}
+	if peeled != "" {
+		return peeled, nil
+	}
+	if direct == "" {
+		return "", fmt.Errorf("ref %q not found in %s", pattern, src.GitURL())
+	}
+	return direct, nil
 }

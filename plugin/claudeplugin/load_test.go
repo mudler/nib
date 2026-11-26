@@ -39,10 +39,11 @@ func fullPlugin(t *testing.T) string {
 		"agents/ignored-because-manifest.md": "---\nname: x\n---\n",
 		"custom/reviewer.md":                 "---\nname: reviewer\ndescription: Reviews\ntools: Read, Grep, Task, TodoWrite\nmodel: sonnet\nmaxTurns: 7\npermissionMode: plan\nskills: [review]\n---\nYou review.\n",
 		"hooks/hooks.json":                   `{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"check.sh"}]}]}}`,
-		".mcp.json":                          `{"local": {"command": "node", "args": ["${CLAUDE_PLUGIN_ROOT}/server.js"]}, "api": {"command": "replaced"}}`,
+		".mcp.json":                          `{"local": {"command": "node", "args": ["${CLAUDE_PLUGIN_ROOT}/server.js", "--lib", "./lib"]}, "api": {"command": "replaced"}}`,
 		"bin/deploy-tool*":                   "#!/bin/sh\n",
-		"output-styles/terse.md":             "---\nname: terse\n---\nShort.\n",
-		"themes/dark.json":                   "{}",
+		"server.js":                          "x", "lib/a.js": "x", "lib/b.js": "x",
+		"output-styles/terse.md": "---\nname: terse\n---\nShort.\n",
+		"themes/dark.json":       "{}",
 	})
 	return root
 }
@@ -129,8 +130,16 @@ func TestLoadFull(t *testing.T) {
 	if len(p.Hooks) != 1 || p.Hooks[0].Matcher != "Bash" {
 		t.Errorf("hooks = %+v", p.Hooks)
 	}
-	if got := p.CodeReasons(); !reflect.DeepEqual(got, []string{CodeBin, CodeHookCommand, CodeLSP, CodeMCPStdio}) {
+	if got := p.CodeReasons(); !reflect.DeepEqual(got, []string{CodeBin, CodeHookCommand, CodeLSP, CodeMCPStdio, CodeShellInjection}) {
 		t.Errorf("CodeReasons = %v", got)
+	}
+	var files []string
+	for _, f := range p.CodeFiles() {
+		r, _ := filepath.Rel(root, f)
+		files = append(files, filepath.ToSlash(r))
+	}
+	if want := []string{".claude-plugin/plugin.json", ".mcp.json", "bin/deploy-tool", "hooks/hooks.json", "lib/a.js", "lib/b.js", "server.js"}; !reflect.DeepEqual(files, want) {
+		t.Errorf("CodeFiles = %v, want %v", files, want)
 	}
 	if !p.HasShellInjections() {
 		t.Error("db:migrate has a shell injection")
@@ -330,4 +339,38 @@ func TestLoadEntryStrictMerge(t *testing.T) {
 			t.Errorf("err = %v", err)
 		}
 	})
+}
+
+func TestEntryHookFileAndSkipCodes(t *testing.T) {
+	root := t.TempDir()
+	writeTree(t, root, map[string]string{
+		".claude-plugin/plugin.json": `{"name":"p","skills":["bad"]}`,
+		"hooks/hooks.json":           `{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"plugin-stop"}]}],"PreToolUse":[{"hooks":[{"type":"weird"}]}]}}`,
+		"extra/hooks.json":           `{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"entry-stop"}]}]}}`,
+		"themes/t.json":              "{}",
+		"agents/a.md":                "---\nname: a\nhooks: {}\n---\n",
+	})
+	m, err := ParseMarketplace([]byte(`{"name":"m","owner":{"name":"o"},"plugins":[{"name":"p","source":"./p","hooks":["./extra/hooks.json"]}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := Load(root, LoadOptions{Entry: &m.Plugins[0]})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(p.Hooks) != 1 || p.Hooks[0].Handlers[0].Command != "entry-stop" {
+		t.Errorf("entry hook file replaces Stop: %+v", p.Hooks)
+	}
+	codes := map[SkipCode]bool{}
+	for _, s := range p.Skipped {
+		if s.Code == "" {
+			t.Errorf("skip without code: %+v", s)
+		}
+		codes[s.Code] = true
+	}
+	for _, c := range []SkipCode{SkipInvalidPath, SkipUnsupportedHookType, SkipUnsupportedComponent, SkipIgnoredField} {
+		if !codes[c] {
+			t.Errorf("missing code %s in %+v", c, p.Skipped)
+		}
+	}
 }

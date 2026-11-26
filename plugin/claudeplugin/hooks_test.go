@@ -36,12 +36,12 @@ func TestHookTimeout(t *testing.T) {
 		event string
 		want  time.Duration
 	}{
-		{HookHandler{Type: HookCommand}, "PreToolUse", 600 * time.Second},
-		{HookHandler{Type: HookCommand}, "UserPromptSubmit", 30 * time.Second},
-		{HookHandler{Type: HookCommand, Timeout: 5}, "PreToolUse", 5 * time.Second},
-		{HookHandler{Type: HookPrompt}, "Stop", 30 * time.Second},
-		{HookHandler{Type: HookAgent}, "Stop", 60 * time.Second},
-		{HookHandler{Type: HookHTTP}, "MessageDisplay", 10 * time.Second},
+		{HookHandler{Type: HookTypeCommand}, "PreToolUse", 600 * time.Second},
+		{HookHandler{Type: HookTypeCommand}, "UserPromptSubmit", 30 * time.Second},
+		{HookHandler{Type: HookTypeCommand, Timeout: 5}, "PreToolUse", 5 * time.Second},
+		{HookHandler{Type: HookTypePrompt}, "Stop", 30 * time.Second},
+		{HookHandler{Type: HookTypeAgent}, "Stop", 60 * time.Second},
+		{HookHandler{Type: HookTypeHTTP}, "MessageDisplay", 10 * time.Second},
 	}
 	for _, tt := range tests {
 		if got := tt.h.TimeoutFor(tt.event); got != tt.want {
@@ -73,7 +73,7 @@ func TestLoadHooksShapes(t *testing.T) {
 	if g := byEvent["SessionStart"]; len(g) != 1 || g[0].Matcher != "startup|clear|compact" || g[0].Handlers[0].Shell != "bash" {
 		t.Errorf("SessionStart = %+v", g)
 	}
-	if g := byEvent["Stop"]; len(g) != 1 || g[0].Matcher != "" || g[0].Handlers[0].Type != HookPrompt || g[0].Handlers[0].Timeout != 20 {
+	if g := byEvent["Stop"]; len(g) != 1 || g[0].Matcher != "" || g[0].Handlers[0].Type != HookTypePrompt || g[0].Handlers[0].Timeout != 20 {
 		t.Errorf("Stop = %+v (matcher must be dropped for Stop)", g)
 	}
 	if g := byEvent["PreToolUse"]; len(g) != 1 || len(g[0].Handlers) != 2 || g[0].Handlers[1].Input["p"] != "${tool_input.file_path}" {

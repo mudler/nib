@@ -101,7 +101,7 @@ func (l *loader) loadSkills(m *manifest) {
 		}
 		paths, err := pathList(m.Skills)
 		if err != nil {
-			l.p.skip("skill", "skills", "manifest field: "+err.Error())
+			l.p.skip(SkipInvalidField, "skill", "skills", "manifest field: "+err.Error())
 		}
 		paths = append(paths, entrySkills...)
 		for _, rel := range paths {
@@ -127,11 +127,11 @@ func (l *loader) loadSkills(m *manifest) {
 func (l *loader) addSkillPath(rel string, add func(...string)) {
 	abs, err := CheckPath(l.p.Root, rel, true)
 	if err != nil {
-		l.p.skip("skill", rel, err.Error())
+		l.p.skip(SkipInvalidPath, "skill", rel, err.Error())
 		return
 	}
 	if !isDir(abs) {
-		l.p.skip("skill", rel, "path not found or not a directory")
+		l.p.skip(SkipNotFound, "skill", rel, "path not found or not a directory")
 		return
 	}
 	add(skillDirs(abs)...)
@@ -141,13 +141,13 @@ func (l *loader) loadSkill(dir string) {
 	path := filepath.Join(dir, "SKILL.md")
 	data, err := os.ReadFile(path)
 	if err != nil {
-		l.p.skip("skill", l.rel(path), err.Error())
+		l.p.skip(SkipReadError, "skill", l.rel(path), err.Error())
 		return
 	}
 	fmRaw, body := SplitFrontmatter(data)
 	fm, ferr := parseFrontmatter(fmRaw)
 	if ferr != nil {
-		l.p.skip("skill", l.rel(path), ferr.Error())
+		l.p.skip(SkipInvalidFrontmatter, "skill", l.rel(path), ferr.Error())
 	}
 	name := fm.str("name")
 	if name == "" {
@@ -184,7 +184,7 @@ func (l *loader) loadSkill(dir string) {
 		s.UserInvocable = v
 	}
 	if s.HasHooks {
-		l.p.skip("skill", s.QualifiedName, "skill frontmatter hooks are not parsed")
+		l.p.skip(SkipIgnoredField, "skill", s.QualifiedName, "skill frontmatter hooks are not parsed")
 	}
 	l.p.Skills = append(l.p.Skills, s)
 }

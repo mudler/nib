@@ -243,7 +243,7 @@ func claudeToManifest(cp *claudeplugin.Plugin, root string) Manifest {
 			matcher = hooks.TranslateMatcher(matcher)
 		}
 		for _, h := range g.Handlers {
-			if h.Type != claudeplugin.HookCommand {
+			if h.Type != claudeplugin.HookTypeCommand {
 				note("hook %s: %s handlers are not supported", g.Event, h.Type)
 				continue
 			}

@@ -45,20 +45,20 @@ func (l *loader) loadUserConfig(raw json.RawMessage) {
 	}
 	var opts map[string]UserConfigOption
 	if err := json.Unmarshal(raw, &opts); err != nil {
-		l.p.skip("manifest", "userConfig", err.Error())
+		l.p.skip(SkipInvalidUserConfig, "manifest", "userConfig", err.Error())
 		return
 	}
 	for _, k := range slices.Sorted(maps.Keys(opts)) {
 		o := opts[k]
 		o.Key = k
 		if !optionKey.MatchString(k) {
-			l.p.skip("manifest", "userConfig."+k, "option keys use letters, digits and '_'")
+			l.p.skip(SkipInvalidUserConfig, "manifest", "userConfig."+k, "option keys use letters, digits and '_'")
 			continue
 		}
 		switch o.Type {
 		case OptionString, OptionNumber, OptionBoolean, OptionDirectory, OptionFile:
 		default:
-			l.p.skip("manifest", "userConfig."+k, fmt.Sprintf("unknown option type %q", o.Type))
+			l.p.skip(SkipInvalidUserConfig, "manifest", "userConfig."+k, fmt.Sprintf("unknown option type %q", o.Type))
 			continue
 		}
 		if l.p.UserConfig == nil {

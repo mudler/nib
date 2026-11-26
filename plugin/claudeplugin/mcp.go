@@ -143,12 +143,12 @@ func (l *loader) loadMCP(m *manifest) {
 	}
 	l.forEachShape("mcp", m.MCPServers, func(rel string) {
 		if strings.HasSuffix(rel, ".mcpb") || strings.HasSuffix(rel, ".dxt") {
-			l.p.skip("mcp", rel, "MCP bundles (.mcpb, .dxt) are not supported")
+			l.p.skip(SkipUnsupportedComponent, "mcp", rel, "MCP bundles (.mcpb, .dxt) are not supported")
 			return
 		}
 		abs, err := CheckPath(l.p.Root, rel, false)
 		if err != nil {
-			l.p.skip("mcp", rel, err.Error())
+			l.p.skip(SkipInvalidPath, "mcp", rel, err.Error())
 			return
 		}
 		l.loadMCPFile(abs)
@@ -163,12 +163,12 @@ func (l *loader) loadMCP(m *manifest) {
 func (l *loader) loadMCPFile(path string) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		l.p.skip("mcp", l.rel(path), err.Error())
+		l.p.skip(SkipReadError, "mcp", l.rel(path), err.Error())
 		return
 	}
 	servers, err := serverMap(data, "mcpServers")
 	if err != nil {
-		l.p.skip("mcp", l.rel(path), "invalid JSON: "+err.Error())
+		l.p.skip(SkipInvalidJSON, "mcp", l.rel(path), "invalid JSON: "+err.Error())
 		return
 	}
 	l.addServerMap(servers, l.rel(path))
@@ -177,7 +177,7 @@ func (l *loader) loadMCPFile(path string) {
 func (l *loader) addMCPServers(raw json.RawMessage, where string) {
 	servers, err := serverMap(raw, "mcpServers")
 	if err != nil {
-		l.p.skip("mcp", where, "invalid JSON: "+err.Error())
+		l.p.skip(SkipInvalidJSON, "mcp", where, "invalid JSON: "+err.Error())
 		return
 	}
 	l.addServerMap(servers, where)
@@ -187,7 +187,7 @@ func (l *loader) addServerMap(servers map[string]json.RawMessage, where string) 
 	for _, name := range slices.Sorted(maps.Keys(servers)) {
 		s, err := ParseMCPServer(name, servers[name])
 		if err != nil {
-			l.p.skip("mcp", name, fmt.Sprintf("%s: %v", where, err))
+			l.p.skip(SkipInvalidMCPServer, "mcp", name, fmt.Sprintf("%s: %v", where, err))
 			continue
 		}
 		l.p.MCPServers[name] = s
@@ -212,13 +212,13 @@ func (l *loader) forEachShape(component string, raw json.RawMessage, onPath func
 	case '[':
 		var items []json.RawMessage
 		if err := json.Unmarshal(raw, &items); err != nil {
-			l.p.skip(component, "manifest", err.Error())
+			l.p.skip(SkipInvalidField, component, "manifest", err.Error())
 			return
 		}
 		for _, it := range items {
 			l.forEachShape(component, it, onPath, onInline)
 		}
 	default:
-		l.p.skip(component, "manifest", "unexpected value: "+string(raw))
+		l.p.skip(SkipInvalidField, component, "manifest", "unexpected value: "+string(raw))
 	}
 }

@@ -225,11 +225,10 @@ func (l *loader) applyEntry(m, em *manifest, hasManifest bool, e *Entry) error {
 		l.entryCommands, _ = pathList(em.Commands)
 		l.entryAgents, _ = pathList(em.Agents)
 		if len(em.Hooks) > 0 && string(em.Hooks) != "null" {
-			if strings.HasPrefix(strings.TrimSpace(string(em.Hooks)), "{") {
-				l.entryHooks = em.Hooks
-			} else {
-				l.p.skip("hook", "marketplace entry", "hook files are not yet supported in a marketplace entry")
-			}
+			// An inline object, a hooks file path or an array of either.
+			// Claude Code itself takes only the inline form here; files
+			// are read too, under the same path rules.
+			l.entryHooks = em.Hooks
 		}
 		if len(em.OutputStyles) > 0 && string(em.OutputStyles) != "null" {
 			m.OutputStyles = em.OutputStyles
@@ -248,7 +247,7 @@ func (l *loader) entrySkillPaths() ([]string, bool) { return l.entrySkills, l.en
 func (l *loader) loadOutputStyles(m *manifest) {
 	paths, err := pathList(m.OutputStyles)
 	if err != nil {
-		l.p.skip("manifest", "outputStyles", err.Error())
+		l.p.skip(SkipInvalidField, "manifest", "outputStyles", err.Error())
 	}
 	if len(paths) == 0 {
 		if d := filepath.Join(l.p.Root, "output-styles"); isDir(d) {
@@ -258,7 +257,7 @@ func (l *loader) loadOutputStyles(m *manifest) {
 	for _, rel := range paths {
 		abs, err := CheckPath(l.p.Root, rel, false)
 		if err != nil {
-			l.p.skip("output-style", rel, err.Error())
+			l.p.skip(SkipInvalidPath, "output-style", rel, err.Error())
 			continue
 		}
 		if isFile(abs) {
@@ -278,19 +277,19 @@ func (l *loader) loadOutputStyles(m *manifest) {
 func (l *loader) noteUnsupported(m *manifest) {
 	set := func(r json.RawMessage) bool { return len(r) > 0 && string(r) != "null" }
 	if set(m.Monitors) || set(m.Experimental.Monitors) || isFile(filepath.Join(l.p.Root, "monitors", "monitors.json")) {
-		l.p.skip("monitor", "monitors", "monitors are not supported")
+		l.p.skip(SkipUnsupportedComponent, "monitor", "monitors", "monitors are not supported")
 	}
 	if set(m.Themes) || set(m.Experimental.Themes) || isDir(filepath.Join(l.p.Root, "themes")) {
-		l.p.skip("theme", "themes", "themes are not supported")
+		l.p.skip(SkipUnsupportedComponent, "theme", "themes", "themes are not supported")
 	}
 	if set(m.Workflows) || isDir(filepath.Join(l.p.Root, "workflows")) {
-		l.p.skip("workflow", "workflows", "workflows are not supported")
+		l.p.skip(SkipUnsupportedComponent, "workflow", "workflows", "workflows are not supported")
 	}
 	if set(m.Channels) {
-		l.p.skip("channel", "channels", "channels are not supported")
+		l.p.skip(SkipUnsupportedComponent, "channel", "channels", "channels are not supported")
 	}
 	if isFile(filepath.Join(l.p.Root, "CLAUDE.md")) {
-		l.p.skip("manifest", "CLAUDE.md", "a CLAUDE.md at the plugin root is not loaded as context")
+		l.p.skip(SkipIgnoredFile, "manifest", "CLAUDE.md", "a CLAUDE.md at the plugin root is not loaded as context")
 	}
 }
 
