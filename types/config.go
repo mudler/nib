@@ -185,22 +185,41 @@ type Skill struct {
 
 // CommandConfig is a named slash command: a prompt template (text/template with
 // {{.Args}} and {{.CurrentDirectory}}) optionally routed through a sub-agent.
+//
+// With Format "claude" the prompt is not a Go template: $ARGUMENTS, $N and
+// the $name placeholders of Arguments are substituted instead, as in the
+// Claude Code command format, so "{{" in the text stays literal.
 type CommandConfig struct {
-	Name        string `yaml:"name"`
-	Description string `yaml:"description"`
-	Prompt      string `yaml:"prompt"`
-	Agent       string `yaml:"agent,omitempty"`
+	Name        string   `yaml:"name"`
+	Description string   `yaml:"description"`
+	Prompt      string   `yaml:"prompt"`
+	Agent       string   `yaml:"agent,omitempty"`
+	Format      string   `yaml:"format,omitempty"`
+	Arguments   []string `yaml:"arguments,omitempty"`
 }
+
+// HookFormatClaude selects the Claude Code hook and command contracts.
+const HookFormatClaude = "claude"
 
 // HookConfig is a shell command bound to a lifecycle event. Matcher (optional)
 // is matched against the tool name for PreToolUse/PostToolUse. Dir is the
 // plugin root (set during merge); it is the command's working directory and is
 // exported as ${NIB_PLUGIN_ROOT}/${CLAUDE_PLUGIN_ROOT}.
+//
+// With Format "claude" the hook follows the Claude Code contract: the stdin
+// JSON uses Claude Code field and tool names, only exit status 2 blocks, the
+// JSON output is read from hookSpecificOutput, and plain output of
+// SessionStart and UserPromptSubmit hooks is added to the context.
 type HookConfig struct {
 	Event   string `yaml:"event"`
 	Matcher string `yaml:"matcher,omitempty"`
 	Command string `yaml:"command"`
-	Dir     string `yaml:"-"` // plugin root; set during merge, not parsed
+	Format  string `yaml:"format,omitempty"`
+	// Timeout is in seconds. 0 uses the default: 30 s, or the Claude Code
+	// default for the event with Format "claude".
+	Timeout int      `yaml:"timeout,omitempty"`
+	Dir     string   `yaml:"-"` // plugin root; set during merge, not parsed
+	Env     []string `yaml:"-"` // extra KEY=VALUE entries; set during merge, not parsed
 }
 
 // GoalConfig controls supervision of active goals. Duration strings remain raw

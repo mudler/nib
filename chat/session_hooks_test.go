@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/mudler/nib/hooks"
@@ -73,5 +74,32 @@ func TestYoloWithExternalProvenanceStillHonorsDenyingHook(t *testing.T) {
 	}
 	if asked {
 		t.Fatal("denying hook fell through to the approval UI")
+	}
+}
+
+func TestSessionStartHookContextReachesSystemPrompt(t *testing.T) {
+	dir := t.TempDir()
+	start := filepath.Join(dir, "start.sh")
+	if err := os.WriteFile(start, []byte("#!/bin/sh\necho 'Use the plugin skills.'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	s, err := NewSession(context.Background(), types.Config{
+		Prompt: "base prompt",
+		Hooks: []types.HookConfig{{
+			Event: "SessionStart", Matcher: "startup|clear|compact", Command: start, Dir: dir, Format: types.HookFormatClaude,
+		}},
+	}, Callbacks{})
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	defer s.Close()
+	if !strings.Contains(s.systemPrompt, "Use the plugin skills.") {
+		t.Fatalf("system prompt lacks the hook context:\n%s", s.systemPrompt)
+	}
+	if err := s.Reload(types.Config{Prompt: "base prompt"}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(s.systemPrompt, "Use the plugin skills.") {
+		t.Fatal("Reload dropped the SessionStart hook context")
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"regexp"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	"github.com/mudler/nib/internal/proc"
+	"github.com/mudler/nib/plugin/claudeplugin"
 	"github.com/mudler/nib/types"
 )
 
@@ -36,6 +38,13 @@ type Decision struct {
 	Block      bool   `json:"block"`
 	Adjustment string `json:"adjustment"`
 	Reason     string `json:"reason"`
+
+	// Context is text a Claude-format hook adds to the model context: its
+	// additionalContext, or its plain stdout on SessionStart and
+	// UserPromptSubmit. Never read from a nib-format hook.
+	Context string `json:"-"`
+	// SystemMessage is a Claude-format hook's warning for the user.
+	SystemMessage string `json:"-"`
 }
 
 // ToolDecision is the combined PreToolUse verdict.
@@ -65,12 +74,41 @@ func (d *Dispatcher) Fire(ctx context.Context, event Event, name string, payload
 		return nil
 	}
 	data, _ := json.Marshal(payload)
+	var claudeData []byte
 	var out []Decision
 	for _, h := range d.hooks {
-		if Event(h.Event) != event || !matchHook(h.Matcher, name) {
+		if Event(h.Event) != event {
 			continue
 		}
-		out = append(out, runHook(ctx, h, data, d.timeout))
+		if h.Format == types.HookFormatClaude {
+			if !claudeplugin.MatchHook(h.Matcher, name) {
+				continue
+			}
+			if claudeData == nil {
+				claudeData = claudePayload(event, payload)
+			}
+			out = append(out, runClaudeHook(ctx, h, event, claudeData))
+			continue
+		}
+		if !matchHook(h.Matcher, name) {
+			continue
+		}
+		timeout := d.timeout
+		if h.Timeout > 0 {
+			timeout = time.Duration(h.Timeout) * time.Second
+		}
+		out = append(out, runHook(ctx, h, data, timeout))
+	}
+	return out
+}
+
+// Contexts returns the non-empty Context of each decision, in order.
+func Contexts(ds []Decision) []string {
+	var out []string
+	for _, d := range ds {
+		if c := strings.TrimSpace(d.Context); c != "" {
+			out = append(out, c)
+		}
 	}
 	return out
 }
@@ -93,6 +131,28 @@ func matchHook(pattern, name string) bool {
 // runHook executes one hook and returns its Decision. A non-zero exit (or
 // timeout) is treated as Block, with stderr as the reason.
 func runHook(ctx context.Context, h types.HookConfig, stdin []byte, timeout time.Duration) Decision {
+	stdout, stderr, err := execHook(ctx, h, stdin, timeout)
+
+	var dec Decision
+	_ = json.Unmarshal(bytes.TrimSpace(stdout), &dec)
+
+	if err != nil {
+		dec.Block = true
+		if dec.Reason == "" {
+			if r := strings.TrimSpace(string(stderr)); r != "" {
+				dec.Reason = r
+			} else {
+				dec.Reason = err.Error()
+			}
+		}
+	}
+	return dec
+}
+
+// execHook runs a hook command with stdin and returns its output. err is nil
+// for a clean exit, an *exec.ExitError for a non-zero status, and another
+// error for a timeout or a start failure.
+func execHook(ctx context.Context, h types.HookConfig, stdin []byte, timeout time.Duration) (stdoutB, stderrB []byte, err error) {
 	cctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
@@ -101,6 +161,7 @@ func runHook(ctx context.Context, h types.HookConfig, stdin []byte, timeout time
 		cmd.Dir = h.Dir
 	}
 	cmd.Env = append(os.Environ(), "NIB_PLUGIN_ROOT="+h.Dir, "CLAUDE_PLUGIN_ROOT="+h.Dir)
+	cmd.Env = append(cmd.Env, h.Env...)
 	cmd.Stdin = bytes.NewReader(stdin)
 
 	var stdout, stderr bytes.Buffer
@@ -117,7 +178,7 @@ func runHook(ctx context.Context, h types.HookConfig, stdin []byte, timeout time
 	// indefinitely, stalling the tool call this hook is gating.
 	cmd.WaitDelay = 2 * time.Second
 
-	err := cmd.Run()
+	err = cmd.Run()
 	if waitDelayOnSuccess(cmd, err) {
 		// The hook itself exited cleanly; WaitDelay fired only because
 		// something it spawned still held the inherited output pipes open.
@@ -126,21 +187,10 @@ func runHook(ctx context.Context, h types.HookConfig, stdin []byte, timeout time
 		// is deciding allow or deny.
 		err = nil
 	}
-
-	var dec Decision
-	_ = json.Unmarshal(bytes.TrimSpace(stdout.Bytes()), &dec)
-
-	if err != nil {
-		dec.Block = true
-		if dec.Reason == "" {
-			if r := strings.TrimSpace(stderr.String()); r != "" {
-				dec.Reason = r
-			} else {
-				dec.Reason = err.Error()
-			}
-		}
+	if err != nil && cctx.Err() != nil {
+		err = fmt.Errorf("hook timed out after %s: %w", timeout, cctx.Err())
 	}
-	return dec
+	return stdout.Bytes(), stderr.Bytes(), err
 }
 
 // waitDelayOnSuccess reports whether err is the WaitDelay backstop firing on a

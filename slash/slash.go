@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/mudler/nib/theme"
+	"github.com/mudler/nib/plugin/claudeplugin"
 	"github.com/mudler/nib/types"
 )
 
@@ -157,8 +158,15 @@ type Action struct {
 	//                KindModelList: which endpoint to list; empty = current.
 }
 
-// Expand renders a command's prompt template with the given args.
+// Expand renders a command's prompt with the given args. A command with
+// Format "claude" substitutes $ARGUMENTS, $N and $name placeholders and
+// ${CLAUDE_PROJECT_DIR}; any other command is a text/template.
 func Expand(c types.CommandConfig, args string) (string, error) {
+	if c.Format == types.HookFormatClaude {
+		cwd, _ := os.Getwd()
+		out := claudeplugin.RenderArguments(c.Prompt, args, c.Arguments)
+		return claudeplugin.ExpandContent(out, claudeplugin.Vars{ProjectDir: cwd}), nil
+	}
 	tmpl, err := template.New("cmd").Parse(c.Prompt)
 	if err != nil {
 		return "", err

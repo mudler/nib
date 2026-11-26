@@ -16,6 +16,30 @@ func TestExpand(t *testing.T) {
 	}
 }
 
+func TestExpandClaudeFormat(t *testing.T) {
+	// A Go template would fail on the unclosed "{{" and mangle "{{ .Field }}".
+	tmplBroken := types.CommandConfig{Prompt: "Fix {{ $ARGUMENTS"}
+	if _, err := Expand(tmplBroken, "x"); err == nil {
+		t.Fatal("a nib-format prompt with {{ is a template error")
+	}
+	tests := []struct {
+		c    types.CommandConfig
+		args string
+		want string
+	}{
+		{types.CommandConfig{Format: "claude", Prompt: "Fix {{ $ARGUMENTS"}, "issue 7", "Fix {{ issue 7"},
+		{types.CommandConfig{Format: "claude", Prompt: "Use {{ .Field }} on $0, then $1"}, `"a b" c`, "Use {{ .Field }} on a b, then c"},
+		{types.CommandConfig{Format: "claude", Prompt: "Move $comp to $to", Arguments: []string{"comp", "to"}}, "Button vue", "Move Button to vue"},
+		{types.CommandConfig{Format: "claude", Prompt: "Review."}, "--fast", "Review.\n\nARGUMENTS: --fast\n"},
+	}
+	for _, tt := range tests {
+		got, err := Expand(tt.c, tt.args)
+		if err != nil || got != tt.want {
+			t.Errorf("Expand(%q, %q) = %q, %v; want %q", tt.c.Prompt, tt.args, got, err, tt.want)
+		}
+	}
+}
+
 func TestResolve(t *testing.T) {
 	cmds := []types.CommandConfig{
 		{Name: "review", Prompt: "Review: {{.Args}}"},

@@ -69,6 +69,7 @@ type Session struct {
 	sentSystemPrompt     string // the system prompt as ensureSystemPrompt last put it in the fragment; guarded by historyMu
 	stampedModel         string // the model systemPrompt names (modelIdentity); guarded by historyMu
 	loadedSkills         string // eager-loaded /skill instructions, re-applied across reloads
+	hookContext          string // SessionStart hook context, re-applied across reloads
 	skills               []types.Skill
 	cogitoOptions        types.AgentOptions
 	compaction           types.CompactionConfig
@@ -770,7 +771,7 @@ func NewSession(ctx context.Context, cfg types.Config, callbacks Callbacks, tran
 	if err := s.Reload(cfg); err != nil {
 		xlog.Warn("self-config: initial reload", "error", err)
 	}
-	s.hooks.Fire(ctx, hooks.EventSessionStart, "", map[string]any{"event": "SessionStart"})
+	s.applySessionStartHooks(ctx)
 
 	// An endpoint picked in an earlier session is the default. A resumed
 	// session then goes back to the endpoint and model it was using.
@@ -798,6 +799,26 @@ func NewSession(ctx context.Context, cfg types.Config, callbacks Callbacks, tran
 		}
 	}
 	return s, nil
+}
+
+// applySessionStartHooks fires the SessionStart hooks and appends the
+// context they return to the system prompt, where Reload keeps it.
+func (s *Session) applySessionStartHooks(ctx context.Context) {
+	ds := s.hooks.Fire(ctx, hooks.EventSessionStart, "startup", map[string]any{"event": "SessionStart", "source": "startup"})
+	parts := hooks.Contexts(ds)
+	if len(parts) == 0 {
+		return
+	}
+	suffix := "\n\n" + hookContextMessage(parts)
+	s.historyMu.Lock()
+	s.hookContext += suffix
+	s.systemPrompt += suffix
+	s.historyMu.Unlock()
+}
+
+// hookContextMessage wraps the context hooks returned.
+func hookContextMessage(parts []string) string {
+	return "<hook-context>\n" + strings.Join(parts, "\n\n") + "\n</hook-context>"
 }
 
 // LoadSkill appends a named skill's instructions to the session system prompt
@@ -2382,8 +2403,9 @@ func (s *Session) SendMessageWithDelivery(text string, delivery InputDelivery, p
 	if toolCallbacks.ToolCallbacks != nil {
 		toolCallbacks.OnToolStart, toolCallbacks.OnToolResult = toolCallbacks.ToolCallbacks()
 	}
+	var promptContext []string
 	if s.hooks != nil {
-		s.hooks.Fire(s.ctx, hooks.EventUserPromptSubmit, "", map[string]any{"event": "UserPromptSubmit", "prompt": text})
+		promptContext = hooks.Contexts(s.hooks.Fire(s.ctx, hooks.EventUserPromptSubmit, "", map[string]any{"event": "UserPromptSubmit", "prompt": text}))
 	}
 	turnCtx := s.beginTurn()
 	if s.background != nil {
@@ -2483,6 +2505,11 @@ func (s *Session) SendMessageWithDelivery(text string, delivery InputDelivery, p
 	notices := s.takePendingNotices()
 	if len(notices) > 0 {
 		s.fragment = s.fragment.AddMessage("user", pendingNoticesMessage(notices))
+	}
+	// Context from UserPromptSubmit hooks goes before the message, like the
+	// notices, and is not added to s.messages.
+	if len(promptContext) > 0 {
+		s.fragment = s.fragment.AddMessage("user", hookContextMessage(promptContext))
 	}
 	s.fragment = buildUserFragment(s.fragment, text, parts)
 	// The turn's own message, so a failed turn can be cut out of a history
@@ -2598,9 +2625,10 @@ func (s *Session) SendMessageWithDelivery(text string, delivery InputDelivery, p
 			s.recordExternalResult(status.Name, status.Result)
 			if status.Executed && s.hooks != nil {
 				s.hooks.Fire(s.ctx, hooks.EventPostToolUse, status.Name, map[string]any{
-					"event":  "PostToolUse",
-					"tool":   status.Name,
-					"result": status.Result,
+					"event":     "PostToolUse",
+					"tool":      status.Name,
+					"arguments": status.ToolArguments.Arguments,
+					"result":    status.Result,
 				})
 			}
 			if toolCallbacks.OnToolResult != nil {
@@ -3484,7 +3512,7 @@ func (s *Session) Reload(cfg types.Config) error {
 		prompt := s.agentDelegationGuidance()
 		model := s.Model()
 		if cfg.Prompt != "" {
-			prompt = cfg.GetPrompt() + s.loadedSkills + s.agentModelGuidance() + prompt
+			prompt = cfg.GetPrompt() + s.loadedSkills + s.hookContext + s.agentModelGuidance() + prompt
 			prompt += s.harnessIdentity(cfg)
 			prompt += modelIdentity(model)
 		}
