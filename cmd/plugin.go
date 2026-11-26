@@ -3,6 +3,7 @@ package cmd
 import (
 	"bufio"
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -13,6 +14,7 @@ import (
 	"github.com/mudler/nib/extsource"
 	"github.com/mudler/nib/internal"
 	"github.com/mudler/nib/plugin"
+	"github.com/mudler/nib/plugin/claudeplugin"
 )
 
 // confirmFn reads a yes/no answer. Var for test injection.
@@ -42,13 +44,15 @@ func RunPluginCommand(programName, baseDir string, args []string) int {
 	case "install":
 		return pluginInstall(prog, mgr, root, args[1:])
 	case "browse":
-		return runBrowse(root, catalog.KindPlugin)
+		return runPluginBrowse(mgr, root, "")
 	case "search":
 		if len(args) < 2 {
 			fmt.Fprintf(os.Stderr, "usage: %s plugin search <query>\n", prog)
 			return 1
 		}
-		return runSearch(root, catalog.KindPlugin, strings.Join(args[1:], " "))
+		return runPluginBrowse(mgr, root, strings.Join(args[1:], " "))
+	case "marketplace":
+		return pluginMarketplace(prog, mgr, args[1:])
 	case "source":
 		return runSource(prog, root, args[1:])
 	case "list":
@@ -69,7 +73,7 @@ func RunPluginCommand(programName, baseDir string, args []string) int {
 }
 
 func pluginUsage(prog string) {
-	fmt.Fprintf(os.Stderr, "usage: %s plugin <install|browse|search|source|list|update|enable|disable|remove> ...\n", prog)
+	fmt.Fprintf(os.Stderr, "usage: %s plugin <install|browse|search|source|marketplace|list|update|enable|disable|remove> ...\n", prog)
 }
 
 // parseInstallArgs parses `[--ref REF] [--yes] <git-url>` with flags allowed
@@ -103,8 +107,19 @@ func parseInstallArgs(args []string) (url, ref string, yes bool, err error) {
 func pluginInstall(prog string, mgr *plugin.Manager, root string, args []string) int {
 	src, ref, yes, err := parseInstallArgs(args)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "usage: %s plugin install [--ref REF] [--yes] <git-url|local-path|zip|catalog-name>\n", prog)
+		fmt.Fprintf(os.Stderr, "usage: %s plugin install [--ref REF] [--yes] <git-url|local-path|zip|name@marketplace|catalog-name>\n", prog)
 		return 1
+	}
+
+	// name@marketplace installs from a registered marketplace. --ref pins
+	// the plugin to a full commit SHA.
+	if _, mkt, ok := claudeplugin.ParsePluginID(src); ok && marketplaceRegistered(mgr, mkt) {
+		m, err := mgr.InstallFromMarketplace(context.Background(), src, ref, internal.Version)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "install failed: %v\n", err)
+			return 1
+		}
+		return reportAndMaybeEnablePlugin(prog, mgr, m, yes)
 	}
 
 	// A .zip archive is imported locally; git URLs and local dirs fall through
@@ -125,6 +140,9 @@ func pluginInstall(prog string, mgr *plugin.Manager, root string, args []string)
 	}
 
 	m, err := mgr.Install(src, ref, internal.Version)
+	if errors.Is(err, plugin.ErrIsMarketplace) {
+		return addMarketplaceAndList(prog, mgr, src)
+	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "install failed: %v\n", err)
 		return 1
@@ -184,7 +202,19 @@ func pluginCatalogInstall(prog string, mgr *plugin.Manager, baseDir, name string
 // enable path.
 func reportAndMaybeEnablePlugin(prog string, mgr *plugin.Manager, m plugin.Manifest, yes bool) int {
 	fmt.Printf("Installed %q v%s — %s\n", m.Name, m.Version, m.Description)
-	fmt.Printf("Contributes: %d MCP server(s), %d sub-agent(s)\n", len(m.MCPServers), len(m.Agents))
+	fmt.Printf("Contributes: %d MCP server(s), %d sub-agent(s), %d skill(s), %d command(s), %d hook(s)\n",
+		len(m.MCPServers), len(m.Agents), len(m.Skills), len(m.Commands), len(m.Hooks))
+	if cp := m.Claude(); cp != nil {
+		if reasons := cp.CodeReasons(); len(reasons) > 0 {
+			fmt.Printf("Runs code: %s\n", strings.Join(reasons, ", "))
+		}
+		if len(m.Notes) > 0 {
+			fmt.Println("Not loaded or limited:")
+			for _, n := range m.Notes {
+				fmt.Printf("  - %s\n", n)
+			}
+		}
+	}
 
 	if yes || confirmFn("Enable this plugin?") {
 		if err := mgr.SetEnabled(m.Name, true); err != nil {

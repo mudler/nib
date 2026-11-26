@@ -102,6 +102,9 @@ func Fetch(ctx context.Context, m *Marketplace, e *Entry, dest string, opts Fetc
 	if _, err := os.Stat(dest); err == nil {
 		return nil, fmt.Errorf("fetch: %s already exists", dest)
 	}
+	if opts.SHA != "" && !fullSHA.MatchString(opts.SHA) {
+		return nil, fmt.Errorf("pin %q: a pin must be a full 40-character lowercase commit SHA", opts.SHA)
+	}
 	src := e.Source
 	res := &FetchResult{Dir: dest, Source: src}
 	if src.Kind == SourceRelative {
@@ -112,7 +115,10 @@ func Fetch(ctx context.Context, m *Marketplace, e *Entry, dest string, opts Fetc
 		if !isDir(dir) {
 			return nil, fmt.Errorf("source path does not exist: %s", src.Path)
 		}
-		if opts.SHA != "" && m.SHA != "" && opts.SHA != m.SHA {
+		if opts.SHA != "" && m.SHA == "" {
+			return nil, fmt.Errorf("marketplace %q has no known commit, so plugin %q cannot be pinned", m.Name, e.Name)
+		}
+		if opts.SHA != "" && opts.SHA != m.SHA {
 			return nil, fmt.Errorf("marketplace %q is at %s, not at the pinned %s; update the marketplace first", m.Name, m.SHA, opts.SHA)
 		}
 		if err := copyLimited(dir, dest, opts.limits()); err != nil {

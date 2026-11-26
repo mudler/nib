@@ -909,10 +909,11 @@ A **plugin** is a single installable unit — a git repo (or local dir) with a
 | `hooks` | shell commands bound to lifecycle events (e.g. `SessionStart`, `PreToolUse`) |
 
 ```bash
-nib plugin install <git-url|local-path|zip|catalog-name>   # [--ref <tag|branch>] [--yes]
-nib plugin browse                          # discover installable plugins from the catalog
+nib plugin install <git-url|local-path|zip|name@marketplace|catalog-name>   # [--ref <tag|branch|sha>] [--yes]
+nib plugin browse                          # discover installable plugins (catalog and marketplaces)
 nib plugin search <query>
 nib plugin source <list|add URL|enable|disable|remove LABEL>
+nib plugin marketplace <add SOURCE|list|update [NAME]|remove NAME>
 nib plugin list
 nib plugin enable|disable <name>
 nib plugin update|remove <name>
@@ -945,9 +946,49 @@ commands:
     agent: researcher
 ```
 
-**Claude Code compatible.** `nib plugin install` also installs an unmodified Claude Code
-plugin (`.claude-plugin/` layout) or marketplace, mapping its `plugin.json`, `skills/`,
-`commands/`, `agents/`, `hooks/`, and `.mcp.json` into nib's model.
+**Compatible with the Claude Code plugin format.** `nib plugin install` also installs an
+unmodified plugin in that format (`.claude-plugin/` layout), and plugins from its
+marketplaces (`.claude-plugin/marketplace.json`):
+
+```bash
+nib plugin marketplace add owner/repo      # or a git URL, a local dir, or a marketplace.json URL
+nib plugin browse                          # lists the marketplace plugins as name@marketplace
+nib plugin install formatter@owner-market  # --ref <full commit SHA> pins the install
+nib plugin update formatter                # fetches the marketplace again, reinstalls at its new commit
+```
+
+Installing a marketplace repo or directory directly registers it and lists its plugins.
+Marketplace sources of type relative path, `github`, `url` and `git-subdir` are supported;
+`npm`, `archive` and `command` sources are listed as unsupported. Every install records the
+commit SHA it came from.
+
+What is mapped:
+
+- `plugin.json` with custom component paths, inline hooks and MCP servers, and `userConfig`
+  (option defaults, overridden by `CLAUDE_PLUGIN_OPTION_<KEY>` environment variables). Paths
+  must start with `./` and stay inside the plugin. A plugin without `plugin.json` uses its
+  marketplace entry as its manifest.
+- Skills, found recursively under `skills/` (and a root `SKILL.md`), commands and agents
+  (also recursive) are namespaced `plugin:name`. A command, `/skill` and `load_skill` also
+  accept the bare name when only one plugin uses it. Skills keep their directory, so bundled
+  scripts work, and `${CLAUDE_PLUGIN_ROOT}`, `${CLAUDE_PLUGIN_DATA}`, `${CLAUDE_SKILL_DIR}`,
+  `${CLAUDE_PROJECT_DIR}` and `${user_config.KEY}` are substituted. A skill with
+  `disable-model-invocation` becomes a command.
+- Commands substitute `$ARGUMENTS`, `$0`, `$1`… and named `$arguments`, and are not Go
+  templates, so `{{` stays literal. `` !`cmd` `` and `@file` references are passed as text.
+- Agent tools are mapped to nib's tools; a `model:` tier uses the session model.
+- MCP servers over stdio, `http` and `sse` (with url, headers and `${VAR:-default}`).
+- Hooks for `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse` and `Stop`
+  follow the format's contract: stdin with `tool_name`/`tool_input`, matchers such as `Bash`
+  or `Edit|Write` matched to nib's tools, exit status 2 blocks, `hookSpecificOutput`
+  decisions, and SessionStart/UserPromptSubmit output added to the context. Hooks run in the
+  project directory with `CLAUDE_PLUGIN_ROOT`, `CLAUDE_PLUGIN_DATA` and the options in their
+  environment; the data dir is `plugin-data/<id>` next to `plugins/`.
+
+The install summary says whether the plugin runs code and lists what nib did not load
+(other hook events and handler types, LSP servers, `bin/`, output styles, monitors…). The
+parser is the importable package `plugin/claudeplugin`, which returns every part as data
+for other hosts.
 
 See **[`examples/nib-plugin-demo`](examples/nib-plugin-demo)** for a reference plugin that
 exercises all six contribution types.
