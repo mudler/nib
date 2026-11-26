@@ -39,6 +39,9 @@ func skillIndex(skills []types.Skill) (map[string]types.Skill, []string) {
 func loadSkillResult(index map[string]types.Skill, in loadSkillInput) loadSkillOutput {
 	s, ok := index[in.Name]
 	if !ok {
+		s, ok = types.FindSkill(skillList(index), in.Name)
+	}
+	if !ok {
 		return loadSkillOutput{Name: in.Name, Found: false, Error: fmt.Sprintf("unknown skill %q", in.Name)}
 	}
 	instructions := s.Instructions
@@ -66,4 +69,12 @@ func StartSkillsMCPServer(ctx context.Context, transport mcp.Transport, skills [
 	})
 
 	return server.Run(ctx, transport)
+}
+
+func skillList(index map[string]types.Skill) []types.Skill {
+	out := make([]types.Skill, 0, len(index))
+	for _, s := range index {
+		out = append(out, s)
+	}
+	return out
 }

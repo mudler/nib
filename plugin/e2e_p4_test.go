@@ -35,10 +35,10 @@ func TestEndToEndClaudePlugin(t *testing.T) {
 	if err := Apply(&cfg, base, "0.9.0"); err != nil {
 		t.Fatal(err)
 	}
-	if len(cfg.Skills) != 1 || cfg.Skills[0].Name != "helper" || cfg.Skills[0].Instructions != "Help body.\n" {
+	if len(cfg.Skills) != 1 || cfg.Skills[0].Name != "claudedemo:helper" || cfg.Skills[0].Instructions != "Help body.\n" {
 		t.Fatalf("claude skill not mapped: %+v", cfg.Skills)
 	}
-	if !strings.Contains(cfg.GetPrompt(), "helper: a claude skill") {
+	if !strings.Contains(cfg.GetPrompt(), "claudedemo:helper: a claude skill") {
 		t.Fatalf("claude skill not in prompt:\n%s", cfg.GetPrompt())
 	}
 	if len(cfg.Hooks) != 1 || cfg.Hooks[0].Event != "PreToolUse" || cfg.Hooks[0].Dir == "" {

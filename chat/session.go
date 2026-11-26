@@ -825,13 +825,11 @@ func hookContextMessage(parts []string) string {
 // (eager load via /skill), so subsequent turns include it without a load_skill
 // tool call. Returns a short notice for the transcript.
 func (s *Session) LoadSkill(name string) (string, error) {
-	for _, sk := range s.skills {
-		if sk.Name == name {
-			suffix := "\n\n# Skill: " + sk.Name + "\n" + sk.Instructions
-			s.loadedSkills += suffix
-			s.systemPrompt += suffix
-			return fmt.Sprintf("Loaded skill %q: %s", sk.Name, sk.Description), nil
-		}
+	if sk, ok := types.FindSkill(s.skills, name); ok {
+		suffix := "\n\n# Skill: " + sk.Name + "\n" + sk.Instructions
+		s.loadedSkills += suffix
+		s.systemPrompt += suffix
+		return fmt.Sprintf("Loaded skill %q: %s", sk.Name, sk.Description), nil
 	}
 	return "", fmt.Errorf("unknown skill %q", name)
 }

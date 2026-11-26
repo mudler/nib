@@ -26,6 +26,11 @@ func DetectFormat(dir string) Format {
 	if _, err := os.Stat(filepath.Join(dir, ".claude-plugin", "plugin.json")); err == nil {
 		return FormatClaude
 	}
+	// A plugin installed from a marketplace may have no plugin.json: its
+	// marketplace entry, kept in SourceFile, is the manifest.
+	if _, err := os.Stat(filepath.Join(dir, SourceFile)); err == nil {
+		return FormatClaude
+	}
 	return FormatUnknown
 }
 

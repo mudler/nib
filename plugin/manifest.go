@@ -11,10 +11,16 @@ import (
 	"strings"
 
 	"github.com/Masterminds/semver/v3"
+	"github.com/mudler/nib/plugin/claudeplugin"
 	"github.com/mudler/nib/types"
 
 	"gopkg.in/yaml.v3"
 )
+
+// Claude returns the parsed plugin of a Claude Code format plugin, or nil for
+// a native plugin. Hosts read RunsCode, Skipped and the raw components from
+// it.
+func (m Manifest) Claude() *claudeplugin.Plugin { return m.claude }
 
 // Manifest is the normalized, format-agnostic representation of a plugin.
 // Both the native (nib-plugin.yaml) and Claude (.claude-plugin/) adapters
@@ -33,6 +39,14 @@ type Manifest struct {
 	Commands []types.CommandConfig `yaml:"commands"`
 
 	Hooks []types.HookConfig `yaml:"hooks"`
+
+	// Notes lists the parts of a Claude Code format plugin that nib does not
+	// load or cannot honour, for the install summary. Never parsed.
+	Notes []string `yaml:"-"`
+
+	// claude is the parsed plugin for the Claude Code format, nil for a
+	// native plugin.
+	claude *claudeplugin.Plugin
 
 	// root is the plugin's install directory. Set by the loader, never parsed.
 	// (Unexported: yaml ignores it; no struct tag, to keep `go vet` quiet.)
@@ -66,6 +80,9 @@ type SkillSpec struct {
 	Description  string           `yaml:"description"`
 	Instructions InstructionsSpec `yaml:"instructions"`
 	Tools        []string         `yaml:"tools"`
+	// Dir is the skill's own directory, for bundled files. Set by the
+	// Claude Code format adapter; never parsed.
+	Dir string `yaml:"-"`
 }
 
 // InstructionsSpec carries a skill body inline or via a file path (relative to
@@ -95,8 +112,8 @@ func (m Manifest) Validate(nibVersion string) error {
 		return fmt.Errorf("plugin manifest: invalid name %q (must be a single path segment)", m.Name)
 	}
 	for k, s := range m.MCPServers {
-		if strings.TrimSpace(s.Command) == "" {
-			return fmt.Errorf("plugin manifest: mcp server %q missing command", k)
+		if strings.TrimSpace(s.Command) == "" && strings.TrimSpace(s.URL) == "" {
+			return fmt.Errorf("plugin manifest: mcp server %q needs a command or a url", k)
 		}
 	}
 	for i, a := range m.Agents {

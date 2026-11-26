@@ -5,6 +5,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/mudler/nib/plugin/claudeplugin"
 	"github.com/mudler/nib/types"
 )
 
@@ -82,28 +83,40 @@ func mergeManifests(cfg *types.Config, manifests []Manifest) {
 }
 
 // expandServerRoot resolves the ${NIB_PLUGIN_ROOT}/${CLAUDE_PLUGIN_ROOT} token
-// (against the plugin's install dir) in a plugin MCP server's command, args, and
-// env values, so a plugin can ship its own server binary and reference it by an
-// absolute, install-location-independent path. Returns a copy; the manifest is
-// left untouched.
+// (against the plugin's install dir) in a plugin MCP server's command, args,
+// env values, url and headers, so a plugin can ship its own server binary and
+// reference it by an absolute, install-location-independent path. ${VAR} and
+// ${VAR:-default} are resolved from the environment. Remote servers keep their
+// url, transport, token and headers. Returns a copy; the manifest is left
+// untouched.
 func expandServerRoot(s types.MCPServer, root string) types.MCPServer {
+	vars := claudeplugin.Vars{PluginRoot: root, Env: os.LookupEnv}
 	repl := func(v string) string {
 		v = strings.ReplaceAll(v, "${NIB_PLUGIN_ROOT}", root)
-		v = strings.ReplaceAll(v, "${CLAUDE_PLUGIN_ROOT}", root)
-		return v
+		return claudeplugin.ExpandConfig(v, vars, nil)
 	}
-	out := types.MCPServer{Command: repl(s.Command)}
+	out := s
+	out.Command = repl(s.Command)
+	out.URL = repl(s.URL)
+	out.BearerToken = repl(s.BearerToken)
 	if len(s.Args) > 0 {
 		out.Args = make([]string, len(s.Args))
 		for i, a := range s.Args {
 			out.Args[i] = repl(a)
 		}
 	}
-	if len(s.Env) > 0 {
-		out.Env = make(map[string]string, len(s.Env))
-		for k, val := range s.Env {
-			out.Env[k] = repl(val)
-		}
+	out.Env = replMap(s.Env, repl)
+	out.Headers = replMap(s.Headers, repl)
+	return out
+}
+
+func replMap(m map[string]string, repl func(string) string) map[string]string {
+	if len(m) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(m))
+	for k, v := range m {
+		out[k] = repl(v)
 	}
 	return out
 }
@@ -202,5 +215,34 @@ func mergeCommands(cfg *types.Config, manifests []Manifest) {
 	}
 	for _, name := range order {
 		cfg.Commands = append(cfg.Commands, byName[name])
+	}
+	addBareCommandAliases(cfg, order, byName)
+}
+
+// addBareCommandAliases also registers a namespaced Claude Code format
+// command ("plugin:cmd") under its bare name ("cmd") when no other command
+// uses that name, so both /plugin:cmd and /cmd work.
+func addBareCommandAliases(cfg *types.Config, order []string, byName map[string]types.CommandConfig) {
+	taken := map[string]bool{}
+	for _, c := range cfg.Commands {
+		taken[c.Name] = true
+	}
+	count := map[string]int{}
+	for _, name := range order {
+		if c := byName[name]; c.Format == types.HookFormatClaude {
+			if _, bare, ok := strings.Cut(name, ":"); ok {
+				count[bare]++
+			}
+		}
+	}
+	for _, name := range order {
+		c := byName[name]
+		_, bare, ok := strings.Cut(name, ":")
+		if c.Format != types.HookFormatClaude || !ok || taken[bare] || count[bare] != 1 {
+			continue
+		}
+		c.Name = bare
+		cfg.Commands = append(cfg.Commands, c)
+		taken[bare] = true
 	}
 }

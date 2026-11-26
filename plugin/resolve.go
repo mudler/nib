@@ -44,6 +44,7 @@ func resolveSkill(s SkillSpec, root string) (types.Skill, error) {
 		Description:  s.Description,
 		Instructions: body,
 		Tools:        s.Tools,
+		Dir:          s.Dir,
 	}, nil
 }
 

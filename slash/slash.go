@@ -482,12 +482,8 @@ func splitVerb(s string) (string, string) {
 }
 
 func hasSkill(skills []types.Skill, name string) bool {
-	for _, s := range skills {
-		if s.Name == name {
-			return true
-		}
-	}
-	return false
+	_, ok := types.FindSkill(skills, name)
+	return ok
 }
 
 func hasAgent(agents []types.AgentTypeConfig, name string) bool {

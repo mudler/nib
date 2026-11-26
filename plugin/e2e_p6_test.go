@@ -146,11 +146,14 @@ func TestAcceptanceClaudePlugin(t *testing.T) {
 	if err := Apply(&cfg, base, "0.9.0"); err != nil {
 		t.Fatal(err)
 	}
-	if len(cfg.Skills) != 1 || cfg.Skills[0].Name != "cskill" {
+	if len(cfg.Skills) != 1 || cfg.Skills[0].Name != "claude-accept:cskill" {
 		t.Fatalf("claude skill not mapped: %+v", cfg.Skills)
 	}
-	if len(cfg.Commands) != 1 || !strings.Contains(cfg.Commands[0].Prompt, "{{.Args}}") {
-		t.Fatalf("claude command not mapped/translated: %+v", cfg.Commands)
+	// Namespaced, plus the bare alias; the prompt keeps $ARGUMENTS for
+	// the Claude format renderer.
+	if len(cfg.Commands) != 2 || cfg.Commands[0].Name != "claude-accept:cmd" || cfg.Commands[1].Name != "cmd" ||
+		cfg.Commands[0].Format != types.HookFormatClaude || !strings.Contains(cfg.Commands[0].Prompt, "$ARGUMENTS") {
+		t.Fatalf("claude command not mapped: %+v", cfg.Commands)
 	}
 }
 

@@ -183,6 +183,29 @@ type Skill struct {
 	Dir          string   `yaml:"-"` // absolute on-disk dir for bundled files; runtime-only, never serialized
 }
 
+// FindSkill returns the skill named name. A bare name also finds a
+// namespaced plugin skill ("plugin:name") when exactly one skill has it.
+func FindSkill(skills []Skill, name string) (Skill, bool) {
+	for _, s := range skills {
+		if s.Name == name {
+			return s, true
+		}
+	}
+	if strings.Contains(name, ":") {
+		return Skill{}, false
+	}
+	var found []Skill
+	for _, s := range skills {
+		if strings.HasSuffix(s.Name, ":"+name) {
+			found = append(found, s)
+		}
+	}
+	if len(found) == 1 {
+		return found[0], true
+	}
+	return Skill{}, false
+}
+
 // CommandConfig is a named slash command: a prompt template (text/template with
 // {{.Args}} and {{.CurrentDirectory}}) optionally routed through a sub-agent.
 //

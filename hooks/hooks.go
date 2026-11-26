@@ -157,7 +157,9 @@ func execHook(ctx context.Context, h types.HookConfig, stdin []byte, timeout tim
 	defer cancel()
 
 	cmd := exec.CommandContext(cctx, "sh", "-c", h.Command)
-	if h.Dir != "" {
+	// A Claude-format hook runs in the project directory, as in Claude Code;
+	// a nib hook runs in its plugin directory.
+	if h.Dir != "" && h.Format != types.HookFormatClaude {
 		cmd.Dir = h.Dir
 	}
 	cmd.Env = append(os.Environ(), "NIB_PLUGIN_ROOT="+h.Dir, "CLAUDE_PLUGIN_ROOT="+h.Dir)
