@@ -109,6 +109,9 @@ func (s Source) Validate() error {
 	if s.SHA != "" && !fullSHA.MatchString(s.SHA) {
 		return fmt.Errorf("sha must be a full 40-character lowercase commit SHA")
 	}
+	if err := safeGitArgs(s.Ref, s.URL, s.Repo, s.Path); err != nil {
+		return err
+	}
 	switch s.Kind {
 	case SourceRelative:
 		if strings.Contains(s.Path, `\`) {

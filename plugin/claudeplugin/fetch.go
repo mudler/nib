@@ -167,6 +167,9 @@ func Fetch(ctx context.Context, m *Marketplace, e *Entry, dest string, opts Fetc
 // branch into dir and returns the commit. With sparse set, only that
 // subdirectory is checked out.
 func checkout(ctx context.Context, git GitFunc, url, ref, sha, sparse, dir string) (string, error) {
+	if err := safeGitArgs(url, ref, sha); err != nil {
+		return "", err
+	}
 	if _, err := git(ctx, dir, "init", "-q"); err != nil {
 		return "", err
 	}
@@ -489,6 +492,9 @@ func ResolveRef(ctx context.Context, src Source, ref string, opts FetchOptions) 
 	if fullSHA.MatchString(ref) {
 		return ref, nil
 	}
+	if err := safeGitArgs(src.GitURL(), ref); err != nil {
+		return "", err
+	}
 	pattern := firstNonEmpty(ref, "HEAD")
 	args := []string{"ls-remote", "--", src.GitURL(), pattern}
 	if ref != "" {
@@ -520,4 +526,18 @@ func ResolveRef(ctx context.Context, src Source, ref string, opts FetchOptions) 
 		return "", fmt.Errorf("ref %q not found in %s", pattern, src.GitURL())
 	}
 	return direct, nil
+}
+
+// safeGitArgs refuses values that git would read as options. They come from
+// marketplace files, which are untrusted.
+func safeGitArgs(vals ...string) error {
+	for _, v := range vals {
+		if strings.HasPrefix(v, "-") {
+			return fmt.Errorf("refusing git argument %q: it starts with '-'", v)
+		}
+		if strings.ContainsAny(v, "\x00\n") {
+			return fmt.Errorf("refusing git argument %q: control character", v)
+		}
+	}
+	return nil
 }

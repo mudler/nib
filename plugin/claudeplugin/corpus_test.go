@@ -1,12 +1,15 @@
 package claudeplugin
 
 import (
+	"context"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestRealCorpus parses every plugin found under the directories listed in
@@ -22,10 +25,13 @@ func TestRealCorpus(t *testing.T) {
 	}
 	var total struct {
 		marketplaces, entries, remote, unsupported, plugins, errors int
+		fetched, fetchErrors                                        int
 		skills, commands, agents, hooks, mcp, lsp, bin, runsCode    int
 		skipped                                                     map[string]int
 	}
 	total.skipped = map[string]int{}
+	// CLAUDEPLUGIN_CORPUS_FETCH=N also fetches the first N remote entries.
+	fetchLeft, _ := strconv.Atoi(os.Getenv("CLAUDEPLUGIN_CORPUS_FETCH"))
 	for _, repo := range filepath.SplitList(env) {
 		if !isDir(repo) {
 			t.Logf("%s: missing, skipped", repo)
@@ -52,7 +58,7 @@ func TestRealCorpus(t *testing.T) {
 				total.runsCode++
 			}
 			for _, s := range p.Skipped {
-				total.skipped[s.Component+": "+reasonKey(s.Reason)]++
+				total.skipped[string(s.Code)+" "+s.Component+": "+reasonKey(s.Reason)]++
 			}
 		}
 		// Every marketplace under the clone, with its entries.
@@ -85,6 +91,23 @@ func TestRealCorpus(t *testing.T) {
 				}
 				if e.Source.Kind != SourceRelative {
 					total.remote++
+					if fetchLeft > 0 {
+						fetchLeft--
+						dest := filepath.Join(t.TempDir(), "p")
+						ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+						res, err := Fetch(ctx, m, e, dest, FetchOptions{MaxBytes: 200 << 20})
+						cancel()
+						if err != nil {
+							total.fetchErrors++
+							t.Logf("fetch %s@%s (%s): %v", e.Name, m.Name, e.Source, err)
+							continue
+						}
+						total.fetched++
+						if len(res.SHA) != 40 {
+							t.Errorf("fetch %s: no SHA", e.Name)
+						}
+						load(dest, LoadOptions{Entry: e, Marketplace: m.Name})
+					}
 					continue
 				}
 				dir, err := m.RelativeDir(e.Source)
@@ -113,8 +136,9 @@ func TestRealCorpus(t *testing.T) {
 			return nil
 		})
 	}
-	t.Logf("marketplaces=%d entries=%d (remote not fetched=%d, unsupported source=%d)",
+	t.Logf("marketplaces=%d entries=%d (remote=%d, unsupported source=%d)",
 		total.marketplaces, total.entries, total.remote, total.unsupported)
+	t.Logf("remote entries fetched=%d fetch errors=%d", total.fetched, total.fetchErrors)
 	t.Logf("plugins parsed=%d errors=%d runs-code=%d", total.plugins, total.errors, total.runsCode)
 	t.Logf("skills=%d commands=%d agents=%d hook-groups=%d mcp=%d lsp=%d bin=%d",
 		total.skills, total.commands, total.agents, total.hooks, total.mcp, total.lsp, total.bin)

@@ -392,3 +392,24 @@ func TestFetchLimits(t *testing.T) {
 		t.Errorf("at the limit: %v", err)
 	}
 }
+
+func TestGitArgumentInjection(t *testing.T) {
+	m, err := ParseMarketplace([]byte(`{"name":"m","owner":{"name":"o"},"plugins":[
+		{"name":"a","source":{"source":"url","url":"https://x/r.git","ref":"--upload-pack=touch /tmp/pwned"}},
+		{"name":"b","source":{"source":"url","url":"-oProxyCommand=x"}}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(m.Plugins) != 0 || len(m.Skipped) != 2 {
+		t.Fatalf("option-like refs and urls must be refused: %+v", m)
+	}
+	called := false
+	git := func(context.Context, string, ...string) (string, error) { called = true; return "", nil }
+	e := &Entry{Name: "x", Source: Source{Kind: SourceURL, URL: "https://x/r.git"}}
+	if _, err := Fetch(context.Background(), &Marketplace{Name: "m"}, e, filepath.Join(t.TempDir(), "d"), FetchOptions{Ref: "-x", Git: git}); err == nil || called {
+		t.Fatalf("Fetch with an option-like ref: err=%v called=%v", err, called)
+	}
+	if _, err := ResolveRef(context.Background(), e.Source, "-x", FetchOptions{Git: git}); err == nil || called {
+		t.Fatalf("ResolveRef with an option-like ref: err=%v called=%v", err, called)
+	}
+}
