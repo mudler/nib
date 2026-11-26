@@ -19,6 +19,10 @@ type Entry struct {
 	SourceURL string `yaml:"source_url"`
 	Ref       string `yaml:"ref"`
 	Enabled   bool   `yaml:"enabled"`
+	// Marketplace and SHA record a plugin installed from a marketplace:
+	// the marketplace name and the commit the plugin was installed at.
+	Marketplace string `yaml:"marketplace,omitempty"`
+	SHA         string `yaml:"sha,omitempty"`
 }
 
 // Registry is a list of entries persisted to <baseDir>/<file> under a single

@@ -1,11 +1,13 @@
 package plugin
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
 
 	"github.com/mudler/nib/internal/vcs"
+	"github.com/mudler/nib/plugin/claudeplugin"
 )
 
 // Manager performs plugin install/update/remove against a base directory.
@@ -42,6 +44,9 @@ func (mgr *Manager) Install(url, ref, nibVersion string) (Manifest, error) {
 	} else if err := vcs.Clone(url, ref, tmp); err != nil {
 		return Manifest{}, fmt.Errorf("git clone: %w", err)
 	}
+	if DetectFormat(tmp) == FormatUnknown && claudeplugin.IsMarketplace(tmp) {
+		return Manifest{}, fmt.Errorf("%s: %w", url, ErrIsMarketplace)
+	}
 	m, err := mgr.place(tmp, url, ref, nibVersion)
 	if err != nil {
 		return Manifest{}, err
@@ -53,6 +58,12 @@ func (mgr *Manager) Install(url, ref, nibVersion string) (Manifest, error) {
 // place finalizes a populated temp dir tmp into plugins/<manifest name>: it
 // validates the manifest, moves the dir into place, and records it DISABLED.
 func (mgr *Manager) place(tmp, sourceURL, ref, nibVersion string) (Manifest, error) {
+	return mgr.placeEntry(tmp, nibVersion, Entry{SourceURL: sourceURL, Ref: ref})
+}
+
+// placeEntry is place with a full registry record template. Its Name and
+// Enabled fields are set here.
+func (mgr *Manager) placeEntry(tmp, nibVersion string, rec Entry) (Manifest, error) {
 	m, err := LoadManifest(tmp, nibVersion)
 	if err != nil {
 		return Manifest{}, err
@@ -69,7 +80,9 @@ func (mgr *Manager) place(tmp, sourceURL, ref, nibVersion string) (Manifest, err
 	if err != nil {
 		return Manifest{}, err
 	}
-	reg.Upsert(Entry{Name: m.Name, SourceURL: sourceURL, Ref: ref, Enabled: false})
+	rec.Name = m.Name
+	rec.Enabled = false
+	reg.Upsert(rec)
 	if err := reg.Save(); err != nil {
 		return Manifest{}, err
 	}
@@ -106,16 +119,31 @@ func (mgr *Manager) InstallDir(dir, nibVersion, sourceURL string) (Manifest, err
 	return m, nil
 }
 
-// Update fast-forwards an installed plugin's checkout.
+// Update fast-forwards an installed plugin's checkout. A plugin installed
+// from a marketplace is updated by fetching the marketplace again and
+// installing the plugin at the commit the marketplace now gives; it keeps its
+// enabled state.
 func (mgr *Manager) Update(name string) error {
 	reg, err := LoadRegistry(mgr.baseDir)
 	if err != nil {
 		return err
 	}
-	if reg.Find(name) == nil {
+	e := reg.Find(name)
+	if e == nil {
 		return fmt.Errorf("plugin %q not installed", name)
 	}
-	return vcs.Pull(pluginDir(mgr.baseDir, name))
+	if e.Marketplace == "" {
+		return vcs.Pull(pluginDir(mgr.baseDir, name))
+	}
+	ctx := context.Background()
+	if _, err := mgr.UpdateMarketplace(ctx, e.Marketplace); err != nil {
+		return err
+	}
+	enabled := e.Enabled
+	if _, err := mgr.InstallFromMarketplace(ctx, e.SourceURL, "", ""); err != nil {
+		return err
+	}
+	return mgr.SetEnabled(name, enabled)
 }
 
 // Remove deletes an installed plugin's files and registry record.
