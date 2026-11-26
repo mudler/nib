@@ -67,6 +67,15 @@ func (mgr *Manager) fetchMarketplace(ctx context.Context, ms claudeplugin.Market
 	if err != nil {
 		return nil, err
 	}
+	reg, err := loadMarketplaces(mgr.baseDir)
+	if err != nil {
+		return nil, err
+	}
+	// The name comes from the fetched file. A different source must not
+	// take over the cache, and the updates, of a registered marketplace.
+	if prev := reg.Find(m.Name); prev != nil && prev.Source != ms.String() {
+		return nil, fmt.Errorf("a marketplace named %q is already registered from %s; remove it first", m.Name, prev.Source)
+	}
 	dest := filepath.Join(dir, m.Name)
 	if err := os.RemoveAll(dest); err != nil {
 		return nil, err
@@ -76,10 +85,6 @@ func (mgr *Manager) fetchMarketplace(ctx context.Context, ms claudeplugin.Market
 	}
 	if m.Root != "" {
 		m.Root = dest
-	}
-	reg, err := loadMarketplaces(mgr.baseDir)
-	if err != nil {
-		return nil, err
 	}
 	reg.Upsert(MarketplaceRecord{Name: m.Name, Source: ms.String(), SHA: m.SHA})
 	return m, reg.Save()

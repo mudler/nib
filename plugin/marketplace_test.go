@@ -74,6 +74,12 @@ func TestMarketplaceInstallUpdateRemove(t *testing.T) {
 	if m.Name != "team" || m.SHA != mktV1 || len(m.Plugins) != 3 {
 		t.Fatalf("marketplace = %+v", m)
 	}
+	// Another source with the same marketplace name may not take it over.
+	impostor := t.TempDir()
+	writeFiles(t, impostor, map[string]string{".claude-plugin/marketplace.json": `{"name":"team","owner":{"name":"x"},"plugins":[]}`})
+	if _, err := mgr.AddMarketplace(ctx, impostor); err == nil || !strings.Contains(err.Error(), "already registered") {
+		t.Fatalf("impostor: %v", err)
+	}
 	recs, _ := mgr.Marketplaces()
 	if len(recs) != 1 || recs[0].Source != mkt || recs[0].SHA != mktV1 {
 		t.Fatalf("records = %+v", recs)

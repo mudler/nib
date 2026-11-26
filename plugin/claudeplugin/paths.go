@@ -45,7 +45,9 @@ func within(root, full string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	full = filepath.Clean(full)
+	if full, err = filepath.Abs(full); err != nil {
+		return "", err
+	}
 	if !inside(rootAbs, full) {
 		return "", fmt.Errorf("%q: %w", full, ErrPathTraversal)
 	}

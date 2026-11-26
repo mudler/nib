@@ -5,7 +5,6 @@ import (
 	"os"
 	"strings"
 
-	"github.com/mudler/nib/plugin/claudeplugin"
 	"github.com/mudler/nib/types"
 )
 
@@ -85,15 +84,16 @@ func mergeManifests(cfg *types.Config, manifests []Manifest) {
 // expandServerRoot resolves the ${NIB_PLUGIN_ROOT}/${CLAUDE_PLUGIN_ROOT} token
 // (against the plugin's install dir) in a plugin MCP server's command, args,
 // env values, url and headers, so a plugin can ship its own server binary and
-// reference it by an absolute, install-location-independent path. ${VAR} and
-// ${VAR:-default} are resolved from the environment. Remote servers keep their
-// url, transport, token and headers. Returns a copy; the manifest is left
-// untouched.
+// reference it by an absolute, install-location-independent path. Remote
+// servers keep their url, transport, token and headers. Other ${...} tokens are
+// left alone: the Claude Code format adapter already resolved ${VAR} and
+// ${VAR:-default} for its own servers, and a nib-format plugin must not read
+// the host environment into a url or header. Returns a copy; the manifest is
+// left untouched.
 func expandServerRoot(s types.MCPServer, root string) types.MCPServer {
-	vars := claudeplugin.Vars{PluginRoot: root, Env: os.LookupEnv}
 	repl := func(v string) string {
 		v = strings.ReplaceAll(v, "${NIB_PLUGIN_ROOT}", root)
-		return claudeplugin.ExpandConfig(v, vars, nil)
+		return strings.ReplaceAll(v, "${CLAUDE_PLUGIN_ROOT}", root)
 	}
 	out := s
 	out.Command = repl(s.Command)

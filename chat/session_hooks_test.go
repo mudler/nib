@@ -103,3 +103,47 @@ func TestSessionStartHookContextReachesSystemPrompt(t *testing.T) {
 		t.Fatal("Reload dropped the SessionStart hook context")
 	}
 }
+
+func TestDecideToolCallHookAskOverridesAutoApprove(t *testing.T) {
+	dir := t.TempDir()
+	ask := filepath.Join(dir, "ask.sh")
+	if err := os.WriteFile(ask, []byte("#!/bin/sh\necho '{\"hookSpecificOutput\":{\"permissionDecision\":\"ask\",\"permissionDecisionReason\":\"risky\"}}'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var asked ToolCallRequest
+	s, err := NewSession(context.Background(), types.Config{
+		Hooks: []types.HookConfig{{Event: "PreToolUse", Command: ask, Dir: dir, Format: types.HookFormatClaude}},
+	}, Callbacks{OnToolCall: func(r ToolCallRequest) ToolCallResponse {
+		asked = r
+		return ToolCallResponse{Approved: false, Adjustment: "no"}
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	s.SetAutoApprove(true)
+	if dec := s.decideToolCall(ToolCallRequest{Name: "bash", Arguments: "{}"}); dec.Approved {
+		t.Fatal("auto-approve bypassed a hook that asked")
+	}
+	if asked.Name != "bash" || !strings.Contains(asked.Verdict, "risky") {
+		t.Fatalf("user was not asked with the reason: %+v", asked)
+	}
+}
+
+func TestUserPromptSubmitHookBlocks(t *testing.T) {
+	dir := t.TempDir()
+	block := filepath.Join(dir, "block.sh")
+	if err := os.WriteFile(block, []byte("#!/bin/sh\necho 'secret in prompt' >&2\nexit 2\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	s, err := NewSession(context.Background(), types.Config{
+		Hooks: []types.HookConfig{{Event: "UserPromptSubmit", Command: block, Dir: dir, Format: types.HookFormatClaude}},
+	}, Callbacks{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if _, err := s.SendMessage("my key is sk-123"); err == nil || !strings.Contains(err.Error(), "secret in prompt") {
+		t.Fatalf("err = %v", err)
+	}
+}

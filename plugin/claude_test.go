@@ -103,7 +103,7 @@ func TestLoadClaudeManifestFull(t *testing.T) {
 		}
 		switch h.Event {
 		case "PreToolUse":
-			if h.Matcher != "edit|write" || h.Timeout != 5 || h.Command != `"`+dir+`/guard.sh"` {
+			if h.Matcher != "edit|write" || h.Timeout != 5 || h.Command != `"${CLAUDE_PLUGIN_ROOT}/guard.sh"` {
 				t.Errorf("PreToolUse = %+v", h)
 			}
 			if !slices.ContainsFunc(h.Env, func(e string) bool { return strings.HasPrefix(e, "CLAUDE_PLUGIN_DATA=") }) ||

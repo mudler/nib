@@ -73,7 +73,7 @@ func TestCombine(t *testing.T) {
 		{Continue: true, PermissionDecision: "ask", Reason: "check", AdditionalContext: "two"},
 		{Continue: true, Error: "e1"},
 	})
-	if c.Block || c.PermissionDecision != "ask" || c.Reason != "check" || c.UpdatedInput != nil || c.AdditionalContext != "one\n\ntwo" || c.Error != "e1" {
+	if c.Block || c.PermissionDecision != "ask" || c.Reason != "check" || c.UpdatedInput == nil || c.AdditionalContext != "one\n\ntwo" || c.Error != "e1" {
 		t.Errorf("combined = %+v", c)
 	}
 	c = Combine("PreToolUse", []Outcome{

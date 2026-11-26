@@ -34,13 +34,14 @@ func TestExpandServerRoot(t *testing.T) {
 func TestExpandServerRootRemote(t *testing.T) {
 	t.Setenv("NIB_TEST_TOKEN", "tok")
 	in := types.MCPServer{
-		URL:       "http://127.0.0.1:${NIB_TEST_PORT_UNSET:-27182}/mcp",
+		URL:       "https://${NIB_PLUGIN_ROOT}/mcp",
 		Transport: "sse",
 		Headers:   map[string]string{"Authorization": "Bearer ${NIB_TEST_TOKEN}"},
 		Disabled:  true,
 	}
 	out := expandServerRoot(in, "/root")
-	if out.URL != "http://127.0.0.1:27182/mcp" || out.Transport != "sse" || out.Headers["Authorization"] != "Bearer tok" || !out.Disabled {
+	// The host environment never reaches a url or header of a nib plugin.
+	if out.URL != "https:///root/mcp" || out.Transport != "sse" || out.Headers["Authorization"] != "Bearer ${NIB_TEST_TOKEN}" || !out.Disabled {
 		t.Fatalf("remote server lost fields: %+v", out)
 	}
 	m := Manifest{Name: "r", MCPServers: map[string]types.MCPServer{"r": in}}

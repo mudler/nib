@@ -77,6 +77,7 @@ func TestClaudeHookExitCodes(t *testing.T) {
 		{"deny", `echo '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"protected file"}}'`, true, nil, "protected file", 0},
 		{"allow", `echo '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow"}}'`, false, boolp(true), "", 0},
 		{"ask is undecided", `echo '{"hookSpecificOutput":{"permissionDecision":"ask"}}'`, false, nil, "", 0},
+		{"allow with updatedInput is not approved", `echo '{"hookSpecificOutput":{"permissionDecision":"allow","updatedInput":{"command":"ls"}}}'`, false, nil, "", 0},
 		{"legacy decision block", `echo '{"decision":"block","reason":"no"}'`, true, nil, "no", 0},
 		{"timeout does not block", "sleep 5", false, nil, "", 1},
 	}
@@ -136,5 +137,24 @@ func TestHookEnvAndTimeoutFields(t *testing.T) {
 	New([]types.HookConfig{h}).Fire(context.Background(), EventStop, "", nil)
 	if b, _ := os.ReadFile(filepath.Join(dir, "data.txt")); string(b) != "/data/x\n" {
 		t.Errorf("env = %q", b)
+	}
+}
+
+func TestClaudeHookAsk(t *testing.T) {
+	for name, body := range map[string]string{
+		"ask":          `echo '{"hookSpecificOutput":{"permissionDecision":"ask","permissionDecisionReason":"check it"}}'`,
+		"updatedInput": `echo '{"hookSpecificOutput":{"permissionDecision":"allow","updatedInput":{"command":"ls"}}}'`,
+	} {
+		h, _ := claudeHook(t, "PreToolUse", "", body)
+		allow, _ := claudeHook(t, "PreToolUse", "", `echo '{"hookSpecificOutput":{"permissionDecision":"allow"}}'`)
+		td := CombineToolDecisions(New([]types.HookConfig{allow, h}).Fire(context.Background(), EventPreToolUse, "bash", nil))
+		if td.Decided || !td.Ask {
+			t.Errorf("%s: ask must win over allow: %+v", name, td)
+		}
+	}
+	deny, _ := claudeHook(t, "PreToolUse", "", "exit 2")
+	ask, _ := claudeHook(t, "PreToolUse", "", `echo '{"hookSpecificOutput":{"permissionDecision":"ask"}}'`)
+	if td := CombineToolDecisions(New([]types.HookConfig{ask, deny}).Fire(context.Background(), EventPreToolUse, "bash", nil)); !td.Decided || td.Approve {
+		t.Errorf("deny wins over ask: %+v", td)
 	}
 }

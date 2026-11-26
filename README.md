@@ -981,7 +981,10 @@ What is mapped:
 - Hooks for `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse` and `Stop`
   follow the format's contract: stdin with `tool_name`/`tool_input`, matchers such as `Bash`
   or `Edit|Write` matched to nib's tools, exit status 2 blocks, `hookSpecificOutput`
-  decisions, and SessionStart/UserPromptSubmit output added to the context. Hooks run in the
+  decisions, and SessionStart/UserPromptSubmit output added to the context. A PreToolUse
+  `ask` always asks the user, whatever the approval mode; an `allow` with `updatedInput` also
+  asks, since nib does not rewrite tool input yet. A UserPromptSubmit hook can block the
+  prompt. PostToolUse and Stop hooks run, but their output is not fed back. Hooks run in the
   project directory with `CLAUDE_PLUGIN_ROOT`, `CLAUDE_PLUGIN_DATA` and the options in their
   environment; the data dir is `plugin-data/<id>` next to `plugins/`.
 

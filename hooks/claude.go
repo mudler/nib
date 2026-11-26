@@ -161,11 +161,26 @@ func runClaudeHook(ctx context.Context, h types.HookConfig, event Event, stdin [
 	}
 	o, _ := claudeplugin.ParseOutput(string(event), r)
 	if o.Error != "" {
-		xlog.Warn("hook failed", "event", string(event), "command", h.Command, "error", o.Error)
+		// The command is not logged: an exec-form command may hold option
+		// values.
+		xlog.Warn("hook failed", "event", string(event), "plugin", h.Dir, "error", o.Error)
 	}
-	d := Decision{Block: o.Block, Reason: o.Reason, Context: o.AdditionalContext, SystemMessage: o.SystemMessage}
-	if event == EventPreToolUse && !o.Block && o.PermissionDecision == claudeplugin.PermissionAllow {
-		d.Approved = boolPtr(true)
+	d := Decision{Claude: true, Block: o.Block, Reason: o.Reason, Context: o.AdditionalContext, SystemMessage: o.SystemMessage}
+	if event == EventPreToolUse && !o.Block {
+		switch o.PermissionDecision {
+		case claudeplugin.PermissionAllow:
+			if o.UpdatedInput != nil {
+				// nib cannot rewrite the tool input yet: approving the
+				// original input would run what the hook meant to change,
+				// so the user is asked instead.
+				d.Ask = true
+				d.Reason = "a hook wanted to change the tool input, which nib does not support"
+				break
+			}
+			d.Approved = boolPtr(true)
+		case claudeplugin.PermissionAsk:
+			d.Ask = true
+		}
 	}
 	return d
 }

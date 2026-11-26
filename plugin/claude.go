@@ -93,14 +93,25 @@ func claudeDataDir(pluginRoot, id string) string {
 // claudeOptionValues resolves userConfig: the option default, overridden by a
 // CLAUDE_PLUGIN_OPTION_<KEY> environment variable. nib has no settings store
 // for plugin options yet.
-func claudeOptionValues(cp *claudeplugin.Plugin) (map[string]string, error) {
-	vals := map[string]any{}
-	for k := range cp.UserConfig {
+// An option that does not validate is left out and reported; the others
+// still apply.
+func claudeOptionValues(cp *claudeplugin.Plugin) (map[string]string, []error) {
+	out := map[string]string{}
+	var errs []error
+	for _, k := range slices.Sorted(maps.Keys(cp.UserConfig)) {
+		one := &claudeplugin.Plugin{UserConfig: map[string]claudeplugin.UserConfigOption{k: cp.UserConfig[k]}}
+		vals := map[string]any{}
 		if v, ok := os.LookupEnv("CLAUDE_PLUGIN_OPTION_" + strings.ToUpper(k)); ok {
 			vals[k] = v
 		}
+		got, err := one.ResolveUserConfig(vals)
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		maps.Copy(out, got)
 	}
-	return cp.ResolveUserConfig(vals)
+	return out, errs
 }
 
 func claudeToManifest(cp *claudeplugin.Plugin, root string) Manifest {
@@ -115,10 +126,9 @@ func claudeToManifest(cp *claudeplugin.Plugin, root string) Manifest {
 		note("%s %s: %s", s.Component, s.Name, s.Reason)
 	}
 
-	options, err := claudeOptionValues(cp)
-	if err != nil {
+	options, errs := claudeOptionValues(cp)
+	for _, err := range errs {
 		note("userConfig: %v (set CLAUDE_PLUGIN_OPTION_<KEY>)", err)
-		options = map[string]string{}
 	}
 	cwd, _ := os.Getwd()
 	dataDir := claudeDataDir(root, cp.ID)
@@ -238,6 +248,9 @@ func claudeToManifest(cp *claudeplugin.Plugin, root string) Manifest {
 			note("hook %s: event not fired by nib", g.Event)
 			continue
 		}
+		if g.Event == "PostToolUse" || g.Event == "Stop" {
+			note("hook %s: runs, but its decision and output are not fed back to the model", g.Event)
+		}
 		matcher := g.Matcher
 		if claudeplugin.IsToolEvent(g.Event) {
 			matcher = hooks.TranslateMatcher(matcher)
@@ -253,10 +266,13 @@ func claudeToManifest(cp *claudeplugin.Plugin, root string) Manifest {
 			if h.If != "" {
 				note("hook %s: \"if\" rule %q is ignored; the hook runs for every match", g.Event, h.If)
 			}
-			cmd := claudeplugin.ExpandConfig(h.Command, claudeplugin.Vars{PluginRoot: root, PluginData: dataDir, ProjectDir: cwd}, nil)
+			// Shell form: the command stays as written. The shell expands
+			// ${CLAUDE_PLUGIN_ROOT} and the other variables from the hook's
+			// environment, so a path is never pasted into the script.
+			cmd := h.Command
 			if len(h.Args) > 0 {
 				// Exec form: one word per argument, no shell parsing.
-				cmd = shellQuote(cmd)
+				cmd = shellQuote(claudeplugin.ExpandConfig(h.Command, vars, nil))
 				for _, arg := range h.Args {
 					cmd += " " + shellQuote(claudeplugin.ExpandConfig(arg, vars, nil))
 				}

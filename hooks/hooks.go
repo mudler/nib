@@ -45,6 +45,11 @@ type Decision struct {
 	Context string `json:"-"`
 	// SystemMessage is a Claude-format hook's warning for the user.
 	SystemMessage string `json:"-"`
+	// Ask asks the user about a PreToolUse call even when the approval
+	// mode or a grant would approve it. Claude-format hooks only.
+	Ask bool `json:"-"`
+	// Claude is true for a decision of a Claude-format hook.
+	Claude bool `json:"-"`
 }
 
 // ToolDecision is the combined PreToolUse verdict.
@@ -53,6 +58,9 @@ type ToolDecision struct {
 	Approve    bool
 	Adjustment string
 	Reason     string
+	// Ask is set when no hook blocked and one asked for the user's
+	// decision; Decided is then false.
+	Ask bool
 }
 
 // Dispatcher fires hooks for events.
@@ -211,6 +219,11 @@ func CombineToolDecisions(ds []Decision) ToolDecision {
 	for _, d := range ds {
 		if d.Block || (d.Approved != nil && !*d.Approved) {
 			return ToolDecision{Decided: true, Approve: false, Reason: d.Reason}
+		}
+	}
+	for _, d := range ds {
+		if d.Ask {
+			return ToolDecision{Ask: true, Reason: d.Reason}
 		}
 	}
 	res := ToolDecision{}

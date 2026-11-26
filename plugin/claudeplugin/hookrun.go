@@ -127,6 +127,14 @@ type Outcome struct {
 	Error string
 }
 
+// nonBlockingEvents cannot be blocked: exit status 2 only reports stderr.
+var nonBlockingEvents = map[string]bool{
+	"SessionStart": true, "SessionEnd": true, "Setup": true, "Notification": true,
+	"SubagentStart": true, "PostCompact": true, "CwdChanged": true, "FileChanged": true,
+	"InstructionsLoaded": true, "StopFailure": true, "WorktreeRemove": true,
+	"PostModelSwitch": true, "MessageDisplay": true, "DirectoryAdded": true,
+}
+
 // plainContextEvents take plain stdout of an exit-0 hook as context.
 var plainContextEvents = map[string]bool{
 	"SessionStart": true, "UserPromptSubmit": true, "UserPromptExpansion": true, "PostModelSwitch": true,
@@ -149,7 +157,9 @@ type hookOutput struct {
 
 // ParseOutput reads a hook result with the format's rules:
 //
-//   - exit 2 blocks, with stderr as the reason;
+//   - exit 2 blocks, with stderr as the reason, on events that can be
+//     blocked (on SessionStart and the other notification events it is an
+//     Error);
 //   - another non-zero exit or a timeout is a non-blocking Error;
 //   - on exit 0, a JSON object on stdout gives continue, stopReason,
 //     systemMessage, decision, reason and hookSpecificOutput
@@ -165,6 +175,9 @@ func ParseOutput(event string, r HookResult) (Outcome, error) {
 	switch {
 	case r.TimedOut:
 		o.Error = "hook timed out"
+		return o, nil
+	case r.ExitCode == 2 && nonBlockingEvents[event]:
+		o.Error = "hook exited with status 2: " + strings.TrimSpace(string(r.Stderr))
 		return o, nil
 	case r.ExitCode == 2:
 		o.Block = true
@@ -267,8 +280,8 @@ func Combine(event string, outs []Outcome) Outcome {
 			errs = append(errs, o.Error)
 		}
 	}
-	if c.PermissionDecision != PermissionAllow {
-		c.UpdatedInput = nil // input changes apply only to an allowed call
+	if c.Block || c.PermissionDecision == PermissionDeny {
+		c.UpdatedInput = nil // a denied call runs no input
 	}
 	c.AdditionalContext = strings.Join(ctx, "\n\n")
 	c.SystemMessage = strings.Join(msgs, "\n")

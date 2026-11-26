@@ -941,12 +941,25 @@ func (s *Session) decideToolCallForTurn(req ToolCallRequest, turn *turnApproval)
 			"reasoning": req.Reasoning,
 			"agent_id":  req.AgentID,
 		})
-		if td := hooks.CombineToolDecisions(decisions); td.Decided {
+		td := hooks.CombineToolDecisions(decisions)
+		if td.Decided {
 			adjustment := td.Adjustment
 			if !td.Approve && adjustment == "" {
 				adjustment = td.Reason
 			}
 			return cogito.ToolCallDecision{Approved: td.Approve, Adjustment: adjustment}
+		}
+		if td.Ask {
+			// A hook asked for the user's decision: no mode, grant or
+			// classifier may approve the call in their place.
+			if s.callbacks.OnToolCall == nil {
+				return cogito.ToolCallDecision{Approved: false, Adjustment: "a hook asked for user approval and no one can approve"}
+			}
+			if td.Reason != "" {
+				req.Verdict = "hook: " + td.Reason
+			}
+			resp := s.callbacks.OnToolCall(req)
+			return cogito.ToolCallDecision{Approved: resp.Approved, Adjustment: resp.Adjustment}
 		}
 	}
 
@@ -2403,7 +2416,15 @@ func (s *Session) SendMessageWithDelivery(text string, delivery InputDelivery, p
 	}
 	var promptContext []string
 	if s.hooks != nil {
-		promptContext = hooks.Contexts(s.hooks.Fire(s.ctx, hooks.EventUserPromptSubmit, "", map[string]any{"event": "UserPromptSubmit", "prompt": text}))
+		ds := s.hooks.Fire(s.ctx, hooks.EventUserPromptSubmit, "", map[string]any{"event": "UserPromptSubmit", "prompt": text})
+		for _, d := range ds {
+			// Only a Claude-format hook may block a prompt; a nib hook's
+			// non-zero exit never did.
+			if d.Block && d.Claude {
+				return "", fmt.Errorf("prompt blocked by a hook: %s", d.Reason)
+			}
+		}
+		promptContext = hooks.Contexts(ds)
 	}
 	turnCtx := s.beginTurn()
 	if s.background != nil {
