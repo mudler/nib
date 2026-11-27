@@ -815,6 +815,9 @@ Codex app-server discovery uses `model/list` without starting a conversation
 or inference turn. Both Codex transports retain exact visible model IDs,
 including IDs newer than nib's catalog, and omit hidden entries. Discovery
 still requires a working configured transport and credentials.
+The native HTTP Codex adapter advertises compatibility version `0.166.0` on
+both inference and model discovery requests. This meets the GPT-6.2 minimum
+client version; it does not add catalog suggestions or establish account access.
 
 The ChatGPT subscription picker adds conservative suggestions from the bundled
 catalog when the live list omits them: `gpt-6-astra`, `gpt-6.1-sol`, and

@@ -34,8 +34,9 @@ import (
 )
 
 const (
-	codexBaseURL   = "https://chatgpt.com/backend-api"
-	codexClientVer = "0.162.1"
+	codexBaseURL = "https://chatgpt.com/backend-api"
+	// Minimum compatibility version for GPT-6.2; released as rust-v0.166.0.
+	codexClientVer = "0.166.0"
 	codexEndpoint  = "/codex/responses"
 
 	headerRoutingHint     = "x-codex-routing-hint"
