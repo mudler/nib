@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"github.com/klauspost/compress/zstd"
+	"github.com/mudler/nib/llmprovider/catalog/internal/catalogformat"
 )
 
 // To reproduce the embedded catalog from pinned provenance, run:
@@ -49,6 +50,11 @@ func Load() error {
 			loadErr = fmt.Errorf("catalog: decompress: %w", err)
 			return
 		}
+		raw, err = catalogformat.Decode(raw)
+		if err != nil {
+			loadErr = err
+			return
+		}
 		if err := json.Unmarshal(raw, &catalogDB); err != nil {
 			loadErr = fmt.Errorf("catalog: parse: %w", err)
 			return
@@ -59,12 +65,12 @@ func Load() error {
 }
 
 func decompress(data []byte) ([]byte, error) {
-	r, err := zstd.NewReader(nil)
+	r, err := zstd.NewReader(nil, zstd.WithDecoderMaxMemory(catalogformat.MaxBytes), zstd.WithDecodeAllCapLimit(true))
 	if err != nil {
 		return nil, err
 	}
 	defer r.Close()
-	return r.DecodeAll(data, nil)
+	return r.DecodeAll(data, make([]byte, 0, catalogformat.MaxBytes))
 }
 
 // buildIndices walks providers and their models in sorted order. The same

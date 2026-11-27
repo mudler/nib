@@ -1,7 +1,7 @@
 {
   "repository": "https://github.com/can1357/oh-my-pi",
   "path": "packages/catalog/src/models.json",
-  "revision": "c8913466dd7bf92040de911f8e00e30b8f4e48a2",
-  "sha256": "08e9acfd48f9a0bbdfb6fcdb90021cdf989da2a1248aba30a129704ba6096596",
+  "revision": "9319b0b3074e2198f5f20db153643109fd01cc29",
+  "sha256": "d421c473be613f4e61a2d90557a77596e2e6cb4098658323c4e24e0b304628e0",
   "validationVersion": 1
 }

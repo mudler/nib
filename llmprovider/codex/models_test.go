@@ -34,7 +34,7 @@ func TestListModelsSkipsHidden(t *testing.T) {
 		{"slug":"codex-none","visibility":"None"}
 	]}`)
 	ids, err := l.ListModels(context.Background())
-	if err != nil || !reflect.DeepEqual(ids, []string{"gpt-5-codex", "gpt-5", "gpt-6-astra", "gpt-6.1-sol", "gpt-6-luna"}) {
+	if err != nil || !reflect.DeepEqual(ids, []string{"gpt-5-codex", "gpt-5", "gpt-6-astra", "gpt-6.1-sol", "gpt-6-luna", "gpt-6.2-sol", "gpt-6.2-astra"}) {
 		t.Fatalf("ids = %v, err = %v", ids, err)
 	}
 }
@@ -76,8 +76,8 @@ func TestListModelsFutureExactAndEmpty(t *testing.T) {
 		body string
 		want []string
 	}{
-		{`{"models":[{"slug":"gpt-6-future.Exact","id":"not-the-slug","visibility":"list"},{"id":"future/other"},{"slug":"hidden","visibility":"hide"},{"slug":"none","visibility":"none"}]}`, []string{"gpt-6-future.Exact", "future/other", "gpt-6-astra", "gpt-6.1-sol", "gpt-6-luna"}},
-		{`{"models":[]}`, []string{"gpt-6-astra", "gpt-6.1-sol", "gpt-6-luna"}},
+		{`{"models":[{"slug":"gpt-6-future.Exact","id":"not-the-slug","visibility":"list"},{"id":"future/other"},{"slug":"hidden","visibility":"hide"},{"slug":"none","visibility":"none"}]}`, []string{"gpt-6-future.Exact", "future/other", "gpt-6-astra", "gpt-6.1-sol", "gpt-6-luna", "gpt-6.2-sol", "gpt-6.2-astra"}},
+		{`{"models":[]}`, []string{"gpt-6-astra", "gpt-6.1-sol", "gpt-6-luna", "gpt-6.2-sol", "gpt-6.2-astra"}},
 	} {
 		t.Run(tc.body, func(t *testing.T) {
 			ids, err := withModelsServer(t, tc.body).ListModels(context.Background())
@@ -107,7 +107,7 @@ func TestListModelsErrors(t *testing.T) {
 func TestListModelsIncludesUnverifiedCatalogSuggestions(t *testing.T) {
 	l := withModelsServer(t, `{"models":[{"slug":"Vendor/Future:Exact"},{"slug":"gpt-6.1-sol"},{"slug":"Vendor/Future:Exact"},{"slug":"gpt-6-luna","visibility":"hide"}]}`)
 	ids, err := l.ListModels(context.Background())
-	want := []string{"Vendor/Future:Exact", "gpt-6.1-sol", "gpt-6-astra"}
+	want := []string{"Vendor/Future:Exact", "gpt-6.1-sol", "gpt-6-astra", "gpt-6.2-sol", "gpt-6.2-astra"}
 	if err != nil || !reflect.DeepEqual(ids, want) {
 		t.Fatalf("ids=%v err=%v; want %v", ids, err, want)
 	}
@@ -118,7 +118,7 @@ func TestListModelsIncludesUnverifiedCatalogSuggestions(t *testing.T) {
 }
 
 func TestCatalogSuggestionsExcludeEveryHiddenCurrentModel(t *testing.T) {
-	l := withModelsServer(t, `{"models":[{"slug":"gpt-6-astra","visibility":"hide"},{"slug":"gpt-6.1-sol","visibility":"none"},{"slug":"gpt-6-luna","visibility":"HIDE"}]}`)
+	l := withModelsServer(t, `{"models":[{"slug":"gpt-6-astra","visibility":"hide"},{"slug":"gpt-6.1-sol","visibility":"none"},{"slug":"gpt-6-luna","visibility":"HIDE"},{"slug":"GPT-6.2-SOL","visibility":"HiDe"},{"id":"GPT-6.2-ASTRA","visibility":"NoNe"},{"slug":"gpt-6.2-sol","visibility":"list"},{"id":"gpt-6.2-astra","visibility":"list"}]}`)
 	ids, err := l.ListModels(context.Background())
 	if err != nil || len(ids) != 0 {
 		t.Fatalf("hidden models reintroduced: %v, %v", ids, err)
@@ -150,7 +150,7 @@ func TestCatalogSuggestionsStayOnOfficialChatGPTRoute(t *testing.T) {
 			if err != nil || len(ids) == 0 || ids[0] != "live.Exact" {
 				t.Fatalf("live result=%v, %v", ids, err)
 			}
-			if tc.want && !slices.Contains(ids, "gpt-6-astra") {
+			if tc.want && (!slices.Contains(ids, "gpt-6.2-sol") || !slices.Contains(ids, "gpt-6.2-astra")) {
 				t.Fatalf("official suggestions missing: %v", ids)
 			}
 			if !tc.want && len(ids) != 1 {

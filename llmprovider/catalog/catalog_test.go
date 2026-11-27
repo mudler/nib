@@ -294,13 +294,15 @@ func TestLookupFindsEveryEntryByItsOwnID(t *testing.T) {
 
 // A user who types a model ID in a different case than the catalog still gets
 // that model, from step 3 (model ID across providers), not a suffix guess.
+// Exact-case preference can select a different provider when the snapshot
+// contains both upper- and lower-case spellings.
 func TestLookupModelIDIgnoresCase(t *testing.T) {
 	upper, ok := Lookup("no-such-provider", "ZAI-ORG/GLM-5.2", "")
 	if !ok {
 		t.Fatal("no match for ZAI-ORG/GLM-5.2")
 	}
 	lower, _ := Lookup("no-such-provider", "zai-org/glm-5.2", "")
-	if upper.Provider != lower.Provider || upper.ID != lower.ID {
+	if !strings.EqualFold(upper.ID, "zai-org/glm-5.2") || !strings.EqualFold(lower.ID, upper.ID) {
 		t.Fatalf("case changed the match: %s/%s vs %s/%s", upper.Provider, upper.ID, lower.Provider, lower.ID)
 	}
 }
@@ -344,5 +346,14 @@ func TestEmbeddedProvenance(t *testing.T) {
 	}
 	if len(p.Revision) != 40 || p.SHA256 != fmt.Sprintf("%x", sha256.Sum256(raw)) {
 		t.Fatal("embedded artifact differs from provenance")
+	}
+}
+
+func TestCodexFreshModelsUseOfficialRoute(t *testing.T) {
+	for _, id := range []string{"gpt-6.2-sol", "gpt-6.2-astra"} {
+		m, ok := Lookup("openai-codex", id, "")
+		if !ok || m.ID != id || m.Provider != "openai-codex" || m.API != "openai-codex-responses" || m.BaseURL != "https://chatgpt.com/backend-api" {
+			t.Errorf("%s: missing official Codex metadata: %+v (found %v)", id, m, ok)
+		}
 	}
 }

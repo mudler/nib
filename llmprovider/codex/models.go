@@ -63,7 +63,7 @@ func (l *LLM) ListModels(ctx context.Context) ([]string, error) {
 	// Official Codex model guidance: https://learn.chatgpt.com/docs/models .
 	// Keep this allowlist narrow: the provider catalog also has image-only and
 	// restricted models. Resolve metadata only on the exact ChatGPT route.
-	for _, id := range []string{"gpt-6-astra", "gpt-6.1-sol", "gpt-6-luna"} {
+	for _, id := range []string{"gpt-6-astra", "gpt-6.1-sol", "gpt-6-luna", "gpt-6.2-sol", "gpt-6.2-astra"} {
 		if seen[id] || hidden[strings.ToLower(id)] {
 			continue
 		}

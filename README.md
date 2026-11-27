@@ -817,11 +817,11 @@ including IDs newer than nib's catalog, and omit hidden entries. Discovery
 still requires a working configured transport and credentials.
 The native HTTP Codex adapter advertises compatibility version `0.166.0` on
 both inference and model discovery requests. This meets the GPT-6.2 minimum
-client version; it does not add catalog suggestions or establish account access.
+client version; it does not establish account access.
 
 The ChatGPT subscription picker adds conservative suggestions from the bundled
-catalog when the live list omits them: `gpt-6-astra`, `gpt-6.1-sol`, and
-`gpt-6-luna`. Astra's model ID is `gpt-6-astra`; GPT-6.1 Sol is a separate model.
+catalog when the live list omits them: `gpt-6-astra`, `gpt-6.1-sol`,
+`gpt-6-luna`, `gpt-6.2-sol`, and `gpt-6.2-astra`. These are distinct model IDs.
 These suggestions apply only to the official ChatGPT route. A model explicitly
 hidden by the backend stays hidden. The picker and `/models` label the combined
 list as unverified suggestions. You can also type an exact ID outside this list;
@@ -1916,13 +1916,22 @@ MIT
 ## Model catalog maintenance
 
 The embedded model metadata in `llmprovider/catalog/catalog.json.zst` comes from
-[oh-my-pi's models.json](https://github.com/can1357/oh-my-pi/blob/c8913466dd7bf92040de911f8e00e30b8f4e48a2/packages/catalog/src/models.json).
+[oh-my-pi's models.json](https://github.com/can1357/oh-my-pi/blob/9319b0b3074e2198f5f20db153643109fd01cc29/packages/catalog/src/models.json).
 This is separate from the skill/plugin catalog. `llmprovider/catalog/provenance.json`
 records the immutable source revision, path, raw SHA-256 and validation version.
 The artifact retains the full upstream JSON, including records that are not chat
 models. A catalog entry is metadata, not proof of account entitlement, discovery
 availability or working inference. Provider-specific limits can differ for the
 same model ID; a refresh does not add provider adapters or change defaults.
+
+The generator and runtime share a decoder for legacy provider/model maps and
+upstream compact schema version 1. Compact references, provider constants,
+boolean masks and compatibility deltas are expanded without inferring metadata.
+Unknown schema versions and malformed references are rejected. Source data is
+limited to 32 MiB, node nesting to 64 levels, and expansion work/output to
+128 MiB. Upstream extension fields such as `providerHashes` are not consumed;
+provenance verifies the SHA-256 of the complete original source instead.
+The compressed artifact retains those original bytes, not normalized JSON.
 
 Reproduce the checked-in artifact with the pinned Go toolchain and dependencies:
 

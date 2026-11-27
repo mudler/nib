@@ -177,3 +177,46 @@ func TestDeltaConsumedReasoningEfforts(t *testing.T) {
 		t.Fatalf("missing consumed capability change: %s", got)
 	}
 }
+
+// Compact and legacy representations of the same consumed fields must not
+// produce a wall of false field changes caused by JSON property ordering.
+func TestDeltaIgnoresObjectOrder(t *testing.T) {
+	a, _ := validate([]byte(strings.Replace(valid, `"future":true`, `"thinking":{"mode":"effort","efforts":["high"]}`, 1)))
+	b, _ := validate([]byte(strings.Replace(valid, `"future":true`, `"thinking":{"efforts":["high"],"mode":"effort"}`, 1)))
+	if s := delta(a, b); s != "" {
+		t.Fatal(s)
+	}
+}
+
+func TestCompactGeneration(t *testing.T) {
+	body := `{"version":1,"keys":["provider","api","contextWindow"],"booleanShapes":[[]],"nodes":[[0,[0,"p",1,"openai-completions"],0,[]],[0,[2,100],0,[]]],"compat":[],"providers":[["p",[0],[["M",[1]]]]]}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, body) }))
+	defer srv.Close()
+	dir := t.TempDir()
+	if _, e := Generate(srv.Client(), srv.URL, dir, revision, true); e != nil {
+		t.Fatal(e)
+	}
+	a, _ := os.ReadFile(filepath.Join(dir, "catalog.json.zst"))
+	p, _ := os.ReadFile(filepath.Join(dir, "provenance.json"))
+	meta, e := ReadProvenance(dir)
+	if e != nil || meta.SHA256 != fmt.Sprintf("%x", sha256.Sum256([]byte(body))) {
+		t.Fatalf("digest: %v %v", meta, e)
+	}
+	if s, e := Generate(srv.Client(), srv.URL, dir, revision, false); e != nil || s != "" {
+		t.Fatalf("reproduce: %s %v", s, e)
+	}
+	b, _ := os.ReadFile(filepath.Join(dir, "catalog.json.zst"))
+	q, _ := os.ReadFile(filepath.Join(dir, "provenance.json"))
+	if !bytes.Equal(a, b) || !bytes.Equal(p, q) {
+		t.Fatal("not deterministic")
+	}
+	body = strings.Replace(body, `"version":1`, `"version":2`, 1)
+	if _, e := Generate(srv.Client(), srv.URL, dir, revision, true); e == nil {
+		t.Fatal("unsupported version accepted")
+	}
+	b, _ = os.ReadFile(filepath.Join(dir, "catalog.json.zst"))
+	q, _ = os.ReadFile(filepath.Join(dir, "provenance.json"))
+	if !bytes.Equal(a, b) || !bytes.Equal(p, q) {
+		t.Fatal("failure changed files")
+	}
+}

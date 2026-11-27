@@ -18,11 +18,12 @@ import (
 
 	"github.com/klauspost/compress/zstd"
 	"github.com/mudler/nib/llmprovider/catalog"
+	"github.com/mudler/nib/llmprovider/catalog/internal/catalogformat"
 )
 
 const Repository = "https://github.com/can1357/oh-my-pi"
 const SourcePath = "packages/catalog/src/models.json"
-const MaxBytes = 32 << 20
+const MaxBytes = catalogformat.MaxBytes
 
 var commitPattern = regexp.MustCompile(`^[0-9a-f]{40}$`)
 
@@ -126,6 +127,10 @@ func validateType(raw json.RawMessage, typ reflect.Type) error {
 	return nil
 }
 func validate(raw []byte) (records, error) {
+	raw, err := catalogformat.Decode(raw)
+	if err != nil {
+		return nil, err
+	}
 	var db records
 	if e := json.Unmarshal(raw, &db); e != nil {
 		return nil, e
@@ -175,6 +180,17 @@ func projection(m map[string]json.RawMessage) map[string]json.RawMessage {
 	}
 	for _, key := range []string{"reasoning", "input", "supportsComputerUse", "thinking"} {
 		out[key] = m[key]
+	}
+	for k, raw := range out {
+		if len(raw) == 0 {
+			continue
+		}
+		var v any
+		dec := json.NewDecoder(bytes.NewReader(raw))
+		dec.UseNumber()
+		if dec.Decode(&v) == nil {
+			out[k], _ = json.Marshal(v)
+		}
 	}
 	return out
 }
@@ -252,16 +268,16 @@ func Generate(client *http.Client, sourceURL, dir, revision string, refresh bool
 	var old records
 	previous, e := os.ReadFile(filepath.Join(dir, "catalog.json.zst"))
 	if e == nil {
-		dec, e := zstd.NewReader(nil)
+		dec, e := zstd.NewReader(nil, zstd.WithDecoderMaxMemory(MaxBytes), zstd.WithDecodeAllCapLimit(true))
 		if e != nil {
 			return "", e
 		}
-		b, e := dec.DecodeAll(previous, nil)
+		b, e := dec.DecodeAll(previous, make([]byte, 0, MaxBytes))
 		dec.Close()
 		if e != nil {
 			return "", fmt.Errorf("old artifact: %w", e)
 		}
-		if e = json.Unmarshal(b, &old); e != nil {
+		if old, e = validate(b); e != nil {
 			return "", e
 		}
 	} else if !os.IsNotExist(e) {
